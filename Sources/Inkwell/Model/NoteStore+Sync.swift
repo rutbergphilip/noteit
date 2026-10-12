@@ -29,21 +29,52 @@ extension NoteStore {
         return syncDeletionJournal
     }
 
+    /// O(1): the engine checks this right before every apply.
+    func syncRevision(of id: UUID, kind: RecordKind) -> UUID? {
+        switch kind {
+        case .note: note(with: id)?.revision
+        case .notebook: notebook(with: id)?.revision
+        }
+    }
+
     func exportPayload(id: UUID, kind: RecordKind, deviceID: String) throws -> RecordPayload {
+        let (payload, source) = try exportPlan(id: id, kind: kind, deviceID: deviceID)
+        return try Self.completeExport(payload, source)
+    }
+
+    /// Everything but the note body, which `completeExport` serializes (off the main actor in the adapter).
+    func exportPlan(id: UUID, kind: RecordKind, deviceID: String) throws -> (RecordPayload, ExportBody?) {
         assignMissingRevisions()
         switch kind {
         case .notebook:
             guard let nb = notebook(with: id), let revision = nb.revision else { throw NoteStoreSyncError.notFound(id) }
-            return RecordPayload(id: id, kind: .notebook, revision: revision, modifiedAt: nb.modifiedAt ?? .distantPast,
-                                 deviceID: deviceID, meta: try Self.encoder.encode(nb))
+            return (RecordPayload(id: id, kind: .notebook, revision: revision, modifiedAt: nb.modifiedAt ?? .distantPast,
+                                  deviceID: deviceID, meta: try Self.encoder.encode(nb)), nil)
         case .note:
             guard let meta = note(with: id), let revision = meta.revision else { throw NoteStoreSyncError.notFound(id) }
             // An unreadable body loads as empty; never push that over a good remote copy.
             if loadError(for: id) != nil { throw NoteStoreSyncError.unreadableBody(id) }
-            return RecordPayload(id: id, kind: .note, revision: revision, modifiedAt: meta.updatedAt,
-                                 deviceID: deviceID, meta: try Self.encoder.encode(meta),
-                                 body: try Self.serializeBody(body(for: id)))
+            return (RecordPayload(id: id, kind: .note, revision: revision, modifiedAt: meta.updatedAt,
+                                  deviceID: deviceID, meta: try Self.encoder.encode(meta)), exportBodySource(id))
         }
+    }
+
+    nonisolated static func completeExport(_ payload: RecordPayload, _ source: ExportBody?) throws -> RecordPayload {
+        guard let source else { return payload }
+        let text: NSAttributedString
+        switch source {
+        case .text(let cached):
+            text = cached
+        case .file(let url):
+            if FileManager.default.fileExists(atPath: url.path) {
+                do { text = try readBody(at: url) } catch { throw NoteStoreSyncError.unreadableBody(payload.id) }
+            } else {
+                text = NSAttributedString()
+            }
+        }
+        var complete = payload
+        complete.body = try serializeBody(text)
+        return complete
     }
 
     /// Inserts or replaces the record, keeping `payload.revision`. A note whose notebook hasn't arrived yet
@@ -51,15 +82,12 @@ extension NoteStore {
     func applyRemote(_ payload: RecordPayload) throws {
         switch payload.kind {
         case .notebook:
-            var nb = try decodeMeta(Notebook.self, payload)
+            var nb = try Self.decodeMeta(Notebook.self, payload)
             nb.revision = payload.revision
             nb.modifiedAt = payload.modifiedAt
             applyRemoteNotebook(nb)
         case .note:
-            var meta = try decodeMeta(NoteMeta.self, payload)
-            meta.revision = payload.revision
-            guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
-            try applyRemoteNote(meta, body: Self.deserializeBody(data))
+            try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, notesURL: notesURL))
         }
     }
 
@@ -69,7 +97,7 @@ extension NoteStore {
             removeNotebookForRemote(id)
         case .note:
             clearSyncDeletion(id)
-            removeNote(id)
+            removeNote(id, remote: true)
         }
     }
 
@@ -78,7 +106,7 @@ extension NoteStore {
     @discardableResult
     func importConflictCopy(_ payload: RecordPayload, fromDevice name: String) throws -> NoteMeta {
         guard payload.kind == .note else { throw NoteStoreSyncError.invalidPayload("conflict copy of a notebook") }
-        let remote = try decodeMeta(NoteMeta.self, payload)
+        let remote = try Self.decodeMeta(NoteMeta.self, payload)
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
         let suffix = " (conflict — \(name), \(Self.conflictDateFormatter.string(from: payload.modifiedAt)))"
         let body = Self.appendingToTitleLine(try Self.deserializeBody(data), suffix)
@@ -88,6 +116,7 @@ extension NoteStore {
             meta.createdAt = remote.createdAt
             meta.updatedAt = remote.updatedAt
             meta.conflictSource = name
+            meta.conflictOriginalID = payload.id
         }
         return note(with: created.id) ?? created
     }
@@ -95,24 +124,24 @@ extension NoteStore {
     // MARK: Body transport
 
     /// Flattened RTFD (same document type as `notes/<id>.rtfd` on disk), so paragraph sentinels and attachments survive.
-    static func serializeBody(_ text: NSAttributedString) throws -> Data {
+    nonisolated static func serializeBody(_ text: NSAttributedString) throws -> Data {
         guard let data = text.rtfd(from: NSRange(location: 0, length: text.length), documentAttributes: [
             .documentType: NSAttributedString.DocumentType.rtfd,
         ]) else { throw NoteStoreSyncError.invalidPayload("body could not be serialized") }
         return data
     }
 
-    static func deserializeBody(_ data: Data) throws -> NSAttributedString {
+    nonisolated static func deserializeBody(_ data: Data) throws -> NSAttributedString {
         guard let text = NSAttributedString(rtfd: data, documentAttributes: nil) else {
             throw NoteStoreSyncError.invalidPayload("body is not RTFD")
         }
         return text
     }
 
-    private func decodeMeta<T: Decodable & Identifiable>(_ type: T.Type, _ payload: RecordPayload) throws -> T where T.ID == UUID {
+    nonisolated static func decodeMeta<T: Decodable & Identifiable>(_ type: T.Type, _ payload: RecordPayload) throws -> T where T.ID == UUID {
         let value: T
         do {
-            value = try Self.decoder.decode(T.self, from: payload.meta)
+            value = try decoder.decode(T.self, from: payload.meta)
         } catch {
             throw NoteStoreSyncError.invalidPayload("\(payload.kind.rawValue) meta: \(error.localizedDescription)")
         }

@@ -23,10 +23,12 @@ struct NoteMeta: Identifiable, Codable, Hashable {
     var revision: UUID? = nil
     /// Device name when this note is a sync conflict copy.
     var conflictSource: String? = nil
+    /// The note this conflict copy was made from.
+    var conflictOriginalID: UUID? = nil
 }
 
 enum SidebarSelection: Hashable {
-    case allNotes, pinned, recent, notebook(UUID), tag(String)
+    case allNotes, pinned, recent, conflicts, notebook(UUID), tag(String)
 }
 
 extension Notebook {

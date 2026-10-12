@@ -16,7 +16,7 @@ enum SyncSelfTest {
             return 2
         }
         let base = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
-        for sub in ["legacy", "a", "b"] { try? FileManager.default.removeItem(at: base.appendingPathComponent(sub)) }
+        for sub in ["legacy", "a", "b", "perf-src", "perf-dst", "copy-1", "copy-2", "att"] { try? FileManager.default.removeItem(at: base.appendingPathComponent(sub)) }
 
         legacyLibrary(base)
         let a = NoteStore(rootURL: base.appendingPathComponent("a", isDirectory: true))
@@ -27,6 +27,12 @@ enum SyncSelfTest {
         journal(a, base)
         remoteDeletions(b)
         adapter(a, b)
+        stagedEditorCommit(a, b)
+        conflictResolution(a)
+        deterministicRevisions(base)
+        attachments(base)
+        exportCache(a)
+        bulkApply(base)
         NoteStore.syncJournalEnabled = false
 
         log(failures == 0 ? "PASS all checks" : "FAIL \(failures) check(s) failed")
@@ -235,6 +241,225 @@ enum SyncSelfTest {
         }
     }
 
+    /// A2: an editor snapshot staged for a later main-queue turn must win over a pull that arrives first.
+    private static func stagedEditorCommit(_ a: NoteStore, _ b: NoteStore) {
+        guard let id = b.notes.first?.id, a.note(with: id) != nil || true else { return }
+        let adapterB = NoteStoreSyncAdapter(store: b, deviceID: "dev-b")
+        _ = runAsync { await adapterB.records() }
+        let before = b.note(with: id)?.revision
+        b.stageEditorCommit(id, styledBody(title: "Typed locally", line: "keystrokes"))
+        check(b.hasStagedEditorBody(id), "staged: snapshot pending")
+        guard let remote = makePayload(from: b, id: id) else { return check(false, "staged: payload") }
+        let result = runAsync { try await adapterB.apply(remote) }
+        if case .failure(let error) = result, case NoteStoreSyncAdapter.AdapterError.localEditInProgress = error {
+            check(true, "staged: apply refused while a commit was staged")
+        } else {
+            check(false, "staged: apply should be refused, got \(result)")
+        }
+        check(!b.hasStagedEditorBody(id), "staged: snapshot committed before the revision check")
+        check(b.note(with: id)?.title == "Typed locally" && b.note(with: id)?.revision != before, "staged: keystrokes kept with a new revision")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        check(b.body(for: id).string.contains("keystrokes"), "staged: later main-queue turn is a no-op")
+        let retry = runAsync { () -> UUID? in
+            _ = await adapterB.records()
+            try await adapterB.apply(remote)
+            return await adapterB.revision(of: id, kind: .note)
+        }
+        if case .success(let rev) = retry {
+            check(rev == remote.revision, "staged: next pass applies once local edit is a known base")
+        } else {
+            check(false, "staged: retry \(retry)")
+        }
+    }
+
+    /// A6: conflict copies leave the Conflicts filter when edited, resolved, or their original is deleted.
+    private static func conflictResolution(_ a: NoteStore) {
+        guard let original = a.notes.first(where: { $0.conflictSource == nil })?.id,
+              let payload = try? a.exportPayload(id: original, kind: .note, deviceID: "dev-a") else { return check(false, "resolve: no note") }
+        func copy() -> NoteMeta? { try? a.importConflictCopy(payload, fromDevice: "Other Mac") }
+        guard let edited = copy(), let marked = copy(), let orphanedLocal = copy() else { return check(false, "resolve: import") }
+        check(edited.conflictOriginalID == original, "resolve: copy remembers its original")
+        let filtered = Set(a.notes(for: .conflicts, search: "").map(\.id))
+        check(filtered.isSuperset(of: [edited.id, marked.id, orphanedLocal.id]) && !filtered.contains(original),
+              "resolve: Conflicts filter shows only copies (\(filtered.count))")
+
+        a.updateBody(edited.id, styledBody(title: "Merged by hand", line: "x"))
+        check(a.note(with: edited.id)?.conflictSource == nil && a.note(with: edited.id)?.revision != edited.revision,
+              "resolve: editing a copy clears the flag as a user edit")
+        a.markConflictResolved(marked.id)
+        check(a.note(with: marked.id)?.conflictSource == nil && a.note(with: marked.id)?.revision != marked.revision,
+              "resolve: Mark Resolved clears the flag with a new revision")
+
+        a.deleteNote(original)
+        let after = a.note(with: orphanedLocal.id)
+        check(after?.conflictSource == nil && after?.revision != orphanedLocal.revision,
+              "resolve: local delete of the original clears copies (bumped)")
+        check(a.notes(for: .conflicts, search: "").isEmpty, "resolve: Conflicts filter empty")
+
+        guard let second = a.notes.first(where: { $0.conflictSource == nil })?.id,
+              let p2 = try? a.exportPayload(id: second, kind: .note, deviceID: "dev-a"),
+              let remoteCopy = try? a.importConflictCopy(p2, fromDevice: "Other Mac") else { return check(false, "resolve: second copy") }
+        a.applyRemoteDeletion(second, kind: .note)
+        let kept = a.note(with: remoteCopy.id)
+        check(kept?.conflictSource == nil && kept?.revision == remoteCopy.revision,
+              "resolve: remote delete of the original clears copies without a new revision")
+    }
+
+    /// A3: libraries copied between Macs (no revisions yet) get identical revisions; differing content doesn't.
+    private static func deterministicRevisions(_ base: URL) {
+        let src = base.appendingPathComponent("copy-1", isDirectory: true)
+        let dst = base.appendingPathComponent("copy-2", isDirectory: true)
+        let seed = NoteStore(rootURL: src)
+        for i in 0..<3 { _ = seed.createNote(in: seed.notebooks.first?.id, initial: styledBody(title: "Copied \(i)", line: "same")) }
+        seed.flush()
+        let library = src.appendingPathComponent("library.json")
+        guard let data = try? Data(contentsOf: library), var json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return check(false, "copied: read library")
+        }
+        for key in ["notes", "notebooks"] {
+            json[key] = (json[key] as? [[String: Any]])?.map { var r = $0; r["revision"] = nil; return r }
+        }
+        guard let stripped = try? JSONSerialization.data(withJSONObject: json) else { return check(false, "copied: strip") }
+        try? stripped.write(to: library)
+        try? FileManager.default.copyItem(at: src, to: dst)
+
+        let one = NoteStore(rootURL: src), two = NoteStore(rootURL: dst)
+        check(one.notes.allSatisfy { $0.revision == nil }, "copied: revisions stripped")
+        guard let changedNote = two.notes.last?.id, let changedBook = two.notebooks.last?.id,
+              let renamed = two.notes.first(where: { $0.id != changedNote })?.id else { return check(false, "copied: no records") }
+        two.updateBody(changedNote, styledBody(title: "Different on Mac 2", line: "x"))
+        two.flush()
+        if let i = two.notes.firstIndex(where: { $0.id == changedNote }) { two.notes[i].revision = nil }
+        var nb = two.notebook(with: changedBook)!
+        nb.name += " (renamed)"
+        two.updateNotebook(nb)
+        if let i = two.notebooks.firstIndex(where: { $0.id == changedBook }) { two.notebooks[i].revision = nil }
+        let adapter1 = NoteStoreSyncAdapter(store: one, deviceID: "m1"), adapter2 = NoteStoreSyncAdapter(store: two, deviceID: "m2")
+        guard case .success(let (r1, r2)) = runAsync({ (await adapter1.records(), await adapter2.records()) }) else {
+            return check(false, "copied: records")
+        }
+        let map1 = Dictionary(uniqueKeysWithValues: r1.map { ($0.id, $0.revision) })
+        let map2 = Dictionary(uniqueKeysWithValues: r2.map { ($0.id, $0.revision) })
+        let same = map1.keys.filter { $0 != changedNote && $0 != changedBook }
+        check(!same.isEmpty && same.allSatisfy { map1[$0] == map2[$0] }, "copied: \(same.count) identical records get equal revisions")
+        check(map1[changedNote] != map2[changedNote], "copied: different body -> different revision")
+        check(map1[changedBook] != map2[changedBook], "copied: different notebook name -> different revision")
+        check(map1[renamed] == map2[renamed], "copied: unchanged sibling still equal")
+        let reloaded = NoteStore(rootURL: src)
+        check(reloaded.notes.allSatisfy { map1[$0.id] == $0.revision }, "copied: derived revisions persisted")
+        let fresh = NoteStore(rootURL: dst)
+        let again = Dictionary(uniqueKeysWithValues: fresh.syncRecords().map { ($0.id, $0.revision) })
+        check(again == map2, "copied: stable across reloads")
+    }
+
+    /// RTFD with an image attachment survives the off-main serialize/parse path used by export and apply.
+    private static func attachments(_ base: URL) {
+        let store = NoteStore(rootURL: base.appendingPathComponent("att", isDirectory: true))
+        let image = NSImage(size: NSSize(width: 24, height: 16), flipped: false) { rect in
+            NSColor.systemOrange.setFill(); rect.fill(); return true
+        }
+        guard let tiff = image.tiffRepresentation, let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else {
+            return check(false, "attachment: image")
+        }
+        let wrapper = FileWrapper(regularFileWithContents: png)
+        wrapper.preferredFilename = "dot.png"
+        let text = NSMutableAttributedString(attributedString: styledBody(title: "With image", line: "below"))
+        text.append(NSAttributedString(string: "\n"))
+        text.append(NSAttributedString(attachment: NSTextAttachment(fileWrapper: wrapper)))
+        let note = store.createNote(in: nil, initial: text)
+        store.flush()
+        let adapter = NoteStoreSyncAdapter(store: store, deviceID: "att")
+        let result = runAsync { () -> (Int, Int, Bool) in
+            // runAsync's detached task: this parse runs off the main thread, like the adapter's apply.
+            let payload = try await adapter.export(note.id, kind: .note)
+            let parsed = try NoteStore.deserializeBody(payload.body ?? Data())
+            var count = 0, bytes = 0
+            parsed.enumerateAttribute(.attachment, in: NSRange(location: 0, length: parsed.length)) { value, _, _ in
+                guard let a = value as? NSTextAttachment else { return }
+                count += 1
+                bytes = a.fileWrapper?.regularFileContents?.count ?? 0
+            }
+            return (count, bytes, parsed.string.contains("With image"))
+        }
+        if case .success(let (count, bytes, title)) = result {
+            check(count == 1 && bytes == png.count && title, "attachment: off-main RTFD round trip (\(count) image, \(bytes) bytes)")
+        } else {
+            check(false, "attachment: \(result)")
+        }
+    }
+
+    /// Export reads bodies that aren't cached straight from disk instead of filling the LRU cache.
+    private static func exportCache(_ a: NoteStore) {
+        a.flush()
+        let reopened = NoteStore(rootURL: a.rootURL)
+        let adapter = NoteStoreSyncAdapter(store: reopened, deviceID: "dev-a")
+        let before = reopened.debugCachedBodyCount
+        let ids = reopened.notes.map(\.id)
+        let result = runAsync { () -> Int in
+            var bytes = 0
+            for id in ids { bytes += try await adapter.export(id, kind: .note).body?.count ?? 0 }
+            return bytes
+        }
+        if case .success(let bytes) = result {
+            check(bytes > 0 && reopened.debugCachedBodyCount == before,
+                  "export: \(ids.count) notes, \(bytes) bytes, body cache \(before) -> \(reopened.debugCachedBodyCount)")
+        } else {
+            check(false, "export: \(result)")
+        }
+    }
+
+    /// A1: applies 500 remote notes through the adapter and reports main-actor time per apply.
+    private static func bulkApply(_ base: URL) {
+        let source = NoteStore(rootURL: base.appendingPathComponent("perf-src", isDirectory: true))
+        for i in 0..<500 {
+            _ = source.createNote(in: nil, initial: styledBody(title: "Bulk \(i)", line: String(repeating: "lorem ipsum \(i) ", count: 40)))
+        }
+        source.flush()
+        let ids = source.notes.map(\.id)
+        let exporter = NoteStoreSyncAdapter(store: source, deviceID: "src")
+        guard case .success(let payloads) = runAsync({ () -> [RecordPayload] in
+            var out: [RecordPayload] = []
+            for id in ids { out.append(try await exporter.export(id, kind: .note)) }
+            return out
+        }, timeout: 120) else { return check(false, "bulk: export") }
+
+        let target = NoteStore(rootURL: base.appendingPathComponent("perf-dst", isDirectory: true))
+        let adapter = NoteStoreSyncAdapter(store: target, deviceID: "dst")
+        _ = runAsync { await adapter.records() }
+        let start = Date()
+        SyncMainThreadMetrics.reset()
+        let result = runAsync({ () -> Int in
+            for payload in payloads { try await adapter.apply(payload) }
+            return payloads.count
+        }, timeout: 300)
+        let elapsed = Date().timeIntervalSince(start)
+        let applies = SyncMainThreadMetrics.count
+        let maxMs = Double(SyncMainThreadMetrics.maxNanos) / 1e6
+        let avgMs = applies == 0 ? 0 : Double(SyncMainThreadMetrics.totalNanos) / 1e6 / Double(applies)
+        if case .success(let n) = result {
+            check(n == payloads.count && ids.allSatisfy { target.note(with: $0) != nil }, "bulk: applied \(n) remote notes")
+            log(String(format: "bulk: total %.2fs, main-actor per apply avg %.2fms p50 %.2fms p95 %.2fms max %.2fms (hop #%d of %d)",
+                       elapsed, avgMs, Double(SyncMainThreadMetrics.percentile(0.5)) / 1e6,
+                       Double(SyncMainThreadMetrics.percentile(0.95)) / 1e6, maxMs, SyncMainThreadMetrics.slowestIndex, applies))
+        } else {
+            check(false, "bulk: \(result)")
+        }
+        let reloaded = NoteStore(rootURL: target.rootURL)
+        check(reloaded.notes.count == target.notes.count, "bulk: every apply persisted in library.json before returning")
+        _ = runAsync { await adapter.passDidFinish() }
+        let index = (try? Data(contentsOf: target.searchIndexURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+        let indexed = (index?["entries"] as? [String: Any])?.count ?? (index?.count ?? 0)
+        check(indexed >= ids.count, "bulk: search index saved once at pass end (\(indexed) entries)")
+
+        // Reference: what one apply used to cost when it saved library.json and the whole search index.
+        target.updateBody(ids[0], styledBody(title: "Bulk 0", line: "touch"))
+        let flushStart = DispatchTime.now().uptimeNanoseconds
+        target.markSearchIndexDirtyForDebug()
+        target.flush()
+        log(String(format: "bulk: old per-apply flush at %d notes ~%.2fms", target.notes.count,
+                   Double(DispatchTime.now().uptimeNanoseconds - flushStart) / 1e6))
+    }
+
     // MARK: Helpers
 
     private static func makePayload(from store: NoteStore, id: UUID) -> RecordPayload? {
@@ -271,12 +496,12 @@ enum SyncSelfTest {
     }
 
     /// Runs async work from this synchronous launch hook; the nested run loop lets `MainActor.run` hops proceed.
-    private static func runAsync<T>(_ work: @escaping @Sendable () async throws -> T) -> Result<T, Error> {
+    private static func runAsync<T>(_ work: @escaping @Sendable () async throws -> T, timeout: TimeInterval = 10) -> Result<T, Error> {
         let box = ResultBox<T>()
         Task.detached {
             do { box.result = .success(try await work()) } catch { box.result = .failure(error) }
         }
-        let deadline = Date().addingTimeInterval(10)
+        let deadline = Date().addingTimeInterval(timeout)
         while box.result == nil, Date() < deadline {
             RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
         }
