@@ -597,6 +597,23 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(manifest, stored)
     }
 
+    func testConnectReportsWhetherItCreatedTheStore() async throws {
+        let backend = InMemoryBackend()
+        let first = try await SyncEngine.connectReportingCreation(backend: backend, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+        XCTAssertTrue(first.created)
+        let second = try await SyncEngine.connectReportingCreation(backend: backend, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+        XCTAssertFalse(second.created)
+        XCTAssertEqual(first.manifest, second.manifest)
+
+        let inner = InMemoryBackend()
+        let racing = FaultyBackend(inner)
+        await racing.onNextPut(keyContaining: "manifest.json", .before({
+            _ = try? await SyncEngine.connect(backend: inner, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+        }))
+        let joined = try await SyncEngine.connectReportingCreation(backend: racing, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+        XCTAssertFalse(joined.created)
+    }
+
     func testPlaintextStoreSyncsWithPassthroughCipher() async throws {
         let backend = InMemoryBackend()
         _ = try await SyncEngine.connect(backend: backend, passphrase: nil, encryptNew: false, makeCipher: XORTestCipher.factory)

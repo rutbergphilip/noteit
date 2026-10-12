@@ -794,6 +794,7 @@ final class NoteStore: ObservableObject {
             rebuildFromBodies(recovered: nil)
         } else if !fm.fileExists(atPath: firstLaunchMarkerURL.path) {
             SeedData.seed(into: self)
+            recordSeedManifest()
         }
         libraryDirty = true
         markInitialized()

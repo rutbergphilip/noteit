@@ -627,6 +627,7 @@ Optional environment variables:
 ├── library.json                        # notebooks + note metadata (pretty-printed, ISO-8601 dates)
 ├── library.corrupt-<ts>.json           # backup of an unreadable library.json (if it ever happens)
 ├── search-index.json                   # folded plain text per note (case/diacritic/width-insensitive)
+├── seed-manifest.json                  # IDs/revisions of the seed content until sync consumes it
 ├── notes/<uuid>.rtfd                   # each note body as RTFD (rich text + image attachments)
 ├── notes/<uuid>.rtfd.corrupt-<ts>      # backup of an unreadable note body
 └── .trash/<uuid>-<ts>.rtfd             # bodies of deleted notes (never deleted outright)
@@ -635,7 +636,7 @@ Optional environment variables:
 - Override the location with `INKWELL_DATA_DIR=/some/dir` (`~` is expanded). This is handy for testing against a scratch library.
 - **Editor → store:** the editor commits edits to `NoteStore` after 300 ms of idle (`RichTextEditor.Coordinator.commitDelay`). It also commits synchronously on note switch, teardown, window/app deactivation and quit.
 - **Store → disk:** saves are debounced (about 0.5 s) and atomic (RTFD is written to a temp sibling and swapped in). The app also flushes on quit and when it loses focus. Failed writes retry after 5 s.
-- **Seeding** happens only on a true first launch: no `library.json`, no note bodies and no `.initialized` marker.
+- **Seeding** happens only on a true first launch: no `library.json`, no note bodies and no `.initialized` marker. The seeded IDs and revisions go to `seed-manifest.json`. When sync joins a library that already exists, unedited seed notes and then unedited, empty seed notebooks are removed locally (not journaled, so nothing is deleted remotely) before the first pass. The manifest is deleted after any connect.
 - **Recovery:**
   - If `library.json` is missing but bodies exist, the library is rebuilt from `notes/*.rtfd`.
   - If `library.json` is unreadable, it is copied to `library.corrupt-<ts>.json`, whatever metadata can be salvaged is kept, and the rest is rebuilt from the bodies. If that backup fails, the original is never overwritten.

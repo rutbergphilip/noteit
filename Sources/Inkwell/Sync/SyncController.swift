@@ -142,10 +142,10 @@ final class SyncController: ObservableObject {
         var config = config
         let destination = try makeDestination(config, accessKey: accessKey, secret: secret)
         let encryptNew = config.encrypted
-        let (manifest, cipher) = try await withAccess(destination) {
+        let (manifest, cipher, created) = try await withAccess(destination) {
             try await Self.offMain {
                 try await destination.backend.probe()
-                return try await SyncEngine.connect(backend: destination.backend, passphrase: passphrase, encryptNew: encryptNew)
+                return try await SyncEngine.connectReportingCreation(backend: destination.backend, passphrase: passphrase, encryptNew: encryptNew)
             }
         }
         config.encrypted = manifest.encryption != nil
@@ -170,6 +170,12 @@ final class SyncController: ObservableObject {
         deactivate()
         try? FileManager.default.removeItem(at: stateURL)
         store.clearAllSyncDeletions()
+        if created {
+            store.discardSeedManifest()
+        } else {
+            let removed = store.removePristineSeedContent()
+            if removed != (0, 0) { NSLog("InkwellSync: removed \(removed.notes) unedited sample notes and \(removed.notebooks) sample notebooks before joining") }
+        }
         let adapter = NoteStoreSyncAdapter(store: store, deviceID: config.deviceID)
         let engine = SyncEngine(backend: destination.backend, cipher: cipher, local: adapter, stateURL: stateURL,
                                 deviceID: config.deviceID, deviceName: config.deviceName)

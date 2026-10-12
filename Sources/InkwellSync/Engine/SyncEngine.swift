@@ -102,12 +102,25 @@ public actor SyncEngine {
     }
 
     public static func connect(backend: StorageBackend, passphrase: String?, encryptNew: Bool) async throws -> (Manifest, SyncCipher) {
-        try await connect(backend: backend, passphrase: passphrase, encryptNew: encryptNew, makeCipher: defaultCipherFactory)
+        let result = try await connectReportingCreation(backend: backend, passphrase: passphrase, encryptNew: encryptNew)
+        return (result.manifest, result.cipher)
+    }
+
+    /// Like `connect`, and also reports whether this call created the store (`false` when joining an existing one).
+    public static func connectReportingCreation(backend: StorageBackend, passphrase: String?, encryptNew: Bool) async throws
+        -> (manifest: Manifest, cipher: SyncCipher, created: Bool) {
+        try await connectReportingCreation(backend: backend, passphrase: passphrase, encryptNew: encryptNew, makeCipher: defaultCipherFactory)
     }
 
     static func connect(backend: StorageBackend, passphrase: String?, encryptNew: Bool, makeCipher: CipherFactory) async throws -> (Manifest, SyncCipher) {
+        let result = try await connectReportingCreation(backend: backend, passphrase: passphrase, encryptNew: encryptNew, makeCipher: makeCipher)
+        return (result.manifest, result.cipher)
+    }
+
+    static func connectReportingCreation(backend: StorageBackend, passphrase: String?, encryptNew: Bool, makeCipher: CipherFactory) async throws
+        -> (manifest: Manifest, cipher: SyncCipher, created: Bool) {
         if let existing = try await readManifest(backend) {
-            return (existing, try openExisting(existing, passphrase: passphrase, encryptNew: encryptNew, makeCipher: makeCipher))
+            return (existing, try openExisting(existing, passphrase: passphrase, encryptNew: encryptNew, makeCipher: makeCipher), false)
         }
         let manifest: Manifest
         let cipher: SyncCipher
@@ -123,11 +136,11 @@ public actor SyncEngine {
         }
         do {
             try await backend.put(RemoteLayout.manifest(), data: try encode(manifest), ifMatch: nil, ifNoneMatch: true)
-            return (manifest, cipher)
+            return (manifest, cipher, true)
         } catch StorageError.preconditionFailed {
             // Another device created the store first; join theirs.
             guard let existing = try await readManifest(backend) else { throw StorageError.notFound(RemoteLayout.manifest()) }
-            return (existing, try openExisting(existing, passphrase: passphrase, encryptNew: encryptNew, makeCipher: makeCipher))
+            return (existing, try openExisting(existing, passphrase: passphrase, encryptNew: encryptNew, makeCipher: makeCipher), false)
         }
     }
 
