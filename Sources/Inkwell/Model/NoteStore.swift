@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import InkwellSync
 
 @MainActor
 final class NoteStore: ObservableObject {
@@ -17,6 +18,11 @@ final class NoteStore: ObservableObject {
     @Published var searchText: String = "" {
         didSet { if searchText != oldValue { editingNoteID = nil } }
     }
+    /// Last note whose content was replaced by sync; the editor reloads it when it's open.
+    @Published var externallyUpdatedNoteID: UUID?
+
+    /// Journal local deletions to `sync-deletions.json`; set by the sync controller while sync is configured.
+    static var syncJournalEnabled = false
 
     /// Window during which notes count as "Recent".
     static let recentInterval: TimeInterval = 7 * 24 * 60 * 60
@@ -32,6 +38,7 @@ final class NoteStore: ObservableObject {
     var trashURL: URL { rootURL.appendingPathComponent(".trash", isDirectory: true) }
     var tombstonesURL: URL { rootURL.appendingPathComponent("tombstones.json") }
     var recoveryURL: URL { rootURL.appendingPathComponent("recovery", isDirectory: true) }
+    var syncDeletionsURL: URL { rootURL.appendingPathComponent("sync-deletions.json") }
     private var firstLaunchMarkerURL: URL { rootURL.appendingPathComponent(".initialized") }
 
     private var bodyCache: [UUID: NSAttributedString] = [:]
@@ -71,6 +78,10 @@ final class NoteStore: ObservableObject {
     private var libraryNoteIDsOnDisk: Set<UUID>?
     /// Note the user is currently typing in; selection reconciliation won't yank it.
     private var editingNoteID: UUID?
+    /// Local deletions not yet pushed by sync, mirrored to `sync-deletions.json`.
+    private(set) var syncDeletionJournal: [UUID: LocalDeletion] = [:]
+    /// A user mutation happened since the last save; the save posts `inkwellLocalChange`.
+    private var hasUnannouncedLocalChange = false
 
     init(rootURL: URL? = nil) {
         if let rootURL {
@@ -228,9 +239,11 @@ final class NoteStore: ObservableObject {
         var meta = notes[index]
         Self.applyDerivedFields(to: &meta, from: snapshot)
         meta.updatedAt = Date()
+        meta.revision = UUID()
         notes[index] = meta
         setIndexEntry(id, text: snapshot.string)
         libraryDirty = true
+        hasUnannouncedLocalChange = true
         scheduleSave()
     }
 
@@ -364,7 +377,8 @@ final class NoteStore: ObservableObject {
             isPinned: false,
             createdAt: now,
             updatedAt: now,
-            tags: []
+            tags: [],
+            revision: UUID()
         )
         Self.applyDerivedFields(to: &meta, from: body)
         bodyCache[meta.id] = body
@@ -373,6 +387,7 @@ final class NoteStore: ObservableObject {
         notes.append(meta)
         setIndexEntry(meta.id, text: body.string)
         libraryDirty = true
+        hasUnannouncedLocalChange = true
         scheduleSave()
         return meta
     }
@@ -397,6 +412,14 @@ final class NoteStore: ObservableObject {
 
     /// Persists the metadata removal first, then moves the body into `.trash` (never deleted outright).
     func deleteNote(_ id: UUID) {
+        guard note(with: id) != nil else { return }
+        journalSyncDeletion(id, kind: .note)
+        hasUnannouncedLocalChange = true
+        removeNote(id)
+    }
+
+    /// Shared by local and remote deletions (only local ones are journaled).
+    func removeNote(_ id: UUID) {
         guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
         if selectedNoteID == id {
             let visible = notes(for: selection, search: searchText)
@@ -426,7 +449,9 @@ final class NoteStore: ObservableObject {
     func togglePin(_ id: UUID) {
         guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
         notes[index].isPinned.toggle()
+        notes[index].revision = UUID()
         libraryDirty = true
+        hasUnannouncedLocalChange = true
         scheduleSave()
         reconcileSelectionAfterUserAction()
     }
@@ -435,7 +460,9 @@ final class NoteStore: ObservableObject {
         guard let index = notes.firstIndex(where: { $0.id == id }),
               notes[index].notebookID != notebookID else { return }
         notes[index].notebookID = notebookID
+        notes[index].revision = UUID()
         libraryDirty = true
+        hasUnannouncedLocalChange = true
         scheduleSave()
         reconcileSelectionAfterUserAction()
     }
@@ -451,29 +478,41 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func createNotebook(name: String, symbol: String, colorHex: String) -> Notebook {
         let nextIndex = (notebooks.map(\.sortIndex).max() ?? -1) + 1
-        let notebook = Notebook(id: UUID(), name: name, symbol: symbol, colorHex: colorHex, sortIndex: nextIndex)
+        let notebook = Notebook(id: UUID(), name: name, symbol: symbol, colorHex: colorHex, sortIndex: nextIndex,
+                                revision: UUID(), modifiedAt: Date())
         notebooks.append(notebook)
         libraryDirty = true
+        hasUnannouncedLocalChange = true
         scheduleSave()
         return notebook
     }
 
     func updateNotebook(_ nb: Notebook) {
         guard let index = notebooks.firstIndex(where: { $0.id == nb.id }) else { return }
-        notebooks[index] = nb
+        var updated = nb
+        updated.revision = notebooks[index].revision
+        updated.modifiedAt = notebooks[index].modifiedAt
+        guard updated != notebooks[index] else { return }
+        updated.revision = UUID()
+        updated.modifiedAt = Date()
+        notebooks[index] = updated
         libraryDirty = true
+        hasUnannouncedLocalChange = true
         scheduleSave()
     }
 
     /// Deletes the notebook; its notes are kept and move to "no notebook".
     func deleteNotebook(_ id: UUID) {
+        if notebook(with: id) != nil { journalSyncDeletion(id, kind: .notebook) }
         notebooks.removeAll { $0.id == id }
         for index in notes.indices where notes[index].notebookID == id {
             notes[index].notebookID = nil
+            notes[index].revision = UUID()
         }
         if selection == .notebook(id) { selection = .allNotes }
         reindexNotebooks(sortedNotebooks)
         libraryDirty = true
+        hasUnannouncedLocalChange = true
         scheduleSave()
         reconcileSelectionAfterUserAction()
     }
@@ -484,13 +523,20 @@ final class NoteStore: ObservableObject {
         ordered.move(fromOffsets: source, toOffset: destination)
         reindexNotebooks(ordered)
         libraryDirty = true
+        hasUnannouncedLocalChange = true
         scheduleSave()
     }
 
+    /// Notebooks whose position changes get a new revision.
     private func reindexNotebooks(_ ordered: [Notebook]) {
+        let now = Date()
         notebooks = ordered.enumerated().map { offset, nb in
             var copy = nb
-            copy.sortIndex = offset
+            if copy.sortIndex != offset {
+                copy.sortIndex = offset
+                copy.revision = UUID()
+                copy.modifiedAt = now
+            }
             return copy
         }
     }
@@ -653,14 +699,14 @@ final class NoteStore: ObservableObject {
         notesURL.appendingPathComponent("\(id.uuidString).rtfd", isDirectory: true)
     }
 
-    private static let encoder: JSONEncoder = {
+    static let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         e.dateEncodingStrategy = .iso8601
         return e
     }()
 
-    private static let decoder: JSONDecoder = {
+    static let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
         return d
@@ -708,6 +754,7 @@ final class NoteStore: ObservableObject {
         // Tombstoned notes are filtered from the library below; their bodies are trashed by flush()
         // only after a library save (or the library just read) confirms they're gone.
         loadTombstones()
+        loadSyncDeletionJournal()
 
         if fm.fileExists(atPath: libraryURL.path) {
             var data: Data?
@@ -869,6 +916,10 @@ final class NoteStore: ObservableObject {
         if searchIndexDirty { saveSearchIndex() }
         if isTerminating { writeRecoveryCopies() }
         trimBodyCache()
+        if hasUnannouncedLocalChange, !libraryDirty {
+            hasUnannouncedLocalChange = false
+            NotificationCenter.default.post(name: .inkwellLocalChange, object: self)
+        }
 
         let retryable = dirtyBodies.subtracting(bodyWriteBlocked)
         if !retryable.isEmpty || libraryDirty || !pendingTrash.isEmpty {
@@ -896,6 +947,7 @@ final class NoteStore: ObservableObject {
             copy.preview = old.preview
             copy.updatedAt = old.updatedAt
             copy.tags = old.tags
+            copy.revision = old.revision
             return copy
         }
         do {
@@ -995,6 +1047,146 @@ final class NoteStore: ObservableObject {
             }
         } catch {
             NSLog("Inkwell: failed to save tombstones: \(error)")
+        }
+    }
+
+    // MARK: - Sync support
+
+    enum SyncApplyError: Error {
+        case bodyWriteBlocked(UUID)
+    }
+
+    /// Gives records created before sync existed a revision and persists it. Not a user change.
+    func assignMissingRevisions() {
+        var changed = false
+        for i in notes.indices where notes[i].revision == nil {
+            notes[i].revision = UUID()
+            changed = true
+        }
+        for i in notebooks.indices where notebooks[i].revision == nil {
+            notebooks[i].revision = UUID()
+            changed = true
+        }
+        guard changed else { return }
+        libraryDirty = true
+        flush()
+    }
+
+    /// Inserts or replaces a note from sync, keeping its revision. The body goes through the atomic body
+    /// write first; nothing changes in memory if that fails.
+    func applyRemoteNote(_ remote: NoteMeta, body: NSAttributedString) throws {
+        let id = remote.id
+        if bodyWriteBlocked.contains(id) { throw SyncApplyError.bodyWriteBlocked(id) }
+        try writeBody(body, to: bodyURL(for: id))
+        let wasTombstoned = pendingTrash.remove(id) != nil
+
+        var meta = remote
+        Self.applyDerivedFields(to: &meta, from: body)
+        bodyCache[id] = body
+        touchBody(id)
+        dirtyBodies.remove(id)
+        failedBodies.remove(id)
+        recoveredSnapshots[id] = nil
+        loadErrors[id] = nil
+        loadErrorFiles[id] = nil
+        if let index = notes.firstIndex(where: { $0.id == id }) {
+            notes[index] = meta
+        } else {
+            notes.append(meta)
+        }
+        setIndexEntry(id, text: body.string)
+        clearSyncDeletion(id)
+        libraryDirty = true
+        flush()
+        // The tombstone goes only after a library listing the note is saved (see trashPendingBodies).
+        if wasTombstoned { saveTombstones() }
+        externallyUpdatedNoteID = id
+        if selectedNoteID == nil { reconcileSelection() }
+    }
+
+    func applyRemoteNotebook(_ remote: Notebook) {
+        if let index = notebooks.firstIndex(where: { $0.id == remote.id }) {
+            notebooks[index] = remote
+        } else {
+            notebooks.append(remote)
+        }
+        clearSyncDeletion(remote.id)
+        libraryDirty = true
+        flush()
+    }
+
+    /// Removes a notebook deleted on another device. Its notes move to "no notebook" without new revisions.
+    func removeNotebookForRemote(_ id: UUID) {
+        clearSyncDeletion(id)
+        guard notebook(with: id) != nil else { return }
+        notebooks.removeAll { $0.id == id }
+        for index in notes.indices where notes[index].notebookID == id {
+            notes[index].notebookID = nil
+        }
+        libraryDirty = true
+        flush()
+        if selection == .notebook(id) {
+            selection = .allNotes
+            reconcileSelection()
+        }
+    }
+
+    /// Adjusts metadata of a note just created by sync (e.g. a conflict copy); counts as a local change.
+    func updateSyncCreatedNote(_ id: UUID, _ change: (inout NoteMeta) -> Void) {
+        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        change(&notes[index])
+        libraryDirty = true
+        hasUnannouncedLocalChange = true
+        flush()
+    }
+
+    private struct SyncDeletionEntry: Codable {
+        var kind: RecordKind
+        var deletedAt: Date
+    }
+
+    private func journalSyncDeletion(_ id: UUID, kind: RecordKind) {
+        guard Self.syncJournalEnabled else { return }
+        syncDeletionJournal[id] = LocalDeletion(kind: kind, deletedAt: Date())
+        saveSyncDeletionJournal()
+    }
+
+    func clearSyncDeletion(_ id: UUID) {
+        guard syncDeletionJournal.removeValue(forKey: id) != nil else { return }
+        saveSyncDeletionJournal()
+    }
+
+    func clearAllSyncDeletions() {
+        syncDeletionJournal = [:]
+        saveSyncDeletionJournal()
+    }
+
+    private func loadSyncDeletionJournal() {
+        guard let data = try? Data(contentsOf: syncDeletionsURL) else { return }
+        guard let entries = try? Self.decoder.decode([String: SyncDeletionEntry].self, from: data) else {
+            NSLog("Inkwell: sync-deletions.json is unreadable; ignoring it")
+            return
+        }
+        for (key, entry) in entries {
+            guard let id = UUID(uuidString: key) else { continue }
+            syncDeletionJournal[id] = LocalDeletion(kind: entry.kind, deletedAt: entry.deletedAt)
+        }
+    }
+
+    private func saveSyncDeletionJournal() {
+        do {
+            if syncDeletionJournal.isEmpty {
+                if FileManager.default.fileExists(atPath: syncDeletionsURL.path) {
+                    try FileManager.default.removeItem(at: syncDeletionsURL)
+                }
+            } else {
+                let entries = Dictionary(uniqueKeysWithValues: syncDeletionJournal.map {
+                    ($0.key.uuidString, SyncDeletionEntry(kind: $0.value.kind, deletedAt: $0.value.deletedAt))
+                })
+                try Self.encoder.encode(entries).write(to: syncDeletionsURL, options: .atomic)
+            }
+        } catch {
+            NSLog("Inkwell: failed to save sync deletions: \(error)")
         }
     }
 

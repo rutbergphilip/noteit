@@ -19,6 +19,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if CommandLine.arguments.contains("--self-test") {
             exit(HotkeySelfTest.run())
         }
+        if ProcessInfo.processInfo.environment["INKWELL_SYNC_SELFTEST"] == "1" {
+            exit(SyncSelfTest.run())
+        }
         #endif
         UserDefaults.standard.register(defaults: [
             PrefKey.showMenuBarIcon: true,
