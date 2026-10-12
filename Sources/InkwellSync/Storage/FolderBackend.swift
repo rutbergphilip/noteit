@@ -64,11 +64,19 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
         }
 
         return try lock.withLock {
-            // Preconditions are only enforced within this process; across machines this is best effort.
+            // ifMatch is only enforced within this process; across machines this is best effort.
             let current = try? fileInfo(at: url.path).etag
             if (ifNoneMatch && current != nil) || (ifMatch != nil && current != ifMatch) {
                 try? fileManager.removeItem(at: temp)
                 throw StorageError.preconditionFailed(key)
+            }
+            if ifNoneMatch {
+                // Exclusive rename makes create-if-absent atomic across processes on local volumes.
+                if renamex_np(temp.path, url.path, UInt32(RENAME_EXCL)) == 0 { return try etag(for: key, at: url) }
+                if errno == EEXIST {
+                    try? fileManager.removeItem(at: temp)
+                    throw StorageError.preconditionFailed(key)
+                }
             }
             guard rename(temp.path, url.path) == 0 else {
                 let message = String(cString: strerror(errno))
@@ -89,7 +97,7 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
 
     public func probe() async throws {
         try requireRoot()
-        let url = root.appendingPathComponent(".inkwell-probe")
+        let url = root.appendingPathComponent(".inkwell-probe-\(UUID().uuidString)")
         do {
             try Data("probe".utf8).write(to: url)
             try fileManager.removeItem(at: url)

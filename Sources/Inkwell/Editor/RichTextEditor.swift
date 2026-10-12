@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 /// Bridges the toolbar (SwiftUI) and the active text view.
@@ -88,6 +89,7 @@ struct RichTextEditor: NSViewRepresentable {
         weak var textView: InkwellTextView?
         private let undo = UndoManager()
         private var isLoading = false
+        private var remoteUpdates: AnyCancellable?
         /// Edits not yet written to the store.
         private(set) var hasPendingChanges = false
 
@@ -124,6 +126,34 @@ struct RichTextEditor: NSViewRepresentable {
                 attrs[.attachment] = nil
                 textView.typingAttributes = attrs
             }
+            textView.needsDisplay = true
+            controller.refresh()
+        }
+
+        /// Sync replaced this note in the store. Without local edits, show the new text (keeping selection and
+        /// scroll). With uncommitted edits, keep them and commit: they get a new revision, so nothing is lost.
+        private func remoteUpdateArrived() {
+            guard let textView, let scrollView = textView.enclosingScrollView else { return }
+            if hasPendingChanges {
+                commit()
+                return
+            }
+            let body = NoteStore.shared.body(for: noteID)
+            if body.isEqual(to: textView.attributedString()) { return }
+            let selection = textView.selectedRange()
+            let origin = scrollView.contentView.bounds.origin
+            isLoading = true
+            defer { isLoading = false }
+            textView.storage.setAttributedString(body)
+            InkwellTextView.refreshTableColors(in: textView.storage)
+            InkwellTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length))
+            undo.removeAllActions()
+            let length = textView.storage.length
+            let location = min(selection.location, length)
+            textView.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
+            if let container = textView.textContainer { textView.layoutManager?.ensureLayout(for: container) }
+            scrollView.contentView.scroll(to: origin)
+            scrollView.reflectScrolledClipView(scrollView.contentView)
             textView.needsDisplay = true
             controller.refresh()
         }
@@ -168,10 +198,27 @@ struct RichTextEditor: NSViewRepresentable {
             nc.addObserver(self, selector: #selector(forceCommit), name: NSWindow.didResignKeyNotification, object: nil)
             nc.addObserver(self, selector: #selector(forceCommit), name: NSWindow.willCloseNotification, object: nil)
             nc.addObserver(self, selector: #selector(willTerminate), name: NSApplication.willTerminateNotification, object: nil)
+            nc.addObserver(self, selector: #selector(syncWillApplyRemote), name: .inkwellSyncWillApplyRemote, object: nil)
+            // Synchronous (no main-queue hop), so no keystroke can land between the store update and the reload.
+            remoteUpdates = NoteStore.shared.$externallyUpdatedNoteID
+                .dropFirst()
+                .sink { [weak self] id in
+                    MainActor.assumeIsolated {
+                        guard let self, id == self.noteID else { return }
+                        self.remoteUpdateArrived()
+                    }
+                }
+        }
+
+        /// Sync is about to replace or delete a note: hand it our pending edits first so it can see them.
+        @objc private func syncWillApplyRemote(_ notification: Notification) {
+            guard let id = notification.object as? UUID, id == noteID else { return }
+            commit()
         }
 
         func stopObserving() {
             NotificationCenter.default.removeObserver(self)
+            remoteUpdates = nil
             cancelScheduledCommit()
         }
 

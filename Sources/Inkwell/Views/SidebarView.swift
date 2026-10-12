@@ -50,7 +50,8 @@ struct SidebarView: View {
                 .buttonStyle(.borderless)
                 .foregroundStyle(.secondary)
                 .help("New Notebook (⇧⌘N)")
-                Spacer()
+                Spacer(minLength: 8)
+                SyncStatusPill()
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)

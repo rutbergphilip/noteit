@@ -67,6 +67,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         HotkeyManager.shared.start()
+        SyncController.shared.start()
 
         handleDebugArguments()
     }
@@ -130,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleDebugArguments() {
         #if DEBUG
         let args = CommandLine.arguments
+        if args.contains("--debug-dark") { NSApp.appearance = NSAppearance(named: .darkAqua) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
             MainActor.assumeIsolated {
                 if args.contains("--debug-preview-bindings") {

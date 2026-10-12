@@ -1,0 +1,215 @@
+import Foundation
+import InkwellSync
+
+/// Where the library syncs to. S3 presets only differ in their defaults and help text.
+enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
+    case folder, awsS3, cloudflareR2, backblazeB2, minio, customS3
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .folder: "Folder"
+        case .awsS3: "Amazon S3"
+        case .cloudflareR2: "Cloudflare R2"
+        case .backblazeB2: "Backblaze B2"
+        case .minio: "MinIO / NAS"
+        case .customS3: "Custom S3"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .folder: "folder.fill"
+        case .awsS3: "shippingbox.fill"
+        case .cloudflareR2: "cloud.fill"
+        case .backblazeB2: "flame.fill"
+        case .minio: "externaldrive.fill.badge.wifi"
+        case .customS3: "server.rack"
+        }
+    }
+
+    /// One-line hint shown on the provider card.
+    var hint: String {
+        switch self {
+        case .folder: "Any folder — NAS, iCloud Drive, Dropbox, USB"
+        case .awsS3: "Your own AWS bucket"
+        case .cloudflareR2: "No egress fees"
+        case .backblazeB2: "Low-cost cloud storage"
+        case .minio: "Self-hosted S3 on your network"
+        case .customS3: "Wasabi, Synology C2 and more"
+        }
+    }
+
+    var helpText: String {
+        switch self {
+        case .folder:
+            "Choose a folder that your other Macs can reach, such as a NAS share, iCloud Drive or Dropbox. Inkwell keeps its files in an “inkwell” subfolder."
+        case .awsS3:
+            "Create a bucket and an IAM access key limited to it. Replace <region> with the bucket's region, for example eu-north-1."
+        case .cloudflareR2:
+            "Create an R2 bucket and an API token with Object Read & Write access. Your account ID is shown on the R2 overview page."
+        case .backblazeB2:
+            "Create a private bucket and an application key for it. The endpoint is listed on the bucket's details page."
+        case .minio:
+            "Use the S3 API address of your MinIO server or NAS (Synology, QNAP, TrueNAS), usually on port 9000."
+        case .customS3:
+            "Any S3-compatible service. Path-style addressing works with most self-hosted servers."
+        }
+    }
+
+    var isS3: Bool { self != .folder }
+
+    var endpointTemplate: String {
+        switch self {
+        case .folder: ""
+        case .awsS3: "https://s3.<region>.amazonaws.com"
+        case .cloudflareR2: "https://<account-id>.r2.cloudflarestorage.com"
+        case .backblazeB2: "https://s3.<region>.backblazeb2.com"
+        case .minio: "http://<nas-host>:9000"
+        case .customS3: "https://"
+        }
+    }
+
+    var defaultRegion: String {
+        switch self {
+        case .awsS3: "us-east-1"
+        case .cloudflareR2: "auto"
+        case .backblazeB2: "us-west-004"
+        case .minio, .customS3: "us-east-1"
+        case .folder: ""
+        }
+    }
+
+    var defaultPathStyle: Bool { self == .minio || self == .customS3 }
+}
+
+/// Non-secret sync settings, stored as JSON in UserDefaults. Secrets live in the keychain.
+struct SyncConfiguration: Codable, Equatable, Sendable {
+    var provider: SyncProvider
+    var folderBookmark: Data?
+    var folderPath: String?
+    var s3: S3Config?
+    var encrypted: Bool
+    var deviceID: String
+    var deviceName: String
+
+    static let defaultsKey = "syncConfiguration"
+    static let deviceIDKey = "syncDeviceID"
+
+    init(provider: SyncProvider, folderBookmark: Data? = nil, folderPath: String? = nil, s3: S3Config? = nil,
+         encrypted: Bool = true, deviceID: String = SyncConfiguration.stableDeviceID(), deviceName: String = SyncConfiguration.defaultDeviceName) {
+        self.provider = provider
+        self.folderBookmark = folderBookmark
+        self.folderPath = folderPath
+        self.s3 = s3
+        self.encrypted = encrypted
+        self.deviceID = deviceID
+        self.deviceName = deviceName
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        provider = try c.decode(SyncProvider.self, forKey: .provider)
+        folderBookmark = try c.decodeIfPresent(Data.self, forKey: .folderBookmark)
+        folderPath = try c.decodeIfPresent(String.self, forKey: .folderPath)
+        s3 = try c.decodeIfPresent(S3Config.self, forKey: .s3)
+        encrypted = try c.decodeIfPresent(Bool.self, forKey: .encrypted) ?? true
+        deviceID = try c.decodeIfPresent(String.self, forKey: .deviceID) ?? UUID().uuidString
+        deviceName = try c.decodeIfPresent(String.self, forKey: .deviceName) ?? Self.defaultDeviceName
+    }
+
+    static var defaultDeviceName: String { Host.current().localizedName ?? "Mac" }
+
+    /// One ID per Mac, kept across disconnect/reconnect so other devices don't see a new device each time.
+    static func stableDeviceID(_ defaults: UserDefaults = .standard) -> String {
+        if let id = defaults.string(forKey: deviceIDKey), !id.isEmpty { return id }
+        let id = UUID().uuidString
+        defaults.set(id, forKey: deviceIDKey)
+        return id
+    }
+
+    static func load(_ defaults: UserDefaults = .standard) -> SyncConfiguration? {
+        guard let data = defaults.data(forKey: defaultsKey) else { return nil }
+        return try? JSONDecoder().decode(SyncConfiguration.self, from: data)
+    }
+
+    func save(_ defaults: UserDefaults = .standard) {
+        if let data = try? JSONEncoder().encode(self) { defaults.set(data, forKey: Self.defaultsKey) }
+    }
+
+    static func clear(_ defaults: UserDefaults = .standard) {
+        defaults.removeObject(forKey: defaultsKey)
+    }
+
+    /// Bucket/prefix or folder path, for display.
+    var destination: String {
+        if provider == .folder {
+            return (folderPath as NSString?)?.abbreviatingWithTildeInPath ?? "Folder"
+        }
+        guard let s3 else { return provider.displayName }
+        let prefix = s3.prefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        return prefix.isEmpty ? s3.bucket : "\(s3.bucket)/\(prefix)"
+    }
+
+    /// Resolves the folder, preferring the security-scoped bookmark and falling back to the stored path.
+    /// `refreshedBookmark` is set when the bookmark was stale and has been recreated.
+    func resolveFolder() -> (url: URL, scoped: Bool, refreshedBookmark: Data?)? {
+        if let bookmark = folderBookmark {
+            for options: URL.BookmarkResolutionOptions in [[.withSecurityScope, .withoutUI], [.withoutUI]] {
+                var stale = false
+                if let url = try? URL(resolvingBookmarkData: bookmark, options: options, relativeTo: nil, bookmarkDataIsStale: &stale) {
+                    let refreshed = stale ? Self.makeBookmark(for: url) : nil
+                    return (url, options.contains(.withSecurityScope), refreshed)
+                }
+            }
+        }
+        if let folderPath, !folderPath.isEmpty {
+            return (URL(fileURLWithPath: folderPath, isDirectory: true), false, nil)
+        }
+        return nil
+    }
+
+    static func makeBookmark(for url: URL) -> Data? {
+        (try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil, relativeTo: nil))
+            ?? (try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil))
+    }
+}
+
+enum PassphraseStrength: Int, Comparable {
+    case tooShort, weak, fair, good, strong
+
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    init(_ passphrase: String) {
+        let length = passphrase.count
+        guard length >= 8 else { self = .tooShort; return }
+        var classes = 0
+        if passphrase.rangeOfCharacter(from: .lowercaseLetters) != nil { classes += 1 }
+        if passphrase.rangeOfCharacter(from: .uppercaseLetters) != nil { classes += 1 }
+        if passphrase.rangeOfCharacter(from: .decimalDigits) != nil { classes += 1 }
+        if passphrase.rangeOfCharacter(from: CharacterSet.alphanumerics.inverted) != nil { classes += 1 }
+        let words = passphrase.split(whereSeparator: { $0 == " " || $0 == "-" }).count
+        var score = 0
+        if length >= 12 { score += 1 }
+        if length >= 16 { score += 1 }
+        if length >= 24 || words >= 4 { score += 1 }
+        if classes >= 3 { score += 1 }
+        switch score {
+        case 0: self = .weak
+        case 1: self = .fair
+        case 2: self = .good
+        default: self = .strong
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .tooShort: "Too short"
+        case .weak: "Weak"
+        case .fair: "Fair"
+        case .good: "Good"
+        case .strong: "Strong"
+        }
+    }
+}

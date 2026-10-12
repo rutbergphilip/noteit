@@ -14,6 +14,7 @@ struct MenuBarView: View {
     @State private var savedNotice: String?
     @State private var hovered: UUID?
     @StateObject private var windowBox = WindowBox()
+    @ObservedObject private var sync = SyncController.shared
 
     private static let recentLimit = 12
 
@@ -39,6 +40,10 @@ struct MenuBarView: View {
             Divider()
             noteList
             Divider()
+            if sync.isConfigured {
+                MenuBarSyncRow()
+                Divider()
+            }
             footer
         }
         .frame(width: 340, height: 460)

@@ -150,6 +150,13 @@ struct NoteRow: View {
                     .lineLimit(1)
                     .foregroundStyle(note.title.isEmpty ? .secondary : .primary)
                 Spacer(minLength: 4)
+                if let source = note.conflictSource {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 10))
+                        .foregroundStyle(.orange)
+                        .help("Conflict copy from \(source)")
+                        .accessibilityLabel("Conflict copy from \(source)")
+                }
                 if note.isPinned {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 10))

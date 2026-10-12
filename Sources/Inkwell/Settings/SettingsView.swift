@@ -2,12 +2,16 @@ import SwiftUI
 
 /// Inkwell › Settings… (⌘,)
 struct SettingsView: View {
-    enum Tab: Hashable { case general, shortcuts, editor, about }
+    enum Tab: String, Hashable { case general, shortcuts, editor, sync, about }
 
-    @State private var tab: Tab = .general
+    @AppStorage(SettingsTabRouter.key) private var tabRaw = Tab.general.rawValue
+
+    private var tab: Binding<Tab> {
+        Binding(get: { Tab(rawValue: tabRaw) ?? .general }, set: { tabRaw = $0.rawValue })
+    }
 
     var body: some View {
-        TabView(selection: $tab) {
+        TabView(selection: tab) {
             GeneralSettingsView()
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(Tab.general)
@@ -17,6 +21,9 @@ struct SettingsView: View {
             EditorSettingsView()
                 .tabItem { Label("Editor", systemImage: "textformat") }
                 .tag(Tab.editor)
+            SyncSettingsView()
+                .tabItem { Label("Sync", systemImage: "arrow.triangle.2.circlepath.icloud") }
+                .tag(Tab.sync)
             AboutSettingsView()
                 .tabItem { Label("About", systemImage: "info.circle") }
                 .tag(Tab.about)
@@ -24,19 +31,26 @@ struct SettingsView: View {
         .frame(width: 520)
         .onReceive(NotificationCenter.default.publisher(for: .inkwellShowSettingsTab)) { note in
             if let raw = note.object as? String {
-                switch raw {
-                case "shortcuts": tab = .shortcuts
-                case "editor": tab = .editor
-                case "about": tab = .about
-                default: tab = .general
-                }
+                tabRaw = (Tab(rawValue: raw) ?? .general).rawValue
             }
         }
     }
 }
 
+/// Opens Settings on a specific tab (the selection lives in UserDefaults, so it works before the window exists).
+@MainActor
+enum SettingsTabRouter {
+    static let key = "settingsTab"
+
+    static func show(_ tab: SettingsView.Tab, using openSettings: OpenSettingsAction? = nil) {
+        UserDefaults.standard.set(tab.rawValue, forKey: key)
+        NotificationCenter.default.post(name: .inkwellShowSettingsTab, object: tab.rawValue)
+        SettingsOpener.open(using: openSettings)
+    }
+}
+
 extension Notification.Name {
-    /// Object: "general" | "shortcuts" | "editor" | "about".
+    /// Object: "general" | "shortcuts" | "editor" | "sync" | "about".
     static let inkwellShowSettingsTab = Notification.Name("inkwellShowSettingsTab")
 }
 

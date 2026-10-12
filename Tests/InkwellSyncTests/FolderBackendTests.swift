@@ -47,6 +47,20 @@ final class FolderBackendTests: XCTestCase {
         XCTAssertEqual(try tempFiles(), [])
     }
 
+    func testConcurrentCreateFromSeparateInstancesHasOneWinner() async throws {
+        let backends = (0..<8).map { _ in FolderBackend(root: root) }
+        let wins = await withTaskGroup(of: Bool.self) { group in
+            for (index, backend) in backends.enumerated() {
+                group.addTask {
+                    (try? await backend.put("manifest", data: Data([UInt8(index)]), ifMatch: nil, ifNoneMatch: true)) != nil
+                }
+            }
+            return await group.reduce(0) { $0 + ($1 ? 1 : 0) }
+        }
+        XCTAssertEqual(wins, 1)
+        XCTAssertEqual(try tempFiles(), [])
+    }
+
     func testIfMatchFailsOnStaleETag() async throws {
         let first = try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
         let second = try await backend.put("k", data: Data([2]), ifMatch: first, ifNoneMatch: false)
