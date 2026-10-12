@@ -67,6 +67,7 @@ public actor SyncEngine {
     static let defaultIterations = 210_000
     static let deviceWriteInterval: TimeInterval = 10 * 60
     static let tombstoneRetention: TimeInterval = 30 * 24 * 60 * 60
+    static let sidecarRetention: TimeInterval = 30 * 24 * 60 * 60
 
     private let backend: StorageBackend
     private let cipher: SyncCipher
@@ -227,6 +228,7 @@ public actor SyncEngine {
         for id in ordered(ids, pass) {
             try await processSafely(id, pass)
         }
+        try await guarded(pass) { try await self.resolveSidecars(pass) }
 
         // Push conflict copies in the same pass so devices converge one round sooner.
         if pass.importedCopies {
@@ -334,7 +336,10 @@ public actor SyncEngine {
 
         switch action {
         case .none:
-            break
+            if let base, let localRecord, kind == .note, base.bodyETag != nil, base.bodyETag != pass.index.bodies[id],
+               base.revision == localRecord.revision, metaETag == base.remoteMetaETag {
+                try await repushBody(id, base: base, pass)
+            }
         case .push:
             guard let localRecord else { return }
             try await push(id, kind: localRecord.kind, remoteETag: metaETag, pass)
@@ -400,10 +405,11 @@ public actor SyncEngine {
             pass.report.skipped += 1
             return false
         }
+        var bodyETag: String?
         if let body = payload.body {
-            try await backend.put(RemoteLayout.body(id), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
+            bodyETag = try await backend.put(RemoteLayout.body(id), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
         }
-        state.bases[id] = .init(revision: payload.revision, remoteMetaETag: newETag, replacedMetaETag: remoteETag)
+        state.bases[id] = .init(revision: payload.revision, remoteMetaETag: newETag, replacedMetaETag: remoteETag, bodyETag: bodyETag)
         state.pendingPushes[id] = nil
         try saveState()
         pass.report.pushed += 1
@@ -436,6 +442,7 @@ public actor SyncEngine {
 
         if envelope.revision == localRecord.revision {
             // Our own write from an interrupted pass: finish it instead of copying ourselves.
+            var bodyETag = remote.bodyETag
             if remote.payload == nil {
                 let payload = try await local.export(id, kind: kind)
                 guard payload.revision == envelope.revision else {
@@ -443,10 +450,11 @@ public actor SyncEngine {
                     return
                 }
                 if let body = payload.body {
-                    try await backend.put(RemoteLayout.body(id), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
+                    bodyETag = try await backend.put(RemoteLayout.body(id), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
                 }
             }
-            state.bases[id] = .init(revision: envelope.revision, remoteMetaETag: remote.etag)
+            let owned = envelope.deviceID == deviceID
+            state.bases[id] = .init(revision: envelope.revision, remoteMetaETag: remote.etag, bodyETag: owned ? bodyETag : nil)
             state.pendingPushes[id] = nil
             try saveState()
             return
@@ -490,6 +498,105 @@ public actor SyncEngine {
         pass.report.conflicts += 1
         pass.importedCopies = true
         try await push(id, kind: kind, remoteETag: remote.etag, pass)
+    }
+
+    /// The meta is still the one this device wrote, so the body slot is ours too; put it back unconditionally.
+    private func repushBody(_ id: UUID, base: SyncState.Base, _ pass: Pass) async throws {
+        let payload = try await local.export(id, kind: .note)
+        guard payload.revision == base.revision, let body = payload.body else { return }
+        let etag = try await backend.put(RemoteLayout.body(id), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
+        state.bases[id]?.bodyETag = etag
+        try saveState()
+        pass.report.pushed += 1
+    }
+
+    /// Imports sync-tool conflict copies of metas, deletes duplicates, and ages out anything it can't use.
+    private func resolveSidecars(_ pass: Pass) async throws {
+        let sidecars = pass.index.sidecars
+        let listed = Set(sidecars.map(\.key))
+        var changed = false
+        for key in state.sidecarFirstSeen.keys where !listed.contains(key) {
+            state.sidecarFirstSeen[key] = nil
+            changed = true
+        }
+        var consumed: Set<String> = []
+        for sidecar in sidecars {
+            guard case .meta(let kind) = sidecar.role else { continue }
+            do {
+                if let used = try await resolveSidecar(sidecar, kind: kind, bodies: sidecars.filter { $0.id == sidecar.id && $0.role == .body }, pass) {
+                    consumed.insert(sidecar.key)
+                    consumed.formUnion(used)
+                }
+            } catch let error as StorageError where Self.isFatal(error) {
+                throw error
+            } catch {
+                pass.report.errors.append("\(sidecar.key): \(error)")
+            }
+        }
+        let cutoff = now().addingTimeInterval(-Self.sidecarRetention)
+        for sidecar in sidecars {
+            if consumed.contains(sidecar.key) {
+                try await deleteIfPresent(sidecar.key)
+                if state.sidecarFirstSeen.removeValue(forKey: sidecar.key) != nil { changed = true }
+            } else if let first = state.sidecarFirstSeen[sidecar.key] {
+                guard first < cutoff else { continue }
+                try await deleteIfPresent(sidecar.key)
+                state.sidecarFirstSeen[sidecar.key] = nil
+                changed = true
+            } else {
+                state.sidecarFirstSeen[sidecar.key] = now()
+                changed = true
+            }
+        }
+        if changed { try saveState() }
+    }
+
+    /// Returns the sidecar keys to delete, or nil to leave the sidecar for later (or for aging out).
+    private func resolveSidecar(_ sidecar: RemoteIndex.Sidecar, kind: RecordKind, bodies: [RemoteIndex.Sidecar], _ pass: Pass) async throws -> [String]? {
+        let id = sidecar.id
+        let canonical = RemoteLayout.meta(kind, id)
+        // Sync tools copy bytes, so the sidecar is still sealed for its canonical key.
+        guard let envelope = try? Self.decode(RemoteEnvelope.self, from: try open(try await backend.get(sidecar.key).data, key: canonical)),
+              envelope.id == id, envelope.kind == kind else { return nil }
+        let localRevision = await local.revision(of: id, kind: kind)
+        var remote: RemoteEnvelope?
+        if pass.index.metas[id]?.kind == kind {
+            remote = try await fetchEnvelope(id, kind: kind).envelope
+        }
+        if envelope.revision == localRevision || envelope.revision == remote?.revision { return [] }
+
+        var body: Data?
+        var usedBodies: [String] = []
+        if let expected = envelope.bodySHA256 {
+            for candidate in [RemoteLayout.body(id)] + bodies.map(\.key) {
+                guard let sealed = try? await backend.get(candidate).data,
+                      let opened = try? open(sealed, key: RemoteLayout.body(id)),
+                      Self.sha256Hex(opened) == expected else { continue }
+                body = opened
+                if candidate != RemoteLayout.body(id) { usedBodies = [candidate] }
+                break
+            }
+            guard body != nil else { return nil }
+        }
+        let payload = RecordPayload(
+            id: id, kind: kind, revision: envelope.revision, modifiedAt: envelope.modifiedAt,
+            deviceID: envelope.deviceID, meta: envelope.meta, body: body
+        )
+        if kind == .notebook {
+            // Notebooks have no conflict copies; like resolveConflict, the newer edit wins.
+            let localRecord = await local.records().first { $0.id == id && $0.kind == kind }
+            guard let localRecord, localRecord.revision == localRevision else { return [] }
+            if envelope.modifiedAt > localRecord.modifiedAt, envelope.modifiedAt > remote?.modifiedAt ?? .distantPast {
+                try await local.apply(payload)
+                pass.report.pulled += 1
+                pass.report.conflicts += 1
+            }
+            return []
+        }
+        try await local.importConflictCopy(payload, fromDevice: envelope.deviceName)
+        pass.report.conflicts += 1
+        pass.importedCopies = true
+        return usedBodies
     }
 
     /// `metaETag` is the remote meta this decision was based on (nil when there was none). The tombstone goes
@@ -563,6 +670,8 @@ public actor SyncEngine {
         var etag: String
         /// nil when the body is missing or doesn't match `bodySHA256` (an upload in progress).
         var payload: RecordPayload?
+        /// The etag of the matching body, when there is one.
+        var bodyETag: String? = nil
     }
 
     private func fetchEnvelope(_ id: UUID, kind: RecordKind) async throws -> (envelope: RemoteEnvelope, etag: String) {
@@ -577,10 +686,11 @@ public actor SyncEngine {
     private func fetchRemote(_ id: UUID, kind: RecordKind) async throws -> FetchedRemote {
         let (envelope, etag) = try await fetchEnvelope(id, kind: kind)
         var body: Data?
+        var bodyETag: String?
         if let expected = envelope.bodySHA256 {
             let sealed: Data
             do {
-                sealed = try await backend.get(RemoteLayout.body(id)).data
+                (sealed, bodyETag) = try await backend.get(RemoteLayout.body(id))
             } catch StorageError.notFound {
                 return FetchedRemote(envelope: envelope, etag: etag, payload: nil)
             }
@@ -594,7 +704,7 @@ public actor SyncEngine {
             id: id, kind: kind, revision: envelope.revision, modifiedAt: envelope.modifiedAt,
             deviceID: envelope.deviceID, meta: envelope.meta, body: body
         )
-        return FetchedRemote(envelope: envelope, etag: etag, payload: payload)
+        return FetchedRemote(envelope: envelope, etag: etag, payload: payload, bodyETag: bodyETag)
     }
 
     private func fetchTombstone(_ id: UUID) async throws -> Tombstone {
@@ -661,9 +771,18 @@ public actor SyncEngine {
 
 /// One `list` of the remote root, indexed by record id.
 struct RemoteIndex {
+    /// A copy that a file-sync tool (iCloud Drive, Dropbox, Syncthing) left next to a record, e.g. `<id> 2.meta`.
+    struct Sidecar: Equatable {
+        enum Role: Equatable { case meta(RecordKind), body, other }
+        var key: String
+        var id: UUID
+        var role: Role
+    }
+
     var metas: [UUID: (kind: RecordKind, etag: String)] = [:]
     var bodies: [UUID: String] = [:]
     var tombstones: [UUID: String] = [:]
+    var sidecars: [Sidecar] = []
     var hasManifest = false
 
     init(_ objects: [RemoteObject]) {
@@ -680,12 +799,18 @@ struct RemoteIndex {
             func id(_ suffix: String) -> UUID? {
                 name.hasSuffix(suffix) ? UUID(uuidString: String(name.dropLast(suffix.count))) : nil
             }
+            func sidecar(_ role: Sidecar.Role) {
+                guard name.count > 36, let id = UUID(uuidString: String(name.prefix(36))) else { return }
+                sidecars.append(Sidecar(key: object.key, id: id, role: role))
+            }
             switch parts[0] {
             case "notebooks":
                 if let id = id(".json") { metas[id] = (.notebook, object.etag) }
+                else { sidecar(name.hasSuffix(".json") ? .meta(.notebook) : .other) }
             case "notes":
                 if let id = id(".meta") { metas[id] = (.note, object.etag) }
                 else if let id = id(".body") { bodies[id] = object.etag }
+                else { sidecar(name.hasSuffix(".meta") ? .meta(.note) : name.contains(".body") ? .body : .other) }
             case "tombstones":
                 if let id = id(".json") { tombstones[id] = object.etag }
             default:

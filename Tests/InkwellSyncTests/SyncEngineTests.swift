@@ -894,4 +894,131 @@ final class SyncEngineTests: XCTestCase {
             XCTAssertEqual(report, SyncReport())
         }
     }
+
+    // MARK: Sync-tool sidecars and orphaned bodies
+
+    private func sidecarKey(_ id: UUID, _ suffix: String, folder: String = "notes") -> String {
+        "\(RemoteLayout.root)\(folder)/\(id.uuidString)\(suffix)"
+    }
+
+    /// Writes a sidecar envelope as a sync tool would: the bytes of another device's canonical object under a renamed key.
+    private func writeSidecar(_ id: UUID, kind: RecordKind = .note, title: String, modifiedAt: Date = Date(), suffix: String) async throws {
+        let meta = try JSONEncoder().encode(FakeLocalStore.Meta(title: title))
+        let body = kind == .note ? FakeLocalStore.body(for: title) : nil
+        let envelope = RemoteEnvelope(id: id, kind: kind, revision: UUID(), modifiedAt: modifiedAt, deviceID: "id-C",
+                                      deviceName: "C", meta: meta, bodySHA256: body.map(SyncEngine.sha256Hex))
+        let folder = kind == .note ? "notes" : "notebooks"
+        let ext = kind == .note ? ".meta" : ".json"
+        try await memory.put(sidecarKey(id, suffix + ext, folder: folder),
+                             data: try seal(try SyncEngine.encode(envelope), key: RemoteLayout.meta(kind, id)), ifMatch: nil, ifNoneMatch: false)
+        if let body {
+            try await memory.put(sidecarKey(id, suffix + ".body"), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
+        }
+    }
+
+    func testRemoteIndexRecognisesSyncToolConflictNames() {
+        let id = UUID()
+        let u = id.uuidString
+        let names = [
+            "notes/\(u) 2.meta", "notes/\(u) (conflicted copy 2026-10-12 10.01.02).meta",
+            "notes/\(u).sync-conflict-20261012-100102-ABCDEFG.meta", "notes/\(u) 2.body",
+            "notebooks/\(u) 2.json", "notes/\(u) 2.txt",
+        ]
+        let canonical = ["notes/\(u).meta", "notes/\(u).body", "notebooks/\(u).json", "tombstones/\(u) 2.json", "notes/readme.meta"]
+        let index = RemoteIndex((names + canonical).map { RemoteObject(key: RemoteLayout.root + $0, etag: "e", size: 1) })
+        XCTAssertEqual(index.sidecars.map(\.key).sorted(), names.map { RemoteLayout.root + $0 }.sorted())
+        XCTAssertTrue(index.sidecars.allSatisfy { $0.id == id })
+        let roles = Dictionary(uniqueKeysWithValues: index.sidecars.map { (String($0.key.dropFirst(RemoteLayout.root.count)), $0.role) })
+        XCTAssertEqual(roles["notes/\(u) 2.meta"], .meta(.note))
+        XCTAssertEqual(roles["notes/\(u).sync-conflict-20261012-100102-ABCDEFG.meta"], .meta(.note))
+        XCTAssertEqual(roles["notes/\(u) 2.body"], .body)
+        XCTAssertEqual(roles["notebooks/\(u) 2.json"], .meta(.notebook))
+        XCTAssertEqual(roles["notes/\(u) 2.txt"], .other)
+        XCTAssertEqual(index.metas[id]?.kind, .notebook)
+        XCTAssertNotNil(index.bodies[id])
+    }
+
+    func testSyncToolConflictCopyIsImportedAndRemoved() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        try await writeSidecar(id, title: "edited in a sync-tool conflict", suffix: " (conflicted copy 2026-10-12)")
+
+        let report = try await a.engine.sync()
+        XCTAssertEqual(report.conflicts, 1)
+        XCTAssertTrue(report.errors.isEmpty, "\(report.errors)")
+        try await sync(b, a)
+        let copies = await b.store.conflictCopies().map(\.title)
+        XCTAssertEqual(copies, ["edited in a sync-tool conflict (conflict — C)"])
+        let original = await b.store.title(id)
+        XCTAssertEqual(original, "v1")
+        let keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains { $0.contains("conflicted copy") })
+        await assertConverged(a, b)
+    }
+
+    func testDuplicateSidecarIsDeletedAndOrphanBodyAgesOut() async throws {
+        let a = device("A")
+        let id = await a.store.create(title: "v1")
+        try await sync(a)
+        let meta = try await memory.get(RemoteLayout.meta(.note, id)).data
+        let body = try await memory.get(RemoteLayout.body(id)).data
+        try await memory.put(sidecarKey(id, " 2.meta"), data: meta, ifMatch: nil, ifNoneMatch: false)
+        try await memory.put(sidecarKey(id, " 2.body"), data: body, ifMatch: nil, ifNoneMatch: false)
+
+        let report = try await a.engine.sync()
+        XCTAssertEqual(report.conflicts, 0)
+        let copies = await a.store.conflictCopies()
+        XCTAssertTrue(copies.isEmpty)
+        var keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(sidecarKey(id, " 2.meta")))
+        XCTAssertTrue(keys.contains(sidecarKey(id, " 2.body")), "unmatched bodies are kept for a while")
+
+        clock.advance(29 * 86_400)
+        try await sync(a)
+        keys = try await remoteKeys()
+        XCTAssertTrue(keys.contains(sidecarKey(id, " 2.body")))
+        clock.advance(2 * 86_400)
+        try await sync(a)
+        keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(sidecarKey(id, " 2.body")))
+        XCTAssertTrue(SyncState.load(from: a.stateURL).sidecarFirstSeen.isEmpty)
+    }
+
+    func testNewerNotebookSidecarWins() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(kind: .notebook, title: "Work")
+        try await sync(a, b)
+        try await writeSidecar(id, kind: .notebook, title: "Work (renamed)", modifiedAt: Date().addingTimeInterval(60), suffix: " 2")
+        try await sync(a, a, b)
+        let onA = await a.store.title(id)
+        let onB = await b.store.title(id)
+        XCTAssertEqual(onA, "Work (renamed)")
+        XCTAssertEqual(onB, "Work (renamed)")
+        let keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(sidecarKey(id, " 2.json", folder: "notebooks")))
+        await assertConverged(a, b)
+    }
+
+    func testOwnerRepushesMissingOrReplacedBody() async throws {
+        let a = device("A")
+        let missing = await a.store.create(title: "missing body")
+        let replaced = await a.store.create(title: "replaced body")
+        try await sync(a)
+        try await memory.delete(RemoteLayout.body(missing))
+        try await memory.put(RemoteLayout.body(replaced), data: try seal(Data("stale".utf8), key: RemoteLayout.body(replaced)), ifMatch: nil, ifNoneMatch: false)
+
+        let healed = try await a.engine.sync()
+        XCTAssertTrue(healed.errors.isEmpty, "\(healed.errors)")
+        let b = device("B")
+        let report = try await b.engine.sync()
+        XCTAssertEqual(report.pulled, 2)
+        XCTAssertEqual(report.skipped, 0)
+        await assertConverged(a, b)
+
+        let before = await counters()
+        try await sync(a, b)
+        let after = await counters()
+        XCTAssertEqual(after.put, before.put, "healed bodies must not ping-pong")
+    }
 }
