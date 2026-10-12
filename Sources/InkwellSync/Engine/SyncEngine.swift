@@ -99,7 +99,14 @@ public actor SyncEngine {
         let previous = tail
         let pass = Task { () async throws -> SyncReport in
             await previous?.value
-            return try await self.runPass()
+            do {
+                let report = try await self.runPass()
+                await self.local.passDidFinish()
+                return report
+            } catch {
+                await self.local.passDidFinish()
+                throw error
+            }
         }
         tail = Task { _ = try? await pass.value }
         return try await pass.value

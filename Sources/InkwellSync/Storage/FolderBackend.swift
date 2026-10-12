@@ -84,8 +84,7 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
         // rename keeps the inode and mtime, so the temp file's stat describes the final object.
         let newETag = etag(key: key, stamp: stamp, content: data)
 
-        return try lock.withLock {
-            // ifMatch is only enforced within this process; across machines this is best effort.
+        return try withStoreLock {
             let current = try? fileInfo(key: key, path: url.path).etag
             if (ifNoneMatch && current != nil) || (ifMatch != nil && current != ifMatch) {
                 try? fileManager.removeItem(at: temp)
@@ -114,8 +113,7 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
 
     public func delete(_ key: String, ifMatch: String?) async throws {
         let url = try fileURL(for: key)
-        try lock.withLock {
-            // Like put, ifMatch is only enforced within this process.
+        try withStoreLock {
             if let ifMatch {
                 let current: String
                 do {
@@ -131,6 +129,25 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
                 if errno == ENOENT { throw StorageError.notFound(key) }
                 throw StorageError.io(String(cString: strerror(errno)))
             }
+        }
+    }
+
+    /// Serializes conditional writes within this process (NSLock) and across processes/machines
+    /// sharing the folder (advisory flock on a hidden lock file). If the volume doesn't support
+    /// locking, falls back to the in-process lock only.
+    private func withStoreLock<T>(_ body: () throws -> T) throws -> T {
+        try lock.withLock {
+            let fd = Darwin.open(root.appendingPathComponent(".inkwell-lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+            guard fd >= 0 else { return try body() }
+            defer { close(fd) }
+            var locked = false
+            for attempt in 0..<200 {
+                if flock(fd, LOCK_EX | LOCK_NB) == 0 { locked = true; break }
+                if errno != EWOULDBLOCK { break }
+                if attempt < 199 { usleep(10_000) }
+            }
+            defer { if locked { flock(fd, LOCK_UN) } }
+            return try body()
         }
     }
 
