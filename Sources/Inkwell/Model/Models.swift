@@ -7,6 +7,8 @@ struct Notebook: Identifiable, Codable, Hashable {
     var symbol: String
     var colorHex: String
     var sortIndex: Int
+    var revision: UUID? = nil
+    var modifiedAt: Date? = nil
 }
 
 struct NoteMeta: Identifiable, Codable, Hashable {
@@ -18,6 +20,9 @@ struct NoteMeta: Identifiable, Codable, Hashable {
     var createdAt: Date
     var updatedAt: Date
     var tags: [String]
+    var revision: UUID? = nil
+    /// Device name when this note is a sync conflict copy.
+    var conflictSource: String? = nil
 }
 
 enum SidebarSelection: Hashable {

@@ -86,4 +86,6 @@ extension Notification.Name {
     static let inkwellFocusSearch = Notification.Name("inkwellFocusSearch")
     static let inkwellShowMainWindow = Notification.Name("inkwellShowMainWindow")
     static let inkwellNewNotebook = Notification.Name("inkwellNewNotebook")
+    /// Posted after a user change to the library has been saved (sync uses it to schedule a pass).
+    static let inkwellLocalChange = Notification.Name("inkwellLocalChange")
 }
