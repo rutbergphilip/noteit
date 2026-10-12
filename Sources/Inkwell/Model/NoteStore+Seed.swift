@@ -50,6 +50,7 @@ extension NoteStore {
         for entry in manifest.notes {
             guard note(with: entry.id) != nil else { continue }
             // Open editors commit pending typing first, so an in-flight edit counts.
+            commitStagedEditorBody(entry.id)
             NotificationCenter.default.post(name: .inkwellSyncWillApplyRemote, object: entry.id)
             guard let meta = note(with: entry.id), isPristine(meta, entry) else { continue }
             applyRemoteDeletion(meta.id, kind: .note)

@@ -18,6 +18,7 @@ struct NoteListView: View {
         case .allNotes: return "All Notes"
         case .pinned: return "Pinned"
         case .recent: return "Recent"
+        case .conflicts: return "Conflicts"
         case .notebook(let id): return store.notebook(with: id)?.name ?? "Notebook"
         case .tag(let tag): return "#\(tag)"
         }
@@ -132,6 +133,9 @@ struct NoteListView: View {
             Divider()
             Button("No Notebook") { store.moveNote(note.id, to: nil) }
                 .disabled(note.notebookID == nil)
+        }
+        if note.conflictSource != nil {
+            Button("Mark Conflict Resolved") { store.markConflictResolved(note.id) }
         }
         Divider()
         Button("Delete…", role: .destructive) { notePendingDelete = note }

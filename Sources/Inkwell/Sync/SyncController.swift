@@ -34,6 +34,7 @@ enum SyncSetupError: LocalizedError {
     case folderUnavailable(String)
     case missingField(String)
     case invalidEndpoint
+    case insecureEndpoint(SyncProvider)
     case storageReset
     case keychain(String)
 
@@ -42,6 +43,7 @@ enum SyncSetupError: LocalizedError {
         case .folderUnavailable(let path): "The folder “\(path)” isn't available. Is the drive or NAS connected?"
         case .missingField(let name): "Enter \(name)."
         case .invalidEndpoint: "The endpoint must be a full URL, such as https://s3.eu-north-1.amazonaws.com."
+        case .insecureEndpoint(let provider): "\(provider.displayName) requires an https:// endpoint."
         case .storageReset: "Sync storage was reset or moved. Disconnect and connect again to start over."
         case .keychain(let message): message
         }
@@ -60,6 +62,8 @@ final class SyncController: ObservableObject {
     @Published private(set) var lastSync: Date?
     @Published private(set) var devices: [DeviceInfo] = []
     @Published private(set) var conflictCount = 0
+    /// The storage rejected the saved access key/secret; Settings offers "Update Credentials…".
+    @Published private(set) var credentialsRejected = false
 
     var isConfigured: Bool { configuration != nil }
 
@@ -87,6 +91,8 @@ final class SyncController: ObservableObject {
     private var observers: [NSObjectProtocol] = []
     private var workspaceObservers: [NSObjectProtocol] = []
     private var notesSubscription: AnyCancellable?
+    /// The running engine pass; disconnect/connect cancel it and wait, so it can't write state afterwards.
+    private var inFlightPass: (worker: Task<SyncReport, Error>, done: Task<Void, Never>)?
     private var intervalOverride: TimeInterval?
     /// DEBUG overrides keep everything in memory: nothing goes to UserDefaults or the keychain.
     private var ephemeralSecrets: Secrets?
@@ -125,7 +131,24 @@ final class SyncController: ObservableObject {
         self.store = store
     }
 
-    private var stateURL: URL { store.rootURL.appendingPathComponent("sync-state.json") }
+    /// One state file per remote store, so a pass still finishing for an old store can't feed a new one.
+    private func stateURL(for config: SyncConfiguration) -> URL {
+        store.rootURL.appendingPathComponent("sync-state-\(config.storeKey).json")
+    }
+
+    private var legacyStateURL: URL { store.rootURL.appendingPathComponent("sync-state.json") }
+
+    /// `sync-state.json` from older builds belonged to the configured store.
+    private func migrateLegacyState(to config: SyncConfiguration) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: legacyStateURL.path) else { return }
+        let keyed = stateURL(for: config)
+        if fm.fileExists(atPath: keyed.path) {
+            try? fm.removeItem(at: legacyStateURL)
+        } else if (try? fm.moveItem(at: legacyStateURL, to: keyed)) == nil {
+            try? fm.removeItem(at: legacyStateURL)
+        }
+    }
 
     // MARK: - Lifecycle
 
@@ -134,6 +157,7 @@ final class SyncController: ObservableObject {
         if startFromDebugEnvironment() { return }
         #endif
         guard let config = SyncConfiguration.load() else { return }
+        migrateLegacyState(to: config)
         activate(config, session: nil)
     }
 
@@ -168,7 +192,10 @@ final class SyncController: ObservableObject {
         }
 
         deactivate()
+        await stopInFlightPass()
+        let stateURL = stateURL(for: config)
         try? FileManager.default.removeItem(at: stateURL)
+        try? FileManager.default.removeItem(at: legacyStateURL)
         store.clearAllSyncDeletions()
         if created {
             store.discardSeedManifest()
@@ -211,8 +238,58 @@ final class SyncController: ObservableObject {
         requestSync(after: 0)
     }
 
+    /// Replaces the S3 access key and secret after the storage rejected them, then resumes syncing.
+    func updateCredentials(accessKey: String, secret: String) async throws {
+        guard let config = configuration, config.provider.isS3 else { return }
+        try await testCredentials(accessKey: accessKey, secret: secret)
+        guard configuration == config else { return }
+        if ephemeralSecrets != nil {
+            ephemeralSecrets?.accessKey = accessKey
+            ephemeralSecrets?.secret = secret
+        } else {
+            do {
+                try Keychain.set(accessKey, for: .s3AccessKey)
+                try Keychain.set(secret, for: .s3Secret)
+            } catch {
+                throw SyncSetupError.keychain("Couldn't save your credentials to the keychain. \(error.localizedDescription)")
+            }
+        }
+        credentialsRejected = false
+        session = nil
+        failures = 0
+        if status != .needsPassphrase {
+            paused = false
+            status = .idle(lastSync: lastSync)
+        }
+        requestSync(after: 0)
+    }
+
+    /// Checks that the key pair can read the connected library, without saving anything.
+    func testCredentials(accessKey: String, secret: String) async throws {
+        guard let config = configuration, config.provider.isS3 else { return }
+        let destination = try makeDestination(config, accessKey: accessKey, secret: secret)
+        let inspection = try await withAccess(destination) {
+            try await Self.offMain { () async throws -> RemoteInspection in
+                try await destination.backend.probe()
+                return try await Self.inspect(destination.backend)
+            }
+        }
+        switch inspection {
+        case .empty: throw SyncSetupError.storageReset
+        case .unsupported(let version): throw SyncError.unsupportedFormat(version)
+        case .plaintext, .encrypted: break
+        }
+    }
+
+    /// Access key ID currently used (not secret), for display.
+    var savedAccessKey: String? {
+        guard configuration?.provider.isS3 == true else { return nil }
+        return secrets.accessKey
+    }
+
     /// Stops syncing and forgets the destination. Notes on this Mac are never touched.
-    func disconnect() {
+    func disconnect() async {
+        let oldStateURL = configuration.map { stateURL(for: $0) }
         deactivate()
         configuration = nil
         status = .notConfigured
@@ -227,7 +304,17 @@ final class SyncController: ObservableObject {
             Keychain.deleteAll()
         }
         UserDefaults.standard.removeObject(forKey: Self.lastSyncKey)
-        removeLocalSyncFiles()
+        credentialsRejected = false
+        await stopInFlightPass()
+        // A reconnect may have happened while waiting; it manages its own state file.
+        let fm = FileManager.default
+        if let oldStateURL, configuration.map({ stateURL(for: $0) }) != oldStateURL {
+            try? fm.removeItem(at: oldStateURL)
+        }
+        if configuration == nil {
+            try? fm.removeItem(at: legacyStateURL)
+            store.clearAllSyncDeletions()
+        }
     }
 
     func testConnection(_ config: SyncConfiguration, accessKey: String?, secret: String?) async -> Result<RemoteInspection, Error> {
@@ -315,18 +402,22 @@ final class SyncController: ObservableObject {
         notesSubscription = nil
     }
 
-    private func removeLocalSyncFiles() {
-        try? FileManager.default.removeItem(at: stateURL)
-        store.clearAllSyncDeletions()
-        // A pass that was already running may still write the state file; clean up after it.
-        if passInFlight {
-            let gen = generation
-            Task { [weak self] in
-                while let self, self.passInFlight { try? await Task.sleep(for: .milliseconds(200)) }
-                guard let self, gen == self.generation, !self.isConfigured else { return }
-                try? FileManager.default.removeItem(at: self.stateURL)
-                self.store.clearAllSyncDeletions()
-            }
+    /// Cancels the running pass (the deactivated adapter refuses further applies) and waits for it to end.
+    private func stopInFlightPass() async {
+        guard let pass = inFlightPass else { return }
+        pass.worker.cancel()
+        await pass.done.value
+    }
+
+    /// Runs one engine pass at utility priority, tracked in `inFlightPass`. The caller resumes through a
+    /// continuation so awaiting from the main actor doesn't raise the pass's priority.
+    private func runTrackedPass(_ session: Session) async throws -> SyncReport {
+        let worker = Task.detached(priority: .utility) { try await session.engine.sync() }
+        let done = Task.detached(priority: .utility) { _ = await worker.result }
+        inFlightPass = (worker, done)
+        defer { if inFlightPass?.done == done { inFlightPass = nil } }
+        return try await withCheckedThrowingContinuation { continuation in
+            Task.detached(priority: .utility) { continuation.resume(with: await worker.result) }
         }
     }
 
@@ -432,7 +523,7 @@ final class SyncController: ObservableObject {
             guard gen == generation else { return nil }
             let destination = Destination(backend: session.backend, folder: session.folder, scoped: session.scoped)
             let report = try await withAccess(destination) {
-                try await Self.offMain { try await session.engine.sync() }
+                try await self.runTrackedPass(session)
             }
             guard gen == generation else { return nil }
             let now = Date()
@@ -440,6 +531,7 @@ final class SyncController: ObservableObject {
             lastSync = now
             if ephemeralSecrets == nil { UserDefaults.standard.set(now, forKey: Self.lastSyncKey) }
             failures = 0
+            credentialsRejected = false
             status = .idle(lastSync: now)
             #if DEBUG
             if intervalOverride != nil, report != SyncReport() {
@@ -449,6 +541,9 @@ final class SyncController: ObservableObject {
             return nil
         } catch {
             guard gen == generation else { return nil }
+            #if DEBUG
+            if intervalOverride != nil { NSLog("InkwellSync: pass failed: \(Self.describe(error))") }
+            #endif
             return handle(error)
         }
     }
@@ -459,12 +554,15 @@ final class SyncController: ObservableObject {
             status = .needsPassphrase
             pause()
             return nil
-        case SyncError.unsupportedFormat, SyncError.encryptionMismatch, SyncSetupError.storageReset, SyncSetupError.missingField, SyncSetupError.invalidEndpoint:
+        case SyncError.unsupportedFormat, SyncError.encryptionMismatch, SyncError.invalidManifest,
+             SyncSetupError.storageReset, SyncSetupError.missingField, SyncSetupError.invalidEndpoint, SyncSetupError.insecureEndpoint,
+             StorageError.insecureConnectionBlocked:
             status = .error(Self.describe(error))
             pause()
             return nil
         case StorageError.unauthorized:
-            status = .error("Access was denied. Check your access key and secret in Settings.")
+            status = .error(Self.describe(error) + " Choose “Update Credentials…” in Settings › Sync.")
+            credentialsRejected = configuration?.provider.isS3 == true
             pause()
             return nil
         case StorageError.notFound(let key) where key == RemoteLayout.manifest():
@@ -491,10 +589,10 @@ final class SyncController: ObservableObject {
         if let session, !pendingDeviceRename { return session }
         if let session, pendingDeviceRename {
             pendingDeviceRename = false
-            var state = SyncState.load(from: stateURL)
+            var state = SyncState.load(from: stateURL(for: config))
             state.lastDeviceWrite = nil
-            try? state.save(to: stateURL)
-            let engine = SyncEngine(backend: session.backend, cipher: session.cipher, local: session.adapter, stateURL: stateURL,
+            try? state.save(to: stateURL(for: config))
+            let engine = SyncEngine(backend: session.backend, cipher: session.cipher, local: session.adapter, stateURL: stateURL(for: config),
                                     deviceID: config.deviceID, deviceName: config.deviceName)
             let renewed = Session(engine: engine, backend: session.backend, cipher: session.cipher, adapter: session.adapter,
                                   folder: session.folder, scoped: session.scoped)
@@ -517,7 +615,7 @@ final class SyncController: ObservableObject {
             }
         }
         let adapter = NoteStoreSyncAdapter(store: store, deviceID: config.deviceID)
-        let engine = SyncEngine(backend: destination.backend, cipher: cipher, local: adapter, stateURL: stateURL,
+        let engine = SyncEngine(backend: destination.backend, cipher: cipher, local: adapter, stateURL: stateURL(for: config),
                                 deviceID: config.deviceID, deviceName: config.deviceName)
         let session = Session(engine: engine, backend: destination.backend, cipher: cipher, adapter: adapter,
                               folder: destination.folder, scoped: destination.scoped)
@@ -552,6 +650,7 @@ final class SyncController: ObservableObject {
         guard let scheme = s3.endpoint.scheme?.lowercased(), ["http", "https"].contains(scheme), s3.endpoint.host != nil else {
             throw SyncSetupError.invalidEndpoint
         }
+        if scheme == "http", !config.provider.allowsPlainHTTP { throw SyncSetupError.insecureEndpoint(config.provider) }
         guard !s3.bucket.isEmpty else { throw SyncSetupError.missingField("a bucket name") }
         guard let accessKey, !accessKey.isEmpty else { throw SyncSetupError.missingField("an access key") }
         guard let secret, !secret.isEmpty else { throw SyncSetupError.missingField("a secret key") }
@@ -614,8 +713,14 @@ final class SyncController: ObservableObject {
             return "This library was created by a newer version of Inkwell. Update Inkwell to keep syncing."
         case SyncError.encryptionMismatch:
             return "This location already holds an unencrypted Inkwell library. Turn off encryption to join it, or choose another location."
-        case StorageError.unauthorized:
-            return "Access was denied. Check the access key, secret and bucket permissions."
+        case SyncError.invalidManifest(let detail):
+            return "Sync storage looks damaged: its manifest can't be read (\(detail)). Restore the “inkwell” folder from a backup, or disconnect and connect to an empty location."
+        case StorageError.unauthorized(let detail):
+            return describeAccessDenied(detail)
+        case StorageError.clockSkew:
+            return "Your Mac's clock is off — enable “Set time automatically” in System Settings › General › Date & Time. Inkwell will keep retrying."
+        case StorageError.insecureConnectionBlocked:
+            return "macOS blocked the unencrypted http:// connection. Use an https:// endpoint, or a local address such as nas.local or the NAS's IP address."
         case StorageError.network(let message):
             return "Can't reach the storage: \(message)"
         case StorageError.notFound(let key) where key == RemoteLayout.manifest():
@@ -631,6 +736,21 @@ final class SyncController: ObservableObject {
         default:
             return error.localizedDescription
         }
+    }
+
+    /// "Access was denied (Code)." plus a hint for common S3 error codes.
+    private static func describeAccessDenied(_ detail: String) -> String {
+        let code = detail.split(separator: ":", maxSplits: 1).first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
+        let hint: String
+        switch code {
+        case "InvalidAccessKeyId": hint = "The access key ID isn't recognized. Check it, or create a new key."
+        case "SignatureDoesNotMatch": hint = "The secret access key doesn't match the access key ID."
+        case "AccessDenied": hint = "The key doesn't have read and write access to this bucket."
+        case "ExpiredToken", "InvalidToken": hint = "The key has expired. Create a new one."
+        default: hint = "Check the access key, secret and bucket permissions."
+        }
+        let shown = code.isEmpty || code.hasPrefix("HTTP") ? detail : code
+        return shown.isEmpty ? "Access was denied. \(hint)" : "Access was denied (\(shown)). \(hint)"
     }
 
     // MARK: - DEBUG overrides
@@ -651,6 +771,21 @@ final class SyncController: ObservableObject {
         }
         if let raw = env["INKWELL_DEBUG_EDIT_AFTER"], let delay = TimeInterval(raw) {
             scheduleDebugEdit(after: delay)
+        }
+        // "<seconds>:<accessKey>:<secret>": headless "Update Credentials…".
+        if let raw = env["INKWELL_DEBUG_UPDATE_CREDENTIALS"] {
+            let parts = raw.split(separator: ":", maxSplits: 2).map(String.init)
+            if parts.count == 3, let delay = TimeInterval(parts[0]) {
+                Task {
+                    try? await Task.sleep(for: .seconds(delay))
+                    do {
+                        try await updateCredentials(accessKey: parts[1], secret: parts[2])
+                        NSLog("InkwellSync: credentials updated")
+                    } catch {
+                        NSLog("InkwellSync: credential update failed: \(Self.describe(error))")
+                    }
+                }
+            }
         }
         guard let json = env["INKWELL_SYNC_CONFIG"], let data = json.data(using: .utf8) else { return false }
         do {

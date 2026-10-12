@@ -158,8 +158,9 @@ struct RichTextEditor: NSViewRepresentable {
             controller.refresh()
         }
 
-        /// Writes pending edits to the store. With `deferred`, the text is snapshotted immediately but
-        /// handed to the store on the next main-queue turn (for callers inside SwiftUI view updates).
+        /// Writes pending edits to the store. With `deferred`, the text is snapshotted immediately and staged in
+        /// the store, which applies it on the next main-queue turn (for callers inside SwiftUI view updates)
+        /// or earlier if sync needs to see it.
         func commit(deferred: Bool = false) {
             cancelScheduledCommit()
             guard hasPendingChanges, let textView, !isLoading else { return }
@@ -168,9 +169,7 @@ struct RichTextEditor: NSViewRepresentable {
             let id = noteID
             let snapshot = NSAttributedString(attributedString: textView.attributedString())
             if deferred {
-                DispatchQueue.main.async {
-                    MainActor.assumeIsolated { NoteStore.shared.updateBody(id, snapshot) }
-                }
+                NoteStore.shared.stageEditorCommit(id, snapshot)
             } else {
                 NoteStore.shared.updateBody(id, snapshot)
             }

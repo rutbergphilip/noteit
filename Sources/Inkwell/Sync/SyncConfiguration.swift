@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import InkwellSync
 
@@ -59,6 +60,9 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 
     var isS3: Bool { self != .folder }
+
+    /// Self-hosted servers often only speak http on the local network; cloud providers always offer https.
+    var allowsPlainHTTP: Bool { self == .minio || self == .customS3 }
 
     var endpointTemplate: String {
         switch self {
@@ -150,6 +154,19 @@ struct SyncConfiguration: Codable, Equatable, Sendable {
         guard let s3 else { return provider.displayName }
         let prefix = s3.prefix.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         return prefix.isEmpty ? s3.bucket : "\(s3.bucket)/\(prefix)"
+    }
+
+    /// Identifies the remote store (not the credentials), e.g. to key the local sync state file.
+    var storeKey: String {
+        let parts: [String]
+        if provider == .folder {
+            parts = ["folder", folderPath.map { URL(fileURLWithPath: $0).standardizedFileURL.path } ?? ""]
+        } else {
+            parts = [provider.rawValue, s3?.endpoint.absoluteString.lowercased() ?? "", s3?.bucket ?? "",
+                     s3?.prefix.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""]
+        }
+        let digest = SHA256.hash(data: Data(parts.joined(separator: "\n").utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
     /// Resolves the folder, preferring the security-scoped bookmark and falling back to the stored path.

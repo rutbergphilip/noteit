@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CryptoKit
 import Foundation
 import InkwellSync
 
@@ -8,7 +9,9 @@ final class NoteStore: ObservableObject {
     static let shared = NoteStore()
 
     @Published var notebooks: [Notebook] = []
-    @Published var notes: [NoteMeta] = []
+    @Published var notes: [NoteMeta] = [] {
+        didSet { notesVersion &+= 1 }
+    }
     @Published var selection: SidebarSelection? = .allNotes {
         didSet { if selection != oldValue { editingNoteID = nil } }
     }
@@ -26,13 +29,13 @@ final class NoteStore: ObservableObject {
 
     /// Window during which notes count as "Recent".
     static let recentInterval: TimeInterval = 7 * 24 * 60 * 60
-    static let previewLength = 140
-    static let titleLength = 120
+    nonisolated static let previewLength = 140
+    nonisolated static let titleLength = 120
     /// Max clean (non-dirty, non-selected) bodies kept in memory.
     static let bodyCacheLimit = 20
 
-    let rootURL: URL
-    var notesURL: URL { rootURL.appendingPathComponent("notes", isDirectory: true) }
+    nonisolated let rootURL: URL
+    nonisolated var notesURL: URL { rootURL.appendingPathComponent("notes", isDirectory: true) }
     var libraryURL: URL { rootURL.appendingPathComponent("library.json") }
     var searchIndexURL: URL { rootURL.appendingPathComponent("search-index.json") }
     var trashURL: URL { rootURL.appendingPathComponent(".trash", isDirectory: true) }
@@ -52,6 +55,14 @@ final class NoteStore: ObservableObject {
     private var searchIndex: [UUID: String] = [:]
     private var searchIndexDirty = false
     private var indexRebuildInFlight = false
+    private var indexSaveWorkItem: DispatchWorkItem?
+
+    /// Position hints for `note(with:)`; rebuilt only after `notes` changed and a lookup misses.
+    private var notesVersion = 0
+    private var noteIndexVersion = -1
+    private var noteIndexByID: [UUID: Int] = [:]
+    /// Editor snapshots taken during a view update and handed to `updateBody` on the next main-queue turn.
+    private var stagedEditorBodies: [UUID: NSAttributedString] = [:]
 
     /// Read failures for note bodies, keyed by note ID (message suitable for UI).
     private var loadErrors: [UUID: String] = [:]
@@ -117,8 +128,17 @@ final class NoteStore: ObservableObject {
     }
 
     func note(with id: UUID?) -> NoteMeta? {
-        guard let id else { return nil }
-        return notes.first { $0.id == id }
+        guard let id, let index = noteIndex(id) else { return nil }
+        return notes[index]
+    }
+
+    func noteIndex(_ id: UUID) -> Int? {
+        let current = notes
+        if let i = noteIndexByID[id], i < current.count, current[i].id == id { return i }
+        if noteIndexVersion == notesVersion { return nil }
+        noteIndexByID = Dictionary(current.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        noteIndexVersion = notesVersion
+        return noteIndexByID[id]
     }
 
     /// Pinned first, then most recently updated.
@@ -132,6 +152,8 @@ final class NoteStore: ObservableObject {
         case .recent:
             let cutoff = Date().addingTimeInterval(-Self.recentInterval)
             filtered = notes.filter { $0.updatedAt >= cutoff }
+        case .conflicts:
+            filtered = notes.filter { $0.conflictSource != nil }
         case .notebook(let id):
             filtered = notes.filter { $0.notebookID == id }
         case .tag(let tag):
@@ -227,7 +249,9 @@ final class NoteStore: ObservableObject {
     }
 
     func updateBody(_ id: UUID, _ text: NSAttributedString) {
-        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        // A direct commit is newer than any snapshot still waiting for its turn.
+        stagedEditorBodies[id] = nil
+        guard let index = noteIndex(id) else { return }
         if body(for: id).isEqual(to: text) { return }
 
         let snapshot = text.copy() as? NSAttributedString ?? NSAttributedString(attributedString: text)
@@ -240,12 +264,39 @@ final class NoteStore: ObservableObject {
         Self.applyDerivedFields(to: &meta, from: snapshot)
         meta.updatedAt = Date()
         meta.revision = UUID()
+        meta.conflictSource = nil
+        meta.conflictOriginalID = nil
         notes[index] = meta
         setIndexEntry(id, text: snapshot.string)
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
     }
+
+    /// For editor commits made inside a SwiftUI view update. Sync calls `commitStagedEditorBody` before it
+    /// compares revisions, so a snapshot still waiting for its turn can never be overwritten by a pull.
+    func stageEditorCommit(_ id: UUID, _ snapshot: NSAttributedString) {
+        stagedEditorBodies[id] = snapshot
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { _ = self?.commitStagedEditorBody(id) }
+        }
+    }
+
+    @discardableResult
+    func commitStagedEditorBody(_ id: UUID) -> Bool {
+        guard let snapshot = stagedEditorBodies.removeValue(forKey: id) else { return false }
+        updateBody(id, snapshot)
+        return true
+    }
+
+    func hasStagedEditorBody(_ id: UUID) -> Bool {
+        stagedEditorBodies[id] != nil
+    }
+
+    #if DEBUG
+    var debugCachedBodyCount: Int { bodyCache.count }
+    func markSearchIndexDirtyForDebug() { searchIndexDirty = true }
+    #endif
 
     private func touchBody(_ id: UUID) {
         if let i = bodyAccessOrder.lastIndex(of: id) { bodyAccessOrder.remove(at: i) }
@@ -346,6 +397,23 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    /// Saves the (rebuildable) search index if anything changed; sync calls this once per pass.
+    func saveSearchIndexIfDirty() {
+        indexSaveWorkItem?.cancel()
+        indexSaveWorkItem = nil
+        if searchIndexDirty { saveSearchIndex() }
+    }
+
+    /// Coalesces index saves during a burst of remote applies.
+    private func scheduleIndexSave(after delay: TimeInterval = 3) {
+        guard indexSaveWorkItem == nil else { return }
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated { self?.saveSearchIndexIfDirty() }
+        }
+        indexSaveWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
     private func saveSearchIndex() {
         var entries: [String: SearchIndexFile.Entry] = [:]
         // Entries are stamped with the note's updatedAt; unsaved bodies are left out so a crash or a
@@ -399,7 +467,7 @@ final class NoteStore: ObservableObject {
         switch selection {
         case .notebook(let id):
             notebookID = id
-        case .pinned, .tag, .none:
+        case .pinned, .conflicts, .tag, .none:
             selection = .allNotes
         case .allNotes, .recent:
             break
@@ -418,9 +486,11 @@ final class NoteStore: ObservableObject {
         removeNote(id)
     }
 
-    /// Shared by local and remote deletions (only local ones are journaled).
-    func removeNote(_ id: UUID) {
-        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+    /// Shared by local and remote deletions (only local ones are journaled). Remote removals skip the
+    /// search-index save (see `persistRemoteApply`).
+    func removeNote(_ id: UUID, remote: Bool = false) {
+        guard let index = noteIndex(id) else { return }
+        stagedEditorBodies[id] = nil
         if selectedNoteID == id {
             let visible = notes(for: selection, search: searchText)
             if let pos = visible.firstIndex(where: { $0.id == id }) {
@@ -441,9 +511,35 @@ final class NoteStore: ObservableObject {
         failedBodies.remove(id)
         pendingTrash.insert(id)
         saveTombstones()
+        resolveConflictCopies(of: id, remote: remote)
         libraryDirty = true
-        flush()
+        if remote { persistRemoteApply() } else { flush() }
         reconcileSelection()
+    }
+
+    /// Conflict copies of a deleted note no longer conflict with anything. A local deletion is a user change;
+    /// a remote one only updates this Mac (the deleting Mac pushes the cleared copies).
+    private func resolveConflictCopies(of id: UUID, remote: Bool) {
+        for i in notes.indices where notes[i].conflictOriginalID == id && notes[i].conflictSource != nil {
+            notes[i].conflictSource = nil
+            notes[i].conflictOriginalID = nil
+            if !remote {
+                notes[i].revision = UUID()
+                hasUnannouncedLocalChange = true
+            }
+        }
+    }
+
+    /// Clears a note's conflict badge; syncs as a normal edit.
+    func markConflictResolved(_ id: UUID) {
+        guard let index = noteIndex(id), notes[index].conflictSource != nil else { return }
+        notes[index].conflictSource = nil
+        notes[index].conflictOriginalID = nil
+        notes[index].revision = UUID()
+        libraryDirty = true
+        hasUnannouncedLocalChange = true
+        scheduleSave()
+        reconcileSelectionAfterUserAction()
     }
 
     func togglePin(_ id: UUID) {
@@ -543,20 +639,20 @@ final class NoteStore: ObservableObject {
 
     // MARK: - Derived fields
 
-    static func applyDerivedFields(to meta: inout NoteMeta, from string: String) {
+    nonisolated static func applyDerivedFields(to meta: inout NoteMeta, from string: String) {
         applyTitleAndPreview(to: &meta, from: string)
         meta.tags = parseTags(string)
     }
 
     /// Like the string variant, but ignores hashtags inside code (monospaced) and links.
-    static func applyDerivedFields(to meta: inout NoteMeta, from text: NSAttributedString) {
+    nonisolated static func applyDerivedFields(to meta: inout NoteMeta, from text: NSAttributedString) {
         applyTitleAndPreview(to: &meta, lines: previewLines(of: text))
         meta.tags = parseTags(text)
     }
 
     /// Paragraphs as display lines, with each table collapsed into one line: cells of a row joined
     /// by " · ", rows by two spaces, and a header row (shaded or bold) left out.
-    static func previewLines(of text: NSAttributedString) -> [String] {
+    nonisolated static func previewLines(of text: NSAttributedString) -> [String] {
         let ns = text.string as NSString
         var lines: [String] = []
         var currentTable: NSTextTable?
@@ -607,11 +703,11 @@ final class NoteStore: ObservableObject {
         return lines
     }
 
-    private static func applyTitleAndPreview(to meta: inout NoteMeta, from string: String) {
+    nonisolated private static func applyTitleAndPreview(to meta: inout NoteMeta, from string: String) {
         applyTitleAndPreview(to: &meta, lines: string.components(separatedBy: .newlines))
     }
 
-    private static func applyTitleAndPreview(to meta: inout NoteMeta, lines: [String]) {
+    nonisolated private static func applyTitleAndPreview(to meta: inout NoteMeta, lines: [String]) {
         var titleLineIndex: Int?
         for (i, line) in lines.enumerated() where !clean(line).isEmpty {
             titleLineIndex = i
@@ -631,7 +727,7 @@ final class NoteStore: ObservableObject {
     }
 
     /// Trims whitespace and invisible characters (attachment glyphs, list markers' tabs).
-    private static func clean(_ line: String) -> String {
+    nonisolated private static func clean(_ line: String) -> String {
         line.replacingOccurrences(of: "\u{FFFC}", with: "")
             .replacingOccurrences(of: "\t", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -639,11 +735,11 @@ final class NoteStore: ObservableObject {
 
     /// `#` must start the text or follow whitespace / opening brackets & quotes / `,` `;`
     /// (so `?q=#swift` or `site.com/#anchor` aren't tags). Tag bodies allow combining marks.
-    private static let tagRegex = try? NSRegularExpression(
+    nonisolated private static let tagRegex = try? NSRegularExpression(
         pattern: "(?<![^\\s\\p{Ps}\\p{Pi},;\"'])#([\\p{L}_][\\p{L}\\p{M}\\p{N}_\\-]*)"
     )
 
-    static func parseTags(_ string: String) -> [String] {
+    nonisolated static func parseTags(_ string: String) -> [String] {
         guard let regex = tagRegex else { return [] }
         let normalized = string.precomposedStringWithCanonicalMapping
         let ns = normalized as NSString
@@ -657,7 +753,7 @@ final class NoteStore: ObservableObject {
     }
 
     /// Blanks out code (monospaced font) and link ranges before parsing, keeping UTF-16 offsets intact.
-    static func parseTags(_ text: NSAttributedString) -> [String] {
+    nonisolated static func parseTags(_ text: NSAttributedString) -> [String] {
         let masked = NSMutableString(string: text.string)
         let full = NSRange(location: 0, length: text.length)
         func blank(_ range: NSRange) {
@@ -695,24 +791,24 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    private func bodyURL(for id: UUID) -> URL {
+    nonisolated func bodyURL(for id: UUID) -> URL {
         notesURL.appendingPathComponent("\(id.uuidString).rtfd", isDirectory: true)
     }
 
-    static let encoder: JSONEncoder = {
+    nonisolated static let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
         e.dateEncodingStrategy = .iso8601
         return e
     }()
 
-    static let decoder: JSONDecoder = {
+    nonisolated static let decoder: JSONDecoder = {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
         return d
     }()
 
-    nonisolated private static func readBody(at url: URL) throws -> NSAttributedString {
+    nonisolated static func readBody(at url: URL) throws -> NSAttributedString {
         try NSAttributedString(
             url: url,
             options: [.documentType: NSAttributedString.DocumentType.rtfd],
@@ -876,6 +972,7 @@ final class NoteStore: ObservableObject {
     /// meanwhile the library keeps their last persisted title/preview/date. At termination, bodies that
     /// still can't be saved are written to `recovery/` instead.
     func flush() {
+        for id in Array(stagedEditorBodies.keys) { commitStagedEditorBody(id) }
         saveWorkItem?.cancel()
         saveWorkItem = nil
         let fm = FileManager.default
@@ -915,6 +1012,8 @@ final class NoteStore: ObservableObject {
         // Bodies of deleted notes move to .trash only once their removal is persisted.
         if !libraryDirty, !pendingTrash.isEmpty { trashPendingBodies() }
         if searchIndexDirty { saveSearchIndex() }
+        indexSaveWorkItem?.cancel()
+        indexSaveWorkItem = nil
         if isTerminating { writeRecoveryCopies() }
         trimBodyCache()
         if hasUnannouncedLocalChange, !libraryDirty {
@@ -1059,13 +1158,41 @@ final class NoteStore: ObservableObject {
 
     /// Gives records created before sync existed a revision and persists it. Not a user change.
     func assignMissingRevisions() {
+        let inputs = missingRevisionInputs()
+        guard !inputs.isEmpty else { return }
+        assignRevisions(Self.contentRevisions(for: inputs), inputs: inputs)
+    }
+
+    /// What a missing revision is derived from: identical records on two Macs (a copied library) get equal
+    /// revisions, so the first sync adopts them instead of producing conflict copies.
+    struct RevisionInput: Sendable {
+        var id: UUID
+        var fields: [String]
+        var bodyURL: URL?
+    }
+
+    func missingRevisionInputs() -> [RevisionInput] {
+        let noteInputs = notes.filter { $0.revision == nil }.map { meta in
+            RevisionInput(id: meta.id, fields: Self.revisionFields(meta), bodyURL: bodyURL(for: meta.id))
+        }
+        let notebookInputs = notebooks.filter { $0.revision == nil }.map { nb in
+            RevisionInput(id: nb.id, fields: Self.revisionFields(nb), bodyURL: nil)
+        }
+        return noteInputs + notebookInputs
+    }
+
+    /// Sets revisions computed by `contentRevisions` on records still lacking one and unchanged since.
+    func assignRevisions(_ revisions: [UUID: UUID], inputs: [RevisionInput]) {
+        let expected = Dictionary(inputs.map { ($0.id, $0.fields) }, uniquingKeysWith: { first, _ in first })
         var changed = false
         for i in notes.indices where notes[i].revision == nil {
-            notes[i].revision = UUID()
+            guard expected[notes[i].id] == Self.revisionFields(notes[i]), let revision = revisions[notes[i].id] else { continue }
+            notes[i].revision = revision
             changed = true
         }
         for i in notebooks.indices where notebooks[i].revision == nil {
-            notebooks[i].revision = UUID()
+            guard expected[notebooks[i].id] == Self.revisionFields(notebooks[i]), let revision = revisions[notebooks[i].id] else { continue }
+            notebooks[i].revision = revision
             changed = true
         }
         guard changed else { return }
@@ -1073,32 +1200,112 @@ final class NoteStore: ObservableObject {
         flush()
     }
 
-    /// Inserts or replaces a note from sync, keeping its revision. The body goes through the atomic body
-    /// write first; nothing changes in memory if that fails.
-    func applyRemoteNote(_ remote: NoteMeta, body: NSAttributedString) throws {
-        let id = remote.id
-        if bodyWriteBlocked.contains(id) { throw SyncApplyError.bodyWriteBlocked(id) }
-        try writeBody(body, to: bodyURL(for: id))
+    nonisolated private static func revisionFields(_ meta: NoteMeta) -> [String] {
+        ["note", meta.title, meta.notebookID?.uuidString ?? "", meta.isPinned ? "pinned" : ""]
+    }
+
+    nonisolated private static func revisionFields(_ nb: Notebook) -> [String] {
+        ["notebook", nb.name, nb.symbol, nb.colorHex, String(nb.sortIndex)]
+    }
+
+    /// SHA-256 over the id, the stable fields and the body package's files (sorted by path), as a v8 UUID.
+    nonisolated static func contentRevisions(for inputs: [RevisionInput]) -> [UUID: UUID] {
+        var result: [UUID: UUID] = [:]
+        for input in inputs {
+            var hasher = SHA256()
+            func feed(_ data: Data) {
+                var length = UInt64(data.count).bigEndian
+                hasher.update(data: Data(bytes: &length, count: 8))
+                hasher.update(data: data)
+            }
+            feed(Data("inkwell-revision-v1".utf8))
+            feed(withUnsafeBytes(of: input.id.uuid) { Data($0) })
+            for field in input.fields { feed(Data(field.utf8)) }
+            if let url = input.bodyURL {
+                for (path, data) in bodyPackageFiles(url) {
+                    feed(Data(path.utf8))
+                    feed(data)
+                }
+            }
+            var bytes = Array(hasher.finalize().prefix(16))
+            bytes[6] = (bytes[6] & 0x0F) | 0x80
+            bytes[8] = (bytes[8] & 0x3F) | 0x80
+            result[input.id] = UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
+                                           bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+        }
+        return result
+    }
+
+    nonisolated private static func bodyPackageFiles(_ url: URL) -> [(String, Data)] {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return [] }
+        guard isDir.boolValue else { return [("", (try? Data(contentsOf: url)) ?? Data())] }
+        let base = url.standardizedFileURL.path
+        var files: [(String, Data)] = []
+        let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.isRegularFileKey])
+        while let item = enumerator?.nextObject() as? URL {
+            guard (try? item.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            let path = String(item.standardizedFileURL.path.dropFirst(base.count))
+            files.append((path, (try? Data(contentsOf: item)) ?? Data()))
+        }
+        return files.sorted { $0.0 < $1.0 }
+    }
+
+    /// A remote note decoded, parsed and written to a temp package off the main actor; see `applyPreparedRemoteNote`.
+    struct PreparedRemoteNote: @unchecked Sendable {
+        var meta: NoteMeta
+        var body: NSAttributedString
+        var folded: String
+        var tempBody: URL
+
+        func discard() {
+            try? FileManager.default.removeItem(at: tempBody)
+        }
+    }
+
+    nonisolated static func prepareRemoteNote(_ payload: RecordPayload, notesURL: URL) throws -> PreparedRemoteNote {
+        var meta = try decodeMeta(NoteMeta.self, payload)
+        meta.revision = payload.revision
+        guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
+        let body = try deserializeBody(data)
+        applyDerivedFields(to: &meta, from: body)
+        let temp = try writeTempBody(body, in: notesURL)
+        return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp)
+    }
+
+    /// Inserts or replaces a note from sync, keeping its revision. The prepared body package is swapped in
+    /// first; nothing changes in memory if that fails. library.json is saved before returning; the search
+    /// index is saved later (it is rebuildable).
+    func applyPreparedRemoteNote(_ prepared: PreparedRemoteNote) throws {
+        let id = prepared.meta.id
+        if bodyWriteBlocked.contains(id) {
+            prepared.discard()
+            throw SyncApplyError.bodyWriteBlocked(id)
+        }
+        try Self.installBody(prepared.tempBody, at: bodyURL(for: id))
         let wasTombstoned = pendingTrash.remove(id) != nil
 
-        var meta = remote
-        Self.applyDerivedFields(to: &meta, from: body)
-        bodyCache[id] = body
-        touchBody(id)
+        stagedEditorBodies[id] = nil
+        if bodyCache[id] != nil || selectedNoteID == id {
+            bodyCache[id] = prepared.body
+            touchBody(id)
+        }
         dirtyBodies.remove(id)
         failedBodies.remove(id)
         recoveredSnapshots[id] = nil
         loadErrors[id] = nil
         loadErrorFiles[id] = nil
-        if let index = notes.firstIndex(where: { $0.id == id }) {
-            notes[index] = meta
+        if let index = noteIndex(id) {
+            notes[index] = prepared.meta
         } else {
-            notes.append(meta)
+            notes.append(prepared.meta)
         }
-        setIndexEntry(id, text: body.string)
+        searchIndex[id] = prepared.folded
+        searchIndexDirty = true
         clearSyncDeletion(id)
         libraryDirty = true
-        flush()
+        persistRemoteApply()
         // The tombstone goes only after a library listing the note is saved (see trashPendingBodies).
         if wasTombstoned { saveTombstones() }
         externallyUpdatedNoteID = id
@@ -1113,7 +1320,7 @@ final class NoteStore: ObservableObject {
         }
         clearSyncDeletion(remote.id)
         libraryDirty = true
-        flush()
+        persistRemoteApply()
     }
 
     /// Removes a notebook deleted on another device. Its notes move to "no notebook" without new revisions.
@@ -1125,16 +1332,42 @@ final class NoteStore: ObservableObject {
             notes[index].notebookID = nil
         }
         libraryDirty = true
-        flush()
+        persistRemoteApply()
         if selection == .notebook(id) {
             selection = .allNotes
             reconcileSelection()
         }
     }
 
+    /// True while library.json lags behind memory (its last save failed); sync must not record a base then.
+    var hasUnsavedLibrary: Bool { libraryDirty }
+
+    /// Durable part of a remote apply: library.json (plus deferred trash moves). Pending user edits keep
+    /// their own debounced save; the search index save is coalesced.
+    private func persistRemoteApply() {
+        if libraryDirty || !FileManager.default.fileExists(atPath: libraryURL.path) { saveLibrary() }
+        if !libraryDirty, !pendingTrash.isEmpty { trashPendingBodies() }
+        if searchIndexDirty { scheduleIndexSave() }
+        trimBodyCache()
+        if libraryDirty, saveWorkItem == nil { scheduleSave(after: 5) }
+    }
+
+    /// Body to export without loading it into the cache: the cached (possibly unsaved) text, or the file.
+    enum ExportBody: @unchecked Sendable {
+        case text(NSAttributedString)
+        case file(URL)
+    }
+
+    func exportBodySource(_ id: UUID) -> ExportBody {
+        if let cached = bodyCache[id] {
+            return .text(cached.copy() as? NSAttributedString ?? NSAttributedString(attributedString: cached))
+        }
+        return .file(bodyURL(for: id))
+    }
+
     /// Adjusts metadata of a note just created by sync (e.g. a conflict copy); counts as a local change.
     func updateSyncCreatedNote(_ id: UUID, _ change: (inout NoteMeta) -> Void) {
-        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = noteIndex(id) else { return }
         change(&notes[index])
         libraryDirty = true
         hasUnannouncedLocalChange = true
@@ -1193,13 +1426,29 @@ final class NoteStore: ObservableObject {
 
     /// RTFD is a directory, so write to a sibling temp location then swap it in.
     private func writeBody(_ text: NSAttributedString, to url: URL) throws {
-        let fm = FileManager.default
+        let temp = try Self.writeTempBody(text, in: url.deletingLastPathComponent())
+        try Self.installBody(temp, at: url)
+    }
+
+    /// Writes `text` as RTFD to a hidden temp package in `directory`; safe off the main actor.
+    nonisolated static func writeTempBody(_ text: NSAttributedString, in directory: URL) throws -> URL {
         let range = NSRange(location: 0, length: text.length)
         let wrapper = try text.fileWrapper(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd])
-        let temp = url.deletingLastPathComponent()
-            .appendingPathComponent(".\(UUID().uuidString).rtfd.tmp", isDirectory: true)
+        let temp = directory.appendingPathComponent(".\(UUID().uuidString).rtfd.tmp", isDirectory: true)
         do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             try wrapper.write(to: temp, options: [], originalContentsURL: nil)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+            throw error
+        }
+        return temp
+    }
+
+    /// Atomically moves a temp package from `writeTempBody` into place (removed on failure).
+    nonisolated static func installBody(_ temp: URL, at url: URL) throws {
+        let fm = FileManager.default
+        do {
             if fm.fileExists(atPath: url.path) {
                 _ = try fm.replaceItemAt(url, withItemAt: temp)
             } else {
