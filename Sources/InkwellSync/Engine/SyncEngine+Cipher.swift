@@ -1,10 +1,10 @@
 import Foundation
 
 extension SyncEngine {
-    typealias CipherFactory = @Sendable (_ passphrase: String, _ salt: Data, _ iterations: Int) -> SyncCipher
+    typealias CipherFactory = @Sendable (_ passphrase: String, _ salt: Data, _ iterations: Int) throws -> SyncCipher
 
     static let defaultCipherFactory: CipherFactory = { passphrase, salt, iterations in
-        AESGCMCipher(key: KeyDerivation.deriveKey(passphrase: passphrase, salt: salt, iterations: iterations))
+        AESGCMCipher(key: try KeyDerivation.checkedKey(passphrase: passphrase, salt: salt, iterations: iterations))
     }
 
     static func plaintextCipher() -> SyncCipher {

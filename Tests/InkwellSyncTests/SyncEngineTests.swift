@@ -66,7 +66,15 @@ final class SyncEngineTests: XCTestCase {
 
     private func sealedEnvelope(_ id: UUID) async throws -> RemoteEnvelope {
         let data = try await memory.get(RemoteLayout.meta(.note, id)).data
-        return try SyncEngine.decode(RemoteEnvelope.self, from: try cipher.open(data))
+        return try SyncEngine.decode(RemoteEnvelope.self, from: try open(data, key: RemoteLayout.meta(.note, id)))
+    }
+
+    private func seal(_ data: Data, key: String) throws -> Data {
+        try cipher.seal(data, context: SyncEngine.context(key))
+    }
+
+    private func open(_ data: Data, key: String) throws -> Data {
+        try cipher.open(data, context: SyncEngine.context(key))
     }
 
     // MARK: Basic propagation
@@ -193,7 +201,7 @@ final class SyncEngineTests: XCTestCase {
         let envelope = try await sealedEnvelope(id)
         XCTAssertEqual(envelope.deviceName, "A", "B must not overwrite A's meta")
         let body = try await memory.get(RemoteLayout.body(id)).data
-        XCTAssertEqual(try cipher.open(body), FakeLocalStore.body(for: "A wins the race"), "B must not overwrite A's body")
+        XCTAssertEqual(try open(body, key: RemoteLayout.body(id)), FakeLocalStore.body(for: "A wins the race"), "B must not overwrite A's body")
 
         let second = try await b.engine.sync()
         XCTAssertEqual(second.conflicts, 1)
@@ -329,7 +337,7 @@ final class SyncEngineTests: XCTestCase {
         let id = await a.store.create(title: "real")
         try await sync(a)
         let goodBody = try await memory.get(RemoteLayout.body(id)).data
-        try await memory.put(RemoteLayout.body(id), data: try cipher.seal(Data("half uploaded".utf8)), ifMatch: nil, ifNoneMatch: false)
+        try await memory.put(RemoteLayout.body(id), data: try seal(Data("half uploaded".utf8), key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
 
         let skipped = try await b.engine.sync()
         XCTAssertEqual(skipped.skipped, 1)
@@ -470,7 +478,7 @@ final class SyncEngineTests: XCTestCase {
         try await sync(a, b)
         let envelope = try await sealedEnvelope(id)
         let stale = Tombstone(id: id, kind: .note, deletedAt: envelope.modifiedAt - 60, deviceID: "ghost")
-        try await memory.put(RemoteLayout.tombstone(id), data: try cipher.seal(try SyncEngine.encode(stale)), ifMatch: nil, ifNoneMatch: false)
+        try await memory.put(RemoteLayout.tombstone(id), data: try seal(try SyncEngine.encode(stale), key: RemoteLayout.tombstone(id)), ifMatch: nil, ifNoneMatch: false)
 
         try await sync(b, a)
         let onB = await b.store.title(id)
@@ -488,7 +496,7 @@ final class SyncEngineTests: XCTestCase {
         try await sync(a, b)
         let envelope = try await sealedEnvelope(id)
         let fresh = Tombstone(id: id, kind: .note, deletedAt: envelope.modifiedAt + 60, deviceID: "ghost")
-        try await memory.put(RemoteLayout.tombstone(id), data: try cipher.seal(try SyncEngine.encode(fresh)), ifMatch: nil, ifNoneMatch: false)
+        try await memory.put(RemoteLayout.tombstone(id), data: try seal(try SyncEngine.encode(fresh), key: RemoteLayout.tombstone(id)), ifMatch: nil, ifNoneMatch: false)
 
         try await sync(b, a)
         let onB = await b.store.title(id)
@@ -507,7 +515,7 @@ final class SyncEngineTests: XCTestCase {
         await b.store.edit(id, title: "unsynced edit")
         let envelope = try await sealedEnvelope(id)
         let fresh = Tombstone(id: id, kind: .note, deletedAt: envelope.modifiedAt + 3600, deviceID: "ghost")
-        try await memory.put(RemoteLayout.tombstone(id), data: try cipher.seal(try SyncEngine.encode(fresh)), ifMatch: nil, ifNoneMatch: false)
+        try await memory.put(RemoteLayout.tombstone(id), data: try seal(try SyncEngine.encode(fresh), key: RemoteLayout.tombstone(id)), ifMatch: nil, ifNoneMatch: false)
         try await sync(b, a)
         let onA = await a.store.title(id)
         XCTAssertEqual(onA, "unsynced edit")
@@ -541,7 +549,7 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(encryption.salt.count, 16)
         let (again, cipher) = try await SyncEngine.connect(backend: backend, passphrase: "secret", encryptNew: false, makeCipher: XORTestCipher.factory)
         XCTAssertEqual(again, manifest)
-        XCTAssertEqual(try cipher.open(try cipher.seal(Data("x".utf8))), Data("x".utf8))
+        XCTAssertEqual(try cipher.open(try cipher.seal(Data("x".utf8), context: "c"), context: "c"), Data("x".utf8))
     }
 
     func testConnectWithWrongPassphraseThrows() async throws {
@@ -573,11 +581,59 @@ final class SyncEngineTests: XCTestCase {
         }
     }
 
+    func testConnectRejectsInvalidManifest() async throws {
+        let salt = Data(repeating: 7, count: 16)
+        let cases: [(Manifest.Encryption, String)] = [
+            (.init(salt: salt, iterations: 0, keyCheck: Data([1])), "zero iterations"),
+            (.init(salt: salt, iterations: -5, keyCheck: Data([1])), "negative iterations"),
+            (.init(salt: salt, iterations: Int(UInt32.max) + 1, keyCheck: Data([1])), "iterations above UInt32.max"),
+            (.init(salt: salt, iterations: 50_000_000, keyCheck: Data([1])), "huge iterations"),
+            (.init(salt: salt, iterations: 99_999, keyCheck: Data([1])), "too few iterations"),
+            (.init(salt: Data(count: 15), iterations: 210_000, keyCheck: Data([1])), "short salt"),
+            (.init(salt: salt, iterations: 210_000, keyCheck: Data()), "empty key check"),
+        ]
+        for (encryption, label) in cases {
+            let backend = InMemoryBackend()
+            try await backend.put(RemoteLayout.manifest(), data: try SyncEngine.encode(Manifest(encryption: encryption)), ifMatch: nil, ifNoneMatch: true)
+            do {
+                _ = try await SyncEngine.connect(backend: backend, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+                XCTFail("expected invalidManifest for \(label)")
+            } catch SyncError.invalidManifest {
+            } catch {
+                XCTFail("unexpected \(error) for \(label)")
+            }
+        }
+    }
+
+    func testPublicConnectRejectsZeroIterationsWithoutTrapping() async throws {
+        let backend = InMemoryBackend()
+        let encryption = Manifest.Encryption(salt: Data(repeating: 1, count: 16), iterations: 0, keyCheck: Data([1, 2, 3]))
+        try await backend.put(RemoteLayout.manifest(), data: try SyncEngine.encode(Manifest(encryption: encryption)), ifMatch: nil, ifNoneMatch: true)
+        do {
+            _ = try await SyncEngine.connect(backend: backend, passphrase: "pw", encryptNew: true)
+            XCTFail("expected invalidManifest")
+        } catch SyncError.invalidManifest {}
+    }
+
+    func testTombstoneForAnotherRecordIsIgnored() async throws {
+        let a = device("A"), b = device("B")
+        let x = await a.store.create(title: "x")
+        let y = await a.store.create(title: "y")
+        try await sync(a, b)
+        let forged = Tombstone(id: x, kind: .note, deletedAt: Date().addingTimeInterval(3600), deviceID: "ghost")
+        try await memory.delete(RemoteLayout.meta(.note, y))
+        try await memory.put(RemoteLayout.tombstone(y), data: try seal(try SyncEngine.encode(forged), key: RemoteLayout.tombstone(y)), ifMatch: nil, ifNoneMatch: false)
+        let report = try await b.engine.sync()
+        XCTAssertFalse(report.errors.isEmpty)
+        let survivor = await b.store.title(y)
+        XCTAssertEqual(survivor, "y")
+    }
+
     func testConnectPlaintextStore() async throws {
         let backend = InMemoryBackend()
         let (manifest, cipher) = try await SyncEngine.connect(backend: backend, passphrase: nil, encryptNew: false, makeCipher: XORTestCipher.factory)
         XCTAssertNil(manifest.encryption)
-        XCTAssertEqual(try cipher.seal(Data("plain".utf8)), Data("plain".utf8))
+        XCTAssertEqual(try cipher.seal(Data("plain".utf8), context: "c"), Data("plain".utf8))
         do {
             _ = try await SyncEngine.connect(backend: backend, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
             XCTFail("expected encryptionMismatch")

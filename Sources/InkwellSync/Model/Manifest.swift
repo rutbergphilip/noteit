@@ -9,7 +9,7 @@ public struct Manifest: Codable, Sendable, Equatable {
     public struct Encryption: Codable, Sendable, Equatable {
         public var salt: Data
         public var iterations: Int
-        /// `seal("inkwell-key-check")` with the derived key; used to verify a passphrase.
+        /// `seal("inkwell-key-check", context: "manifest")` with the derived key; used to verify a passphrase.
         public var keyCheck: Data
 
         public init(salt: Data, iterations: Int, keyCheck: Data) {

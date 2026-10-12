@@ -3,11 +3,25 @@ import CryptoKit
 import Foundation
 import Security
 
+public enum KeyDerivationError: Error, Equatable, Sendable {
+    case invalidIterations(Int)
+    case failed(Int32)
+}
+
 public enum KeyDerivation {
     public static let defaultIterations = 210_000
 
+    /// Traps on invalid parameters; use `checkedKey` for untrusted input.
     public static func deriveKey(passphrase: String, salt: Data, iterations: Int) -> SymmetricKey {
-        SymmetricKey(data: deriveBytes(passphrase: passphrase, salt: salt, iterations: iterations, length: 32))
+        do {
+            return try checkedKey(passphrase: passphrase, salt: salt, iterations: iterations)
+        } catch {
+            preconditionFailure("Key derivation failed: \(error)")
+        }
+    }
+
+    public static func checkedKey(passphrase: String, salt: Data, iterations: Int) throws -> SymmetricKey {
+        SymmetricKey(data: try deriveBytes(passphrase: passphrase, salt: salt, iterations: iterations, length: 32))
     }
 
     public static func randomSalt() -> Data {
@@ -17,7 +31,10 @@ public enum KeyDerivation {
         return Data(bytes)
     }
 
-    static func deriveBytes(passphrase: String, salt: Data, iterations: Int, length: Int) -> Data {
+    static func deriveBytes(passphrase: String, salt: Data, iterations: Int, length: Int) throws -> Data {
+        guard iterations >= 1, let rounds = UInt32(exactly: iterations) else {
+            throw KeyDerivationError.invalidIterations(iterations)
+        }
         let password = Array(passphrase.utf8)
         let saltBytes = [UInt8](salt)
         var out = [UInt8](repeating: 0, count: length)
@@ -29,12 +46,12 @@ public enum KeyDerivation {
                 saltBytes,
                 saltBytes.count,
                 CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
-                UInt32(iterations),
+                rounds,
                 &out,
                 length
             )
         }
-        precondition(status == kCCSuccess, "PBKDF2 failed: \(status)")
+        guard status == kCCSuccess else { throw KeyDerivationError.failed(status) }
         return Data(out)
     }
 }

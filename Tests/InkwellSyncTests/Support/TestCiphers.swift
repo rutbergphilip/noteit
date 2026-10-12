@@ -2,8 +2,8 @@ import CryptoKit
 import Foundation
 @testable import InkwellSync
 
-/// Deterministic keystream XOR keyed by SHA-256(passphrase|salt). Not secure; it only makes bytes unreadable
-/// and makes a wrong passphrase fail the manifest key check.
+/// Deterministic keystream XOR keyed by SHA-256(passphrase|salt|context). Not secure; it only makes bytes unreadable,
+/// makes a wrong passphrase fail the manifest key check and makes a wrong context produce garbage.
 struct XORTestCipher: SyncCipher {
     let key: [UInt8]
 
@@ -11,10 +11,11 @@ struct XORTestCipher: SyncCipher {
         key = Array(SHA256.hash(data: Data(passphrase.utf8) + Data("|".utf8) + salt))
     }
 
-    func seal(_ plain: Data) throws -> Data { transform(plain) }
-    func open(_ sealed: Data) throws -> Data { transform(sealed) }
+    func seal(_ plain: Data, context: String) throws -> Data { transform(plain, context) }
+    func open(_ sealed: Data, context: String) throws -> Data { transform(sealed, context) }
 
-    private func transform(_ data: Data) -> Data {
+    private func transform(_ data: Data, _ context: String) -> Data {
+        let key = Array(SHA256.hash(data: Data(self.key) + Data("|\(context)".utf8)))
         var out = [UInt8](data)
         for i in out.indices { out[i] ^= key[i % key.count] &+ UInt8(truncatingIfNeeded: i / key.count) }
         return Data(out)
@@ -24,8 +25,8 @@ struct XORTestCipher: SyncCipher {
 }
 
 struct TestPassthroughCipher: SyncCipher {
-    func seal(_ plain: Data) throws -> Data { plain }
-    func open(_ sealed: Data) throws -> Data { sealed }
+    func seal(_ plain: Data, context: String) throws -> Data { plain }
+    func open(_ sealed: Data, context: String) throws -> Data { sealed }
 }
 
 final class TestClock: @unchecked Sendable {

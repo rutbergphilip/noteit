@@ -61,6 +61,8 @@ public enum SyncError: Error, Equatable, Sendable {
 /// With this ordering a crash never leaves both a meta and a tombstone behind; only a race does.
 public actor SyncEngine {
     static let keyCheckPlaintext = Data("inkwell-key-check".utf8)
+    static let keyCheckContext = "manifest"
+    static let iterationRange = 100_000...10_000_000
     static let defaultIterations = 210_000
     static let deviceWriteInterval: TimeInterval = 10 * 60
     static let tombstoneRetention: TimeInterval = 30 * 24 * 60 * 60
@@ -105,7 +107,7 @@ public actor SyncEngine {
         var result: [DeviceInfo] = []
         for object in try await backend.list(prefix: RemoteLayout.root + "devices/") {
             let data = try await backend.get(object.key).data
-            result.append(try Self.decode(DeviceInfo.self, from: try cipher.open(data)))
+            result.append(try Self.decode(DeviceInfo.self, from: try open(data, key: object.key)))
         }
         return result.sorted { ($0.name, $0.deviceID) < ($1.name, $1.deviceID) }
     }
@@ -136,8 +138,8 @@ public actor SyncEngine {
         if encryptNew {
             guard let passphrase, !passphrase.isEmpty else { throw SyncError.passphraseRequired }
             let salt = makeSalt()
-            cipher = makeCipher(passphrase, salt, defaultIterations)
-            let check = try cipher.seal(keyCheckPlaintext)
+            cipher = try makeCipher(passphrase, salt, defaultIterations)
+            let check = try cipher.seal(keyCheckPlaintext, context: keyCheckContext)
             manifest = Manifest(encryption: .init(salt: salt, iterations: defaultIterations, keyCheck: check))
         } else {
             cipher = plaintextCipher()
@@ -173,9 +175,14 @@ public actor SyncEngine {
             if encryptNew { throw SyncError.encryptionMismatch }
             return plaintextCipher()
         }
+        guard iterationRange.contains(encryption.iterations) else {
+            throw SyncError.invalidManifest("iterations \(encryption.iterations) outside \(iterationRange)")
+        }
+        guard encryption.salt.count == 16 else { throw SyncError.invalidManifest("salt is \(encryption.salt.count) bytes, expected 16") }
+        guard !encryption.keyCheck.isEmpty else { throw SyncError.invalidManifest("missing key check") }
         guard let passphrase, !passphrase.isEmpty else { throw SyncError.passphraseRequired }
-        let cipher = makeCipher(passphrase, encryption.salt, encryption.iterations)
-        guard (try? cipher.open(encryption.keyCheck)) == keyCheckPlaintext else { throw SyncError.wrongPassphrase }
+        let cipher = try makeCipher(passphrase, encryption.salt, encryption.iterations)
+        guard (try? cipher.open(encryption.keyCheck, context: keyCheckContext)) == keyCheckPlaintext else { throw SyncError.wrongPassphrase }
         return cipher
     }
 
@@ -357,7 +364,7 @@ public actor SyncEngine {
         let newETag: String
         do {
             newETag = try await backend.put(
-                RemoteLayout.meta(kind, id), data: try cipher.seal(try Self.encode(envelope)),
+                RemoteLayout.meta(kind, id), data: try seal(try Self.encode(envelope), key: RemoteLayout.meta(kind, id)),
                 ifMatch: remoteETag, ifNoneMatch: remoteETag == nil
             )
         } catch StorageError.preconditionFailed {
@@ -365,7 +372,7 @@ public actor SyncEngine {
             return false
         }
         if let body = payload.body {
-            try await backend.put(RemoteLayout.body(id), data: try cipher.seal(body), ifMatch: nil, ifNoneMatch: false)
+            try await backend.put(RemoteLayout.body(id), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
         }
         state.bases[id] = .init(revision: payload.revision, remoteMetaETag: newETag)
         try saveState()
@@ -405,7 +412,7 @@ public actor SyncEngine {
                     return
                 }
                 if let body = payload.body {
-                    try await backend.put(RemoteLayout.body(id), data: try cipher.seal(body), ifMatch: nil, ifNoneMatch: false)
+                    try await backend.put(RemoteLayout.body(id), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
                 }
             }
             state.bases[id] = .init(revision: envelope.revision, remoteMetaETag: remote.etag)
@@ -454,7 +461,7 @@ public actor SyncEngine {
     private func pushDeletion(_ id: UUID, _ deletion: LocalDeletion, _ pass: Pass) async throws {
         try await deleteRemoteRecord(id, kind: deletion.kind)
         let tombstone = Tombstone(id: id, kind: deletion.kind, deletedAt: deletion.deletedAt, deviceID: deviceID)
-        try await backend.put(RemoteLayout.tombstone(id), data: try cipher.seal(try Self.encode(tombstone)), ifMatch: nil, ifNoneMatch: false)
+        try await backend.put(RemoteLayout.tombstone(id), data: try seal(try Self.encode(tombstone), key: RemoteLayout.tombstone(id)), ifMatch: nil, ifNoneMatch: false)
         pass.touchedTombstones.insert(id)
         state.tombstoneDates[id] = deletion.deletedAt
         state.bases[id] = nil
@@ -487,7 +494,7 @@ public actor SyncEngine {
         let date = now()
         if let last = state.lastDeviceWrite, date.timeIntervalSince(last) < Self.deviceWriteInterval, date >= last { return }
         let info = DeviceInfo(deviceID: deviceID, name: deviceName, lastSync: date)
-        try await backend.put(RemoteLayout.device(deviceID), data: try cipher.seal(try Self.encode(info)), ifMatch: nil, ifNoneMatch: false)
+        try await backend.put(RemoteLayout.device(deviceID), data: try seal(try Self.encode(info), key: RemoteLayout.device(deviceID)), ifMatch: nil, ifNoneMatch: false)
         state.lastDeviceWrite = date
         try saveState()
     }
@@ -503,7 +510,7 @@ public actor SyncEngine {
 
     private func fetchEnvelope(_ id: UUID, kind: RecordKind) async throws -> (envelope: RemoteEnvelope, etag: String) {
         let (data, etag) = try await backend.get(RemoteLayout.meta(kind, id))
-        let envelope = try Self.decode(RemoteEnvelope.self, from: try cipher.open(data))
+        let envelope = try Self.decode(RemoteEnvelope.self, from: try open(data, key: RemoteLayout.meta(kind, id)))
         guard envelope.id == id, envelope.kind == kind else {
             throw StorageError.invalidResponse("Envelope at \(RemoteLayout.meta(kind, id)) describes another record")
         }
@@ -520,7 +527,7 @@ public actor SyncEngine {
             } catch StorageError.notFound {
                 return FetchedRemote(envelope: envelope, etag: etag, payload: nil)
             }
-            let opened = try cipher.open(sealed)
+            let opened = try open(sealed, key: RemoteLayout.body(id))
             guard Self.sha256Hex(opened) == expected else {
                 return FetchedRemote(envelope: envelope, etag: etag, payload: nil)
             }
@@ -535,7 +542,10 @@ public actor SyncEngine {
 
     private func fetchTombstone(_ id: UUID) async throws -> Tombstone {
         let data = try await backend.get(RemoteLayout.tombstone(id)).data
-        let tombstone = try Self.decode(Tombstone.self, from: try cipher.open(data))
+        let tombstone = try Self.decode(Tombstone.self, from: try open(data, key: RemoteLayout.tombstone(id)))
+        guard tombstone.id == id else {
+            throw StorageError.invalidResponse("Tombstone at \(RemoteLayout.tombstone(id)) describes another record")
+        }
         if state.tombstoneDates[id] != tombstone.deletedAt {
             state.tombstoneDates[id] = tombstone.deletedAt
             try saveState()
@@ -561,6 +571,19 @@ public actor SyncEngine {
 
     private func currentRevision(_ id: UUID) async -> UUID? {
         await local.records().first { $0.id == id }?.revision
+    }
+
+    private func seal(_ plain: Data, key: String) throws -> Data {
+        try cipher.seal(plain, context: Self.context(key))
+    }
+
+    private func open(_ sealed: Data, key: String) throws -> Data {
+        try cipher.open(sealed, context: Self.context(key))
+    }
+
+    /// The cipher context for an object: its key relative to the remote root.
+    static func context(_ key: String) -> String {
+        key.hasPrefix(RemoteLayout.root) ? String(key.dropFirst(RemoteLayout.root.count)) : key
     }
 
     private func saveState() throws {
