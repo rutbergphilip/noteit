@@ -11,6 +11,15 @@ public protocol SyncLocalStore: Sendable {
     /// Imports the payload as a new record with a new id and a new revision.
     func importConflictCopy(_ payload: RecordPayload, fromDevice name: String) async throws
     func clearDeletion(_ id: UUID) async
+    func revision(of id: UUID, kind: RecordKind) async -> UUID?
+    func passDidFinish() async
+}
+
+extension SyncLocalStore {
+    public func revision(of id: UUID, kind: RecordKind) async -> UUID? {
+        await records().first { $0.id == id && $0.kind == kind }?.revision
+    }
+    public func passDidFinish() async {}
 }
 
 public struct LocalDeletion: Sendable, Equatable {
@@ -38,7 +47,7 @@ public struct SyncReport: Sendable, Equatable {
 }
 
 public enum SyncError: Error, Equatable, Sendable {
-    case wrongPassphrase, passphraseRequired, unsupportedFormat(Int), encryptionMismatch
+    case wrongPassphrase, passphraseRequired, unsupportedFormat(Int), encryptionMismatch, invalidManifest(String)
 }
 
 /// Runs sync passes against one remote store. Passes are serialized; each one resumes from the

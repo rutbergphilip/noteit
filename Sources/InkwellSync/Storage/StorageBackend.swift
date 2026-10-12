@@ -16,6 +16,8 @@ public enum StorageError: Error, Sendable, Equatable {
     case notFound(String)
     case preconditionFailed(String)
     case unauthorized(String)
+    case clockSkew(String)
+    case insecureConnectionBlocked(String)
     case network(String)
     case invalidResponse(String)
     case io(String)
