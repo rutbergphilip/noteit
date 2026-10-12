@@ -8,9 +8,19 @@ let package = Package(
         .executable(name: "Inkwell", targets: ["Inkwell"])
     ],
     targets: [
+        .target(
+            name: "InkwellSync",
+            path: "Sources/InkwellSync"
+        ),
         .executableTarget(
             name: "Inkwell",
+            dependencies: ["InkwellSync"],
             path: "Sources/Inkwell"
+        ),
+        .testTarget(
+            name: "InkwellSyncTests",
+            dependencies: ["InkwellSync"],
+            path: "Tests/InkwellSyncTests"
         )
     ]
 )
