@@ -1,0 +1,689 @@
+import XCTest
+@testable import InkwellSync
+
+final class SyncEngineTests: XCTestCase {
+    struct Device {
+        let name: String
+        let store: FakeLocalStore
+        let stateURL: URL
+        let engine: SyncEngine
+    }
+
+    private var dir: URL!
+    private var memory: InMemoryBackend!
+    private var faulty: FaultyBackend!
+    private var cipher: SyncCipher!
+    private let clock = TestClock()
+
+    override func setUp() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        dir = root.appendingPathComponent(".build/sync-engine-tests/\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        memory = InMemoryBackend()
+        faulty = FaultyBackend(memory)
+        cipher = try await SyncEngine.connect(backend: memory, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory).1
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    private func device(_ name: String, store: FakeLocalStore? = nil, backend: StorageBackend? = nil) -> Device {
+        let stateURL = dir.appendingPathComponent("\(name).json")
+        let store = store ?? FakeLocalStore()
+        let clock = clock
+        let engine = SyncEngine(backend: backend ?? faulty, cipher: cipher, local: store, stateURL: stateURL,
+                                deviceID: "id-\(name)", deviceName: name, now: { clock.now() })
+        return Device(name: name, store: store, stateURL: stateURL, engine: engine)
+    }
+
+    /// A fresh engine over the same store and state file, as after an app relaunch.
+    private func relaunch(_ d: Device) -> Device { device(d.name, store: d.store) }
+
+    @discardableResult
+    private func sync(_ devices: Device..., file: StaticString = #filePath, line: UInt = #line) async throws -> [SyncReport] {
+        var reports: [SyncReport] = []
+        for d in devices {
+            let report = try await d.engine.sync()
+            reports.append(report)
+        }
+        return reports
+    }
+
+    private func assertConverged(_ a: Device, _ b: Device, file: StaticString = #filePath, line: UInt = #line) async {
+        let sa = await a.store.snapshot()
+        let sb = await b.store.snapshot()
+        XCTAssertEqual(sa, sb, "record sets differ", file: file, line: line)
+    }
+
+    private func remoteKeys() async throws -> Set<String> {
+        Set(try await memory.list(prefix: RemoteLayout.root).map(\.key))
+    }
+
+    private func counters() async -> (list: Int, get: Int, put: Int, delete: Int) {
+        (await memory.listCount, await memory.getCount, await memory.putCount, await memory.deleteCount)
+    }
+
+    private func sealedEnvelope(_ id: UUID) async throws -> RemoteEnvelope {
+        let data = try await memory.get(RemoteLayout.meta(.note, id)).data
+        return try SyncEngine.decode(RemoteEnvelope.self, from: try cipher.open(data))
+    }
+
+    // MARK: Basic propagation
+
+    func testCreateOnAPullsToB() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "Hello")
+        let reports = try await sync(a, b)
+        XCTAssertEqual(reports[0].pushed, 1)
+        XCTAssertEqual(reports[1].pulled, 1)
+        let title = await b.store.title(id)
+        XCTAssertEqual(title, "Hello")
+        await assertConverged(a, b)
+    }
+
+    func testEditOnBReachesA() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await b.store.edit(id, title: "v2")
+        try await sync(b, a)
+        let title = await a.store.title(id)
+        XCTAssertEqual(title, "v2")
+        await assertConverged(a, b)
+    }
+
+    func testNotebooksSyncBeforeNotes() async throws {
+        let a = device("A"), b = device("B")
+        let nb = await a.store.create(kind: .notebook, title: "Work")
+        try await sync(a, b)
+        let title = await b.store.title(nb)
+        XCTAssertEqual(title, "Work")
+        let keys = try await remoteKeys()
+        XCTAssertTrue(keys.contains(RemoteLayout.meta(.notebook, nb)))
+        XCTAssertFalse(keys.contains(RemoteLayout.body(nb)))
+    }
+
+    // MARK: Conflicts
+
+    func testConcurrentEditKeepsBothAndConverges() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "A's edit")
+        await b.store.edit(id, title: "B's edit")
+
+        try await sync(b)
+        let reportA = try await a.engine.sync()
+        XCTAssertEqual(reportA.conflicts, 1)
+        let mine = await a.store.title(id)
+        XCTAssertEqual(mine, "A's edit")
+        let copies = await a.store.conflictCopies()
+        XCTAssertEqual(copies.map(\.title), ["B's edit (conflict — B)"])
+
+        try await sync(b)
+        await assertConverged(a, b)
+
+        // Further rounds are stable and never produce another copy.
+        try await sync(a, b, a, b)
+        await assertConverged(a, b)
+        let copiesA = await a.store.conflictCopies().count
+        let copiesB = await b.store.conflictCopies().count
+        XCTAssertEqual(copiesA, 1)
+        XCTAssertEqual(copiesB, 1)
+        let titles = await b.store.titles()
+        XCTAssertEqual(titles, ["A's edit", "B's edit (conflict — B)"])
+    }
+
+    func testIndependentCreationWithSameIDIsAConflictNotAnOverwrite() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "A original")
+        try await sync(a)
+        let payload = try await a.store.export(id, kind: .note)
+        var other = payload
+        other.revision = UUID()
+        other.meta = try JSONEncoder().encode(FakeLocalStore.Meta(title: "B original"))
+        other.body = FakeLocalStore.body(for: "B original")
+        try await b.store.apply(other)
+
+        try await sync(b, a, b)
+        await assertConverged(a, b)
+        let titles = await a.store.titles()
+        XCTAssertEqual(titles, ["B original", "A original (conflict — A)"])
+    }
+
+    func testConcurrentNotebookRenameLastWriterWins() async throws {
+        let a = device("A"), b = device("B")
+        let nb = await a.store.create(kind: .notebook, title: "Inbox")
+        try await sync(a, b)
+        await a.store.edit(nb, title: "From A")
+        try await Task.sleep(nanoseconds: 5_000_000)
+        await b.store.edit(nb, title: "From B (later)")
+
+        try await sync(b, a, b)
+        await assertConverged(a, b)
+        let title = await a.store.title(nb)
+        XCTAssertEqual(title, "From B (later)")
+        let copies = await a.store.conflictCopies().count
+        XCTAssertEqual(copies, 0)
+
+        // The other order: the earlier writer syncs last and still loses.
+        await b.store.edit(nb, title: "B first")
+        try await Task.sleep(nanoseconds: 5_000_000)
+        await a.store.edit(nb, title: "A later")
+        try await sync(b, a, b)
+        await assertConverged(a, b)
+        let title2 = await b.store.title(nb)
+        XCTAssertEqual(title2, "A later")
+    }
+
+    func testRepushAfterPreconditionFailed() async throws {
+        let a = device("A", backend: memory), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "A wins the race")
+        await b.store.edit(id, title: "B loses the race")
+
+        // A pushes between B's list and B's first write for this note.
+        let engineA = a.engine
+        await faulty.onNextPut(keyContaining: id.uuidString, .before({ _ = try? await engineA.sync() }))
+        let first = try await b.engine.sync()
+        XCTAssertEqual(first.skipped, 1)
+        XCTAssertEqual(first.pushed, 0)
+        let envelope = try await sealedEnvelope(id)
+        XCTAssertEqual(envelope.deviceName, "A", "B must not overwrite A's meta")
+        let body = try await memory.get(RemoteLayout.body(id)).data
+        XCTAssertEqual(try cipher.open(body), FakeLocalStore.body(for: "A wins the race"), "B must not overwrite A's body")
+
+        let second = try await b.engine.sync()
+        XCTAssertEqual(second.conflicts, 1)
+        try await sync(a, b, a)
+        await assertConverged(a, b)
+        let titles = await a.store.titles()
+        XCTAssertEqual(titles, ["B loses the race", "A wins the race (conflict — A)"])
+    }
+
+    func testConflictCopyNotDuplicatedWhenPushFailsAfterImport() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "A edit")
+        await b.store.edit(id, title: "B edit")
+        try await sync(a)
+
+        await faulty.onNextPut(keyContaining: "\(id.uuidString).meta", .failBefore)
+        let failed = try await b.engine.sync()
+        XCTAssertEqual(failed.conflicts, 1)
+        XCTAssertFalse(failed.errors.isEmpty)
+
+        let retry = try await relaunch(b).engine.sync()
+        XCTAssertEqual(retry.conflicts, 0)
+        let copies = await b.store.conflictCopies().count
+        XCTAssertEqual(copies, 1)
+
+        try await sync(a, b, a)
+        await assertConverged(a, b)
+        let copiesA = await a.store.conflictCopies().count
+        XCTAssertEqual(copiesA, 1)
+    }
+
+    // MARK: Interrupted passes
+
+    func testCrashAfterMetaPutBeforeBodyPutIsIdempotent() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "v2")
+
+        await faulty.onNextPut(keyContaining: "\(id.uuidString).body", .failBefore)
+        _ = try await a.engine.sync()
+        // Remote meta is new, body is old: B must not pull a mismatched pair.
+        let midway = try await b.engine.sync()
+        XCTAssertEqual(midway.skipped, 1)
+        let stale = await b.store.title(id)
+        XCTAssertEqual(stale, "v1")
+
+        let resumed = try await relaunch(a).engine.sync()
+        XCTAssertEqual(resumed.conflicts, 0)
+        XCTAssertTrue(resumed.errors.isEmpty, "\(resumed.errors)")
+        try await sync(b)
+        await assertConverged(a, b)
+        let copies = await a.store.conflictCopies().count + (await b.store.conflictCopies().count)
+        XCTAssertEqual(copies, 0)
+        let title = await b.store.title(id)
+        XCTAssertEqual(title, "v2")
+    }
+
+    func testCrashAfterBodyPutBeforeStateSaveIsIdempotent() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "v2")
+
+        await faulty.onNextPut(keyContaining: "\(id.uuidString).body", .failAfter)
+        _ = try await a.engine.sync()
+        let before = await counters()
+        let resumed = try await relaunch(a).engine.sync()
+        let after = await counters()
+        XCTAssertEqual(resumed.conflicts, 0)
+        XCTAssertEqual(resumed.pushed, 0)
+        XCTAssertEqual(after.put - before.put, 0, "nothing needs re-uploading")
+
+        try await sync(b, a)
+        await assertConverged(a, b)
+        let copies = await a.store.conflictCopies().count + (await b.store.conflictCopies().count)
+        XCTAssertEqual(copies, 0)
+    }
+
+    func testCrashAfterMetaPutThenFurtherLocalEditPushesWithoutCopy() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "v2")
+        await faulty.onNextPut(keyContaining: "\(id.uuidString).meta", .failAfter)
+        _ = try await a.engine.sync()
+        await a.store.edit(id, title: "v3")
+
+        let resumed = try await relaunch(a).engine.sync()
+        XCTAssertEqual(resumed.conflicts, 0)
+        XCTAssertEqual(resumed.pushed, 1)
+        try await sync(b)
+        await assertConverged(a, b)
+        let title = await b.store.title(id)
+        XCTAssertEqual(title, "v3")
+    }
+
+    func testCrashOnFirstUploadOfNewNote() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "fresh")
+        await faulty.onNextPut(keyContaining: "\(id.uuidString).meta", .failAfter)
+        _ = try await a.engine.sync()
+        let resumed = try await relaunch(a).engine.sync()
+        XCTAssertEqual(resumed.conflicts, 0)
+        try await sync(b)
+        await assertConverged(a, b)
+    }
+
+    func testFailNextPutsMidPassConvergesWithoutDuplicates() async throws {
+        let a = device("A"), b = device("B")
+        for i in 0..<5 { await a.store.create(title: "note \(i)") }
+        try await sync(a)
+        await memory.failNextPuts(1)
+        let partial = try await a.engine.sync()
+        XCTAssertEqual(partial.errors.count, 0, "nothing to push, the failure is unused")
+
+        for i in 5..<10 { await a.store.create(title: "note \(i)") }
+        await memory.failNextPuts(3)
+        let failing = try await a.engine.sync()
+        XCTAssertFalse(failing.errors.isEmpty)
+        try await sync(b, a, b)
+        await assertConverged(a, b)
+        let count = await b.store.entries.count
+        XCTAssertEqual(count, 10)
+        let copies = await a.store.conflictCopies().count + (await b.store.conflictCopies().count)
+        XCTAssertEqual(copies, 0)
+    }
+
+    func testBodySHAMismatchIsSkippedThenPulledOnceFixed() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "real")
+        try await sync(a)
+        let goodBody = try await memory.get(RemoteLayout.body(id)).data
+        try await memory.put(RemoteLayout.body(id), data: try cipher.seal(Data("half uploaded".utf8)), ifMatch: nil, ifNoneMatch: false)
+
+        let skipped = try await b.engine.sync()
+        XCTAssertEqual(skipped.skipped, 1)
+        XCTAssertEqual(skipped.pulled, 0)
+        let missing = await b.store.title(id)
+        XCTAssertNil(missing)
+
+        try await memory.put(RemoteLayout.body(id), data: goodBody, ifMatch: nil, ifNoneMatch: false)
+        let fixed = try await b.engine.sync()
+        XCTAssertEqual(fixed.pulled, 1)
+        await assertConverged(a, b)
+    }
+
+    // MARK: Deletions
+
+    func testDeleteOnAPropagatesToB() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "doomed")
+        try await sync(a, b)
+        await a.store.delete(id)
+        try await sync(a, b)
+        let gone = await b.store.title(id)
+        XCTAssertNil(gone)
+        let keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(RemoteLayout.meta(.note, id)))
+        XCTAssertFalse(keys.contains(RemoteLayout.body(id)))
+        XCTAssertTrue(keys.contains(RemoteLayout.tombstone(id)))
+        let journal = await a.store.journaledDeletions()
+        XCTAssertTrue(journal.isEmpty)
+        await assertConverged(a, b)
+    }
+
+    func testDeleteOnAWhileBEditsAfterBaseSurvivesOnBoth() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        // B's edit is older than A's deletion, but A never saw it: it must not be lost.
+        await b.store.edit(id, title: "B kept writing")
+        try await Task.sleep(nanoseconds: 5_000_000)
+        await a.store.delete(id)
+        try await sync(a, b, a)
+        let onA = await a.store.title(id)
+        let onB = await b.store.title(id)
+        XCTAssertEqual(onA, "B kept writing")
+        XCTAssertEqual(onB, "B kept writing")
+        let keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(RemoteLayout.tombstone(id)))
+        try await sync(b, a)
+        await assertConverged(a, b)
+    }
+
+    func testDeleteOnAAfterRemoteEditPullsInsteadOfDeleting() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await b.store.edit(id, title: "B edit")
+        try await sync(b)
+        await a.store.delete(id)
+        try await sync(a)
+        let restored = await a.store.title(id)
+        XCTAssertEqual(restored, "B edit")
+        let journal = await a.store.journaledDeletions()
+        XCTAssertTrue(journal.isEmpty)
+        try await sync(b, a)
+        await assertConverged(a, b)
+    }
+
+    func testDeletedOnBothSidesForgets() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "x")
+        try await sync(a, b)
+        await a.store.delete(id)
+        await b.store.delete(id)
+        try await sync(a, b, a)
+        let journalB = await b.store.journaledDeletions()
+        XCTAssertTrue(journalB.isEmpty)
+        let state = SyncState.load(from: b.stateURL)
+        XCTAssertNil(state.bases[id])
+    }
+
+    func testLongOfflineDeviceDoesNotResurrectUneditedNote() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "old")
+        let keep = await a.store.create(title: "keep")
+        try await sync(a, b)
+        await a.store.delete(id)
+        try await sync(a)
+        clock.advance(31 * 24 * 3600)
+        try await sync(a)
+        let swept = try await remoteKeys()
+        XCTAssertFalse(swept.contains(RemoteLayout.tombstone(id)), "tombstone swept after 30 days")
+        XCTAssertTrue(SyncState.load(from: a.stateURL).knownTombstones.contains(id))
+
+        try await sync(b, a)
+        let gone = await b.store.title(id)
+        XCTAssertNil(gone)
+        let kept = await b.store.title(keep)
+        XCTAssertEqual(kept, "keep")
+        let keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(RemoteLayout.meta(.note, id)))
+        await assertConverged(a, b)
+    }
+
+    func testLongOfflineDeviceResurrectsNoteItEditedAfterBase() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "old")
+        try await sync(a, b)
+        await b.store.edit(id, title: "edited offline")
+        await a.store.delete(id)
+        try await sync(a)
+        clock.advance(31 * 24 * 3600)
+        try await sync(a)
+        try await sync(b, a)
+        let onA = await a.store.title(id)
+        XCTAssertEqual(onA, "edited offline")
+        await assertConverged(a, b)
+    }
+
+    func testOfflineDeviceWithTombstoneStillPresentAppliesDeletion() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "x")
+        try await sync(a, b)
+        await a.store.delete(id)
+        try await sync(a)
+        clock.advance(10 * 24 * 3600)
+        try await sync(b, a)
+        let gone = await b.store.title(id)
+        XCTAssertNil(gone)
+        let before = await counters()
+        try await sync(b)
+        let after = await counters()
+        XCTAssertEqual(after.get - before.get, 0, "an already-applied tombstone is never fetched again")
+    }
+
+    func testRemoteMetaNewerThanTombstoneWins() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "alive")
+        try await sync(a, b)
+        let envelope = try await sealedEnvelope(id)
+        let stale = Tombstone(id: id, kind: .note, deletedAt: envelope.modifiedAt - 60, deviceID: "ghost")
+        try await memory.put(RemoteLayout.tombstone(id), data: try cipher.seal(try SyncEngine.encode(stale)), ifMatch: nil, ifNoneMatch: false)
+
+        try await sync(b, a)
+        let onB = await b.store.title(id)
+        let onA = await a.store.title(id)
+        XCTAssertEqual(onB, "alive")
+        XCTAssertEqual(onA, "alive")
+        let keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(RemoteLayout.tombstone(id)))
+        XCTAssertTrue(keys.contains(RemoteLayout.meta(.note, id)))
+    }
+
+    func testTombstoneNewerThanRemoteMetaWins() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "dead")
+        try await sync(a, b)
+        let envelope = try await sealedEnvelope(id)
+        let fresh = Tombstone(id: id, kind: .note, deletedAt: envelope.modifiedAt + 60, deviceID: "ghost")
+        try await memory.put(RemoteLayout.tombstone(id), data: try cipher.seal(try SyncEngine.encode(fresh)), ifMatch: nil, ifNoneMatch: false)
+
+        try await sync(b, a)
+        let onB = await b.store.title(id)
+        let onA = await a.store.title(id)
+        XCTAssertNil(onB)
+        XCTAssertNil(onA)
+        let keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(RemoteLayout.meta(.note, id)))
+        XCTAssertFalse(keys.contains(RemoteLayout.body(id)))
+    }
+
+    func testTombstoneNewerThanMetaStillKeepsUnsyncedLocalEdit() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await b.store.edit(id, title: "unsynced edit")
+        let envelope = try await sealedEnvelope(id)
+        let fresh = Tombstone(id: id, kind: .note, deletedAt: envelope.modifiedAt + 3600, deviceID: "ghost")
+        try await memory.put(RemoteLayout.tombstone(id), data: try cipher.seal(try SyncEngine.encode(fresh)), ifMatch: nil, ifNoneMatch: false)
+        try await sync(b, a)
+        let onA = await a.store.title(id)
+        XCTAssertEqual(onA, "unsynced edit")
+    }
+
+    // MARK: Encryption and connect
+
+    func testRemoteBytesNeverContainPlaintext() async throws {
+        let a = device("A"), b = device("B")
+        let marker = "SECRET-MARKER-7f3a"
+        let nb = await a.store.create(kind: .notebook, title: "\(marker) notebook")
+        let id = await a.store.create(title: "\(marker) note")
+        try await sync(a, b)
+        await a.store.delete(nb)
+        try await sync(a)
+        _ = id
+        for object in try await memory.list(prefix: "") {
+            let data = try await memory.get(object.key).data
+            XCTAssertNil(data.range(of: Data(marker.utf8)), "plaintext in \(object.key)")
+            XCTAssertFalse(String(decoding: data, as: UTF8.self).contains(marker))
+        }
+        let devices = try await b.engine.devices()
+        XCTAssertEqual(devices.map(\.name), ["A", "B"])
+    }
+
+    func testConnectCreatesEncryptedManifestAndReconnects() async throws {
+        let backend = InMemoryBackend()
+        let (manifest, _) = try await SyncEngine.connect(backend: backend, passphrase: "secret", encryptNew: true, makeCipher: XORTestCipher.factory)
+        let encryption = try XCTUnwrap(manifest.encryption)
+        XCTAssertEqual(encryption.iterations, 210_000)
+        XCTAssertEqual(encryption.salt.count, 16)
+        let (again, cipher) = try await SyncEngine.connect(backend: backend, passphrase: "secret", encryptNew: false, makeCipher: XORTestCipher.factory)
+        XCTAssertEqual(again, manifest)
+        XCTAssertEqual(try cipher.open(try cipher.seal(Data("x".utf8))), Data("x".utf8))
+    }
+
+    func testConnectWithWrongPassphraseThrows() async throws {
+        do {
+            _ = try await SyncEngine.connect(backend: memory, passphrase: "not pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+            XCTFail("expected wrongPassphrase")
+        } catch let error as SyncError {
+            XCTAssertEqual(error, .wrongPassphrase)
+        }
+    }
+
+    func testConnectToEncryptedStoreWithoutPassphraseThrows() async throws {
+        do {
+            _ = try await SyncEngine.connect(backend: memory, passphrase: nil, encryptNew: false, makeCipher: XORTestCipher.factory)
+            XCTFail("expected passphraseRequired")
+        } catch let error as SyncError {
+            XCTAssertEqual(error, .passphraseRequired)
+        }
+    }
+
+    func testConnectRejectsNewerFormat() async throws {
+        let backend = InMemoryBackend()
+        try await backend.put(RemoteLayout.manifest(), data: try SyncEngine.encode(Manifest(formatVersion: 2)), ifMatch: nil, ifNoneMatch: true)
+        do {
+            _ = try await SyncEngine.connect(backend: backend, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+            XCTFail("expected unsupportedFormat")
+        } catch let error as SyncError {
+            XCTAssertEqual(error, .unsupportedFormat(2))
+        }
+    }
+
+    func testConnectPlaintextStore() async throws {
+        let backend = InMemoryBackend()
+        let (manifest, cipher) = try await SyncEngine.connect(backend: backend, passphrase: nil, encryptNew: false, makeCipher: XORTestCipher.factory)
+        XCTAssertNil(manifest.encryption)
+        XCTAssertEqual(try cipher.seal(Data("plain".utf8)), Data("plain".utf8))
+        do {
+            _ = try await SyncEngine.connect(backend: backend, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+            XCTFail("expected encryptionMismatch")
+        } catch let error as SyncError {
+            XCTAssertEqual(error, .encryptionMismatch)
+        }
+    }
+
+    func testConnectRaceJoinsTheStoreCreatedFirst() async throws {
+        let inner = InMemoryBackend()
+        let racing = FaultyBackend(inner)
+        await racing.onNextPut(keyContaining: "manifest.json", .before({
+            _ = try? await SyncEngine.connect(backend: inner, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+        }))
+        let (manifest, _) = try await SyncEngine.connect(backend: racing, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+        let stored = try SyncEngine.decode(Manifest.self, from: try await inner.get(RemoteLayout.manifest()).data)
+        XCTAssertEqual(manifest, stored)
+    }
+
+    func testPlaintextStoreSyncsWithPassthroughCipher() async throws {
+        let backend = InMemoryBackend()
+        _ = try await SyncEngine.connect(backend: backend, passphrase: nil, encryptNew: false, makeCipher: XORTestCipher.factory)
+        let storeA = FakeLocalStore(), storeB = FakeLocalStore()
+        let a = SyncEngine(backend: backend, cipher: TestPassthroughCipher(), local: storeA, stateURL: dir.appendingPathComponent("pa.json"), deviceID: "pa", deviceName: "PA")
+        let b = SyncEngine(backend: backend, cipher: TestPassthroughCipher(), local: storeB, stateURL: dir.appendingPathComponent("pb.json"), deviceID: "pb", deviceName: "PB")
+        let id = await storeA.create(title: "plain")
+        _ = try await a.sync()
+        _ = try await b.sync()
+        let title = await storeB.title(id)
+        XCTAssertEqual(title, "plain")
+    }
+
+    // MARK: Fatal errors and devices
+
+    func testMissingManifestAbortsWithoutDeletingAnything() async throws {
+        let a = device("A")
+        let id = await a.store.create(title: "precious")
+        try await sync(a)
+        for object in try await memory.list(prefix: RemoteLayout.root) { try await memory.delete(object.key) }
+        do {
+            _ = try await a.engine.sync()
+            XCTFail("expected a fatal error")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, .notFound(RemoteLayout.manifest()))
+        }
+        let title = await a.store.title(id)
+        XCTAssertEqual(title, "precious")
+    }
+
+    func testUnauthorizedAbortsPass() async throws {
+        let a = device("A"), b = device("B")
+        await a.store.create(title: "x")
+        try await sync(a)
+        await faulty.rejectGets()
+        do {
+            _ = try await b.engine.sync()
+            XCTFail("expected unauthorized")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, .unauthorized("denied"))
+        }
+    }
+
+    func testDeviceRecordIsThrottledToTenMinutes() async throws {
+        let a = device("A")
+        try await sync(a)
+        let key = RemoteLayout.device("id-A")
+        let first = try await memory.get(key).etag
+        try await sync(a)
+        let second = try await memory.get(key).etag
+        XCTAssertEqual(first, second)
+        clock.advance(11 * 60)
+        try await sync(a)
+        let third = try await memory.get(key).etag
+        XCTAssertNotEqual(second, third)
+    }
+
+    func testConcurrentSyncCallsAreSerialized() async throws {
+        let a = device("A"), b = device("B")
+        for i in 0..<20 { await a.store.create(title: "n\(i)") }
+        async let r1 = a.engine.sync()
+        async let r2 = a.engine.sync()
+        let (x, y) = try await (r1, r2)
+        XCTAssertEqual(x.pushed + y.pushed, 20)
+        XCTAssertTrue(x.errors.isEmpty && y.errors.isEmpty)
+        try await sync(b)
+        await assertConverged(a, b)
+    }
+
+    // MARK: Performance
+
+    func testUnchangedSecondPassWith500NotesDoesOneListAndNothingElse() async throws {
+        let a = device("A"), b = device("B")
+        for i in 0..<500 { await a.store.create(title: "note \(i)") }
+        try await sync(a, b)
+        let count = await b.store.entries.count
+        XCTAssertEqual(count, 500)
+
+        for d in [a, b] {
+            let before = await counters()
+            let report = try await d.engine.sync()
+            let after = await counters()
+            XCTAssertEqual(after.list - before.list, 1)
+            XCTAssertEqual(after.get - before.get, 0)
+            XCTAssertEqual(after.put - before.put, 0)
+            XCTAssertEqual(after.delete - before.delete, 0)
+            XCTAssertEqual(report, SyncReport())
+        }
+    }
+}
