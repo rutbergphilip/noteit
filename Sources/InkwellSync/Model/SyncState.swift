@@ -23,16 +23,22 @@ public struct SyncState: Codable, Sendable, Equatable {
     public var lastDeviceWrite: Date?
     /// `deletedAt` of remote tombstones this device has read or written, so the 30-day sweep needs no extra gets.
     public var tombstoneDates: [UUID: Date] = [:]
+    /// Revisions whose meta this device is about to write; kept until a base records the outcome.
+    public var pendingPushes: [UUID: UUID] = [:]
 
-    public init(bases: [UUID: Base] = [:], knownTombstones: Set<UUID> = [], lastDeviceWrite: Date? = nil, tombstoneDates: [UUID: Date] = [:]) {
+    public init(
+        bases: [UUID: Base] = [:], knownTombstones: Set<UUID> = [], lastDeviceWrite: Date? = nil,
+        tombstoneDates: [UUID: Date] = [:], pendingPushes: [UUID: UUID] = [:]
+    ) {
         self.bases = bases
         self.knownTombstones = knownTombstones
         self.lastDeviceWrite = lastDeviceWrite
         self.tombstoneDates = tombstoneDates
+        self.pendingPushes = pendingPushes
     }
 
     private enum CodingKeys: String, CodingKey {
-        case bases, knownTombstones, lastDeviceWrite, tombstoneDates
+        case bases, knownTombstones, lastDeviceWrite, tombstoneDates, pendingPushes
     }
 
     // Every key is optional so state files written by older builds keep their bases.
@@ -42,6 +48,7 @@ public struct SyncState: Codable, Sendable, Equatable {
         knownTombstones = try c.decodeIfPresent(Set<UUID>.self, forKey: .knownTombstones) ?? []
         lastDeviceWrite = try c.decodeIfPresent(Date.self, forKey: .lastDeviceWrite)
         tombstoneDates = try c.decodeIfPresent([UUID: Date].self, forKey: .tombstoneDates) ?? [:]
+        pendingPushes = try c.decodeIfPresent([UUID: UUID].self, forKey: .pendingPushes) ?? [:]
     }
 
     /// Missing or corrupt files yield an empty state.

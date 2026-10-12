@@ -357,6 +357,7 @@ public actor SyncEngine {
             }
             try await local.applyDeletion(id, kind: localRecord.kind)
             state.bases[id] = nil
+            state.pendingPushes[id] = nil
             try saveState()
             pass.report.deleted += 1
         case .resurrectPush:
@@ -365,8 +366,9 @@ public actor SyncEngine {
             forgetTombstoneDate(id, pass)
             try await push(id, kind: localRecord.kind, remoteETag: nil, pass)
         case .forgetBase:
-            if base != nil {
+            if base != nil || state.pendingPushes[id] != nil {
                 state.bases[id] = nil
+                state.pendingPushes[id] = nil
                 try saveState()
             }
             if deletion != nil { await local.clearDeletion(id) }
@@ -384,6 +386,8 @@ public actor SyncEngine {
             deviceID: deviceID, deviceName: deviceName, meta: payload.meta,
             bodySHA256: payload.body.map(Self.sha256Hex)
         )
+        state.pendingPushes[id] = payload.revision
+        try saveState()
         let newETag: String
         do {
             newETag = try await backend.put(
@@ -391,6 +395,8 @@ public actor SyncEngine {
                 ifMatch: remoteETag, ifNoneMatch: remoteETag == nil
             )
         } catch StorageError.preconditionFailed {
+            state.pendingPushes[id] = nil
+            try saveState()
             pass.report.skipped += 1
             return false
         }
@@ -398,6 +404,7 @@ public actor SyncEngine {
             try await backend.put(RemoteLayout.body(id), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
         }
         state.bases[id] = .init(revision: payload.revision, remoteMetaETag: newETag, replacedMetaETag: remoteETag)
+        state.pendingPushes[id] = nil
         try saveState()
         pass.report.pushed += 1
         return true
@@ -418,6 +425,7 @@ public actor SyncEngine {
     private func adopt(_ payload: RecordPayload, etag: String) async throws {
         try await local.apply(payload)
         state.bases[payload.id] = .init(revision: payload.revision, remoteMetaETag: etag)
+        state.pendingPushes[payload.id] = nil
         try saveState()
     }
 
@@ -439,12 +447,15 @@ public actor SyncEngine {
                 }
             }
             state.bases[id] = .init(revision: envelope.revision, remoteMetaETag: remote.etag)
+            state.pendingPushes[id] = nil
             try saveState()
             return
         }
 
-        if state.bases[id] != nil, envelope.deviceID == deviceID {
-            // We wrote this remote revision and then kept editing before the pass finished, so local descends from it.
+        // We wrote this remote revision and then kept editing before the pass finished, so local descends from it.
+        // Without a base (an interrupted first push) the pending record, or a never-uploaded body, proves it.
+        if envelope.deviceID == deviceID,
+           state.bases[id] != nil || state.pendingPushes[id] == envelope.revision || remote.payload == nil {
             try await push(id, kind: kind, remoteETag: remote.etag, pass)
             return
         }
@@ -507,6 +518,7 @@ public actor SyncEngine {
         }
         state.tombstoneDates[id] = deletion.deletedAt
         state.bases[id] = nil
+        state.pendingPushes[id] = nil
         try saveState()
         await local.clearDeletion(id)
         pass.report.deleted += 1

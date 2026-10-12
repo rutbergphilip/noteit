@@ -262,6 +262,31 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertEqual(title, "v2")
     }
 
+    /// The first push of a new note fails after its meta landed, then the user keeps editing (E1).
+    func testInterruptedFirstPushThenEditIsNotStuck() async throws {
+        let a = device("A"), b = device("B")
+        let unsent = await a.store.create(title: "v1")
+        let unsaved = await a.store.create(title: "w1")
+        await faulty.onNextPut(keyContaining: "\(unsent.uuidString).body", .failBefore)
+        await faulty.onNextPut(keyContaining: "\(unsaved.uuidString).body", .failAfter)
+        _ = try await a.engine.sync()
+        await a.store.edit(unsent, title: "v2")
+        await a.store.edit(unsaved, title: "w2")
+
+        let resumed = try await relaunch(a).engine.sync()
+        XCTAssertEqual(resumed.pushed, 2)
+        XCTAssertEqual(resumed.skipped, 0)
+        XCTAssertEqual(resumed.conflicts, 0)
+        try await sync(b, a)
+        let first = await b.store.title(unsent)
+        let second = await b.store.title(unsaved)
+        XCTAssertEqual(first, "v2")
+        XCTAssertEqual(second, "w2")
+        let copies = await a.store.conflictCopies().count + (await b.store.conflictCopies().count)
+        XCTAssertEqual(copies, 0)
+        await assertConverged(a, b)
+    }
+
     func testCrashAfterBodyPutBeforeStateSaveIsIdempotent() async throws {
         let a = device("A"), b = device("B")
         let id = await a.store.create(title: "v1")
