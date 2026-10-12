@@ -713,6 +713,23 @@ final class SyncEngineTests: XCTestCase {
         }
     }
 
+    func testClockSkewAndBlockedHTTPAbortPass() async throws {
+        let a = device("A")
+        await a.store.create(title: "x")
+        try await sync(a)
+        for error in [StorageError.clockSkew("RequestTimeTooSkewed"), .insecureConnectionBlocked("ATS")] {
+            let inner = FaultyBackend(memory)
+            await inner.rejectGets(with: error)
+            let b = device("B-\(error)", backend: inner)
+            do {
+                _ = try await b.engine.sync()
+                XCTFail("expected \(error)")
+            } catch let thrown as StorageError {
+                XCTAssertEqual(thrown, error)
+            }
+        }
+    }
+
     func testDeviceRecordIsThrottledToTenMinutes() async throws {
         let a = device("A")
         try await sync(a)

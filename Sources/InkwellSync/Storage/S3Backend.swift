@@ -100,10 +100,11 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
                 markConditionalWritesUnsupported()
             }
         }
-        if conditional {
-            try await checkPreconditions(key, ifMatch: ifMatch, ifNoneMatch: ifNoneMatch)
-        }
-        return try await upload(key, data: data, headers: [:])
+        guard conditional else { return try await upload(key, data: data, headers: [:]) }
+        try await checkPreconditions(key, ifMatch: ifMatch, ifNoneMatch: ifNoneMatch)
+        let tag = try await upload(key, data: data, headers: [:])
+        try await verifyUnconditionalWrite(key, expected: tag)
+        return tag
     }
 
     public func delete(_ key: String) async throws {
@@ -140,6 +141,17 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
         if let ifMatch, current != ifMatch { throw StorageError.preconditionFailed(key) }
     }
 
+    /// HEAD+PUT isn't atomic: if another writer landed in between, report a lost race so the caller re-decides.
+    private func verifyUnconditionalWrite(_ key: String, expected: String) async throws {
+        let current: String
+        do {
+            current = etag(from: try await send(method: "HEAD", key: key).1)
+        } catch StorageError.notFound {
+            throw StorageError.preconditionFailed(key)
+        }
+        if current != expected { throw StorageError.preconditionFailed(key) }
+    }
+
     private func send(
         method: String,
         key: String?,
@@ -167,6 +179,8 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
                     throw StorageError.invalidResponse("Non-HTTP response for \(label)")
                 }
                 outcome = try classify(data: data, response: http, label: label, conditional: conditional)
+            } catch let error as URLError where error.code == .appTransportSecurityRequiresSecureConnection {
+                outcome = .failure(.insecureConnectionBlocked(error.localizedDescription))
             } catch let error as URLError {
                 outcome = .failure(.network(error.localizedDescription))
             }
@@ -190,6 +204,11 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
         let detail = body.map { "\($0.code): \($0.message)" } ?? "HTTP \(status)"
         if conditional, status == 501 || (status == 400 && body?.code == "NotImplemented") {
             throw S3Failure.conditionalNotSupported
+        }
+        switch body?.code {
+        case "RequestTimeTooSkewed": return .failure(.clockSkew(detail))
+        case "InvalidAccessKeyId", "SignatureDoesNotMatch": return .failure(.unauthorized(detail))
+        default: break
         }
         switch status {
         case 404: return .failure(.notFound(label))

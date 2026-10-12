@@ -92,7 +92,7 @@ public actor SyncEngine {
         self.now = now
     }
 
-    /// Throws only fatal errors (unauthorized, listing failures, missing manifest).
+    /// Throws only fatal errors (unauthorized, clock skew, blocked plain HTTP, listing failures, missing manifest).
     public func sync() async throws -> SyncReport {
         let previous = tail
         let pass = Task { () async throws -> SyncReport in
@@ -252,10 +252,18 @@ public actor SyncEngine {
         do {
             try await work()
         } catch let error as StorageError {
-            if case .unauthorized = error { throw error }
+            if Self.isFatal(error) { throw error }
             pass.report.errors.append(String(describing: error))
         } catch {
             pass.report.errors.append(String(describing: error))
+        }
+    }
+
+    /// Errors that would fail every request, so the pass stops instead of collecting one per record.
+    static func isFatal(_ error: StorageError) -> Bool {
+        switch error {
+        case .unauthorized, .clockSkew, .insecureConnectionBlocked: return true
+        default: return false
         }
     }
 
@@ -264,7 +272,7 @@ public actor SyncEngine {
         do {
             try await process(id, pass)
         } catch let error as StorageError {
-            if case .unauthorized = error { throw error }
+            if Self.isFatal(error) { throw error }
             pass.report.errors.append("\(id.uuidString): \(error)")
         } catch {
             pass.report.errors.append("\(id.uuidString): \(error)")

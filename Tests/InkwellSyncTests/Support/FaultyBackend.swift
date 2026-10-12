@@ -14,18 +14,18 @@ actor FaultyBackend: StorageBackend {
 
     let inner: InMemoryBackend
     private var putFaults: [(fragment: String, fault: Fault)] = []
-    private var unauthorizedGets = false
+    private var getError: StorageError?
 
     init(_ inner: InMemoryBackend) { self.inner = inner }
 
     /// Arms `fault` for the next put whose key contains `fragment`.
     func onNextPut(keyContaining fragment: String, _ fault: Fault) { putFaults.append((fragment, fault)) }
-    func rejectGets() { unauthorizedGets = true }
+    func rejectGets(with error: StorageError = .unauthorized("denied")) { getError = error }
 
     func list(prefix: String) async throws -> [RemoteObject] { try await inner.list(prefix: prefix) }
 
     func get(_ key: String) async throws -> (data: Data, etag: String) {
-        if unauthorizedGets { throw StorageError.unauthorized("denied") }
+        if let getError { throw getError }
         return try await inner.get(key)
     }
 

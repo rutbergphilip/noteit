@@ -226,13 +226,17 @@ final class S3BackendTests: XCTestCase {
     }
 
     func testConditionalNotImplementedFallsBackToHeadThenPut() async throws {
+        let lock = NSLock()
+        var stored: String?
         StubURLProtocol.reset { request in
+            lock.lock(); defer { lock.unlock() }
             switch request.httpMethod {
             case "PUT" where request.value(forHTTPHeaderField: "If-None-Match") != nil:
                 return .init(status: 501, body: self.errorXML("NotImplemented", "A header you provided implies functionality that is not implemented"))
             case "HEAD":
-                return .init(status: 404)
+                return stored.map { .init(status: 200, headers: ["ETag": "\"\($0)\""]) } ?? .init(status: 404)
             default:
+                stored = "v1"
                 return .init(status: 200, headers: ["ETag": "\"v1\""])
             }
         }
@@ -240,17 +244,22 @@ final class S3BackendTests: XCTestCase {
         let etag = try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
         XCTAssertEqual(etag, "v1")
         XCTAssertFalse(backend.conditionalWritesSupported)
-        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["PUT", "HEAD", "PUT"])
+        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["PUT", "HEAD", "PUT", "HEAD"])
         XCTAssertNil(StubURLProtocol.requests[2].request.value(forHTTPHeaderField: "If-None-Match"))
     }
 
     func testFallbackHeadDetectsStaleETag() async throws {
+        let lock = NSLock()
+        var stored = "current"
         StubURLProtocol.reset { request in
+            lock.lock(); defer { lock.unlock() }
             switch request.httpMethod {
             case "PUT" where request.value(forHTTPHeaderField: "If-Match") != nil:
                 return .init(status: 400, body: self.errorXML("NotImplemented", "nope"))
-            case "HEAD": return .init(status: 200, headers: ["ETag": "\"current\""])
-            default: return .init(status: 200, headers: ["ETag": "\"next\""])
+            case "HEAD": return .init(status: 200, headers: ["ETag": "\"\(stored)\""])
+            default:
+                stored = "next"
+                return .init(status: 200, headers: ["ETag": "\"next\""])
             }
         }
         let backend = makeBackend()
@@ -263,7 +272,72 @@ final class S3BackendTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["PUT", "HEAD"])
 
         try await backend.put("k", data: Data([2]), ifMatch: "current", ifNoneMatch: false)
-        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["PUT", "HEAD", "HEAD", "PUT"])
+        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["PUT", "HEAD", "HEAD", "PUT", "HEAD"])
         XCTAssertNil(StubURLProtocol.requests[3].request.value(forHTTPHeaderField: "If-Match"))
+    }
+
+    func testFallbackDetectsWriteOverwrittenAfterPut() async throws {
+        let lock = NSLock()
+        var puts = 0
+        StubURLProtocol.reset { request in
+            lock.lock(); defer { lock.unlock() }
+            switch request.httpMethod {
+            case "PUT" where request.value(forHTTPHeaderField: "If-None-Match") != nil:
+                return .init(status: 501, body: self.errorXML("NotImplemented", "nope"))
+            case "HEAD":
+                // Absent before our PUT; another device's write lands right after it.
+                return puts == 0 ? .init(status: 404) : .init(status: 200, headers: ["ETag": "\"theirs\""])
+            default:
+                puts += 1
+                return .init(status: 200, headers: ["ETag": "\"mine\""])
+            }
+        }
+        let backend = makeBackend()
+        do {
+            try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
+            XCTFail("Expected preconditionFailed")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, .preconditionFailed("k"))
+        }
+        XCTAssertFalse(backend.conditionalWritesSupported)
+    }
+
+    func testUnconditionalPutIsNotVerified() async throws {
+        StubURLProtocol.reset { _ in .init(status: 200, headers: ["ETag": "\"x\""]) }
+        try await makeBackend().put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
+        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["PUT"])
+    }
+
+    func testClockSkewIsDistinctAndNotRetried() async throws {
+        StubURLProtocol.reset { _ in .init(status: 403, body: self.errorXML("RequestTimeTooSkewed", "The difference between the request time and the current time is too large.")) }
+        do {
+            _ = try await makeBackend().get("k")
+            XCTFail("Expected clockSkew")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, .clockSkew("RequestTimeTooSkewed: The difference between the request time and the current time is too large."))
+        }
+        XCTAssertEqual(StubURLProtocol.requests.count, 1)
+    }
+
+    func testInvalidAccessKeyIsUnauthorizedWithCode() async throws {
+        StubURLProtocol.reset { _ in .init(status: 403, body: self.errorXML("InvalidAccessKeyId", "The AWS Access Key Id you provided does not exist")) }
+        do {
+            try await makeBackend().probe()
+            XCTFail("Expected unauthorized")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, .unauthorized("InvalidAccessKeyId: The AWS Access Key Id you provided does not exist"))
+        }
+        XCTAssertEqual(StubURLProtocol.requests.count, 1)
+    }
+
+    func testATSBlockedPlainHTTPIsDistinctAndNotRetried() async throws {
+        StubURLProtocol.reset { _ in throw URLError(.appTransportSecurityRequiresSecureConnection) }
+        do {
+            _ = try await makeBackend().get("k")
+            XCTFail("Expected insecureConnectionBlocked")
+        } catch let error as StorageError {
+            guard case .insecureConnectionBlocked = error else { return XCTFail("Unexpected \(error)") }
+        }
+        XCTAssertEqual(StubURLProtocol.requests.count, 1)
     }
 }
