@@ -555,6 +555,7 @@ private struct SyncConnectedView: View {
             }
         }
         .formStyle(.grouped)
+        .background(InitialFocusClearer())
         .onAppear {
             deviceName = config.deviceName
             Task { await sync.refreshDevices() }
@@ -675,5 +676,42 @@ private struct SyncConnectedView: View {
         store.selection = .allNotes
         store.searchText = "conflict —"
         WindowRouter.showMainWindow()
+    }
+}
+
+/// AppKit makes the first text field in a newly shown view key; this clears that initial focus once.
+private struct InitialFocusClearer: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { ClearingView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class ClearingView: NSView {
+        private var observer: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            removeObserver()
+            guard let window else { return }
+            Self.clear(window)
+            if !window.isKeyWindow {
+                observer = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main) { [weak self, weak window] _ in
+                    MainActor.assumeIsolated {
+                        self?.removeObserver()
+                        if let window { Self.clear(window) }
+                    }
+                }
+            }
+        }
+
+        private func removeObserver() {
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            observer = nil
+        }
+
+        private static func clear(_ window: NSWindow) {
+            DispatchQueue.main.async { [weak window] in
+                guard let window, window.firstResponder is NSText else { return }
+                window.makeFirstResponder(nil)
+            }
+        }
     }
 }
