@@ -173,6 +173,93 @@ final class FolderBackendTests: XCTestCase {
         XCTAssertEqual(try tempFiles(), [])
     }
 
+    func testETagIsContentBasedForSmallFilesOnCoarseMtimeVolumes() async throws {
+        let key = "inkwell/v1/notes/x.meta"
+        let first = try await backend.put(key, data: Data("AAAA".utf8), ifMatch: nil, ifNoneMatch: false)
+        XCTAssertTrue(first.hasPrefix("h"))
+        XCTAssertEqual(first.count, 33)
+        let listed = try await backend.list(prefix: "")
+        XCTAssertEqual(listed.first?.etag, first)
+
+        // Another writer rewrites the file in place with the same size, and the volume keeps the old mtime.
+        try rewriteKeepingMtime(key, Data("BBBB".utf8))
+
+        let fresh = FolderBackend(root: root)
+        let got = try await fresh.get(key)
+        XCTAssertEqual(got.data, Data("BBBB".utf8))
+        XCTAssertNotEqual(got.etag, first)
+        let relisted = try await backend.list(prefix: "")
+        XCTAssertEqual(relisted.first?.etag, got.etag)
+        do {
+            try await backend.put(key, data: Data("CCCC".utf8), ifMatch: first, ifNoneMatch: false)
+            XCTFail("Expected preconditionFailed")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, .preconditionFailed(key))
+        }
+    }
+
+    func testLargeFilesUseStatETag() async throws {
+        let data = Data(repeating: 7, count: 256 * 1024 + 1)
+        let etag = try await backend.put("inkwell/v1/notes/x.body", data: data, ifMatch: nil, ifNoneMatch: false)
+        XCTAssertFalse(etag.hasPrefix("h"))
+        XCTAssertEqual(etag.split(separator: "-").count, 3)
+        let got = try await backend.get("inkwell/v1/notes/x.body")
+        XCTAssertEqual(got.etag, etag)
+    }
+
+    func testListReusesHashesForUnchangedFiles() async throws {
+        for i in 0..<5 {
+            try await backend.put("inkwell/v1/notes/\(i).meta", data: Data("note \(i)".utf8), ifMatch: nil, ifNoneMatch: false)
+        }
+        let first = try await backend.list(prefix: "")
+        let reads = backend.hashedFileReads
+        let second = try await backend.list(prefix: "")
+        XCTAssertEqual(second, first)
+        XCTAssertEqual(backend.hashedFileReads, reads, "unchanged files are not re-read")
+    }
+
+    func testGetAndPutETagsMatchContentUnderConcurrentRenames() async throws {
+        let key = "inkwell/v1/notes/x.body"
+        let base = 300_000
+        let writers = [FolderBackend(root: root), FolderBackend(root: root)]
+        let reader = FolderBackend(root: root)
+        try await writers[0].put(key, data: Data(repeating: 0, count: base), ifMatch: nil, ifNoneMatch: false)
+
+        async let written: [Int: String] = withThrowingTaskGroup(of: [Int: String].self) { group in
+            for (w, writer) in writers.enumerated() {
+                group.addTask {
+                    var tags: [Int: String] = [:]
+                    for i in 1...150 {
+                        let size = base + i * 2 + w
+                        tags[size] = try await writer.put(key, data: Data(repeating: UInt8(i % 250), count: size), ifMatch: nil, ifNoneMatch: false)
+                    }
+                    return tags
+                }
+            }
+            return try await group.reduce(into: [:]) { $0.merge($1) { a, _ in a } }
+        }
+        var observed: [(Int, String)] = []
+        for _ in 0..<1500 {
+            let got = try await reader.get(key)
+            observed.append((got.data.count, got.etag))
+        }
+        let tags = try await written
+        var mismatches = 0
+        for (size, etag) in observed where size != base && tags[size] != etag { mismatches += 1 }
+        XCTAssertEqual(mismatches, 0, "bytes paired with another write's etag")
+    }
+
+    private func rewriteKeepingMtime(_ key: String, _ data: Data) throws {
+        let path = root.appendingPathComponent(key).path
+        var st = stat()
+        XCTAssertEqual(stat(path, &st), 0)
+        let handle = try XCTUnwrap(FileHandle(forWritingAtPath: path))
+        try handle.write(contentsOf: data)
+        try handle.close()
+        var times = [st.st_atimespec, st.st_mtimespec]
+        XCTAssertEqual(utimensat(AT_FDCWD, path, &times, 0), 0)
+    }
+
     private func tempFiles() throws -> [String] {
         let paths = FileManager.default.subpaths(atPath: root.path) ?? []
         return paths.filter { $0.contains(".tmp-") }
