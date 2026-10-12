@@ -64,6 +64,10 @@ struct EditorHeader: View {
 
             Spacer()
 
+            if let source = note.conflictSource {
+                ConflictBadge(source: source) { store.markConflictResolved(note.id) }
+            }
+
             Button {
                 store.togglePin(note.id)
             } label: {
@@ -77,6 +81,29 @@ struct EditorHeader: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 2)
+    }
+}
+
+/// Shown on a sync conflict copy; "Resolved" clears the badge (also cleared by editing the copy).
+struct ConflictBadge: View {
+    let source: String
+    let resolve: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Label("Conflict copy from \(source)", systemImage: "exclamationmark.triangle.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.orange)
+                .lineLimit(1)
+            Button("Mark Resolved", action: resolve)
+                .controlSize(.small)
+                .help("Keep this note and clear its conflict badge")
+        }
+        .padding(.leading, 9)
+        .padding(.trailing, 3)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(Color.orange.opacity(0.12)))
     }
 }
 

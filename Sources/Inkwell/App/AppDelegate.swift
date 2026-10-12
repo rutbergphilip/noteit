@@ -162,6 +162,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     window.makeKeyAndOrderFront(nil)
                     self.debugWindow = window
                 }
+                if args.contains("--debug-show-conflicts") {
+                    let store = NoteStore.shared
+                    store.selection = .conflicts
+                    store.selectedNoteID = store.notes(for: .conflicts, search: "").first?.id
+                }
                 if args.contains("--debug-quick-capture") {
                     QuickCaptureController.shared.show()
                 }
