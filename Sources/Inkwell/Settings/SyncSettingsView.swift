@@ -124,6 +124,9 @@ private struct SyncSetupView: View {
     @ViewBuilder
     private func s3Form(_ provider: SyncProvider) -> some View {
         TextField("Endpoint", text: $endpoint, prompt: Text(provider.endpointTemplate))
+        if let endpointProblem {
+            SettingsFootnote(text: endpointProblem, symbol: "xmark.octagon.fill", color: .red)
+        }
         TextField("Region", text: $region, prompt: Text(provider.defaultRegion))
         TextField("Bucket", text: $bucket, prompt: Text("my-notes"))
         TextField("Folder inside bucket", text: $prefix, prompt: Text("Optional"))
@@ -233,10 +236,16 @@ private struct SyncSetupView: View {
 
     private var trimmedEndpoint: String { endpoint.trimmingCharacters(in: .whitespacesAndNewlines) }
 
+    /// Cloud providers always offer https; plain http is only for self-hosted servers on the local network.
+    private var endpointProblem: String? {
+        guard let provider, provider.isS3, !provider.allowsPlainHTTP, trimmedEndpoint.lowercased().hasPrefix("http://") else { return nil }
+        return SyncSetupError.insecureEndpoint(provider).errorDescription
+    }
+
     private var destinationComplete: Bool {
         guard let provider else { return false }
         if provider == .folder { return folderURL != nil }
-        return !trimmedEndpoint.isEmpty && !trimmedEndpoint.contains("<") && !bucket.trimmingCharacters(in: .whitespaces).isEmpty
+        return endpointProblem == nil && !trimmedEndpoint.isEmpty && !trimmedEndpoint.contains("<") && !bucket.trimmingCharacters(in: .whitespaces).isEmpty
             && !accessKey.trimmingCharacters(in: .whitespaces).isEmpty && !secret.isEmpty
     }
 
@@ -356,6 +365,9 @@ private struct SyncSetupView: View {
             _region = State(initialValue: preset.defaultRegion)
             _pathStyle = State(initialValue: preset.defaultPathStyle)
             _endpoint = State(initialValue: preset.endpointTemplate)
+            if let i = args.firstIndex(of: "--debug-sync-endpoint"), i + 1 < args.count {
+                _endpoint = State(initialValue: args[i + 1])
+            }
         }
     }
     #endif
@@ -495,6 +507,11 @@ private struct SyncConnectedView: View {
     @State private var unlockPassphrase = ""
     @State private var unlockError: String?
     @State private var unlocking = false
+    @State private var editingCredentials = false
+    @State private var newAccessKey = ""
+    @State private var newSecret = ""
+    @State private var credentialsBusy = false
+    @State private var credentialsFeedback: (text: String, isError: Bool)?
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -535,8 +552,16 @@ private struct SyncConnectedView: View {
                 Text("This Mac")
             } footer: {
                 if sync.conflictCount > 0 {
-                    SettingsFootnote(text: "When a note changed on two Macs at once, both versions are kept. Review the copies and delete the one you don't need.")
+                    SettingsFootnote(text: "When a note changed on two Macs at once, both versions are kept. Review the copies, delete the one you don't need, or choose Mark Resolved.")
                         .padding(.top, 2)
+                }
+            }
+
+            if config.provider.isS3 {
+                Section {
+                    credentialsForm
+                } header: {
+                    Text("Credentials")
                 }
             }
 
@@ -562,7 +587,7 @@ private struct SyncConnectedView: View {
         }
         .onChange(of: sync.lastSync) { _, _ in Task { await sync.refreshDevices() } }
         .confirmationDialog("Disconnect from \(config.provider.displayName)?", isPresented: $confirmDisconnect) {
-            Button("Disconnect", role: .destructive) { sync.disconnect() }
+            Button("Disconnect", role: .destructive) { Task { await sync.disconnect() } }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Your notes stay on this Mac and in \(config.destination). Syncing stops and the saved credentials are removed from the keychain.")
@@ -625,6 +650,73 @@ private struct SyncConnectedView: View {
     }
 
     @ViewBuilder
+    private var credentialsForm: some View {
+        if editingCredentials || sync.credentialsRejected {
+            if sync.credentialsRejected {
+                SettingsFootnote(text: "\(config.provider.displayName) rejected the saved access key. Enter a working key to resume syncing.",
+                                 symbol: "exclamationmark.triangle.fill", color: .orange)
+            }
+            TextField("Access key ID", text: $newAccessKey)
+            SecureField("Secret access key", text: $newSecret)
+            if let credentialsFeedback {
+                SettingsFootnote(text: credentialsFeedback.text,
+                                 symbol: credentialsFeedback.isError ? "xmark.octagon.fill" : "checkmark.circle.fill",
+                                 color: credentialsFeedback.isError ? .red : .green)
+            }
+            HStack {
+                if credentialsBusy { ProgressView().controlSize(.small) }
+                Spacer()
+                if !sync.credentialsRejected {
+                    Button("Cancel") { resetCredentialsForm() }
+                }
+                Button("Test") { Task { await submitCredentials(save: false) } }
+                Button("Save") { Task { await submitCredentials(save: true) } }
+                    .keyboardShortcut(.defaultAction)
+            }
+            .disabled(credentialsBusy || newAccessKey.trimmingCharacters(in: .whitespaces).isEmpty || newSecret.isEmpty)
+        } else {
+            LabeledContent("Access key ID") {
+                HStack(spacing: 8) {
+                    Text(sync.savedAccessKey ?? "—")
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button("Update Credentials…") {
+                        newAccessKey = sync.savedAccessKey ?? ""
+                        editingCredentials = true
+                    }
+                    .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    private func resetCredentialsForm() {
+        editingCredentials = false
+        newAccessKey = ""
+        newSecret = ""
+        credentialsFeedback = nil
+    }
+
+    private func submitCredentials(save: Bool) async {
+        credentialsBusy = true
+        credentialsFeedback = nil
+        defer { credentialsBusy = false }
+        let key = newAccessKey.trimmingCharacters(in: .whitespaces)
+        do {
+            if save {
+                try await sync.updateCredentials(accessKey: key, secret: newSecret)
+                resetCredentialsForm()
+            } else {
+                try await sync.testCredentials(accessKey: key, secret: newSecret)
+                credentialsFeedback = ("These credentials work.", false)
+            }
+        } catch {
+            credentialsFeedback = (SyncController.describe(error), true)
+        }
+    }
+
+    @ViewBuilder
     private var devicesList: some View {
         if sync.devices.isEmpty {
             Text("Your Macs appear here after their first sync.")
@@ -673,8 +765,8 @@ private struct SyncConnectedView: View {
     }
 
     private func showConflicts() {
-        store.selection = .allNotes
-        store.searchText = "conflict —"
+        store.searchText = ""
+        store.selection = .conflicts
         WindowRouter.showMainWindow()
     }
 }
