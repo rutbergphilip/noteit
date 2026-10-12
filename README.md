@@ -4,7 +4,7 @@
 
 > **Who this document is for:** primarily the **design team** (UX, logotype and app icon, motion, brand). It covers what the product is, who it serves, how the current build looks and behaves, and what we need from you. Engineers can skip to [For engineers](#11-for-engineers).
 >
-> **Status (Oct 2026):** working app, macOS 14+, single user, local-only. Working name **Inkwell**, backup name **NoteIt** (see [Naming](#8-naming-inkwell-vs-noteit)). Visuals are engineering defaults, and the app icon is a code-drawn placeholder.
+> **Status (Oct 2026):** working app, macOS 14+, single user. Local-first, with optional sync between your Macs through storage you own (see [Sync & storage](#510-sync--storage)). Working name **Inkwell**, backup name **NoteIt** (see [Naming](#8-naming-inkwell-vs-noteit)). Visuals are engineering defaults, and the app icon is a code-drawn placeholder.
 
 ---
 
@@ -40,7 +40,7 @@ These are proposals. Pick one, combine them, or replace them.
 
 ## 2. The product in 30 seconds
 
-**Vision.** A Mac notes app as calm and instant as Apple Notes, with the formatting depth and keyboard control power users expect from tools like Bear or Obsidian. It needs no account and no cloud, and nothing loads between you and your note.
+**Vision.** A Mac notes app as calm and instant as Apple Notes, with the formatting depth and keyboard control power users expect from tools like Bear or Obsidian. It needs no account and no Inkwell cloud, and nothing loads between you and your note.
 
 **Problem.**
 
@@ -54,6 +54,7 @@ These are proposals. Pick one, combine them, or replace them.
 - **Organize lightly:** colored notebooks with icons, automatic `#hashtag` tags, and Pinned and Recent smart views.
 - **Format richly:** headings, lists, checklists, tables, code blocks, quotes, colors, highlights, links and images, plus markdown-as-you-type.
 - **Stay native, local and private:** SwiftUI and AppKit with no third-party dependencies. Everything lives in a folder on your Mac.
+- **Sync on your terms:** optionally, keep your Macs in sync through a folder or S3 bucket you own, end-to-end encrypted by default. There's no Inkwell account and no Inkwell server.
 
 **Why now.** People are tired of subscription, cloud-first, Electron note apps. macOS 14+ gives us mature SwiftUI, `MenuBarExtra` and `SMAppService` login items, so a small team can build a native app with real polish.
 
@@ -75,13 +76,13 @@ Legend: ✅ yes · ◐ partial or limited · ❌ no. "Inkwell" means **today's b
 | Notebooks with color and icon | ✅ | ◐ folders | ✅ | ❌ tags only | ◐ folders |
 | `#hashtag` tags | ✅ | ✅ | ❌ | ✅ | ✅ |
 | Local-first, no account | ✅ | ❌ iCloud | ❌ | ◐ | ✅ |
-| Sync across devices | ❌ **not yet** | ✅ | ✅ | ✅ | ✅ (paid) |
+| Sync across devices | ✅ Macs only, via your own folder or S3 bucket | ✅ | ✅ | ✅ | ✅ (paid) |
 | iPhone / iPad app | ❌ | ✅ | ✅ | ✅ | ✅ |
 | Export (Markdown/PDF) | ❌ **not yet** | ◐ | ✅ | ✅ | ✅ |
 | Collaboration | ❌ | ✅ | ✅ | ❌ | ◐ |
 | Plugins / extensibility | ❌ | ❌ | ◐ | ❌ | ✅ |
 
-**Where we win today:** capture speed (hotkey, floating panel, menu bar), a native feel, and rich formatting without learning a syntax. **Where we lose today:** sync, mobile, export and collaboration.
+**Where we win today:** capture speed (hotkey, floating panel, menu bar), a native feel, and rich formatting without learning a syntax. **Where we lose today:** mobile, export and collaboration. Sync works between Macs only, and it needs storage the user brings.
 
 ---
 
@@ -122,9 +123,9 @@ Legend: ✅ yes · ◐ partial or limited · ❌ no. "Inkwell" means **today's b
 | Principle | What it means | How it shows up today |
 |---|---|---|
 | **Speed** | Nothing between the thought and the note | Global hotkeys, Quick Capture, menu bar panel, ⌘N focuses the editor immediately, autosave about 0.5 s after typing stops |
-| **Calm** | Quiet chrome; the content is the hero | System materials, soft tints, comfortable reading width (≤ 760 pt), no badges or nags |
+| **Calm** | Quiet chrome; the content is the hero | System materials, soft tints, comfortable reading width (≤ 760 pt), no nags. The only alert-style badge marks a sync conflict copy |
 | **Native** | Feels like Apple made it | SwiftUI + AppKit, SF Symbols, system fonts, sidebar vibrancy, light and dark mode, standard menus and Settings |
-| **Private & local-first** | Your notes are files on your Mac | `~/Library/Application Support/Inkwell/`, no account, no network code |
+| **Private & local-first** | Your notes are files on your Mac | `~/Library/Application Support/Inkwell/`, no account. Inkwell only touches the network once you connect sync, and then only your own storage, end-to-end encrypted by default |
 | **Keyboard-first** | Every frequent action has a shortcut | About 30 editor shortcuts, markdown triggers, a fully keyboard-driven menu bar panel, hotkey recorder |
 | **Delightful** | Small moments of craft | Round accent-filled checkboxes, keycap chips, a "Saved to Inbox" toast, a shake on an invalid hotkey, collapsing toolbar |
 
@@ -146,13 +147,14 @@ A `NavigationSplitView` with a unified toolbar. The default size is 1120 × 720 
 
 | Column | Width (min / ideal / max) | Contents |
 |---|---|---|
-| **Sidebar** | 190 / 220 / 320 | Library, Notebooks, Tags, and a "New Notebook" button pinned at the bottom |
+| **Sidebar** | 190 / 220 / 320 | Library, Notebooks, Tags, and a footer with a "New Notebook" button and (when sync is on) the sync status pill |
 | **Note list** | 240 / 300 / 440 | Title and subtitle ("All Notes · 3 notes"), toolbar search, New Note button, note cards |
 | **Editor** | flexible | Note header, formatting toolbar, rich-text editor |
 
 ### 5.2 Sidebar
 
 - **Library:** *All Notes* (accent-colored `note.text`), *Pinned* (orange `pin.fill`), and *Recent* (teal `clock`, showing notes edited in the **last 7 days**). Each row has a count badge.
+  - *Conflicts* (orange `exclamationmark.triangle.fill`) appears only while sync conflict copies exist (see §5.10).
 - **Notebooks:** each row shows the notebook's SF Symbol in its color plus a count.
   - Drag a notebook to reorder it.
   - Drop notes onto a notebook to move them.
@@ -170,13 +172,14 @@ A `NavigationSplitView` with a unified toolbar. The default size is 1120 × 720 
 - Plain inset list rows (no separators) styled as cards. Each card shows:
   - **title** (13 pt semibold; "New Note" in secondary when empty)
   - an orange pin if pinned
+  - an orange warning triangle if it's a sync conflict copy (tooltip: "Conflict copy from *Mac name*")
   - a **2-line preview** (12 pt secondary)
   - a **relative date** ("1 minute ago")
   - a **notebook dot and name**, except when you're already inside that notebook
 - Title and preview are derived automatically from the first non-empty line and the following text.
 - Sort order: **pinned first, then most recently edited.**
 - Search (⌘F) matches all words across the title and full body text, within the current sidebar scope. Matching ignores case, accents and width, so `cafe` finds "Café".
-- Right-click offers Pin/Unpin, Move to › notebook, and Delete…. The app confirms first. The dialog says "This note will be permanently deleted", and the note does disappear from the app with no undo, but its body is quietly moved to a hidden `.trash/` folder on disk (see §11). The ⌫ key also triggers delete with confirmation.
+- Right-click offers Pin/Unpin, Move to › notebook, Mark Conflict Resolved (conflict copies only), and Delete…. The app confirms first. The dialog says "This note will be permanently deleted", and the note does disappear from the app with no undo, but its body is quietly moved to a hidden `.trash/` folder on disk (see §11). The ⌫ key also triggers delete with confirmation.
 - Drag a card onto a sidebar notebook or onto Pinned.
 - **Empty states** use a large SF Symbol in a tinted 88 pt circle, a title, a message and a prominent CTA:
   - "No Pinned Notes" (orange)
@@ -189,6 +192,7 @@ A `NavigationSplitView` with a unified toolbar. The default size is 1120 × 720 
 - **Header row:**
   - a **notebook chip** (a capsule tinted with the notebook color; click it to move the note)
   - "Edited 12 Oct 2026 at 10:28"
+  - on a sync conflict copy, an orange capsule badge, "Conflict copy from *Mac name*", with a **Mark Resolved** button
   - a pin toggle
 - **Formatting toolbar.** A compact icon bar of 26 × 24 buttons with hover and active (accent) states. Groups left to right:
 
@@ -244,7 +248,8 @@ A `NavigationSplitView` with a unified toolbar. The default size is 1120 × 720 
   2. **Search field** ("Search notes"). Use ↑/↓ to move, ↩ to open, and Esc to clear the query, then close the panel.
   3. **Composer card:** "Jot down a quick note…" (1–4 lines). It includes a notebook picker, an expand button (↗ opens the text in Quick Capture), and a send button (⌘↩). Saving shows a green **"Saved to Inbox"** toast for about 1.8 s.
   4. **List:** a **PINNED** section, then **RECENT** (up to 12 notes). Each row has a notebook glyph, title, one-line preview and a short time ("15m", "Yesterday", "Mon").
-  5. **Footer:** New Note ⌘N · Settings… ⌘, · Quit Inkwell ⌘Q.
+  5. **Sync row** (only when sync is on): status icon, "Synced 2 minutes ago" (or the problem in plain words), and a **Sync Now** link.
+  6. **Footer:** New Note ⌘N · Settings… ⌘, · Quit Inkwell ⌘Q.
 
 ### 5.6 Quick Capture panel
 
@@ -273,7 +278,37 @@ A 520 pt wide tabbed window:
 | **General** | *Show Inkwell in:* "Dock and menu bar" or "Menu bar only" · *Show menu bar icon* (locked on in menu-bar-only mode so the app can't become unreachable) · *Launch at login* (requires the .app bundle, and handles "requires approval") |
 | **Shortcuts** | Three global-hotkey rows, each with a gradient icon tile, title, description and a **Record Shortcut** field. "Clear All" appears once any are set. Footer: "Shortcuts work from any app. No special permissions needed." |
 | **Editor** | *Default font size* slider, 11–24 pt (default 15) with a live preview line · *Default notebook for new notes* (used by Quick Capture and the menu bar) |
+| **Sync** | Connect storage, or manage the connection (see below) |
 | **About** | 96 pt app icon, "Inkwell" in SF Rounded Bold 26, version, "Notes that keep up with your thinking." |
+
+**Settings › Sync** has two states.
+
+*Disconnected (setup):*
+
+- **Storage:** a 3 × 2 grid of **provider cards**, each with a gradient icon tile, a name and a one-line hint:
+
+  | Card | SF Symbol | Tile color | Hint |
+  |---|---|---|---|
+  | Folder | `folder.fill` | `#0A84FF` | Any folder — NAS, iCloud Drive, Dropbox, USB |
+  | Amazon S3 | `shippingbox.fill` | `#FF9F0A` | Your own AWS bucket |
+  | Cloudflare R2 | `cloud.fill` | `#5E5CE6` | No egress fees |
+  | Backblaze B2 | `flame.fill` | `#FF453A` | Low-cost cloud storage |
+  | MinIO / NAS | `externaldrive.fill.badge.wifi` | `#30B0C7` | Self-hosted S3 on your network |
+  | Custom S3 | `server.rack` | `#8E8E93` | Wasabi, Synology C2 and more |
+
+  Before a card is picked, the footer reads "Your notes sync through storage you own. Inkwell doesn't run a server and never sees your data."
+- **Folder form:** a *Choose Folder…* button and the chosen path. Inkwell keeps its files in an `inkwell` subfolder.
+- **S3 form:** Endpoint (prefilled per provider), Region, Bucket, *Folder inside bucket* (optional), *Path-style addressing*, Access key ID, Secret access key. Each provider has its own help text. Amazon S3, R2 and B2 require `https://`; MinIO / NAS and Custom S3 also accept `http://` for servers on the local network.
+- **Encryption:** an *End-to-end encryption* toggle, **on by default**, with Passphrase (at least 8 characters), Confirm passphrase, a 4-segment strength meter (Too short / Weak / Fair / Good / Strong) and an orange warning that a lost passphrase means the synced notes can't be decrypted. Turning encryption off shows "anyone with access to the storage can read your notes". If the location already holds an encrypted library, the section switches to a single "Enter the passphrase used on your other Mac" field.
+- **Action bar:** **Test Connection** reports what it found (an empty location, an unencrypted or encrypted Inkwell library, or one from a newer version). **Connect & Sync** is the default button.
+
+*Connected:*
+
+- **Status:** provider icon, provider name and destination, the live status line ("Synced 2 minutes ago"), a "N items will be retried on the next sync" note when some records failed, and a **Sync Now** button. When the passphrase is missing or wrong, an inline Passphrase field with **Unlock** appears here.
+- **This Mac:** an editable *Name* (shown to your other Macs), *Encryption* ("End-to-end encrypted" with a green lock, or "Not encrypted"), and *Conflicts* ("None", or an orange "N conflict copies" with a **Show** button that opens the Conflicts filter).
+- **Credentials** (S3 only): the saved access key ID and **Update Credentials…**, which opens Access key ID / Secret fields with **Test** and **Save**. If the storage rejects the saved key, this form opens on its own with an orange explanation.
+- **Devices:** every Mac that has synced, with "This Mac" tagged and "Seen 5 minutes ago" for the others.
+- **Disconnect…:** a confirmation explains that notes stay on this Mac and in the storage, and that the saved credentials are removed from the keychain.
 
 ### 5.8 Global hotkeys are **unbound by default**
 
@@ -302,7 +337,43 @@ None are preassigned, so we never steal someone's existing shortcut. The user re
 - **"Custom keyboard shortcuts"** contains the Ghostty table from Persona 1, tagged `#shortcuts #ghostty`.
 - There is no onboarding flow beyond this content (see §9).
 
-### 5.10 Screenshots
+### 5.10 Sync & storage
+
+**The pitch:** your notes sync between your Macs through storage **you** own. There's no Inkwell account and no Inkwell server.
+
+- **Where your notes can live:**
+  - **Any folder:** a NAS share, iCloud Drive, Dropbox, or a USB drive.
+  - **Any S3-compatible bucket:** Amazon S3, Cloudflare R2, Backblaze B2, MinIO on your NAS, or a custom S3 service (Wasabi, Synology C2 and others).
+- **Setup** takes about a minute in Settings › Sync: pick a provider card, fill in the folder or bucket, set a passphrase, and click **Connect & Sync**. On your second Mac, point it at the same place and enter the same passphrase. Sample notes from that Mac's first launch that were never edited are removed before it joins, so the library doesn't get a second Welcome note.
+- **End-to-end encryption is on by default.** Notes are encrypted on the Mac before they're uploaded. The storage only sees encrypted files named by random IDs, plus one small unencrypted file that describes the format. The passphrase stays in the Mac's keychain and is never uploaded. **If it's lost, the data can't be recovered**, and the setup screen says so.
+- **Conflicts never lose data.** If a note changes on two Macs before they sync, both versions are kept:
+  - the remote version arrives as a **conflict copy** titled "Title (conflict — *Mac name*, *date*)";
+  - the copy carries an **orange badge** in the note list and the editor header;
+  - all copies are gathered under the **Conflicts** filter in the sidebar;
+  - **Mark Resolved** (or simply editing the copy) clears the badge. Deleting either version also works.
+  - Notebooks don't get copies: the most recent change to a notebook's name, color or icon wins.
+- **The status pill** sits in the sidebar footer, and the same status shows as a row in the menu bar panel. Clicking the pill opens Settings › Sync.
+
+  | State | Symbol | Label | Tint |
+  |---|---|---|---|
+  | Synced | `checkmark.icloud` | Synced | secondary |
+  | Syncing | `arrow.triangle.2.circlepath` (rotating) | Syncing | accent |
+  | Offline | `icloud.slash` | Offline | secondary |
+  | Error | `exclamationmark.icloud` | Sync Issue | orange |
+  | Needs passphrase | `lock.icloud` | Locked | orange |
+
+  Quick background passes don't flash "Syncing"; the pill only switches if a pass takes longer than 0.7 s.
+- **Lightweight:** when sync isn't configured, it uses nothing at all: no timers, no observers, no network. Once configured, it checks **once a minute while you're using Inkwell** and **every 10 minutes in the background**, on a low-priority thread that never blocks typing. Local edits are pushed about 2 s after you stop typing (at most 10 s later), and a check also runs after waking from sleep. Each check is a single listing of the storage, and only records that changed are downloaded.
+
+**Design opportunities and briefs:**
+
+- **Status pill motion:** today the syncing glyph simply spins (SF Symbols' rotate effect on macOS 15, a 1.2 s linear rotation on 14), and labels cross-fade in 0.15 s. We'd like a calmer syncing rotation and a deliberate transition into *Offline* and *Sync Issue* that informs without alarming.
+- **Provider card icons:** the six cards use SF Symbols on colored gradient tiles as placeholders. Explore a consistent icon family; we can't use third-party logos without checking each brand's guidelines.
+- **"Connect your second Mac" onboarding:** right now the second Mac just goes through the same form. A short moment (or a sheet after the first connect) that explains "same place, same passphrase" would help.
+- **Conflict badge:** an orange triangle in the list and an orange capsule in the editor header. It needs to be noticeable without feeling like an error.
+- **Logo and motion brief:** if it fits, a subtle "sync" motif (two marks, a loop, ink flowing between pages) could inform the mark or the syncing animation. It's optional; don't force it.
+
+### 5.11 Screenshots
 
 Current UI captures exist in the project's working files. Proposed repo locations, for designers to drop exports into later:
 
@@ -349,6 +420,8 @@ Everything uses the **system font (SF Pro)**; code uses **SF Mono**. Editor size
 | App accent | **System accent** (user's choice) | No brand accent defined yet |
 | Notebook palette | `#0A84FF` `#5E5CE6` `#BF5AF2` `#FF375F` `#FF453A` `#FF9F0A` `#FFD60A` `#30D158` `#64D2FF` `#8E8E93` | Apple system hues. Used for sidebar icons, list dots, header chip (14% tint), empty states, menu bar glyphs (16% tint) — `Model/Models.swift` |
 | Pinned | System orange | Pin icons, Pinned row |
+| Sync conflicts / sync problems | System orange | Conflict badge and triangle, Conflicts row, pill in *Sync Issue* and *Locked* states |
+| Sync provider tiles | `#0A84FF` `#FF9F0A` `#5E5CE6` `#FF453A` `#30B0C7` `#8E8E93` | Folder, Amazon S3, R2, B2, MinIO / NAS, Custom S3 — `Settings/SyncSettingsView.swift` |
 | Recent | System teal | Sidebar icon |
 | Text colors | Red, Orange, Yellow, Green, Teal, Blue, Purple, Pink, Gray + custom | `EditorStyle.textColors` |
 | Highlights | Yellow, Green, Blue, Pink, Purple, Orange (pastels) | `EditorStyle.highlightColors` |
@@ -387,6 +460,8 @@ Everything uses the **system font (SF Pro)**; code uses **SF Mono**. Editor size
   | "Saved to…" toast | Fade + slide from trailing, 0.2 s ease-out |
   | Hotkey recorder | 0.15 s fades; 0.3 s shake on reject |
   | Menu bar selection | 0.12 s scroll-to-highlight |
+  | Sync pill | Glyph rotates while syncing (SF Symbols rotate effect on macOS 15, 1.2 s linear loop on 14); label changes ease out over 0.15 s |
+  | Sync provider cards | 0.15 s ease-out selection |
   | Everything else | System default (or no animation) |
 
 ---
@@ -422,12 +497,16 @@ Everything uses the **system font (SF Pro)**; code uses **SF Mono**. Editor size
      | Empty states | Static | Gentle idle or entrance for the symbol |
      | Launch / first open | None | Optional welcome moment |
      | Hotkey reject | Shake | Keep or refine |
+     | Sync pill: syncing | Plain rotation | Calm, branded "syncing" loop |
+     | Sync pill: offline / error | Instant swap + 0.15 s label fade | A transition that informs without alarming |
+     | Conflict copy arrives | Instant | A gentle way to draw the eye to the badge |
 5. **Micro-interactions**
    - Toolbar hover/active states, the table-size picker, swatch popovers and keycaps.
    - Tag chips: `#hashtags` are currently **unstyled plain text** in the editor.
 6. **Onboarding / first run**
    - Today it's only seed notes.
    - Proposal: a 3-step welcome covering hotkey setup, the menu bar, and markdown tips. Settings › Shortcuts is the "aha" screen.
+   - A separate "connect your second Mac" moment for sync (see §5.10).
 7. **Marketing site and App Store screenshots**
    - Hero, feature pages and a pricing placeholder.
    - App Store set at 2880 × 1800 and 1280 × 800.
@@ -447,6 +526,8 @@ Everything uses the **system font (SF Pro)**; code uses **SF Mono**. Editor size
 | Type spec | Table | Editor scale + chrome | System fonts preferred; a custom display face is OK for marketing only |
 | Motion specs | Lottie/After Effects + spec sheet (duration, curve, delay) | Per moment in §7.1 | SwiftUI spring/easing equivalents appreciated |
 | Empty-state art | SF Symbol choices or custom SVG | 88 pt circle composition | Should also work in dark mode |
+| Sync provider icons | SVG/PDF or SF Symbol choices | 26 pt card tile, 36 pt status tile | Six providers (§5.7); check brand guidelines before using any logo |
+| Sync status set | SF Symbol choices or custom symbols + motion spec | 11 pt in the pill | Synced, syncing, offline, error, needs passphrase |
 | Onboarding screens | Figma frames | 520–640 pt wide sheet | 3 steps max |
 | App Store screenshots | PNG | 2880 × 1800 (and 1280 × 800) | 5–8 frames |
 | Website | Figma | Desktop + mobile | Landing + feature + pricing |
@@ -473,7 +554,7 @@ The working name is **Inkwell**, with **NoteIt** as backup. Before investing in 
 | App icon ideas | Ink drop, a well/pot seen from above, nib + page. Strong silhouette at 16 px | Note card with a lightning bolt or check; speech-bubble-like note |
 | Menu bar glyph | Ink drop or nib: a simple, distinctive single-color shape | Small note with a corner fold or bolt. Risks looking like system "Notes" |
 | Sayability / spelling | Easy and unambiguous | Easy to say; spelling and casing vary |
-| Code impact | Current name (bundle id `com.inkwell.app`, data folder `Inkwell`) | Rename needed: bundle id, Application Support folder (with migration), UI strings |
+| Code impact | Current name (bundle id `com.inkwell.app`, data folder `Inkwell`, keychain service `com.inkwell.app.sync`) | Rename needed: bundle id, Application Support folder (with migration), keychain service (or users re-enter sync secrets), UI strings |
 
 **Recommendation for design exploration:** explore **Inkwell first**, because its tone is more distinctive and fits "calm and crafted". Keep NoteIt as a quick parallel sketch for the icon and menu bar glyph only, so we can decide quickly if the trademark check fails.
 
@@ -486,8 +567,12 @@ The working name is **Inkwell**, with **NoteIt** as backup. Before investing in 
 | Area | Gap |
 |---|---|
 | Brand | **Placeholder app icon** (code-drawn) and SF Symbol menu bar icon; no brand accent color |
-| Sync | **No sync** (no iCloud/CloudKit), single Mac only |
-| Mobile | No iPhone/iPad app |
+| Sync: folders | Folders kept in sync by another tool (iCloud Drive, Dropbox) rely on **advisory file locking** (`flock`), which only helps when Macs write to the same volume that supports it, such as a NAS share. A sync tool copies files between Macs after the fact, so two Macs can still race. The tool's own conflict files (e.g. `<id> 2.meta`) are detected and imported as conflict copies, and unusable ones are cleaned up after 30 days |
+| Sync: S3 | Providers without conditional writes (`If-Match` / `If-None-Match`) get **best-effort** protection: Inkwell checks before and after each write, which narrows but doesn't close the race between two Macs |
+| Sync: providers | **No WebDAV** backend yet |
+| Sync: conflicts | **No side-by-side compare** view; the user compares the two notes manually |
+| Sync: passphrase | Encryption is chosen at connect time; there's no "change passphrase" or "turn encryption on later" without starting a new library |
+| Mobile | **No iOS app** (iPhone/iPad); sync is Mac-to-Mac only |
 | Export / share | **No export** (Markdown, PDF, HTML), no print, no Share menu |
 | Deletion | No Trash or "Recently Deleted" UI and no undo. Deleted bodies are kept in a hidden `.trash/` folder on disk, but recovering one means digging in Finder, and its title/notebook metadata is gone. The dialog copy ("permanently deleted") doesn't match this |
 | Onboarding | No first-run flow; only seed notes. Global hotkeys are unbound by default and are only discoverable via Settings |
@@ -498,14 +583,14 @@ The working name is **Inkwell**, with **NoteIt** as backup. Before investing in 
 | Note metadata | No word count, created-date display or note info panel |
 | Windows | Single main window; no opening notes in separate windows |
 | Accessibility | Not yet audited (VoiceOver labels exist on some controls only) |
-| Testing | No unit-test target; only built-in self-test modes (see §11) |
+| Testing | Unit tests cover the `InkwellSync` library only; the app layer is checked with built-in self-test modes (see §11) |
 | Distribution | Ad-hoc signed; not notarized, no auto-update, no licensing/pricing |
 
 ### 9.2 Opportunities and future ideas (not built)
 
 - **Capture++:** a "Capture selection" service, clipboard capture, a share extension, a Shortcuts/AppleScript action, and voice notes.
-- **Sync:** optional iCloud (CloudKit) sync that keeps the local-first model, or a "store in folder" option (Dropbox/iCloud Drive).
-- **Mobile companion:** iOS capture first, editing later.
+- **Sync:** a WebDAV backend, a side-by-side conflict compare view, passphrase change, and an optional iCloud (CloudKit) backend for people who don't want to bring their own storage.
+- **Mobile companion:** iOS capture first, editing later. The `InkwellSync` engine has no AppKit dependency, so an iOS app could reuse it.
 - **Export / import:** Markdown with images, PDF and HTML; import from Apple Notes, Bear and Obsidian.
 - **Organization:** nested notebooks, a smart Today/Untagged view, saved searches, note links (`[[wiki links]]`), and backlinks.
 - **Editor:** slash command menu, tag chips and autocomplete, table column add/delete and sorting, collapsible headings, callouts, syntax highlighting in code blocks.
@@ -593,8 +678,8 @@ Every entry was verified against the source: `App/InkwellApp.swift`, `Editor/For
 ### Requirements
 
 - macOS **14 Sonoma** or later.
-- Swift 6 toolchain. The manifest is `swift-tools-version:5.10`. Command Line Tools are enough; Xcode and `xcodebuild` aren't needed.
-- No third-party dependencies. The app uses SwiftUI and AppKit, plus Carbon for hotkeys and ServiceManagement for login items.
+- Swift 6 toolchain. The manifest is `swift-tools-version:5.10`. Command Line Tools are enough to build and run; `xcodebuild` isn't used. **Running the unit tests needs Xcode**, because the Command Line Tools alone don't ship XCTest (see [Testing](#testing)).
+- No third-party dependencies. The app uses SwiftUI and AppKit, plus Carbon for hotkeys and ServiceManagement for login items. Sync uses CryptoKit, CommonCrypto, Security (keychain) and URLSession.
 
 ### Build & run
 
@@ -607,7 +692,7 @@ swift run Inkwell           # run unbundled (launch-at-login disabled, icon fall
 `build_app.sh` does the following:
 
 - builds in release mode
-- writes `Info.plist` (bundle id `com.inkwell.app`, `LSMinimumSystemVersion` 14.0, category Productivity)
+- writes `Info.plist` (bundle id `com.inkwell.app`, `LSMinimumSystemVersion` 14.0, category Productivity, and App Transport Security `NSAllowsLocalNetworking` so plain-`http://` MinIO/NAS servers on the local network work; see [Sync](#sync))
 - renders the icon via `scripts/make_icon.swift` → `iconutil`
 - ad-hoc codesigns the app, then installs it atomically (staged copy, verified, swapped in; the previous version is restored on failure)
 
@@ -628,6 +713,8 @@ Optional environment variables:
 ├── library.corrupt-<ts>.json           # backup of an unreadable library.json (if it ever happens)
 ├── search-index.json                   # folded plain text per note (case/diacritic/width-insensitive)
 ├── seed-manifest.json                  # IDs/revisions of the seed content until sync consumes it
+├── sync-state-<hash>.json              # per remote store: last-synced base per record (only while sync is configured)
+├── sync-deletions.json                 # journal of local deletions not yet pushed (only while sync is configured)
 ├── notes/<uuid>.rtfd                   # each note body as RTFD (rich text + image attachments)
 ├── notes/<uuid>.rtfd.corrupt-<ts>      # backup of an unreadable note body
 └── .trash/<uuid>-<ts>.rtfd             # bodies of deleted notes (never deleted outright)
@@ -643,7 +730,7 @@ Optional environment variables:
   - An unreadable note body is copied to `<id>.rtfd.corrupt-<ts>`, and the note opens empty with an error message. If the backup fails, writes to that note are blocked.
 - **Deleting a note** persists the metadata removal first, then moves the body to `.trash/`. There's no in-app recovery yet (see §9).
 - To reset to first-launch state, quit and delete the whole folder, including the hidden `.initialized` marker and `.trash/`.
-- Preferences live in `UserDefaults`: `hideDockIcon`, `showMenuBarIcon`, `editorFontSize`, `defaultNotebookID`, plus the hotkey bindings.
+- Preferences live in `UserDefaults`: `hideDockIcon`, `showMenuBarIcon`, `editorFontSize`, `defaultNotebookID`, plus the hotkey bindings. Sync adds `syncConfiguration` (non-secret settings as JSON), `syncDeviceID` (stable per Mac, kept across reconnects) and `syncLastSync`. Sync secrets live only in the keychain (see [Sync](#sync)).
 
 ### Architecture map (`Sources/Inkwell/`)
 
@@ -651,13 +738,67 @@ Optional environment variables:
 |---|---|
 | `App/` | `InkwellApp` (WindowGroup, Settings, MenuBarExtra, menu commands), `AppDelegate` (activation policy, hotkey wiring, debug args), `WindowRouter` (show/hide/focus) |
 | `Model/` | `Models` (Notebook, NoteMeta, SidebarSelection, palette), `NoteStore` (singleton ObservableObject: queries, CRUD, tags, persistence), `SeedData` |
-| `Views/` | `MainView` (3-column split), `SidebarView`, `NoteListView`, `EditorContainerView` (header + toolbar + editor), `EmptyStates`, `NotebookEditSheet` |
+| `Views/` | `MainView` (3-column split), `SidebarView`, `NoteListView`, `EditorContainerView` (header + toolbar + editor, `ConflictBadge`), `EmptyStates`, `NotebookEditSheet`, `SyncStatusView` (pill, menu bar row) |
 | `Editor/` | `RichTextEditor` (NSViewRepresentable), `InkwellTextView` (NSTextView subclass + custom layout manager drawing code blocks, quotes, dividers, checkboxes), `TextFormatter`, `MarkdownShortcuts`, `FormatCommand` (commands + shortcuts), `FormattingToolbar`, `EditorStyles` (type scale, colors, block model) |
 | `MenuBar/` | `MenuBarView`, `QuickCapturePanel`, `PanelSearchField`, `SharedViews` (vibrancy, notebook glyph, icon view), `NoteStore+Capture` |
 | `Hotkeys/` | `HotkeyAction`, `HotkeyManager` (Carbon `RegisterEventHotKey`), `KeyCombo`, `ShortcutRecorder` |
-| `Settings/` | `SettingsView` + General / Shortcuts / Editor / About tabs, `Preferences` (keys, `SettingsOpener`) |
+| `Settings/` | `SettingsView` + General / Shortcuts / Editor / Sync / About tabs, `Preferences` (keys, `SettingsOpener`) |
+| `Sync/` | `SyncController`, `NoteStoreSyncAdapter`, `SyncConfiguration` (providers, settings), `Keychain` — see [Sync](#sync) |
 
 Block identity is stored as sentinel `defaultTabInterval` values on each paragraph, because RTFD drops custom attributes. This covers special blocks (code, quote, divider) and also **title, heading, subheading and body**, so a heading stays a heading even if the user changes the body font size. Paragraphs without a sentinel (older notes) fall back to font-size inference. See `EditorStyles.swift` (`BlockKind`, `*Sentinel` constants).
+
+### Sync
+
+Design and decisions: [`docs/specs/2026-10-12-sync-design.md`](docs/specs/2026-10-12-sync-design.md), including the implementation notes and deviations at the end.
+
+**`InkwellSync` library target** (`Sources/InkwellSync/`). Foundation, CryptoKit, CommonCrypto and Security only, with no AppKit or app types, so it's unit-testable on its own.
+
+| Folder | Contents |
+|---|---|
+| `Storage/` | `StorageBackend` protocol: `list`, `get`, `put(ifMatch:ifNoneMatch:)`, conditional `delete(ifMatch:)`, `probe`. Backends: **`FolderBackend`** (atomic temp-file + rename, `renamex_np(RENAME_EXCL)` for create-if-absent, content-hash etags for files ≤ 256 KB, stat etags for larger bodies, and an in-process lock plus a cross-process `flock` on `<root>/.inkwell-lock` around every write and delete); **`S3Backend`** (path-style or virtual-host URLs, optional key prefix, `If-Match` / `If-None-Match`, falling back to HEAD-check, PUT, HEAD-verify when a provider answers 501/`NotImplemented`); **`InMemoryBackend`** (tests). `SigV4Signer` implements AWS Signature V4 with CryptoKit and is checked against AWS's published examples. `S3ListParser` parses `ListObjectsV2`. |
+| `Crypto/` | `KeyDerivation`: PBKDF2-HMAC-SHA256, **210,000 iterations**, 16-byte random salt, 32-byte key. `AESGCMCipher`: AES-GCM, `nonce ‖ ciphertext ‖ tag`, with the object key relative to `inkwell/v1/` (e.g. `notes/<id>.meta`) as **AAD**, so a sealed object can't be replayed under another key. `PassthroughCipher` for unencrypted stores. |
+| `Engine/` | **`SyncPlanner`**: the pure decision table (local record / local deletion / remote meta / remote tombstone / base → `push`, `pull`, `conflict`, `pushDeletion`, `applyRemoteDeletion`, `resurrectPush`, `forgetBase`, `none`). **`SyncEngine`** (actor): runs passes one at a time, each resuming from the persisted `SyncState`; connects/creates the store and verifies the passphrase; imports sync-tool sidecar copies; sweeps tombstones after 30 days; writes its device record at most every 10 minutes. `RemoteLayout`: object keys. |
+| `Model/` | `Manifest` (format version, optional encryption parameters), `SyncState` (per-record bases, pending pushes, tombstone dates, sidecar first-seen dates), record/envelope/tombstone/device types. |
+
+**App layer** (`Sources/Inkwell/`):
+
+- **`NoteStore`** gives every note and notebook a `revision` UUID that changes on each user edit. Records created before sync get a deterministic revision derived from their content, so identical libraries on two Macs don't conflict. While sync is configured, local deletions are journaled to `sync-deletions.json`. Conflict copies carry `conflictSource` (device name) and `conflictOriginalID`.
+- **`NoteStoreSyncAdapter`** implements the engine's `SyncLocalStore`. RTFD parsing and body writes happen off the main actor, and main-actor hops only swap prepared files in. Before a remote change replaces or deletes a note, it commits staged and open-editor edits; if the revision moved since the engine read it, the apply is refused and the next pass sees a conflict.
+- **`SyncController`** owns scheduling and status. Nothing (no timers, tasks or observers) exists until sync is configured. Then one loop runs passes in `Task.detached(priority: .utility)`: every 60 s while Inkwell is active or has a visible window, every 600 s otherwise; 2 s after a local edit (at most 10 s); 5 s after wake; on activation if the last pass is more than 15 s old; and on **Sync Now**. Failures back off from 15 s, doubling up to 10 minutes. Wrong/missing passphrase, rejected credentials, an unsupported format and a missing manifest pause sync until the user acts.
+- **Keychain:** generic passwords under service **`com.inkwell.app.sync`**, accounts `s3-access-key`, `s3-secret` and `passphrase` (`kSecAttrAccessibleAfterFirstUnlock`). Non-secret settings are JSON in `UserDefaults` (`syncConfiguration`); folders are kept as security-scoped bookmarks.
+- **ATS:** `build_app.sh` sets `NSAppTransportSecurity` → `NSAllowsLocalNetworking`. In the app, plain `http://` endpoints are accepted **only for the MinIO / NAS and Custom S3 presets**; Amazon S3, R2 and B2 require `https://`. If macOS still blocks an `http://` request (e.g. a non-local host), sync stops with an explanation.
+
+**Remote layout** (under the chosen folder, or the bucket plus the optional *Folder inside bucket*):
+
+```text
+inkwell/v1/
+├── manifest.json            # format version, created date, encryption salt/iterations/key check — never encrypted
+├── notebooks/<id>.json      # notebook envelope (revision, modifiedAt, device, metadata)
+├── notes/<id>.meta          # note envelope, including the SHA-256 of the body it expects
+├── notes/<id>.body          # flattened RTFD
+├── tombstones/<id>.json     # deletion marker (deletedAt, device, the meta etag the deleter saw)
+└── devices/<deviceID>.json  # device name and last sync, for Settings › Sync › Devices
+```
+
+Everything except `manifest.json` is AES-GCM sealed when encryption is on. A body that's missing or doesn't match its meta's hash is treated as an upload in progress and skipped until a later pass.
+
+**Local files** (in `~/Library/Application Support/Inkwell/`):
+
+| File | Purpose |
+|---|---|
+| `sync-state-<hash>.json` | Last-synced base per record. One file per remote store; `<hash>` is the first 8 bytes of a SHA-256 over the provider and folder path or endpoint/bucket/prefix, in hex. Removed on connect and disconnect. An older `sync-state.json` is migrated on launch. |
+| `sync-deletions.json` | Local deletions not yet pushed. Written only while sync is configured; cleared on connect and disconnect. |
+| `seed-manifest.json` | First-launch sample content, so a Mac joining an existing library drops unedited samples. Deleted after any connect. |
+
+### Testing
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
+```
+
+- 142 XCTest cases in `Tests/InkwellSyncTests/`: the planner table, the engine against in-memory and faulty backends, folder backend (including a cross-process lock test), S3 request and response handling with a stubbed URL protocol, SigV4, list parsing and crypto.
+- **Command Line Tools alone don't include XCTest**, so `swift test` fails without Xcode. `DEVELOPER_DIR` points SwiftPM at Xcode's toolchain without changing `xcode-select`.
+- The app layer (NoteStore, adapter, seed handling) is covered by the debug-only `INKWELL_SYNC_SELFTEST` mode below.
 
 ### Debug & test launch arguments
 
@@ -666,10 +807,14 @@ Block identity is stored as sentinel `defaultTabInterval` values on each paragra
 | Argument (debug builds only) | Effect |
 |---|---|
 | `--self-test` | Runs the hotkey self-test and exits with its status |
-| `--debug-open-settings [--debug-settings-tab general\|shortcuts\|editor\|about]` | Opens Settings (optionally a tab) |
+| `--debug-open-settings [--debug-settings-tab general\|shortcuts\|editor\|sync\|about]` | Opens Settings (optionally a tab) |
 | `--debug-preview-bindings` | Shows sample hotkey bindings in the UI without saving them (for screenshots) |
 | `--debug-menubar-preview` | Hosts the menu bar panel in a normal window (for screenshots) |
 | `--debug-quick-capture` | Opens Quick Capture at launch |
+| `--debug-dark` | Forces dark appearance |
+| `--debug-show-conflicts` | Selects the Conflicts filter and its first note |
+| `--debug-sync-provider <folder\|awsS3\|cloudflareR2\|backblazeB2\|minio\|customS3>` | Preselects that provider card in Settings › Sync. For `folder` with `INKWELL_DATA_DIR` set, the folder is prefilled as a `remote` sibling of the data dir; for S3 presets, region, path style and endpoint get the preset defaults |
+| `--debug-sync-endpoint <url>` | With an S3 `--debug-sync-provider`, prefills the endpoint |
 
 Environment variables (currently read in **all** builds):
 
@@ -681,4 +826,22 @@ Environment variables (currently read in **all** builds):
 | `INKWELL_EDITOR_SELFTEST_SHOW=<title prefix>` | With the above, only opens the matching note (for screenshots) |
 | `INKWELL_EDITOR_SELFTEST_NARROW=1` | With the above, shrinks the window to 900 pt wide |
 
+Sync environment variables (**debug builds only**, `SyncController.swift` and `AppDelegate.swift`):
+
+| Env var | Effect |
+|---|---|
+| `INKWELL_SYNC_CONFIG=<json>` | Connects headlessly at launch. The JSON is a `SyncConfiguration` (`provider`, `folderPath` or `s3`, `encrypted`, `deviceName`, …) plus optional `passphrase`, `accessKey` and `secret`. Nothing is written to `UserDefaults` or the keychain. A `folderPath` is created if missing |
+| `INKWELL_SYNC_INTERVAL=<seconds>` | Replaces both poll intervals and the 15 s backoff base, and logs a line per non-empty pass |
+| `INKWELL_SYNC_SELFTEST=1` | Runs the sync self-test against scratch stores inside `INKWELL_DATA_DIR` (required), prints `SYNCTEST` lines and exits non-zero on failure. `INKWELL_SYNC_SELFTEST_LIBRARY=<path>` also loads a copy of that `library.json` to check that files without revisions still load |
+| `INKWELL_DEBUG_EDIT_AFTER=<seconds>` | After the delay, appends "Edited on *device* at *time*" to the selected (or first) note, as if typed. Handy for two-instance tests |
+| `INKWELL_DEBUG_UPDATE_CREDENTIALS=<seconds>:<accessKey>:<secret>` | After the delay, runs "Update Credentials…" headlessly |
+
 Example: `swift run Inkwell --debug-open-settings --debug-settings-tab shortcuts`
+
+Headless sync example (scratch library, local folder as the remote):
+
+```sh
+INKWELL_DATA_DIR=~/scratch/a INKWELL_SYNC_INTERVAL=5 \
+INKWELL_SYNC_CONFIG='{"provider":"folder","folderPath":"~/scratch/remote","encrypted":true,"deviceName":"A","passphrase":"correct horse battery"}' \
+swift run Inkwell
+```

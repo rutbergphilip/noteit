@@ -112,3 +112,54 @@ devices/<deviceID>.json               device name, last sync (for "Synced device
    - Before downloading anything, do a cheap change check: a single `ListObjectsV2` (S3) or one directory enumeration (folder), comparing ETags or modification dates against `sync-state.json`. Download only records that changed.
    - Bodies are streamed one at a time and nothing is kept in memory after applying. Target: idle sync adds < 5 MB resident memory and < 1% CPU averaged.
    - No timers while sync is not configured.
+
+## Implementation notes & deviations (2026-10-12)
+
+What shipped differs from the design above in these ways. Code references are to `Sources/InkwellSync/` and `Sources/Inkwell/`.
+
+### Storage and revisions
+- **No local layout migration.** There's no `LocalRepository` and no per-note record files on disk; `library.json` stays the source of truth. `NoteMeta` and `Notebook` gained optional `revision: UUID?` fields (plus `conflictSource` / `conflictOriginalID` on notes), so older files load unchanged. A user edit sets a new random revision.
+- **Deterministic legacy revisions.** Records without a revision get one when sync first reads them: SHA-256 over a version tag, the id, stable metadata fields and the body package files, as a v8 UUID (`NoteStore.contentRevisions`). Identical libraries on two Macs therefore get equal revisions and adopt each other instead of producing conflict copies.
+- **Deletion journal.** While sync is configured, local deletions go to `sync-deletions.json`; remote deletions and pruned seed content are never journaled.
+- **Per-store state file.** The base lives in `sync-state-<hash>.json`, keyed by a hash of the store identity (provider plus folder path, or endpoint/bucket/prefix), so a pass still finishing for an old store can't feed a new one. Connect starts from a fresh state file; disconnect deletes it. A legacy `sync-state.json` is migrated on launch.
+
+### Decision table (`SyncPlanner`)
+Implements the plan's 17-row table with these changes:
+- A live local record makes any journaled deletion for the same id stale.
+- **Row 12 (resurrection):** a local edit since the base always resurrects (delete tombstone, then push), whatever the timestamps, because the deleter never saw that edit.
+- Row 11 with a base also resurrects when the tombstone's `deletedMetaETag` equals the etag our own push replaced (the deleter decided before our push landed). Without a base, row 11 compares `local.modifiedAt` with `tombstone.deletedAt`.
+- No local record, no journal entry, remote meta and a base (missing from the table): pull, so nothing is lost.
+- A meta and a tombstone coexisting are reconciled before planning: the tombstone wins if its `deletedMetaETag` names that exact meta (or, for older tombstones, if the meta isn't newer than `deletedAt`); otherwise the tombstone is removed.
+
+### Write order (`SyncEngine`)
+- **push:** conditional meta put first (`If-Match` the base etag, or `If-None-Match` for creates), body second. The meta's etag is the per-record lock, so a writer that loses the race never overwrites the winner's body. The meta carries `bodySHA256`; readers treat a missing or mismatched body as an upload in progress and skip it. A `pendingPushes` entry lets an interrupted push be recognized and finished rather than copied as a conflict.
+- **pushDeletion:** tombstone first, carrying `deletedMetaETag` (the meta etag the decision saw), then a conditional meta delete (`If-Match` that etag), then the body. If the conditional delete fails, the tombstone is withdrawn and the next pass pulls the edit (row 9). A crash in between leaves a meta plus a tombstone naming it, which every device finishes as a deletion.
+- **resurrectPush:** delete the tombstone, then push.
+
+### Safety
+- **Missing manifest aborts the pass.** The engine refuses to sync if `inkwell/v1/manifest.json` isn't in the listing, and the controller won't recreate a vanished store; the user sees "Sync storage was reset or moved" and sync pauses.
+- **Fatal vs per-record errors.** Unauthorized, clock skew and blocked plain HTTP stop the pass; other errors are collected per record and retried next pass.
+
+### Folder backend
+- **Content-hash etags** for files ≤ 256 KB (every meta, tombstone and the manifest), because coarse-mtime volumes (FAT/exFAT, some SMB) give same-size rewrites equal stat etags. Larger bodies use mtime/size/inode, with a stat-keyed hash cache to keep listings cheap.
+- **Cross-process lock.** Writes and deletes run under an in-process lock plus an advisory `flock` on `<root>/.inkwell-lock` (falls back to in-process only if the volume can't lock). Create-if-absent uses `renamex_np(RENAME_EXCL)`.
+- **Sync-tool sidecar import.** Copies left by iCloud Drive, Dropbox or Syncthing (e.g. `<id> 2.meta`) are opened with the canonical key's AAD. Unseen note revisions are imported as conflict copies (with a matching body found by hash); notebooks use newest-wins. Consumed sidecars are deleted; unusable ones are deleted after 30 days.
+
+### Encryption
+- PBKDF2-HMAC-SHA256 with 210,000 iterations and a 16-byte salt, used directly as the AES-256 key (no HKDF step). The manifest stores salt, iterations (accepted range 100,000–10,000,000) and a key check sealed with context `manifest`.
+- **AAD binding.** Every object is sealed with its key relative to `inkwell/v1/` as AES-GCM additional data, so an object can't be swapped or replayed under another key.
+- Encryption covers metas, bodies, tombstones and device records; only the manifest is plaintext. It's chosen at connect time, and joining an unencrypted store with encryption requested is refused (`encryptionMismatch`).
+
+### App integration
+- **Seed dedupe on join.** First-launch sample IDs and revisions are kept in `seed-manifest.json`. When joining an existing store, unedited sample notes and then unedited, now-empty sample notebooks are removed locally without journaling, before the first pass. Creating a new store keeps them. The manifest is deleted after any connect.
+- **Staged editor snapshots.** Editor commits made during a SwiftUI update are staged in `NoteStore`. Before applying a remote change to a note, the adapter commits staged and open-editor edits; if the revision moved since the engine read it, the apply is refused and the next pass resolves it as a conflict.
+- **Scheduling.** Passes run at `.utility` QoS: every 60 s while active or with a visible window, 600 s otherwise, 2 s after local edits (10 s max), 5 s after wake, and on Sync Now. Failures back off from 15 s to 10 min. Nothing is scheduled while sync isn't configured.
+- **S3 without conditional writes.** On 501/`NotImplemented`, the backend falls back to HEAD-check, PUT, HEAD-verify, and reports a lost race when the verify fails.
+
+### Remaining known limitations
+- Folder sync through a sync tool (iCloud Drive, Dropbox) relies on advisory locking that doesn't span Macs; races are caught later through sidecar import rather than prevented.
+- S3 providers without conditional writes get best-effort protection only (the check-write-verify window isn't atomic).
+- No WebDAV backend, no side-by-side conflict compare view, no Trash UI.
+- No passphrase change or switching encryption on/off without a new store.
+- No iOS app.
+- Unit tests cover `InkwellSync` only (142 tests); the app layer relies on the debug `INKWELL_SYNC_SELFTEST` mode.
