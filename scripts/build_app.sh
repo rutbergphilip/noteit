@@ -42,6 +42,8 @@ plist_bool NSHighResolutionCapable YES
 plist_str NSPrincipalClass "NSApplication"
 plist_bool NSSupportsAutomaticTermination NO
 plist_str NSHumanReadableCopyright "© $(date +%Y) Inkwell"
+# Self-hosted sync servers (MinIO on a NAS) often only speak http on the local network.
+plutil -replace NSAppTransportSecurity -json '{"NSAllowsLocalNetworking":true}' "$PLIST"
 plutil -lint "$PLIST"
 
 echo "==> Generating AppIcon.icns"
