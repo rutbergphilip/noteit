@@ -570,7 +570,13 @@ public actor SyncEngine {
         if pass.index.metas[id]?.kind == kind {
             remote = try await fetchEnvelope(id, kind: kind).envelope
         }
-        if envelope.revision == localRevision || envelope.revision == remote?.revision { return [] }
+        if envelope.revision == remote?.revision { return [] }
+        if envelope.revision == localRevision {
+            // Our own copy is only safe once nothing remote is about to overwrite it; otherwise keep the
+            // sidecar so it becomes a conflict copy after the pending pull lands.
+            let baseETag = state.bases[id]?.remoteMetaETag
+            return baseETag != nil && baseETag == pass.index.metas[id]?.etag ? [] : nil
+        }
 
         var body: Data?
         var usedBodies: [String] = []
@@ -739,7 +745,8 @@ public actor SyncEngine {
     }
 
     private func currentRevision(_ id: UUID) async -> UUID? {
-        await local.records().first { $0.id == id }?.revision
+        if let revision = await local.revision(of: id, kind: .note) { return revision }
+        return await local.revision(of: id, kind: .notebook)
     }
 
     private func seal(_ plain: Data, key: String) throws -> Data {

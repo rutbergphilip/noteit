@@ -957,6 +957,36 @@ final class SyncEngineTests: XCTestCase {
         await assertConverged(a, b)
     }
 
+    func testSidecarHoldingOwnEditSurvivesUntilPulledOverwriteBecomesConflictCopy() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await b.store.edit(id, title: "B's edit")
+        try await sync(b)
+        let bMeta = try await memory.get(RemoteLayout.meta(.note, id)).data
+        let bBody = try await memory.get(RemoteLayout.body(id)).data
+        try await memory.put(sidecarKey(id, " (conflicted copy).meta"), data: bMeta, ifMatch: nil, ifNoneMatch: false)
+
+        let cBody = FakeLocalStore.body(for: "C's edit")
+        let cEnvelope = RemoteEnvelope(id: id, kind: .note, revision: UUID(), modifiedAt: Date(), deviceID: "id-C", deviceName: "C",
+                                       meta: try JSONEncoder().encode(FakeLocalStore.Meta(title: "C's edit")),
+                                       bodySHA256: SyncEngine.sha256Hex(cBody))
+        try await memory.put(RemoteLayout.meta(.note, id), data: try seal(try SyncEngine.encode(cEnvelope), key: RemoteLayout.meta(.note, id)),
+                             ifMatch: nil, ifNoneMatch: false)
+        let canonicalBody = try await memory.get(RemoteLayout.body(id)).data
+        XCTAssertEqual(canonicalBody, bBody, "canonical body still B's: tool picked different winners")
+
+        try await sync(b)
+        try await memory.put(sidecarKey(id, " (conflicted copy).body"), data: bBody, ifMatch: nil, ifNoneMatch: false)
+        try await memory.put(RemoteLayout.body(id), data: try seal(cBody, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
+        try await sync(b)
+        try await sync(b)
+
+        let titles = await b.store.titles()
+        XCTAssertTrue(titles.contains("C's edit"), "\(titles)")
+        XCTAssertTrue(titles.contains { $0.hasPrefix("B's edit") }, "B's edit must survive as a conflict copy: \(titles)")
+    }
+
     func testDuplicateSidecarIsDeletedAndOrphanBodyAgesOut() async throws {
         let a = device("A")
         let id = await a.store.create(title: "v1")
