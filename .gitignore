@@ -1,0 +1,10 @@
+.build/
+build/
+.DS_Store
+.swiftpm/
+*.xcodeproj
+.build-system/
+.build-editor/
+.build-model/
+.selftest/
+.build-*/
