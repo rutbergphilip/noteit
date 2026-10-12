@@ -19,6 +19,8 @@ public enum SyncAction: Equatable, Sendable {
 /// - A live local record makes any journaled deletion for the same id stale, so `localDeletedAt` is ignored.
 /// - Row 12: a local edit after the base always resurrects, whatever the timestamps; the deleter never saw that edit.
 /// - Row 11 without a base: resurrect if `local.modifiedAt > tombstone.deletedAt`, otherwise apply the deletion.
+/// - Row 11 with a base: resurrect when the tombstone's `deletedMetaETag` is the etag our own push replaced; the
+///   deleter decided before our push landed. A merely older base (we're behind the deleter) still applies the deletion.
 /// - No local record, no journal entry, remote meta and a base (missing from the table): pull, so nothing is lost.
 public enum SyncPlanner {
     public static func decide(local: LocalRecord?, localDeletedAt: Date?, remote: RemoteInfo, base: SyncState.Base?) -> SyncAction {
@@ -38,6 +40,10 @@ public enum SyncPlanner {
             }
             if let tombstone = remote.tombstone {
                 if let base {
+                    // The deleter saw the version our own push replaced, so it never saw ours.
+                    if let seen = tombstone.deletedMetaETag, seen != base.remoteMetaETag, seen == base.replacedMetaETag {
+                        return .resurrectPush
+                    }
                     return local.revision != base.revision ? .resurrectPush : .applyRemoteDeletion   // 12, 11
                 }
                 return local.modifiedAt > tombstone.deletedAt ? .resurrectPush : .applyRemoteDeletion // 11

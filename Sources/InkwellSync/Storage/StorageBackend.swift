@@ -30,6 +30,15 @@ public protocol StorageBackend: Sendable {
     /// ifMatch: write only if current etag equals it. ifNoneMatch: write only if key absent. Returns new etag.
     @discardableResult func put(_ key: String, data: Data, ifMatch: String?, ifNoneMatch: Bool) async throws -> String
     func delete(_ key: String) async throws
+    /// Deletes only while the current etag equals `ifMatch` (when non-nil), otherwise throws `preconditionFailed`.
+    func delete(_ key: String, ifMatch: String?) async throws
     /// Reachability/auth check for "Test connection".
     func probe() async throws
+}
+
+extension StorageBackend {
+    /// For backends that can't delete conditionally: `ifMatch` is ignored.
+    public func delete(_ key: String, ifMatch: String?) async throws {
+        try await delete(key)
+    }
 }

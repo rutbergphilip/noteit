@@ -405,6 +405,99 @@ final class SyncEngineTests: XCTestCase {
         await assertConverged(a, b)
     }
 
+    /// B edits and runs a whole pass after A decided to delete but before A deletes anything.
+    func testDeletionRacingAnEditKeepsTheEditOnBothDevices() async throws {
+        let a = device("A"), b = device("B", backend: memory)
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.delete(id)
+        let storeB = b.store, engineB = b.engine
+        await faulty.onNextDelete(keyContaining: "\(id.uuidString).meta", .before({
+            await storeB.edit(id, title: "B's edit")
+            _ = try? await engineB.sync()
+        }))
+        _ = try await a.engine.sync()
+        try await sync(b, a, b, a)
+        let onA = await a.store.title(id)
+        let onB = await b.store.title(id)
+        XCTAssertEqual(onA, "B's edit")
+        XCTAssertEqual(onB, "B's edit")
+        let journal = await a.store.journaledDeletions()
+        XCTAssertTrue(journal.isEmpty)
+        let keys = try await remoteKeys()
+        XCTAssertTrue(keys.contains(RemoteLayout.meta(.note, id)))
+        XCTAssertFalse(keys.contains(RemoteLayout.tombstone(id)))
+        await assertConverged(a, b)
+    }
+
+    /// B's conditional push lands after A decided but before A writes anything.
+    func testDeletionRacingAnEarlierEditKeepsTheEdit() async throws {
+        let a = device("A"), b = device("B", backend: memory)
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.delete(id)
+        let storeB = b.store, engineB = b.engine
+        await faulty.onNextPut(keyContaining: "tombstones/\(id.uuidString)", .before({
+            await storeB.edit(id, title: "B's edit")
+            _ = try? await engineB.sync()
+        }))
+        _ = try await a.engine.sync()
+        try await sync(b, a, b, a)
+        let onA = await a.store.title(id)
+        let onB = await b.store.title(id)
+        XCTAssertEqual(onA, "B's edit")
+        XCTAssertEqual(onB, "B's edit")
+        let keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(RemoteLayout.tombstone(id)))
+        await assertConverged(a, b)
+    }
+
+    /// A provider that ignores If-Match on DELETE removes B's edit; the tombstone tells B the deleter never saw it.
+    func testIgnoredConditionalDeleteStillKeepsTheEdit() async throws {
+        let a = device("A"), b = device("B", backend: memory)
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.delete(id)
+        await faulty.ignoreDeleteIfMatch()
+        let storeB = b.store, engineB = b.engine
+        await faulty.onNextPut(keyContaining: "tombstones/\(id.uuidString)", .before({
+            await storeB.edit(id, title: "B's edit")
+            _ = try? await engineB.sync()
+        }))
+        _ = try await a.engine.sync()
+        let midway = try await remoteKeys()
+        XCTAssertFalse(midway.contains(RemoteLayout.meta(.note, id)), "the unconditional delete removed B's edit")
+
+        try await sync(b, a, b, a)
+        let onA = await a.store.title(id)
+        let onB = await b.store.title(id)
+        XCTAssertEqual(onB, "B's edit")
+        XCTAssertEqual(onA, "B's edit")
+        await assertConverged(a, b)
+    }
+
+    func testCrashAfterTombstoneWriteStillDeletesEverywhere() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "doomed")
+        try await sync(a, b)
+        await a.store.delete(id)
+        await faulty.onNextDelete(keyContaining: "\(id.uuidString).meta", .failBefore)
+        let failed = try await a.engine.sync()
+        XCTAssertFalse(failed.errors.isEmpty)
+        let midway = try await remoteKeys()
+        XCTAssertTrue(midway.contains(RemoteLayout.tombstone(id)), "the tombstone is written first")
+
+        try await sync(b, relaunch(a))
+        let gone = await b.store.title(id)
+        XCTAssertNil(gone)
+        let journal = await a.store.journaledDeletions()
+        XCTAssertTrue(journal.isEmpty)
+        let keys = try await remoteKeys()
+        XCTAssertFalse(keys.contains(RemoteLayout.meta(.note, id)))
+        XCTAssertFalse(keys.contains(RemoteLayout.body(id)))
+        XCTAssertTrue(keys.contains(RemoteLayout.tombstone(id)))
+    }
+
     func testDeletedOnBothSidesForgets() async throws {
         let a = device("A"), b = device("B")
         let id = await a.store.create(title: "x")
@@ -429,7 +522,7 @@ final class SyncEngineTests: XCTestCase {
         try await sync(a)
         let swept = try await remoteKeys()
         XCTAssertFalse(swept.contains(RemoteLayout.tombstone(id)), "tombstone swept after 30 days")
-        XCTAssertTrue(SyncState.load(from: a.stateURL).knownTombstones.contains(id))
+        XCTAssertTrue(SyncState.load(from: a.stateURL).knownTombstones.isEmpty, "nothing reads it, so it must not grow")
 
         try await sync(b, a)
         let gone = await b.store.title(id)

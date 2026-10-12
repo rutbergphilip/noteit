@@ -51,8 +51,14 @@ public actor InMemoryBackend: StorageBackend {
     }
 
     public func delete(_ key: String) async throws {
+        try await delete(key, ifMatch: nil)
+    }
+
+    public func delete(_ key: String, ifMatch: String?) async throws {
         deleteCount += 1
-        guard storage.removeValue(forKey: key) != nil else { throw StorageError.notFound(key) }
+        guard let current = storage[key]?.1 else { throw StorageError.notFound(key) }
+        if let ifMatch, current != ifMatch { throw StorageError.preconditionFailed(key) }
+        storage[key] = nil
     }
 
     public func probe() async throws {}

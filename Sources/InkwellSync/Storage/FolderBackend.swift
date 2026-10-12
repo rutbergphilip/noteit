@@ -109,11 +109,28 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
     }
 
     public func delete(_ key: String) async throws {
+        try await delete(key, ifMatch: nil)
+    }
+
+    public func delete(_ key: String, ifMatch: String?) async throws {
         let url = try fileURL(for: key)
-        cacheLock.withLock { hashCache[key] = nil }
-        guard unlink(url.path) == 0 else {
-            if errno == ENOENT { throw StorageError.notFound(key) }
-            throw StorageError.io(String(cString: strerror(errno)))
+        try lock.withLock {
+            // Like put, ifMatch is only enforced within this process.
+            if let ifMatch {
+                let current: String
+                do {
+                    current = try fileInfo(key: key, path: url.path).etag
+                } catch {
+                    if access(url.path, F_OK) != 0 { throw StorageError.notFound(key) }
+                    throw error
+                }
+                if current != ifMatch { throw StorageError.preconditionFailed(key) }
+            }
+            cacheLock.withLock { hashCache[key] = nil }
+            guard unlink(url.path) == 0 else {
+                if errno == ENOENT { throw StorageError.notFound(key) }
+                throw StorageError.io(String(cString: strerror(errno)))
+            }
         }
     }
 

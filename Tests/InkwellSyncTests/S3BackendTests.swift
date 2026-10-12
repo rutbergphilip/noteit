@@ -225,6 +225,42 @@ final class S3BackendTests: XCTestCase {
         }
     }
 
+    func testConditionalDeleteSendsIfMatchAndMaps412() async throws {
+        StubURLProtocol.reset { _ in .init(status: 412, body: self.errorXML("PreconditionFailed", "At least one of the pre-conditions you specified did not hold")) }
+        do {
+            try await makeBackend().delete("k", ifMatch: "seen")
+            XCTFail("Expected preconditionFailed")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, .preconditionFailed("k"))
+        }
+        XCTAssertEqual(StubURLProtocol.requests.count, 1)
+        XCTAssertEqual(StubURLProtocol.requests[0].request.httpMethod, "DELETE")
+        XCTAssertEqual(StubURLProtocol.requests[0].request.value(forHTTPHeaderField: "If-Match"), "\"seen\"")
+    }
+
+    func testConditionalDeleteNotImplementedFallsBackToHead() async throws {
+        StubURLProtocol.reset { request in
+            switch request.httpMethod {
+            case "DELETE" where request.value(forHTTPHeaderField: "If-Match") != nil:
+                return .init(status: 501, body: self.errorXML("NotImplemented", "nope"))
+            case "HEAD": return .init(status: 200, headers: ["ETag": "\"current\""])
+            default: return .init(status: 204)
+            }
+        }
+        let backend = makeBackend()
+        do {
+            try await backend.delete("k", ifMatch: "stale")
+            XCTFail("Expected preconditionFailed")
+        } catch let error as StorageError {
+            XCTAssertEqual(error, .preconditionFailed("k"))
+        }
+        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["DELETE", "HEAD"])
+        try await backend.delete("k", ifMatch: "current")
+        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["DELETE", "HEAD", "DELETE", "HEAD", "DELETE"])
+        XCTAssertNil(StubURLProtocol.requests[4].request.value(forHTTPHeaderField: "If-Match"))
+        XCTAssertTrue(backend.conditionalWritesSupported, "a DELETE limitation must not disable conditional PUTs")
+    }
+
     func testConditionalNotImplementedFallsBackToHeadThenPut() async throws {
         let lock = NSLock()
         var stored: String?

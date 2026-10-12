@@ -14,12 +14,18 @@ actor FaultyBackend: StorageBackend {
 
     let inner: InMemoryBackend
     private var putFaults: [(fragment: String, fault: Fault)] = []
+    private var deleteFaults: [(fragment: String, fault: Fault)] = []
+    private var ignoreDeleteConditions = false
     private var getError: StorageError?
 
     init(_ inner: InMemoryBackend) { self.inner = inner }
 
     /// Arms `fault` for the next put whose key contains `fragment`.
     func onNextPut(keyContaining fragment: String, _ fault: Fault) { putFaults.append((fragment, fault)) }
+    /// Arms `fault` for the next delete whose key contains `fragment`.
+    func onNextDelete(keyContaining fragment: String, _ fault: Fault) { deleteFaults.append((fragment, fault)) }
+    /// Simulates a provider that accepts but ignores `If-Match` on deletes.
+    func ignoreDeleteIfMatch() { ignoreDeleteConditions = true }
     func rejectGets(with error: StorageError = .unauthorized("denied")) { getError = error }
 
     func list(prefix: String) async throws -> [RemoteObject] { try await inner.list(prefix: prefix) }
@@ -46,6 +52,21 @@ actor FaultyBackend: StorageBackend {
         return try await inner.put(key, data: data, ifMatch: ifMatch, ifNoneMatch: ifNoneMatch)
     }
 
-    func delete(_ key: String) async throws { try await inner.delete(key) }
+    func delete(_ key: String) async throws { try await delete(key, ifMatch: nil) }
+
+    func delete(_ key: String, ifMatch: String?) async throws {
+        if let index = deleteFaults.firstIndex(where: { key.contains($0.fragment) }) {
+            switch deleteFaults.remove(at: index).fault {
+            case .failBefore:
+                throw StorageError.network("injected before deleting \(key)")
+            case .failAfter:
+                try await inner.delete(key, ifMatch: ifMatch)
+                throw StorageError.network("injected after deleting \(key)")
+            case .before(let action):
+                await action()
+            }
+        }
+        try await inner.delete(key, ifMatch: ignoreDeleteConditions ? nil : ifMatch)
+    }
     func probe() async throws {}
 }

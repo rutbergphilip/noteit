@@ -5,10 +5,16 @@ public struct SyncState: Codable, Sendable, Equatable {
     public struct Base: Codable, Sendable, Equatable {
         public var revision: UUID
         public var remoteMetaETag: String
+        /// Set only when this device pushed the record: the remote meta etag its push overwrote (nil for a create).
+        public var replacedMetaETag: String?
+        /// Set only when this device pushed the record: the etag of the body it uploaded.
+        public var bodyETag: String?
 
-        public init(revision: UUID, remoteMetaETag: String) {
+        public init(revision: UUID, remoteMetaETag: String, replacedMetaETag: String? = nil, bodyETag: String? = nil) {
             self.revision = revision
             self.remoteMetaETag = remoteMetaETag
+            self.replacedMetaETag = replacedMetaETag
+            self.bodyETag = bodyETag
         }
     }
 

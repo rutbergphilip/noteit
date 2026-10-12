@@ -81,6 +81,29 @@ final class FolderBackendTests: XCTestCase {
         XCTAssertEqual(got.etag, second)
     }
 
+    func testConditionalDeleteChecksETag() async throws {
+        let memory = InMemoryBackend()
+        for backend in [backend as any StorageBackend, memory] {
+            let first = try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
+            let second = try await backend.put("k", data: Data([2]), ifMatch: nil, ifNoneMatch: false)
+            do {
+                try await backend.delete("k", ifMatch: first)
+                XCTFail("Expected preconditionFailed")
+            } catch let error as StorageError {
+                XCTAssertEqual(error, .preconditionFailed("k"))
+            }
+            let kept = try await backend.get("k")
+            XCTAssertEqual(kept.data, Data([2]))
+            try await backend.delete("k", ifMatch: second)
+            do {
+                try await backend.delete("k", ifMatch: second)
+                XCTFail("Expected notFound")
+            } catch let error as StorageError {
+                XCTAssertEqual(error, .notFound("k"))
+            }
+        }
+    }
+
     func testListPrefix() async throws {
         try await backend.put("inkwell/v1/notes/1.meta", data: Data([1, 2]), ifMatch: nil, ifNoneMatch: false)
         try await backend.put("inkwell/v1/notes/2.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: false)

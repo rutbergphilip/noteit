@@ -111,6 +111,20 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
         _ = try await send(method: "DELETE", key: key)
     }
 
+    public func delete(_ key: String, ifMatch: String?) async throws {
+        guard let ifMatch else { return try await delete(key) }
+        if conditionalWritesSupported {
+            do {
+                _ = try await send(method: "DELETE", key: key, headers: ["If-Match": "\"\(ifMatch)\""], conditional: true)
+                return
+            } catch S3Failure.conditionalNotSupported {
+                // Some providers support conditional PUT but not DELETE; fall back without changing the PUT path.
+            }
+        }
+        try await checkPreconditions(key, ifMatch: ifMatch, ifNoneMatch: false)
+        try await delete(key)
+    }
+
     public func probe() async throws {
         let query = [("list-type", "2"), ("max-keys", "1"), ("prefix", keyPrefix)]
         let (data, _) = try await send(method: "GET", key: nil, query: query)

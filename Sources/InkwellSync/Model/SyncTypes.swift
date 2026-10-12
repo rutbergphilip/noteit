@@ -66,12 +66,15 @@ public struct Tombstone: Codable, Sendable, Hashable {
     public var kind: RecordKind
     public var deletedAt: Date
     public var deviceID: String
+    /// The meta etag the deleter based its decision on; nil when it saw no meta (or in older tombstones).
+    public var deletedMetaETag: String?
 
-    public init(id: UUID, kind: RecordKind, deletedAt: Date, deviceID: String) {
+    public init(id: UUID, kind: RecordKind, deletedAt: Date, deviceID: String, deletedMetaETag: String? = nil) {
         self.id = id
         self.kind = kind
         self.deletedAt = deletedAt
         self.deviceID = deviceID
+        self.deletedMetaETag = deletedMetaETag
     }
 }
 

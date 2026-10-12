@@ -76,4 +76,18 @@ final class SyncPlannerTests: XCTestCase {
         XCTAssertEqual(decide(nil, deleted: true, meta: "e1", tombstone: tomb(), base: base()), .pushDeletion) // row 8 before 15
         XCTAssertEqual(decide(nil, deleted: true, meta: "e1", tombstone: tomb()), .forgetBase)   // row 15 before 17
     }
+
+    func testTombstoneDeleterNeverSawOurPush_resurrects() {
+        let ours = SyncState.Base(revision: rev, remoteMetaETag: "e2", replacedMetaETag: "e1")
+        let deleted = Tombstone(id: id, kind: .note, deletedAt: t0, deviceID: "other", deletedMetaETag: "e1")
+        XCTAssertEqual(decide(local(), tombstone: deleted, base: ours), .resurrectPush)
+    }
+
+    func testTombstoneDeleterSawNewerVersionThanOurBase_applies() {
+        let deleted = Tombstone(id: id, kind: .note, deletedAt: t0, deviceID: "other", deletedMetaETag: "e1")
+        XCTAssertEqual(decide(local(), tombstone: deleted, base: base(etag: "e0")), .applyRemoteDeletion)
+        let pushedEarlier = SyncState.Base(revision: rev, remoteMetaETag: "e0", replacedMetaETag: "e-1")
+        XCTAssertEqual(decide(local(), tombstone: deleted, base: pushedEarlier), .applyRemoteDeletion)
+        XCTAssertEqual(decide(local(), tombstone: deleted, base: base(etag: "e1")), .applyRemoteDeletion)
+    }
 }

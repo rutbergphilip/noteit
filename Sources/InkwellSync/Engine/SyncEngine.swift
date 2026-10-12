@@ -56,9 +56,10 @@ public enum SyncError: Error, Equatable, Sendable {
 /// Write ordering (deliberately different from the plan; see the T5 report):
 /// - push: conditional meta put first, body second. The meta's ETag is the per-record lock, so a
 ///   writer that loses the race never overwrites the winner's body.
-/// - pushDeletion: delete meta and body first, tombstone last.
+/// - pushDeletion: tombstone first (carrying the meta etag the decision saw), then a conditional meta
+///   delete, then the body. A crash in between leaves a meta plus a tombstone naming that same meta,
+///   which every device resolves as "finish the deletion".
 /// - resurrectPush: delete the tombstone first, then push.
-/// With this ordering a crash never leaves both a meta and a tombstone behind; only a race does.
 public actor SyncEngine {
     static let keyCheckPlaintext = Data("inkwell-key-check".utf8)
     static let keyCheckContext = "manifest"
@@ -297,15 +298,29 @@ public actor SyncEngine {
         }
 
         if let remoteMeta, let current = tombstone {
-            // A meta and a tombstone together only arise from a race; the newer one wins and the loser is removed.
-            let envelope = try await fetchEnvelope(id, kind: remoteMeta.kind).envelope
-            if envelope.modifiedAt > current.deletedAt {
+            // A meta and a tombstone together arise from an unfinished deletion or a race; the loser is removed.
+            let tombstoneWins: Bool
+            if let seen = current.deletedMetaETag {
+                // The deleter saw exactly this meta, so it is mid-deletion; any other meta is newer than its decision.
+                tombstoneWins = seen == remoteMeta.etag
+            } else {
+                let envelope = try await fetchEnvelope(id, kind: remoteMeta.kind).envelope
+                tombstoneWins = envelope.modifiedAt <= current.deletedAt
+            }
+            if tombstoneWins {
+                do {
+                    try await backend.delete(RemoteLayout.meta(remoteMeta.kind, id), ifMatch: remoteMeta.etag)
+                } catch StorageError.notFound {
+                } catch StorageError.preconditionFailed {
+                    pass.report.skipped += 1
+                    return
+                }
+                if remoteMeta.kind == .note { try await deleteIfPresent(RemoteLayout.body(id)) }
+                metaETag = nil
+            } else {
                 try await deleteIfPresent(RemoteLayout.tombstone(id))
                 forgetTombstoneDate(id, pass)
                 tombstone = nil
-            } else {
-                try await deleteRemoteRecord(id, kind: remoteMeta.kind)
-                metaETag = nil
             }
         }
 
@@ -333,7 +348,7 @@ public actor SyncEngine {
             try await resolveConflict(id, local: localRecord, pass)
         case .pushDeletion:
             guard let deletion else { return }
-            try await pushDeletion(id, deletion, pass)
+            try await pushDeletion(id, deletion, metaETag: metaETag, pass)
         case .applyRemoteDeletion:
             guard let localRecord else { return }
             guard await currentRevision(id) == localRecord.revision else {
@@ -382,7 +397,7 @@ public actor SyncEngine {
         if let body = payload.body {
             try await backend.put(RemoteLayout.body(id), data: try seal(body, key: RemoteLayout.body(id)), ifMatch: nil, ifNoneMatch: false)
         }
-        state.bases[id] = .init(revision: payload.revision, remoteMetaETag: newETag)
+        state.bases[id] = .init(revision: payload.revision, remoteMetaETag: newETag, replacedMetaETag: remoteETag)
         try saveState()
         pass.report.pushed += 1
         return true
@@ -466,11 +481,30 @@ public actor SyncEngine {
         try await push(id, kind: kind, remoteETag: remote.etag, pass)
     }
 
-    private func pushDeletion(_ id: UUID, _ deletion: LocalDeletion, _ pass: Pass) async throws {
-        try await deleteRemoteRecord(id, kind: deletion.kind)
-        let tombstone = Tombstone(id: id, kind: deletion.kind, deletedAt: deletion.deletedAt, deviceID: deviceID)
-        try await backend.put(RemoteLayout.tombstone(id), data: try seal(try Self.encode(tombstone), key: RemoteLayout.tombstone(id)), ifMatch: nil, ifNoneMatch: false)
+    /// `metaETag` is the remote meta this decision was based on (nil when there was none). The tombstone goes
+    /// first and the meta is deleted only if it is still that version; otherwise someone edited it meanwhile, so
+    /// the tombstone is withdrawn and the next pass pulls the edit (row 9).
+    private func pushDeletion(_ id: UUID, _ deletion: LocalDeletion, metaETag: String?, _ pass: Pass) async throws {
+        let tombstoneKey = RemoteLayout.tombstone(id)
+        let tombstone = Tombstone(id: id, kind: deletion.kind, deletedAt: deletion.deletedAt, deviceID: deviceID, deletedMetaETag: metaETag)
+        let tombstoneETag = try await backend.put(tombstoneKey, data: try seal(try Self.encode(tombstone), key: tombstoneKey), ifMatch: nil, ifNoneMatch: false)
         pass.touchedTombstones.insert(id)
+        if let metaETag {
+            do {
+                try await backend.delete(RemoteLayout.meta(deletion.kind, id), ifMatch: metaETag)
+            } catch StorageError.notFound {
+            } catch StorageError.preconditionFailed {
+                do {
+                    try await backend.delete(tombstoneKey, ifMatch: tombstoneETag)
+                } catch StorageError.notFound {
+                } catch StorageError.preconditionFailed {}
+                pass.report.skipped += 1
+                return
+            }
+        }
+        if deletion.kind == .note, metaETag != nil || pass.index.bodies[id] != nil {
+            try await deleteIfPresent(RemoteLayout.body(id))
+        }
         state.tombstoneDates[id] = deletion.deletedAt
         state.bases[id] = nil
         try saveState()
@@ -481,12 +515,15 @@ public actor SyncEngine {
     private func sweepTombstones(_ pass: Pass) async throws {
         let cutoff = now().addingTimeInterval(-Self.tombstoneRetention)
         var changed = false
+        // Older builds filled knownTombstones without ever reading it; drop it so state files stop growing.
+        if !state.knownTombstones.isEmpty {
+            state.knownTombstones = []
+            changed = true
+        }
         for id in pass.index.tombstones.keys.sorted(by: { $0.uuidString < $1.uuidString }) where !pass.touchedTombstones.contains(id) {
-            state.knownTombstones.remove(id)
             guard let deletedAt = state.tombstoneDates[id], deletedAt < cutoff else { continue }
             try await deleteIfPresent(RemoteLayout.tombstone(id))
             state.tombstoneDates[id] = nil
-            state.knownTombstones.insert(id)
             changed = true
         }
         let live = Set(pass.index.tombstones.keys).union(pass.touchedTombstones)
@@ -564,11 +601,6 @@ public actor SyncEngine {
     private func forgetTombstoneDate(_ id: UUID, _ pass: Pass) {
         pass.touchedTombstones.insert(id)
         state.tombstoneDates[id] = nil
-    }
-
-    private func deleteRemoteRecord(_ id: UUID, kind: RecordKind) async throws {
-        try await deleteIfPresent(RemoteLayout.meta(kind, id))
-        if kind == .note { try await deleteIfPresent(RemoteLayout.body(id)) }
     }
 
     private func deleteIfPresent(_ key: String) async throws {
