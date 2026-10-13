@@ -37,7 +37,7 @@ Design principles:
 - **Shared notebooks between users.** Every user's store is encrypted with that user's own key, so sharing
   needs key sharing (wrapping a notebook key for several users) and a new store layout. Future work (§16).
 - Horizontal scaling: a server instance owns its data directory; run exactly one server process per data
-  directory (no cluster workers, no replicas). A lockfile enforces this (§8).
+  directory (no cluster workers, no replicas). The instance socket `/data/.noteit.sock` enforces this (§8).
 - Real-time collaborative editing; CRDTs. NoteIt's model stays "conflict copies, never silent merge".
 - Rollback/freshness protection against a malicious store (same as native today).
 - Server-side search, previews, or any server-side plaintext.
@@ -874,6 +874,46 @@ Decisions:
      `notes/<id>.body` and adopts the meta. That object is a legacy body under a noteit-doc meta, so the
      orphan sweep removes it on a later pass (on a store without atomic conditional writes it stays until
      the note is deleted), and no reader of the doc meta ever looks at it.
+10. **Late-landing mutations: the ordering guarantee.** A request that NoteIt has given up on (a timeout, a
+    lost response, or a server call detached at its hard deadline, §7.4) can still be applied by the store
+    later, after newer writes. There is **no per-key fence**. Instead, the protocol's safety rests on
+    conditions that the store evaluates **when it applies the request**, and on immutable keys. A
+    late-landing NoteIt mutation therefore either applies to exactly the state it was conditioned on, or
+    fails. Every v2 mutation (native and web engine alike) is in one of these classes:
+    - **Conditional on the key's current state:**
+      - meta writes (`notes/*.meta`, `notebooks/*.json`, including the meta refresh): `If-Match: <base>`,
+        or `If-None-Match: *` for a new record;
+      - manifest writes: `If-None-Match: *` to create, `If-Match` for the upgrade (item 6);
+      - **tombstone writes**, which today are unconditional (`SyncEngine.swift:621`): v2 sends
+        `If-None-Match: *` when the listing has no tombstone for the id, and otherwise `If-Match:
+        <listed ETag>`. A 412 skips the deletion for this pass and the next pass re-plans it. A tombstone
+        also carries `deletedMetaETag`, so even one that lands late loses against any meta newer than the
+        one its deleter saw (the existing meta-plus-tombstone rule, `SyncEngine.swift:309-332`);
+      - **every delete**: meta deletes and tombstone withdrawals are already `If-Match`; v2 replaces today's
+        unconditional `deleteIfPresent` (`SyncEngine.swift:741-745`), used for tombstone retention,
+        resurrection, sync-tool sidecars and legacy bodies, with `deleteIfUnchanged(key, listedETag)`
+        (`If-Match: <listed ETag>`; 404 and 412 leave the key to the next pass), and the orphan sweep,
+        stale-tag cleanup and "Clean up unused storage…" already delete with `If-Match`. A late delete
+        therefore never removes an object written after the listing it was based on.
+    - **Immutable keys:** a versioned body `bodies/<ID>.<VERSION>.<TAG>.body` is only ever written with
+      the same sealed bytes (re-sends reuse the stored bytes), so a late landing recreates the identical
+      object. If it was deleted in between, it reappears as an unreferenced body and falls under the
+      sweep's rules (stale tag: deletable; live tag: pending or meta refresh; `new`: user cleanup).
+    - **Unconditional, argued harmless:**
+      - the device record `devices/<deviceID>.json`: only its own device writes it, and nothing reads it
+        for a sync decision; a late landing only shows an older "last synced" time until the device's next
+        write (at most 10 minutes);
+      - the connectivity canary `.canary/<UUID>`: a fresh key per check, written and deleted only by that
+        check. A late `PUT` recreates a key nobody else uses, which counts toward the 4-canary cap and is
+        removed by the 10-minute canary sweep (§6.2); a late `DELETE` removes only that check's own object;
+      - a v2 engine's re-upload of a **legacy** body (`notes/<id>.body`, for a note not yet converted):
+        it carries the plaintext of the revision the meta's `bodySHA256` describes, so a late landing
+        either restores identical content or lands under a meta that has since been converted, where no
+        reader of the noteit-doc meta looks at it and the sweep removes it.
+
+    Pre-release v1 binaries keep their unconditional calls, but they stop at a v2 store
+    (`unsupportedFormat`, item 4). Quota needs nothing extra: a late landing is covered by the existing
+    reservation and dirty-flag rules (§6.2), and an ambiguous DELETE also marks the user dirty.
 
 ### 3.5 Native converter
 
@@ -1349,6 +1389,12 @@ Account and their own sync passphrase, so every Mac in a family syncs with its o
   empty store; the native app or the web app then connects to it normally. A pinned rclone runs this in CI
   (§12). The supported rclone version range is the one CI tests; if a newer rclone starts sending
   `aws-chunked` uploads, the CI test fails before release and the server gains decoding for them.
+- **Ordering of late requests.** A request the server gave up on (a hard deadline, §7.4) or one a client
+  retries can be applied by the upstream after newer requests for the same key. Conditional requests are
+  evaluated when they are applied, so NoteIt's own mutations stay safe (§3.4 item 10). Unconditional
+  `PutObject`/`DeleteObject` from generic clients such as rclone get exactly the last-writer-wins
+  guarantee of plain S3 with in-flight retries: whichever request is applied last wins. The server adds
+  no stronger ordering and no per-key fence.
 - Auth: SigV4 `Authorization` header only (no presigned URLs), signed headers incl. `host`, `x-amz-date`,
   `x-amz-content-sha256` (`UNSIGNED-PAYLOAD` or hex payload hash, verified when hex; `aws-chunked` rejected with
   `NotImplemented`), `if-match`/`if-none-match` (`SigV4Signer.swift:31-39`). Clock skew > 15 min →
@@ -1691,7 +1737,8 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
   the upstream applies or discards a request within `AMBIGUOUS_GRACE` after its connection ended: at the
   deadline the abort makes the S3 driver destroy the request's socket, so the connection has ended then.
   Detached promises are kept in a registry only to log when (or whether) they settle; nothing ever waits
-  for them.
+  for them. A detached mutation can be applied after newer writes to the same key; §3.4 item 10 shows
+  why that is safe for NoteIt's own requests, and §6.3b states the guarantee for generic `/s3` clients.
 
   The lease's signal also aborts on a client disconnect and on account deletion. Acquisition and gate
   closure are synchronous, single-tick steps in the one server process (no `await` in between), so they
@@ -1773,13 +1820,45 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 - **One process per data directory.** Operation leases, the deletion gate (§7.4) and the quota state (§6.2)
   live in the memory of a single Node process, so the server runs as exactly one process per data
   directory: Nitro's `node-server` preset (never `node-cluster`), no cluster workers, no replicas sharing
-  a volume. In server mode, before loading anything else, startup takes an exclusive lock on `/data`
-  (`/data/.noteit.lock`, a directory created atomically with `mkdir` and refreshed every 10 s; a lock not
-  refreshed for 30 s is stale and may be taken over, so a crashed container restarts cleanly). If another
-  process holds a live lock, startup retries for 40 s and then exits with "Another NoteIt server is using
-  /data. Run one server process per data directory." If the lock is lost or taken over while running,
-  the process exits at once. A process started as a cluster worker exits at startup. Static mode
-  (§6.4) uses no data directory and takes no lock.
+  a volume. A process started as a cluster worker exits at startup. Static mode (§6.4) uses no data
+  directory and takes no lock.
+- **Local filesystem only.** `/data` must be a local filesystem (ext4, xfs, btrfs, zfs, APFS, or a Docker
+  named volume on one), **not NFS, SMB/CIFS or another network share**. The server relies on atomic
+  `rename` after `fsync` (§6.2, §7.1) and on Unix domain sockets that live in `/data` (below); neither is
+  reliable on network filesystems. Startup checks the filesystem type (`statfs`) and refuses to start on
+  NFS, SMB/CIFS or FUSE network filesystems with a message naming the requirement.
+- **Instance socket (the lock).** Before loading anything else, the server takes ownership of
+  `/data/.noteit.sock`, a Unix domain socket it listens on for its whole life. The kernel releases a
+  listening socket only when the process exits, so liveness is decided by the kernel, not by timestamps:
+  a garbage-collection pause or a stalled process still holds the socket, and can never be mistaken for a
+  dead one. Startup:
+  1. `bind` + `listen` on `/data/.noteit.sock`. `bind` on an existing path fails (`EADDRINUSE`), so it is
+     an atomic create: if it succeeds, no other process can hold that path.
+  2. If the path exists, `connect` to it. If the connection succeeds and the peer answers the handshake
+     (a line naming a NoteIt server and its instance ID), another live server owns `/data`: exit with
+     "Another NoteIt server is using /data. Run one server process per data directory." Only
+     `ECONNREFUSED` means stale (no process listens on it). Then the stale file is removed **by inode**:
+     note its inode, `rename` it to a unique `/data/.noteit.sock.stale.<random>`, and check that the
+     moved file still has that inode. If it does, unlink it and go back to step 1. If it doesn't, a live
+     server bound the path in between, so put its socket back with `link` and start again at step 2.
+  3. **Connect after binding.** Once bound, the server connects to `/data/.noteit.sock` and checks that
+     the handshake returns its own instance ID (retried for up to 5 s while the path is briefly absent
+     during another starter's step 2); any other answer means it lost the path, and it exits before
+     serving.
+  4. While running, it repeats that check every second (the path's inode is still its socket's, and the
+     handshake reaches itself) and exits at once if not. A starter that, in step 2, displaced a live
+     socket and could not put it back connects to that socket and sends `displaced`, and its owner exits
+     at once.
+
+  **Why connect-after-bind rather than bind-to-a-temporary-name-and-rename:** `rename` replaces its
+  target unconditionally, so a starter that wrongly judged the path stale would silently replace a live
+  server's socket that was bound after its check. That would recreate the race instead of closing it.
+  `bind` on the final path is an atomic create, so the only window left is removing a stale file. The
+  inode check makes that removal touch only the file that refused the connection. With two starters
+  racing over a stale socket, one binds and the other always finds it live. Only if a third starter binds
+  in the moment between another starter's `rename` and `link` back can two servers run at once, and then
+  the step-4 check or the `displaced` message stops the older one within a second. Outside such a
+  simultaneous start of three processes after an unclean exit, a second server never starts serving.
 - `docker-compose.yml`: one service, named volume `noteit-data:/data`, env file; documented reverse-proxy
   examples (Caddy/Traefik) because WebCrypto requires a secure context (HTTPS or `localhost`).
 - **Environment** (every `…_SECRET`, `…_HASH` and `…_TOKEN` variable also has a `…_FILE` form for Docker
@@ -2081,7 +2160,13 @@ remain open (§15) and are not v1 guarantees.
        grace passes with no write), the other notes sync normally, and deleting M from any device
        removes its meta and writes a tombstone as usual; the dialog text in both apps equals the spec
        string;
-     - a running v1 engine never deletes or rewrites anything under `bodies/`, and skips (doesn't wedge)
+     - **late-landing mutations** (§3.4 item 10): a spy over every v2 run asserts that every `PUT` and
+      `DELETE` the engine sends carries `If-Match` or `If-None-Match`, except device records, canaries and
+      legacy-body re-uploads; with `hold`, a conditional mutation of A (a meta commit, a tombstone `PUT`, a
+      tombstone-retention `DELETE`, a sidecar `DELETE`) is held, B commits on top, A is released and fails
+      its condition at apply time, and B's object survives; a late tombstone with an older
+      `deletedMetaETag` loses against the newer meta;
+    - a running v1 engine never deletes or rewrites anything under `bodies/`, and skips (doesn't wedge)
        notes whose legacy body is gone;
      - the orphan sweep never deletes a referenced version, a body whose tag matches the listed meta, or
        anything for a note whose meta changed since the last pull, and respects its 200-per-pass limit;
@@ -2183,8 +2268,15 @@ remain open (§15) and are not v1 guarantees.
      log registry only; **exception-safe leases**: a synchronous throw inside `fn`, a refused admission
      (`quotaExceeded`, `busy`), a rejected driver call and a client disconnect mid-request each leave
      `stillRunning` at 0 afterwards; **one process**: a second server started on the same data directory
-     exits with the lockfile message while the first keeps serving; after the first is killed, a new one
-     takes over the stale lock within 40 s; a cluster worker exits at startup; **repeated restarts**: a restart during the quarantine
+     exits with the instance-socket message while the first keeps serving, also when the first is
+     **stalled** (`SIGSTOP`) for 60 s, well past any timeout: the second never starts serving and the
+     first resumes as the only server; after the first is killed (`SIGKILL`, leaving a stale socket file),
+     a new one finds it refused, removes it by inode and binds; two starters racing over a stale socket
+     end with exactly one server; a cluster worker exits at startup, and an NFS-backed `/data` is
+     refused; **late-landing conditional mutation**: a conditional meta PUT A (`If-Match: E0`) is
+     detached at its hard deadline, B commits `E1` on top, then A is applied late by the upstream and
+     fails its condition (412 at apply time): the meta stays `E1`, A's body stays unreferenced, and the
+     same holds for a late tombstone `PUT` and a late `If-Match` delete; **repeated restarts**: a restart during the quarantine
      re-quarantines exactly the users still flagged, with a full grace from the new start, and not users
      created since or whose quarantine already ended; three restarts in a row, each after some users
      were reconciled, shrink the set each time and end with an empty state file;
@@ -2277,7 +2369,8 @@ remain open (§15) and are not v1 guarantees.
 | Compromised server serves malicious JS | cannot be prevented in-browser; honest threat model, signed release manifest + out-of-band verifier (detection only), native app as anchor, pinned static client as future work |
 | S3-subset incompatibilities with other clients | only NoteIt + rclone are supported; conformance tests reuse Swift `S3Backend`; a pinned-rclone round trip runs in CI (§12 item 7) |
 | Shortcut collisions per browser/OS | Playwright matrix (Chromium/WebKit/Firefox) |
-| Two server processes share one data directory, splitting the in-memory leases and quota | exactly one process per data directory; `/data/.noteit.lock` taken at startup, a cluster worker exits (§8) |
+| Two server processes share one data directory, splitting the in-memory leases and quota | exactly one process per data directory, enforced by the kernel-held instance socket `/data/.noteit.sock` (a stalled owner still holds it); `/data` must be local (network filesystems refused); a cluster worker exits (§8) |
+| A detached or retried mutation lands after newer writes | no fence: every NoteIt mutation is conditional (evaluated at apply time), immutable, or argued harmless (§3.4 item 10); generic `/s3` clients get plain-S3 last-writer-wins (§6.3b) |
 | A namespace bug leaks one user's ciphertext to another | one `namespacedKey` choke point fed only by the session or `/s3` key; key validation first; property tests and cross-user E2E (§12); content stays encrypted per user |
 | Admin or IdP misconfiguration grants access | auto-provisioning requires allowed groups; last-admin guard; invites single-use and expiring; forward-auth dropped (§7.3) |
 | Direct mode: CORS misconfigured or `ETag` not exposed | connect wizard CORS check with specific hints; provider examples (§6.4) |
@@ -2291,8 +2384,8 @@ remain open (§15) and are not v1 guarantees.
   has not been released.
 - A2: Homelab users terminate TLS at a reverse proxy (WebCrypto needs a secure context).
 - A3: An instance serves a family or small group (up to about 20 users), so a JSON account file and in-memory
-  usage counters are enough, and one server process per data directory (enforced by a lockfile, §8) is
-  enough.
+  usage counters are enough, and one server process per data directory (enforced by the instance socket, §8) is
+  enough; `/data` is on a local filesystem.
 - A4: Notes rarely exceed tens of MB including images (inline attachments).
 - A5: The curated SF Symbol list (32) can be mapped to open-licensed SVG icons compatible with AGPL; web
   chrome uses the NoteIt icon set (`design/assets/icons`).
