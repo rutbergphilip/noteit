@@ -767,16 +767,20 @@ Decisions:
        Settings → Sync (native) and in the web app's Settings → Sync. It never runs automatically, on a
        schedule or as part of a pass. The dialog says, in plain words: "This removes leftover copies of
        notes that were never finished saving, for example from a Mac that was erased while it was
-       syncing. Before you continue, make sure no other device is saving a new note right now: let your
-       other devices finish syncing, or quit NoteIt on them. Notes that are already saved are never
-       affected." Buttons: Cancel (default) and Clean Up. On confirmation the engine runs a pass, then
+       syncing. Only run this when your other devices are idle. A note being saved on another device at
+       the same moment could be lost if that device is then lost before it syncs again." Buttons: Cancel
+       (default) and Clean Up. On confirmation the engine runs a pass, then
        deletes, with `If-Match: <listed ETag>`, every `new` body whose note has no meta and no tombstone
        in that pass's listing and that isn't this device's own pending version, and reports how many
        objects and bytes it removed. It works on every store, at full quota (deleting is always allowed),
-       and in direct mode. If the user confirms while another device is in fact mid-create, that device's
-       create can still commit, with its body gone; this is the "missing committed body" case below, and
-       the creating device republishes it on its next pass. The note is lost only if that device is also
-       lost before its next pass, which is why the action asks first and is never automatic.
+       and in direct mode. There is no protocol coordination with other devices; the confirmation is the
+       only safeguard, and the dialog says so. If another device is in fact mid-create, its create can
+       commit between the cleanup's listing and its `DELETE`, leaving a meta whose body is gone. That is
+       the "missing committed body" case below: the creating device republishes the note on its next
+       pass. If that device is lost first (wiped, or never syncs again), **the note is lost**: no other
+       device ever held its contents, so nobody can repair it, and every reader skips it with a body 404
+       and lists it in the sync report until the user deletes it. That is why the action is never
+       automatic and the warning says exactly this.
    - **Why the sweep can't delete a body that will be committed.** This argument applies to stores with
      atomic conditional writes. A body becomes referenced only through the conditional meta write of the
      publish that created it, or of a re-send with the same tag. So it doesn't matter how late that write
@@ -1185,10 +1189,11 @@ no "unlimited" setting, because one user must never be able to fill storage that
     write is gone from the file. A write is requested when a reservation is admitted, turns unresolved
     or is dropped by a settle, when dirty is set or cleared, when a quarantine starts or ends, and when
     an account is deleted (below).
-  - **Deleted accounts.** When an admin deletes an account (status `deleting`, §7.4), its entry is removed
-    from the in-memory state at once (reservations, dirty and quarantine alike) and the file is
-    rewritten; nothing is ever reconciled for it again. No PUT can reach that namespace any more, and
-    the purge (§7.4) removes whatever is there, including a late-landing write.
+  - **Deleted accounts.** When an admin deletes an account (status `deleting`, §7.4), the server first
+    aborts and awaits the user's in-flight operations (§7.4), then removes the entry from the in-memory
+    state (reservations, dirty and quarantine alike) and rewrites the file; nothing is ever reconciled
+    for it again. No new request can reach that namespace any more, and the purge (§7.4) removes
+    whatever is there, including a late-landing write.
   - A PUT's reservation is persisted after admission and before the driver call. If that write fails,
     the reservation is dropped and the PUT fails with `502 storeUnavailable` before any I/O. Writes for
     removals may be coalesced with later ones: a stale entry only makes the next start more
@@ -1652,12 +1657,32 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 - **Disable / enable.** Disabling bumps the epoch: sessions get 401 on their next request, the user's `/s3`
   keys get `403 AccessDenied`, and OIDC sign-in is refused. Data is kept. Enabling restores the keys, but
   the user has to sign in again.
-- **Delete.** The admin types the username to confirm. The account is marked deleted (status `deleting`;
-  all auth fails), its keys are removed, its quota state is dropped at once (§6.2 "Deleted accounts"), the
-  namespace is purged (disk `rm -r`; upstream S3 list + delete), and the record is removed. On upstream S3
-  the purge lists and deletes once more `AMBIGUOUS_GRACE` after the first pass, so a write of the old
-  process that lands late doesn't stay behind. An interrupted purge resumes at startup, and the record
-  is removed only after the last pass.
+- **Delete.** The admin types the username to confirm. Then, in order:
+  1. The record becomes `status: deleting` with a `purge` entry and is persisted in `accounts.json` before
+     anything else, so it survives a restart. All auth fails from then on and the keys are removed; no new
+     request for the user is accepted.
+  2. Every in-flight operation of the user (REST and `/s3` PUTs, DELETEs, listings, settles, reconciles)
+     is aborted through its `AbortSignal` and awaited, each for at most `NOTEIT_STORE_TIMEOUT_S`. The
+     server records the user's **latest request end time**: the moment the last of them ended, or now
+     if none was running. An operation still unsettled after that wait keeps being tracked, and when it
+     does end, a later end time replaces the recorded one.
+  3. The quota state is dropped (§6.2 "Deleted accounts").
+  4. **Pass one** purges the namespace (disk `rm -r`; upstream S3 list + delete), retried every minute
+     until it succeeds.
+  5. The **final pass** (the same list + delete) runs at `AMBIGUOUS_GRACE` after the latest request end
+     time, and is pushed back whenever a later end time is recorded. Under the §6.2 assumption, every
+     request of the user has been applied or discarded by then, so the final pass removes anything that
+     landed after pass one. A failed final pass is retried every minute.
+  6. Only when the final pass has succeeded is the record removed.
+
+  Until then the `deleting` record keeps the user's UUID, and therefore their namespace, reserved, and
+  also their username and OIDC identity, so nothing new can be created in that namespace. On the disk
+  driver the aborted writes have finished or rolled back inside step 2, so nothing can land later, but
+  the final pass still runs, by the same rule. **After a restart** the process can't know when the old
+  process's requests ended, so every `deleting` record gets its latest request end time set to the
+  startup time, as for persisted reservations (§6.2 "Restarts"). It then resumes at pass one if that
+  hadn't finished, and otherwise at the final pass, which is due `AMBIGUOUS_GRACE` after startup.
+  Wall-clock times are never compared across processes.
 - **Last admin.** Any change that would leave no active admin — disabling, demoting or deleting the last
   one, including yourself — returns 409 `lastAdmin`, checked under the accounts mutex.
 - **Password reset.** An admin sets a temporary password; the epoch is bumped and the user must change it.
@@ -1974,6 +1999,13 @@ remain open (§15) and are not v1 guarantees.
        (spy over the whole suite); deletes only `new` bodies of notes with no meta and no tombstone that
        aren't the device's own pending version, with `If-Match`; when the user confirms while A's create
        is held, A's later commit leaves a meta with a missing body and A republishes it on its next pass;
+       **commit before delete, then the creator is lost** (documents the warned loss): the cleanup lists
+       M's body with no meta, A's create commits, then the cleanup's `DELETE` lands; A is wiped before
+       its next pass. M is then unreadable on every device (body 404, listed in the sync report every
+       pass, no conflict copy, no crash), no device ever repairs it (none holds its revision; the repair
+       grace passes with no write), the other notes sync normally, and deleting M from any device
+       removes its meta and writes a tombstone as usual; the dialog text in both apps equals the spec
+       string;
      - a running v1 engine never deletes or rewrites anything under `bodies/`, and skips (doesn't wedge)
        notes whose legacy body is gone;
      - the orphan sweep never deletes a referenced version, a body whose tag matches the listed meta, or
@@ -2058,8 +2090,11 @@ remain open (§15) and are not v1 guarantees.
      the quarantine; a user created during the quarantine is admitted at once; **without any traffic**,
      the scheduled reconciles end every user's quarantine shortly after the deadline, including a
      disabled user's (who is later re-enabled and admitted at once); a user deleted during the quarantine
-     is removed from the state immediately, never reconciled, and the purge's second pass removes an
-     object that landed late in their namespace; **repeated restarts**: a restart during the quarantine
+     is removed from the state once their operations are aborted and awaited, and is never reconciled;
+     **purge timing**: a PUT whose driver call ignores the abort ends after pass one, and its write
+     lands more than one grace period after pass one but within the grace after its own end; the final
+     pass, which runs a grace after that end, removes it, and the `deleting` record (persisted, so it is
+     also there after a restart in between) keeps the username and namespace reserved until then; **repeated restarts**: a restart during the quarantine
      re-quarantines exactly the users still flagged, with a full grace from the new start, and not users
      created since or whose quarantine already ended; three restarts in a row, each after some users
      were reconciled, shrink the set each time and end with an empty state file;
@@ -2138,6 +2173,8 @@ remain open (§15) and are not v1 guarantees.
 | A create lands after its note was deleted (meta back without a body) | pre-existing in every format version; readers skip and report it; documented (§3.4 item 9, "Late creates") |
 | An abandoned device leaves uncommitted bodies | at most one per note per device, kept only while the note's meta is unchanged; counted in quota (§3.4 item 9) |
 | A wiped device leaves the body of a note it never created (`new`) | never collected automatically, since no write can make it stale without racing a valid create; at most one per wiped device per never-committed note, counted in quota; the user reclaims it with the confirmed "Clean up unused storage…" action (§3.4 item 9) |
+| "Clean up unused storage…" runs while another device is creating a note | user-initiated only, never automatic; the dialog warns plainly that such a note can be lost if that device is lost before it syncs again; otherwise the creator repairs it (§3.4 item 9) |
+| A deleted user's late upstream write lands after the purge | in-flight operations aborted and awaited first; final purge pass a grace after the latest request end; the persisted `deleting` record keeps the namespace reserved until it succeeds (§7.4) |
 | Stores without atomic conditional writes (folder stores, S3 providers failing the canary) keep orphaned bodies | the sweep deletes only bodies of deleted notes there; writers still delete what they replace; the larger bound is documented (§3.4 item 9, "What it costs"); a NoteIt server never runs in this mode (§6.2) |
 | One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper; conservative reservations, ambiguous results reconciled, in-flight cap; reservations persisted across restarts in a bounded, compacted file; a quarantine after a lost state file (§6.2) |
 | A wiped or vanished device leaves bodies with a live tag, and a full user can't edit to make them stale | any v2 device's body-free meta refresh after 20 passes and 24 hours, admitted as a zero-delta replacement even at the hard ceiling; the sweep then deletes them (§3.4 item 9, §6.2) |
