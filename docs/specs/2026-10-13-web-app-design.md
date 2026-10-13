@@ -468,10 +468,13 @@ Decisions:
      (its revision equals `base.revision` and `pendingBodyVersions` has the note), which the sweep resumes.
 
    For each candidate, the engine runs item 9's publish with the unchanged revision:
-   1. Resolves any pending entry left by an interrupted conversion of this note (item 9), exports the note
-      as noteit-doc and records `pendingPushes[id] = revision` and `pendingBodyVersions[id] = {version:
-      <new VERSION>, tag: baseTag(base.remoteMetaETag), phase: "uploading", envelope}`.
-   2. Uploads `bodies/<id>.<VERSION>.<TAG>.body` with `If-None-Match: *`. The legacy meta and body are
+   1. Resolves any pending entry left by an interrupted conversion of this note (item 9); an entry that can
+      still be committed is continued with its own version, and nothing new is exported. Otherwise it
+      exports the note as noteit-doc, seals the body, stores the sealed bytes and records `pendingPushes[id]
+      = revision` and `pendingBodyVersions[id] = {version: <new VERSION>, tag: baseTag(base.remoteMetaETag),
+      phase: "uploading", envelope}`.
+   2. Uploads the stored bytes to `bodies/<id>.<VERSION>.<TAG>.body` with `If-None-Match: *` (2xx or 412
+      both mean it is there; anything else is in doubt, as in item 9 step 2). The legacy meta and body are
       untouched, so every reader still sees a consistent legacy note.
    3. Sets `phase: "committing"` and sends `PUT notes/<id>.meta` with **`If-Match: base.remoteMetaETag`**.
       The new envelope has the same `revision`, this device's `deviceID`/`deviceName`,
@@ -485,10 +488,11 @@ Decisions:
    **Crash at any step** leaves a consistent store, because nothing a reader can reach changes before the
    commit point:
    - before step 2, or after step 2 but before the meta `PUT` is sent: the legacy meta and body are intact;
-     at most one uncommitted version exists. The next sweep resumes the conversion (deleting that version
-     first). If this device never comes back, the version stays while the legacy meta is unchanged
-     (item 9, "What it costs"), and the note stays a conversion candidate on every v2 device. When another
-     one converts it, the meta changes, and the stray version becomes deletable;
+     at most one uncommitted version exists. The next sweep resumes the conversion with the same version:
+     it re-uploads the stored bytes to the same key (a 412 means they are already there) and commits. If
+     this device never comes back, the version stays while the legacy meta is unchanged (item 9, "What it
+     costs"), and the note stays a conversion candidate on every v2 device. When another one converts it,
+     the meta changes, and the stray version becomes deletable on stores with atomic conditional writes;
    - while the meta `PUT` is out: in doubt; the next pass adopts the write if it landed, otherwise
      re-sends the same commit (item 9);
    - after step 3 succeeded: the new meta and the new body both exist. On the next pass the listed meta
@@ -502,8 +506,9 @@ Decisions:
    applies the payload with the unchanged revision. No conflict copy is created, but every peer
    re-downloads each converted note once. This is the intended cost.
 
-   **412 on the meta PUT:** another device changed the record after our pass, for example an old client
-   that edited it. The engine:
+   **412 on the meta PUT** (confirmed by the `GET` of item 9 step 4: the meta doesn't reference our
+   version): another device changed the record after our pass, for example an old client that edited
+   it. The engine:
    - abandons the conversion of that record and clears `pendingPushes`, exactly as `push` does;
    - does **not** retry immediately;
    - leaves the id in `legacyBodies`.
@@ -587,47 +592,77 @@ Decisions:
        would let the storage confirm guesses about note content.
    - **Publish order** (`@noteit/core` and native, in a v2 session):
      1. Resolve any earlier entry in `pendingBodyVersions` for the note (below). Export and validate;
-        compute `bodySHA256`; pick a fresh `<VERSION>` and the `<TAG>`; persist `pendingPushes[id] =
+        compute `bodySHA256`; pick a fresh `<VERSION>` and the `<TAG>`; seal the body once. Persist the
+        **sealed bytes** (native: a file next to the sync state; web: IndexedDB), then `pendingPushes[id] =
         revision` and `pendingBodyVersions[id] = {version, tag, phase: "uploading", envelope}` (the
         plaintext envelope, so the commit can be re-sent).
-     2. `PUT bodies/<id>.<VERSION>.<TAG>.body` with `If-None-Match: *`.
+     2. `PUT bodies/<id>.<VERSION>.<TAG>.body` with `If-None-Match: *` and the stored sealed bytes. A 2xx
+        or a 412 both mean the object is there: only this device ever writes this key, and every attempt
+        sends the same bytes. Anything else (timeout, connection loss, 5xx) is **in doubt**: the entry
+        stays `uploading`, the note is skipped for this pass, and the request may still land later.
      3. Persist `phase: "committing"`. From here on the meta `PUT` may have been sent.
      4. `PUT notes/<id>.meta` with `If-Match: base.remoteMetaETag` (`If-None-Match: *` for `new`), carrying
         `bodyFormat`, `bodyVersion` and `bodySHA256`. **This is the only way a version becomes referenced,
         and the commit point.** The outcome is one of:
         - **2xx**: committed; go on to step 5;
-        - **412**: not committed, and it never can be (the meta has moved on): delete the version (best
-          effort) and clear both pending entries, then `push` handles the 412 as today;
+        - **412**: first `GET` the meta. If it references our version, an earlier attempt or an HTTP-level
+          replay of this one landed: treat it as a 2xx with the `GET`'s ETag and go on to step 5.
+          Otherwise:
+          - if this was the **first attempt** of this commit (the entry went to `committing` in this same
+            step and nothing was sent before), the 412 is definite: delete the version (best effort), clear
+            both pending entries and the sealed bytes, and `push` handles the 412 as today;
+          - if an earlier attempt was in doubt (the entry is `inDoubt`, below), the 412 says only that the
+            meta isn't ours *now*. Delete nothing: clear the entries and the sealed bytes and leave the
+            version to the orphan sweep, which removes it only where that is safe; the planner handles the
+            note;
         - **anything else** (timeout, connection loss, 5xx, other 4xx, a crash while the request was out):
-          **in doubt**. The request may still land later. Nothing is deleted and the entry stays.
+          **in doubt**. Persist `phase: "inDoubt"`. The request may still land later. Nothing is deleted.
      5. Save `base = {revision, remoteMetaETag, replacedMetaETag, bodyETag, bodyVersion}` and clear the
-        pending entries.
+        pending entries and the sealed bytes.
      6. Delete the body the previous meta referenced (the previous version or the legacy body) with
         `If-Match: <its listed ETag>`. A failure is only logged; the orphan sweep removes it later.
+   - **No transparent retries of conditional requests.** A request carrying `If-Match` or `If-None-Match`
+     (meta commits, body uploads, manifest writes, conditional deletes, the canary) is sent once by
+     NoteIt's own code. A transport error or a timeout is returned as `network`, which the engine treats
+     as in doubt, and the engine decides on its next pass. Native `S3Backend.send` retries every `network`
+     error today (`S3Backend.swift:252-280`); v2 limits that to unconditional requests. HTTP stacks may
+     still replay an idempotent request on a dropped keep-alive connection without telling the caller, so
+     step 4 never trusts a 412 alone: it confirms with the `GET`. The HEAD-verify fallback (§6.4) reports
+     a failed verification after its `PUT` as `network` (in doubt), not as `preconditionFailed`, because
+     its `PUT` was sent; only its pre-write check yields a definite 412.
    - **Resolving a pending entry** (step 1, and at the start of every v2 pass for each note that has one).
-     Nothing here reads a clock:
-     - `phase: "uploading"`: the meta `PUT` was never sent, so the version can't be committed. Delete it
-       (best effort) and drop the entry.
-     - `phase: "committing"` (in doubt), when the listed meta's ETag differs from `base` (or a meta now
-       exists for `new`): the planner handles the note first, as today. If our commit landed, the meta
-       carries our revision and the existing same-revision branch of `resolveConflict`
-       (`SyncEngine.swift:450-457`), or a pull for a conversion, adopts it, and the entry is cleared.
-       Otherwise the meta moved on without our version, the sweep rule below allows the delete, and the
-       device deletes the version and drops the entry.
-     - `phase: "committing"`, when the listed meta's ETag still equals `base` (or there is still no meta
-       and no tombstone for `new`): **re-send the same commit**, with the same version, tag, revision and
-       precondition, from the stored envelope sealed afresh, and classify the outcome as in step 4. The
-       device starts no new version for the note until the entry is resolved, so it has **at most one
-       pending version per note**.
+     Nothing here reads a clock. An entry loaded in `committing` (a crash while the meta request was out)
+     is treated as `inDoubt`.
+     - `uploading`: the meta `PUT` was never sent, so nothing references the version.
+       - **Live tag** (the listed meta ETag still equals `base`; for `new`: still no meta and no tombstone):
+         re-send step 2 with the **stored bytes to the same key**, then continue at step 3. The device
+         never starts a new version for the note while this one could still be committed.
+       - **Stale tag** (the meta moved on, or a meta or tombstone appeared for `new`): no commit of this
+         version can ever succeed, and this device will never send one. Delete the version if it is listed
+         (with `If-Match`), drop the entry and the sealed bytes; the planner handles the note. If an
+         earlier upload of it is still in flight, it can land after this delete; it then lands as an
+         unreferenced body with a stale tag (see the sweep).
+     - `inDoubt`, when the listed meta's ETag differs from `base` (or a meta now exists for `new`): the
+       planner handles the note first, as today. If the meta references our version, our commit landed:
+       the existing same-revision branch of `resolveConflict` (`SyncEngine.swift:450-457`), or a pull for
+       a conversion, adopts it, and the entry is cleared. Otherwise the entry and the sealed bytes are
+       dropped **without deleting the version**, which is left to the orphan sweep.
+     - `inDoubt`, when the listed meta's ETag still equals `base` (or there is still no meta and no
+       tombstone for `new`): **re-send the same commit**, with the same version, tag, revision and
+       precondition, from the stored envelope sealed afresh, and classify the outcome as in step 4 (a 412
+       is then never "first attempt").
+
+     So a device has **at most one pending version per note**, and it starts a new one only once the old
+     one can no longer be committed.
    - **Crash after each step:**
 
      | Crash after | Remote state | Recovery |
      |---|---|---|
-     | 1 | unchanged | the next pass drops the entry (nothing was uploaded) and publishes again |
-     | 2 | old meta and body intact, one uncommitted version | `phase: "uploading"`: the next pass deletes the version and publishes a fresh one |
+     | 1 | unchanged | `uploading`, live tag: the next pass uploads the stored bytes to the same key and commits |
+     | 2 (or the body `PUT` in doubt) | old meta and body intact, one uncommitted version (or one that may still land) | the same: the re-upload gets 2xx or 412, both fine, and the same version is committed; no second version is created |
      | 3, or during 4 | old meta intact, or the new meta if the `PUT` landed | in doubt: the next pass adopts the write if it landed, otherwise re-sends the same commit |
      | 4 (2xx received) | new meta and new body | the listed meta differs from `base`: the same-revision branch of `resolveConflict`, or a pull for a conversion, adopts our own write without a conflict copy |
-     | 5 | new meta and body; previous body left over | orphan sweep |
+     | 5 | new meta and body; previous body left over | orphan sweep (on stores with atomic conditional writes; otherwise kept, see "What it costs") |
 
      Readers never see a committed meta without its body. The one benign race: a peer that listed the old
      meta before step 4 may `GET` the previous body after step 6 and get 404. A 404 on a body is handled
@@ -638,10 +673,22 @@ Decisions:
      version is unique, so at most one object matches), and `notes/<id>.body` for legacy ones, then checks
      `bodySHA256` as today. A version missing from the listing is handled like a body 404. **Deletion** (`pushDeletion`) deletes the referenced
      body after the meta, as today; any other versions are left to the sweep.
+   - **Atomic conditional writes.** The orphan sweep relies on conditional writes being atomic, which the
+     HEAD-verify fallback is not. Each backend reports `atomicConditionalWrites`:
+     - an S3 backend reports true only after the extended conditional canary (§6.4) **passed in this
+       session**: preconditions are enforced, and an overwrite with different bytes gets a new ETag that
+       makes the old one fail `If-Match`. Before the canary has passed, after it failed, or in the fallback,
+       it reports false;
+     - the native folder backend reports false: its lock covers only processes that share a working
+       `flock`, not a folder synced between Macs by a file-sync service;
+     - `HttpProxyBackend` and `/s3` on a NoteIt server report true (the server's canary passes): the disk
+       driver serializes conditional writes per key, and the server refuses to start on an upstream S3
+       store that fails the canary (§6.2).
    - **Orphan sweep** (end of every v2 pass, both engines, at most 200 deletions per pass, each with
      `If-Match: <listed ETag>`). It uses no clock and no retention period. The current meta of a note
      is *known* to the sweeper only when the listed meta ETag equals its `base.remoteMetaETag` (it has
      pulled exactly that meta); a note with a listed meta that isn't known is skipped until a later pass.
+     On a store **with** atomic conditional writes:
      - A **versioned body** `bodies/<NOTE>.<VERSION>.<TAG>.body` may be deleted only if **both**:
        - (a) the note's current meta doesn't reference it: the meta is known and its `bodyVersion` is a
          different version, or the note has no meta;
@@ -657,11 +704,17 @@ Decisions:
      - An **unparsable name** under `bodies/` may be deleted: no writer creates one, and no meta can
        reference one.
 
+     On a store **without** atomic conditional writes, the sweep deletes only unparsable names and the
+     bodies (versioned or legacy) of a note that has a tombstone and no meta. It never deletes a body
+     because of its tag or because a meta stopped referencing it. Writers still delete what they
+     themselves abandon or replace (step 4 after a first-attempt 412, step 6, a stale-tag `uploading`
+     version, conversion step 5) on every store.
+
      Orphans count toward the quota (§6.2) until they are removed.
-   - **Why the sweep can't delete a body that will be committed.** A body becomes referenced only through
-     the conditional meta write of the publish that created it, or of a re-send with the same tag. So it
-     doesn't matter how late that write or the sweeper's `DELETE` lands, or how the devices' clocks
-     differ:
+   - **Why the sweep can't delete a body that will be committed.** This argument applies to stores with
+     atomic conditional writes. A body becomes referenced only through the conditional meta write of the
+     publish that created it, or of a re-send with the same tag. So it doesn't matter how late that write
+     or the sweeper's `DELETE` lands, or how the devices' clocks differ:
      - `If-Match: E` succeeds only while the meta's ETag is `E`. The sweeper deleted a hashed-tag body only
        after seeing a meta ETag `E'` with `baseTag(E') ≠ TAG = baseTag(E)`, so `E' ≠ E`: the meta had
        already moved on from `E`. From then on, the commit can succeed only if the meta's ETag becomes `E`
@@ -670,39 +723,60 @@ Decisions:
        after seeing a meta, or a tombstone. From then on the create can succeed only once the note's meta
        is deleted, which means the note was deleted (see "Late creates").
      - Condition (a) covers the publish that did commit: its version is the current `bodyVersion`.
-     - Versions are never reused: every new publish, repair and conversion picks a fresh one.
+     - Versions are never reused: every new publish, repair and conversion picks a fresh one, and a device
+       re-sends only the version it has pending.
+     - A retried or replayed request can't turn a landed commit into a deletion: NoteIt sends conditional
+       requests once, and every 412 is checked with a `GET` before the writer deletes anything. After an
+       in-doubt attempt the writer deletes nothing and leaves the version to the rules above.
 
      So when writer A uploads a body built against meta `E` and then stalls, and in the meantime device C
      commits an edit (meta `E1`), sweeper B may delete A's body at once. If A's commit (`If-Match: E`)
      lands afterwards, however late, it fails with 412, and A republishes against `E1`. If nobody changes
      the meta while A stalls, every sweeper keeps A's body, and A's late commit is legitimate.
 
-     - **ABA.** If the meta's ETag is `E` again when a sweeper looks, the tag matches and the body is
-       kept; committing it then is legitimate, because the meta is exactly the one A built against. The
-       only hazard is `E → E1` (the sweeper deletes) `→ E` again, followed by A's commit. On every
-       supported store the ETag is either derived from the content (S3 MD5, the server's disk MD5, the
-       native folder backend's SHA-256 prefix, `FolderBackend.swift:192-197`) or unique per write (for
-       example S3 with SSE-KMS), so the ETag can return to `E` only if the identical ciphertext is
-       written again. No NoteIt engine does that: every write seals with a fresh random AES-GCM nonce
-       (`SyncCipher.swift:27-28`), and a re-sent commit is sealed afresh too. It takes an outside copy of
-       old meta bytes, such as a backup restore. That is outside this guarantee; a restored meta whose
-       body is missing is handled by repair (below).
+     - **ABA and ETag reuse.** If the meta's ETag is `E` again when a sweeper looks, the tag matches and
+       the body is kept; committing it then is legitimate only if the meta is exactly the one A built
+       against. That needs the backend requirement **"different bytes never get a previously issued
+       ETag"**, which the canary checks (§6.4) and without which a store counts as having no atomic
+       conditional writes. It holds for content-derived ETags (S3's MD5 for single-part uploads, the
+       server's disk driver, which uses the MD5 of the stored bytes) and for ETags unique per write (for
+       example S3 with SSE-KMS). For the disk driver an equal ETag therefore means identical bytes, and
+       since every seal uses a fresh random AES-GCM nonce (`SyncCipher.swift:27-28`) and a re-sent
+       commit is sealed afresh, identical bytes mean a copy of the same sealed object, never a new write
+       by a NoteIt engine. (A deliberately crafted MD5 collision could only be written by the namespace
+       owner into their own store.) So the ETag returns to `E` only through an outside copy of old meta
+       bytes, such as a backup restore. If that happens after the sweeper's delete, A's commit can
+       succeed and reference a missing body; A's local revision equals the meta's, so A repairs it
+       (below).
      - **Late creates.** A create whose `PUT` lands after the note was created by an earlier attempt and
        then deleted (meta removed, tombstone written) resurrects a meta whose body is gone. This is the
        existing behaviour of every format version for a create delayed past a whole delete cycle (in v1 the
        meta lands without a body too); the sweep doesn't add to it. Readers skip such a note (a body 404,
-       below) and list it in the sync report.
-     - **Assumptions.** Listings and conditional writes are strongly consistent, which is what the
-       conditional-write canary checks. In the HEAD-verify fallback for stores without conditional writes
-       (§6.4), the commit is check-then-write and can overwrite a meta that changed after the check, the
-       fallback's known window. A body deleted in that window leaves the writer's own meta pointing at a
-       missing body, and the writer repairs it, since its local revision equals the meta's.
-     - **What it costs.** Uncommitted bodies whose tag still matches are kept. Each device has at most one
-       pending version per note; it deletes it on its next pass once the version is known to be
-       uncommitted, and resolves an in-doubt one on its next pass with a connection. Only a device that
-       never comes back leaves something behind: at most one body per note it was publishing, kept until
-       that note's meta changes or the note is deleted (for `new`: until a meta or a tombstone appears).
-       These bodies count toward the owner's quota.
+       below) and list it in the sync report, and its writer repairs it.
+     - **Assumptions.** Listings and conditional writes are strongly consistent, conditional requests are
+       atomic, and ETags are never reused for different bytes: exactly what the canary checks. On stores
+       without them, the sweep's tag and reference rules are off. The only body it then deletes belongs to
+       a note with a tombstone and no meta; a fallback commit that was checked before the deletion and
+       lands after it resurrects the note as a late create, and its writer repairs it. Writers' own
+       deletions stay on: a first-attempt 412 from the fallback's pre-write check sent no `PUT`, a
+       stale-tag `uploading` version was never committed, and step 6 removes a version whose meta the
+       writer just replaced. That version becomes referenced again only if its own publisher's commit lands
+       later still, which on such a store is the fallback's known lost-update window (it also discards the
+       writer's edit); the meta then carries a revision that its publisher and every peer that pulled it
+       hold, so repair restores the body.
+     - **What it costs.** On stores with atomic conditional writes, uncommitted bodies whose tag still
+       matches are kept. Each device has at most one pending version per note; it deletes it on its next
+       pass once the version can no longer be committed, and resolves an in-doubt one on its next pass
+       with a connection. Only a device that never comes back leaves something behind: at most one body
+       per note it was publishing, kept until that note's meta changes or the note is deleted (for `new`:
+       until a meta or a tombstone appears). An upload that lands after its writer abandoned it has a
+       stale tag and is swept. On stores **without** them (folder stores and S3 providers that fail the
+       canary; never a NoteIt server, which has no such mode) the leak is larger: every body that its
+       writer didn't delete stays until the note is deleted. That is one body per failed step-6 or
+       step-4 delete, per crash between steps 5 and 6, per in-doubt commit that ended in a 412, per
+       abandoned upload that landed late, per device that vanished mid-publish, and per old-binary
+       same-revision re-upload; all of them go once the note's tombstone is seen. Bodies count toward the
+       owner's quota where there is one.
    - **Missing committed body (repair).** If the current meta references a version that the listing
      lacks (lost storage, a partial restore), the device that wrote the meta republishes the note with a
      fresh version and the **same revision** when its local revision equals the meta's. Any other v2
@@ -717,7 +791,8 @@ Decisions:
      only v1 path that still writes is the same-revision branch of `resolveConflict`, when the v1 binary
      had pushed exactly the revision that was then converted: it re-uploads its RTFD bytes to
      `notes/<id>.body` and adopts the meta. That object is a legacy body under a noteit-doc meta, so the
-     orphan sweep removes it on a later pass, and no reader of the doc meta ever looks at it.
+     orphan sweep removes it on a later pass (on a store without atomic conditional writes it stays until
+     the note is deleted), and no reader of the doc meta ever looks at it.
 
 ### 3.5 Native converter
 
@@ -914,9 +989,20 @@ server. Neither mode gives anyone but the user's own devices the keys or the pla
 
 - `disk` (default): files under `/data/store/users/<USER-UUID>/<key>` (per-user namespaces, below); ETag = hex(MD5(bytes)) (unquoted), the same form S3 uses for single-part uploads, so backup tools such as rclone can verify copies with it;
   per-key async mutex; writes go temp file → `fsync` → `rename`; in-memory ETag index revalidated by
-  `stat` (mtime/size); single-instance only (documented). Conditional semantics identical to S3.
+  `stat` (mtime/size); single-instance only (documented). Conditional semantics identical to S3, and
+  atomic: the check and the rename happen under the key's mutex. Because the ETag is the MD5 of the
+  bytes, an equal ETag means identical bytes; a different write never gets an ETag issued before
+  (§3.4 item 9, "ABA and ETag reuse").
 - `s3` (upstream): server uses `@noteit/core`'s `S3Backend` (same SigV4 code the browser uses in direct
-  mode) with credentials from env (§8); supports any provider the native app supports.
+  mode) with credentials from env (§8). The upstream must have **atomic conditional writes and unique
+  ETags**: at startup the server runs the extended canary (§6.4) on
+  `<NOTEIT_S3_PREFIX>/server-canary/<UUID>` and refuses to start if the upstream ignores a precondition,
+  answers `501`/`NotImplemented`, or reissues an ETag (the log names the failed check). If the canary
+  can't reach the upstream, it retries every 10 seconds; until it passes, `/api/health` answers `503
+  {ok: false, mode: "server", reason: "storeUnavailable"}` and every other route answers 503. The
+  HEAD-verify fallback is never used by the server, so every client of a NoteIt server gets atomic
+  conditional writes. Like every NoteIt `S3Backend`, the driver sends conditional requests once and never
+  retries them (§3.4 item 9).
 
 **Per-user namespaces.** Every user has a fully isolated store. Each storage operation, REST or `/s3`, runs
 for exactly one authenticated user and reaches a driver only through one choke point,
@@ -964,13 +1050,14 @@ no "unlimited" setting, because one user must never be able to fill storage that
      - **definite no-op** (`preconditionFailed`, nothing was written): the reservation is dropped;
      - **anything else** (timeout, abort, network or driver error, a failed `head`) is **ambiguous**: the
        user is marked dirty, and the reservation is kept as *unresolved*, still counted and still holding
-       its in-flight slot.
+       its in-flight slot. The client gets REST `502 {error: "storeUnavailable"}` or `/s3` `500
+       InternalError`, never 412, so its engine treats the write as in doubt (§3.4 item 9).
 
   A DELETE (REST, `/s3`, the canary sweeper) needs no admission, reservation or slot. It runs the driver
   delete with the same timeout. On success or `notFound` it settles under the lock: if `head` finds the key
   absent its entry is removed, and if a concurrent PUT recreated it the entry is left for that PUT's settle.
-  Any other error marks the user dirty. A hung PUT therefore never blocks deletes, the canary sweeper, or
-  another user.
+  Any other error marks the user dirty and is returned as `502 storeUnavailable` / `500 InternalError`.
+  A hung PUT therefore never blocks deletes, the canary sweeper, or another user.
 - **Reconcile** is an authoritative recount, and it is the only thing that clears dirty or drops an
   unresolved reservation. It runs before the next PUT of a dirty user, at most once a minute per user
   (inside that minute such PUTs get the busy response), plus 15 minutes after every ambiguous result and
@@ -980,6 +1067,24 @@ no "unlimited" setting, because one user must never be able to fill storage that
   - drops each unresolved reservation whose request ended at least **15 minutes** (`AMBIGUOUS_GRACE`)
     before the listing began. Its outcome is in the listing by then, either landed or not;
   - clears dirty. Younger unresolved reservations stay counted until a later reconcile.
+
+  A reservation is therefore released only after **both** the grace has passed since its request ended
+  **and** a recount that began after that has run.
+- **Restarts.** Reservations and the dirty flags survive a restart in `/data/quota-state.json`, written
+  atomically (temp file → `fsync` → `rename`) by one writer queue, never under a per-user lock.
+  - A PUT's reservation is persisted after admission and before the driver call. If that write fails,
+    the reservation is dropped and the PUT fails with `502 storeUnavailable` before any I/O.
+  - A reservation turning unresolved and a dirty flag being set are persisted when they happen. Removals
+    after a settle may be written lazily: a stale entry only makes the next start more conservative.
+  - Settled sizes aren't persisted; the startup listing rebuilds them. The disk driver also removes
+    leftover temp files at startup, so a write interrupted by a crash never becomes an object.
+  - At startup every persisted reservation, whether it was in flight or unresolved when the server
+    stopped, becomes unresolved with its end time set to the **startup time**: a conservative stand-in
+    for the unknown moment the old process stopped, which can only be earlier. Its user is dirty, the
+    reservations keep counting and keep their in-flight slots, and that user's PUTs get the busy response
+    until a reconcile that began at least `AMBIGUOUS_GRACE` after startup has run. That reconcile drops
+    them. Users without persisted reservations are not affected. An unreadable or corrupt
+    `quota-state.json` makes every user dirty and busy in the same way (logged), never admitted early.
 - **What is guaranteed.**
   - **Hard ceiling:** a user's stored bytes stay ≤ `quotaBytes + 1 MiB + in-flight reservations`, and the
     in-flight term is at most 4 × 50 MB. The object count stays ≤ `maxObjects + 1000 + 4`.
@@ -993,10 +1098,13 @@ no "unlimited" setting, because one user must never be able to fill storage that
   - The disk driver's call returns only once its write is finished or rolled back (the abort is checked
     between steps, and the temp file is removed before it rejects), so a disk write can't land after its
     reservation is dropped.
-  - For upstream S3, the guarantee assumes the upstream applies or discards a request within 15 minutes
-    after the server's connection for it ended. A request applied later than that adds at most its own
-    size until the next recount (at most 6 hours), which then blocks further PUTs until the user is back
-    under the limit.
+  - These bounds hold across restarts, because reservations and their slots are persisted.
+  - **Assumption** (upstream S3 only): the upstream applies or discards every request within 15 minutes
+    (`AMBIGUOUS_GRACE`) after the server's connection for it ended, or after the server process stopped,
+    whichever came first. A request applied later than that adds at most its own size until the next
+    recount (at most 6 hours), which then blocks further PUTs until the user is back under the limit.
+    The disk driver needs no such assumption: its writes finish or roll back inside the call, and die
+    with the process.
 - **Control allowance.** For ordinary objects the limits are `quotaBytes` and `maxObjects`. For control
   objects (`manifest.json`, `tombstones/*`, `devices/*`, `.canary/*`), each capped at 64 KB, the limits are
   `quotaBytes + 1 MiB` and `maxObjects + 1000`. This small, bounded headroom lets a full user still connect,
@@ -1032,8 +1140,8 @@ relative to the signed-in user's namespace (§6.2):
 |---|---|---|
 | `GET /api/storage/list?prefix=inkwell/v1/&continuationToken=` | — | `200 {objects:[{key,etag,size}], nextContinuationToken?}` (etags unquoted, ≤1000/page) |
 | `GET /api/storage/object/<key>` | — | `200` bytes, header `ETag: "<etag>"` (quoted on the wire); `404` |
-| `PUT /api/storage/object/<key>` | bytes; `If-Match: "<etag>"` (bare accepted) or `If-None-Match: *` | `200 {etag}` (JSON, unquoted) + header `ETag: "<etag>"`; `412` precondition failed; `507` quotaExceeded; `429` busy |
-| `DELETE /api/storage/object/<key>` | optional `If-Match` | `204`; `404`; `412` |
+| `PUT /api/storage/object/<key>` | bytes; `If-Match: "<etag>"` (bare accepted) or `If-None-Match: *` | `200 {etag}` (JSON, unquoted) + header `ETag: "<etag>"`; `412` precondition failed; `507` quotaExceeded; `429` busy; `502` storeUnavailable (ambiguous: the write may have landed) |
+| `DELETE /api/storage/object/<key>` | optional `If-Match` | `204`; `404`; `412`; `502` storeUnavailable (ambiguous) |
 
 Keys must match `^inkwell/(v1/(manifest\.json|notebooks/[0-9A-F-]{36}\.json|notes/[0-9A-F-]{36}\.(meta|body)|bodies/[0-9A-F-]{36}\.[0-9A-F-]{36}\.([A-Z2-7]{16}|new)\.body|tombstones/[0-9A-F-]{36}\.json|devices/[0-9A-Za-z-]{1,64}\.json)|\.canary/[0-9A-F-]{36})$`
 (case-insensitive hex accepted for reads, writes uppercase-only). Body limit `NOTEIT_MAX_OBJECT_MB` (default 50).
@@ -1093,7 +1201,8 @@ Account and their own sync passphrase, so every Mac in a family syncs with its o
   - The only bucket is `noteit` (path-style `/s3/noteit/<key>`); any other bucket name gets
     `404 NoSuchBucket`. The bucket is virtual and always maps to the caller's own namespace, so two users
     who both use bucket `noteit` see disjoint stores. No request parameter can name another namespace.
-  - Over quota: `400 QuotaExceeded`; busy: `503 SlowDown` (§6.2).
+  - Over quota: `400 QuotaExceeded`; busy: `503 SlowDown`; an ambiguous driver result: `500 InternalError`,
+    never 412 (§6.2).
 - Must accept the canary (`inkwell/.canary/<UUID>` PUT/DELETE).
 - **Per-user keys.** Each user manages their own keys in Settings → Account → S3 Access Keys (up to 10):
   - Create: `POST /api/account/s3-keys {label}` returns `{accessKeyId, secretAccessKey}` once. The id is
@@ -1109,7 +1218,7 @@ Account and their own sync passphrase, so every Mac in a family syncs with its o
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `GET /api/health` | none | always 200 `{ok: true, mode: "server"\|"static", needsSetup}` |
+| `GET /api/health` | none | 200 `{ok: true, mode: "server"\|"static", needsSetup}`; 503 `{ok: false, mode: "server", reason: "storeUnavailable"}` until the upstream canary passed (§6.2) |
 | `GET /api/server-info` | none | `ServerInfo` (below) |
 | `POST /api/setup` | setup token | create the first admin (§7.1) |
 | `POST /api/login`, `POST /api/logout` | — / session | password login; logout |
@@ -1157,22 +1266,32 @@ driver, which ports the native one:
 - Before the first conditional request of a session it runs the native canary once
   (`S3Backend.swift:160-190`) on `inkwell/.canary/<UUID>`: a `PUT If-None-Match: *`; a second one, which must
   get 412; a `PUT` with the bogus `If-Match: "inkwell-canary-mismatch"`, which must get 412; and a `DELETE`
-  with the same bogus `If-Match`, which must get 412. Then it deletes the canary, and also deletes any
+  with the same bogus `If-Match`, which must get 412. v2 extends it with two steps that check the ETag
+  requirement of §3.4 item 9 ("different bytes never get a previously issued ETag"): a `PUT` of different
+  bytes with `If-Match: <first ETag>`, which must succeed with a **different** ETag, and then a `PUT` with
+  `If-Match: <first ETag>` again, which must get 412. Then it deletes the canary, and also deletes any
   other `inkwell/.canary/` object whose `LastModified` is more than 10 minutes old (left by a crashed
   client), so canaries never accumulate in a bucket without a server. A provider that ignores
   the write preconditions (or answers `501`/`400 NotImplemented`) is marked "conditional writes
-  unsupported"; one that ignores the delete precondition is marked "conditional deletes unsupported".
+  unsupported"; so is one that fails either ETag step (the same ETag twice, or the old ETag still
+  matching). One that ignores the delete precondition is marked "conditional deletes unsupported". The
+  backend reports `atomicConditionalWrites` (§3.4 item 9) only once the whole canary has passed in this
+  session.
   Whether a provider supports them is decided by this probe at runtime, never assumed per provider. If the
   canary itself fails (network, credentials), nothing is marked and it runs again next time.
 - When unsupported, writes use the native fallback (`S3Backend.swift:104-121`): a `HEAD` precondition check,
-  an unconditional `PUT`, and a `HEAD` that verifies the stored ETag (a mismatch is `preconditionFailed`).
-  Deletes check the precondition with `HEAD` and then delete unconditionally. As in native, this narrows the
-  race window but can't close it; Settings shows "Conditional Writes: Not Supported".
+  an unconditional `PUT`, and a `HEAD` that verifies the stored ETag. A failed pre-write check is
+  `preconditionFailed`; a failed verification after the `PUT` is `network` (in doubt, §3.4 item 9), because
+  the `PUT` was sent. Deletes check the precondition with `HEAD` and then delete unconditionally. As in
+  native, this narrows the race window but can't close it; Settings shows "Conditional Writes: Not
+  Supported", and the orphan sweep keeps every body of a live note (§3.4 item 9), so such a bucket grows
+  until notes are deleted.
 - Error classification is the native `classify` (`S3Backend.swift:285-305`): `501` or `400 NotImplemented`
   on a conditional request → unsupported (fallback); `RequestTimeTooSkewed` → `clockSkew` (the browser signs
   with the device clock); `InvalidAccessKeyId`/`SignatureDoesNotMatch`/401/403 → `unauthorized`; 404 →
   `notFound`; 412 and conditional 409 → `preconditionFailed`; 5xx → `network`; anything else →
-  `invalidResponse`. A CORS rejection (`TypeError`, no status) → `network`.
+  `invalidResponse`. A CORS rejection (`TypeError`, no status) → `network`. As in v2 native, only
+  unconditional requests are retried; a conditional one is sent once (§3.4 item 9).
 - Every request uses `fetch` with `cache: "no-store"`, `credentials: "omit"` and `redirect: "error"`, so no
   HTTP cache can serve a stale manifest or object.
 - A 2xx response without a readable `ETag` falls back to a `HEAD`, as native `upload` does. If that is also
@@ -1634,9 +1753,33 @@ remain open (§15) and are not v1 guarantees.
        the body PUT, after the body and before the meta, after the meta and before the state save, and
        after the state save and before the old-body delete. After each, a second device always reads a
        consistent note, no conflict copy appears, the next pass converges, and after one more pass of each
-       device (no clock advanced) exactly the referenced body remains. Each crash point is run twice when
-       the meta `PUT` is involved: once where the request landed and once where it didn't (in doubt, then
-       re-sent);
+       device (no clock advanced) exactly the referenced body remains. A crash before or after the body
+       `PUT` resumes with the **same** version (re-upload of the stored bytes, 2xx or 412), never a new
+       one. Each crash point is run twice when the meta `PUT` is involved: once where the request landed
+       and once where it didn't (in doubt, then re-sent);
+     - **lost response, then 412**: the meta `PUT`'s first attempt lands but its response is lost (in
+       doubt); the re-send gets 412. The writer `GET`s the meta, finds its own version, adopts the commit
+       and deletes nothing. The same with the replay inside one request (the backend applies the request,
+       then answers 412 as a replaying HTTP stack would). A first-attempt 412 whose `GET` shows another
+       version deletes the version; a 412 after an in-doubt attempt deletes nothing;
+     - **no transparent retry**: native `S3Backend` against a `URLProtocol` stub that drops the response
+       of a conditional `PUT` or `DELETE` after applying it sends exactly one request and throws `network`;
+       an unconditional `GET` is still retried; the HEAD-verify fallback reports a failed verification as
+       `network`;
+     - **ambiguous body upload**: the body `PUT` is held (in doubt) and released (a) before the next pass,
+       (b) during the next pass's re-upload and (c) after the next pass has re-uploaded and committed. In
+       every order there is one version, its re-upload gets 2xx or 412, the commit references it, and no
+       second version or stray body appears. With the meta moved on before the next pass (stale tag), the
+       writer drops the entry and deletes the version; a later release lands a stale-tag body, which the
+       sweep deletes on an atomic store and keeps on a non-atomic one;
+     - **fallback race**: on a backend without atomic conditional writes, writer A's check (`HEAD` sees
+       `E`) runs, then C commits `E1` and B's sweep runs, then A's unconditional `PUT` lands. B's sweep
+       deleted nothing, so A's meta references a body that exists and every device reads it. The same
+       trace on an atomic backend shows B deleting A's version and A's conditional commit failing with
+       412. On the non-atomic backend the sweep still deletes the bodies of a tombstoned note;
+     - **ETag reuse**: a backend that reissues an ETag for different bytes (or keeps accepting the old
+       ETag) fails the canary, reports no atomic conditional writes, and its sweep follows the non-atomic
+       rules;
      - **late-landing commit after the sweep**: writer A uploads a version built against meta `E` and its
        meta `PUT` is held by a test hook; device C commits an edit (`E1`); sweeper B deletes A's version;
        then A's held `PUT` (`If-Match: E`) is released and gets 412, and A republishes against `E1`. The
@@ -1653,7 +1796,7 @@ remain open (§15) and are not v1 guarantees.
      - **tags**: `baseTag` vectors; `new` bodies are kept while the note has neither meta nor tombstone and
        deleted once either exists (and isn't referencing them); a hashed-tag body whose note has no meta is
        deleted; each device has at most one pending version per note, also after repeated in-doubt
-       outcomes; a meta 412 deletes the uncommitted version;
+       outcomes; a first-attempt meta 412 deletes the uncommitted version;
      - a running v1 engine never deletes or rewrites anything under `bodies/`, and skips (doesn't wedge)
        notes whose legacy body is gone;
      - the orphan sweep never deletes a referenced version, a body whose tag matches the listed meta, or
@@ -1673,7 +1816,9 @@ remain open (§15) and are not v1 guarantees.
    `@nuxt/test-utils`. Also:
    - `connect` on a v1 store returns the "Open NoteIt on your Mac…" state and never writes;
    - `S3Backend` with a mocked `fetch`: the canary (supported, ignored `If-None-Match`, ignored `If-Match`,
-     `501`/`NotImplemented`), the HEAD-verify fallback, `cache: "no-store"` on every request, the
+     `501`/`NotImplemented`, a reissued ETag, an old ETag still matching), `atomicConditionalWrites` only
+     after a passed canary, conditional requests sent once (a lost response → `network`, no second
+     request), the HEAD-verify fallback (a failed verification → `network`), `cache: "no-store"` on every request, the
      missing-`ETag` HEAD fallback and `invalidResponse("ETag not exposed")`, and CORS `TypeError` → `network`;
    - the credential vault: round trip, wrong passphrase, nothing in `localStorage`/`sessionStorage`;
    - the engine crash and orphan-sweep scenarios listed under Swift, run from shared `engine-scenarios.json`
@@ -1707,7 +1852,15 @@ remain open (§15) and are not v1 guarantees.
      total exactly;
    - **hung PUT**: while one PUT hangs inside the driver, a DELETE of another key, the canary sweeper and
      another user's PUTs all complete and settle; the lock is never held for longer than one `head`;
-   - **ceiling**: randomized concurrent PUTs, DELETEs, timeouts and late landings (disk and S3 drivers,
+   - **restarts**: (1) four PUTs time out against an upstream that lands them later, then the server
+     restarts; the user's PUTs get busy, the four reservations still count, the writes land during the
+     grace, and only a reconcile that began a grace after startup releases them, with usage then equal
+     to the stored total; (2) one client request repeated several times (each attempt times out and lands
+     late, some after the restart) gives the same result and never exceeds the ceiling; a failing write
+     of `quota-state.json` refuses the PUT before any I/O; a disk-driver restart leaves no temp file;
+   - the server's upstream canary: an upstream that ignores preconditions or reissues ETags stops startup;
+     an ambiguous driver result reaches clients as `502 storeUnavailable` / `500 InternalError`, never 412;
+   - **ceiling**: randomized concurrent PUTs, DELETEs, timeouts, late landings and restarts (disk and S3 drivers,
      within the grace) never take stored bytes above `quotaBytes + 1 MiB + in-flight reservations` or
      objects above `maxObjects + 1004`, and with no ambiguous outcomes never above `quotaBytes + 1 MiB`;
    - last admin: disabling, demoting or deleting the last active admin (including yourself) returns 409,
@@ -1771,10 +1924,11 @@ remain open (§15) and are not v1 guarantees.
 |---|---|
 | NSAttributedString ⇄ doc fidelity gaps (foreign paste) | documented fallbacks; random-doc round-trip tests; read-only for unknown nodes |
 | Old native session keeps writing RTFD after upgrade (§2.12) | per-record `bodyFormat`, lazy reconversion, web read-only fallback |
-| A crash between body and meta writes wedges a noteit-doc note | versioned bodies written before the meta commits; in-doubt commits re-sent, never deleted; orphan sweep keyed to the base meta ETag, so late requests and clock skew can't make it delete a body that will be committed; repair path; crash tests at every step (§3.4 item 9) |
+| A crash between body and meta writes wedges a noteit-doc note | versioned bodies written before the meta commits; in-doubt uploads and commits re-sent with the same version, never deleted; conditional requests never transparently retried and every 412 confirmed with a `GET`; orphan sweep keyed to the base meta ETag and enabled only on stores whose canary proves atomic conditional writes and unique ETags, so late requests, retries and clock skew can't make it delete a body that will be committed; repair path; crash tests at every step (§3.4 item 9) |
 | A create lands after its note was deleted (meta back without a body) | pre-existing in every format version; readers skip and report it; documented (§3.4 item 9, "Late creates") |
 | An abandoned device leaves uncommitted bodies | at most one per note per device, kept only while the note's meta is unchanged; counted in quota (§3.4 item 9) |
-| One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper; conservative reservations, ambiguous results reconciled, in-flight cap (§6.2) |
+| Stores without atomic conditional writes (folder stores, S3 providers failing the canary) keep orphaned bodies | the sweep deletes only bodies of deleted notes there; writers still delete what they replace; the larger bound is documented (§3.4 item 9, "What it costs"); a NoteIt server never runs in this mode (§6.2) |
+| One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper; conservative reservations, ambiguous results reconciled, in-flight cap; reservations persisted across restarts (§6.2) |
 | "Remember on this device" lets served code decrypt without an unlock | off by default, explicit warning, honest threat model (§4.2, §11.1) |
 | Planner/engine drift between Swift and TS | exhaustive planner vectors + scenario traces in one CI |
 | Large inline images bloat bodies and re-uploads | size cap with warning; content-addressed attachments later |
