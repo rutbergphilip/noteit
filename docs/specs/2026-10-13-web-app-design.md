@@ -321,6 +321,27 @@ Decisions:
   derivation masks the whole code block, as native does for monospaced ranges. The cost is a custom TipTap
   node instead of the stock `CodeBlock`, which only allows unmarked text. Syntax highlighting is
   therefore out of scope for v1.
+- **What each `FormatCommand` does inside a code block.** These outcomes were verified against
+  `Editor/FormatCommand.swift:4-21` and `Editor/TextFormatter.swift`, and the web editor matches them:
+
+  | `FormatCommand` | Native effect in a code paragraph | inkwell-doc result |
+  |---|---|---|
+  | `bold`, `italic` | font trait on the monospaced font (`:99-115`) | `bold` / `italic` mark |
+  | `underline`, `strikethrough` | line attribute (`:117-130`) | mark |
+  | `inlineCode` | **no-op**: guarded by `blockKind != .code` (`:132-135`) | unchanged; the toolbar shows it off (`:72`) |
+  | `textColor(c)`, `textColor(nil)`, `customColor` (color panel → `NSTextView.changeColor`) | `.foregroundColor` set or removed | `textColor` mark set or removed |
+  | `highlight(c)`, `highlight(nil)`, `toggleHighlight` | `.backgroundColor` set or removed | `highlight` mark |
+  | `fontBigger`, `fontSmaller` | size ±1 clamped to 8–96 (`:169-182`) | `fontSize{delta}` relative to the code base size |
+  | `align(.left/.center/.right/.justified)` | paragraph alignment (`:472-486`) | `codeBlock.align` `left/center/right/justify` |
+  | `indent`, `outdent` | **no-op**: code paragraphs get an identity edit (`:423-433`) | unchanged. `codeBlock.indent` exists only because `block(.code)` keeps the level of an indented paragraph it converts (`:290-294`, `EditorStyles.swift:282-285`). |
+  | `list(_)`, `toggleCheckbox` | **no-op**: code paragraphs are filtered out (`:305-309`), and there is no checkbox marker | unchanged |
+  | `block(.code)` again | toggles the paragraphs back to body (`:273`); the font goes to body and keeps italic only (`:234-240`) | `paragraph`, keeps marks except bold-from-font |
+  | `block(.title/.heading/.subheading/.body/.quote)` | converts the paragraph out of code | that block |
+  | `link` | `.link` on the range (`:666-731`) | `link` mark |
+  | `image` | inline attachment at the caret (`:754-776`) | inline `image` / `attachment` inside `codeBlock` |
+  | `divider`, `block(.divider)`, `table(r,c)` | inserted *after* the paragraph (`blockInsertionPoint`, `:506-530`) | sibling block; the code block is unchanged |
+  | `clearFormatting` | removes colors/lines, sets the body font, resets the paragraph style to body with natural alignment (`:778-806`) | the paragraph **leaves** the code block: a plain `paragraph` without marks |
+  | `addRowAbove`, `addRowBelow`, `deleteRow` | table-only; no effect outside a table | unchanged |
 - Absent attrs mean defaults (`align` natural/left, `indent` 0).
 
 ### 3.4 Versioning and migration
@@ -417,6 +438,12 @@ Decisions:
    convert") plus the meta title/preview; pin/move/delete are allowed and re-push the opaque body bytes
    **without** `bodyFormat`. The web never converts bodies (it cannot parse RTFD).
 
+   **Wire rule (both implementations):** the envelope's `bodyFormat` key is either `"inkwell-doc/1"` or
+   **omitted**. It is never `null`, `""` or any legacy marker such as `"rtfd"`. Local stores keep exactly
+   the wire value: `undefined`/`nil` means legacy, and there is no internal `'rtfd'` tag that could leak.
+   The envelope builder (`encodeEnvelope` in TS; in Swift, the engine's envelope construction, which only assigns `bodyFormat` from the adapter's `RecordPayload`) rejects any other value
+   with an internal error and never publishes it.
+
 ### 3.5 Native converter
 
 New SwiftPM library target **`InkwellDoc`** (depends on AppKit; used by the `Inkwell` app):
@@ -437,8 +464,11 @@ Fidelity tests (`Tests/InkwellDocTests`):
 - **NSAS → doc → NSAS is semantically equal**: block kind, marker, level, alignment, marks, colors, links,
   attachment hash per paragraph range (not byte-equal RTFD).
 - Corpus: the app's seed notes, every `FormatCommand` applied to sample text, tables, mixed lists, images,
-  and a code-block set that applies every `FormatCommand` (marks, colors, highlight, bigger/smaller,
-  alignment, indent), a link and an inline image inside a code block.
+  and a code-block set that covers **every row of the §3.3 code-block table**, including the no-ops
+  (`inlineCode`, `indent`/`outdent`, lists, `toggleCheckbox`, table row commands), justify, `block(.code)`
+  toggling back to body, `clearFormatting` leaving the block, and a link and an inline image inside it.
+  The unit fixtures reproduce the attribute edits (tests can't import the app target). The real
+  `TextFormatter.perform(_:)` runs the same list in the §12.6 real-app gate.
 - Derivations: title/preview/tags computed from the NSAS equal those computed from the doc (feeds TS vectors).
 
 ### 3.6 Keep RTFD alongside? — No
@@ -595,7 +625,7 @@ needed: native adds an "Inkwell Server" provider preset (endpoint = server URL +
   (mode 0600) because SigV4 verification needs the plaintext secret. They grant storage access only (still
   ciphertext).
 
-**Other endpoints**: `GET /api/health`, `GET /api/server-info` → `{version, commit, sourceUrl, authMode, storage:
+**Other endpoints**: `GET /api/health` → `{ok: true, needsSetup}` (always 200, unauthenticated), `GET /api/server-info` → `{version, commit, sourceUrl, authMode, storage:
 "disk"|"s3", needsSetup}` (self-reported; carries no integrity claims, see §11.1), `POST /api/setup`,
 `POST /api/login`, `POST /api/logout`, `GET /api/session`, `GET|POST|DELETE /api/credentials`.
 
@@ -623,7 +653,10 @@ bring your own CORS bucket" mode is a configuration change, not a rewrite.
     - On success it writes the hash to `/data/config.json` with temp + rename and mode 0600, deletes
       `/data/setup-token`, and clears the in-memory token. The token is **single-use**: any later setup
       call returns 404.
-    - While setup is pending, every other `/api/*` and `/s3` route returns 503 `setupRequired`.
+    - While setup is pending, every `/api/*` and `/s3` route returns 503 `setupRequired`, **except**
+      `GET /api/health`, `GET /api/server-info` and `POST /api/setup`. Health must stay green so the
+      Docker `HEALTHCHECK` doesn't mark a fresh container unhealthy. It returns 200
+      `{ok: true, needsSetup}`.
 
   Session = signed, `HttpOnly; Secure; SameSite=Strict` cookie
   (`INKWELL_SESSION_SECRET` or generated), 30-day sliding; login rate limiting with exponential backoff per IP.
@@ -750,9 +783,22 @@ What v1 does provide (plan task 4.6), as **detection** only:
    listing the SHA-256 of every file in `.output/public`, as a GitHub release asset signed with the
    project's minisign key. The public key is committed in the repo (`scripts/inkwell-release.pub`) and
    printed in each release's notes.
-2. **Out-of-band verifier.** `node scripts/verify-web-client.mjs https://notes.example.com` runs from any
-   machine. It fetches `/api/server-info` for the claimed version, then the served `index.html`, every
-   referenced asset and `sw.js`. It compares them with the signed manifest and reports any difference.
+2. **Out-of-band verifier.** `node scripts/verify-web-client.mjs https://notes.example.com --expect <version>`
+   (or `--latest`) runs from any machine.
+   - **The expected version comes from the user, never from the server.** `--expect` takes it on the
+     command line. `--latest` reads the newest non-prerelease tag from the GitHub releases API for the
+     canonical repo. Without either flag, the verifier refuses to run.
+   - It downloads and verifies the signed manifest for the *expected* version. It checks that the
+     `version` field inside the signed manifest equals the expected version, so a renamed older manifest
+     is rejected.
+   - It fetches the served `index.html`, every referenced asset and `sw.js`, and compares them with that
+     manifest.
+   - `/api/server-info` is only read to report the claimed version. If it differs from the expected
+     version, or if the served files match a different signed release, the verifier fails with
+     `version mismatch (possible rollback)`. This blocks serving an older, legitimately signed release
+     with known vulnerabilities.
+   - `--allow-older` downgrades that failure to a warning, for operators who pin a release on purpose.
+     The files must still match the signed manifest of the version the server claims.
 
    The verifier can only detect *untargeted* tampering. A server that fingerprints clients could serve
    honest files to the verifier and malicious ones to the victim. The docs say so.
@@ -802,7 +848,7 @@ direct/proxy mode. It is recorded as future work and as an open question (§15),
        after that converts it. No revision is lost and no conflict copy is created. The reverse order is
        also tested: an old client editing *after* conversion gets 412 and then a non-fatal per-record
        `importConflictCopy` error. Its local edit survives.
-   - `InkwellDocTests` fidelity suite, including code blocks with every `FormatCommand`, a link and an image.
+   - `InkwellDocTests` fidelity suite, including the §3.3 code-block command table, a link and an image.
 4. **TS unit** (Vitest): core against all vectors; engine scenarios ported from the 53 `SyncEngineTests` using an
    `InMemoryBackend`; fast-check property tests for derivations and doc validation; server routes with
    `@nuxt/test-utils`.
@@ -819,8 +865,8 @@ direct/proxy mode. It is recorded as future work and as an open question (§15),
      `INKWELL_SYNC_CONFIG` pointing at the store.
      - It drives a real `NoteStore` through `NoteStoreSyncAdapter` and `SyncController`'s session code.
      - It authors notes through the real editor formatting path (`TextFormatter` applying every
-       `FormatCommand`, a table, every list kind, a code block with marks, a link, PNG and TIFF
-       attachments).
+       `FormatCommand` through `perform(_:)`, a table, every list kind, the full §3.3 code-block command
+       list, a link, PNG and TIFF attachments).
      - It syncs, then waits for the web side's step file. It pulls the web-authored notes and asserts on
        the resulting `NSAttributedString`: block sentinels, list markers and levels, fonts and traits,
        colors, alignment, attachments by hash.
