@@ -29,3 +29,7 @@ The app icon and menu bar glyph use the squiggle + pencil mark. The icon (a whit
 - The name is **NoteIt**. Exactly that casing everywhere user-facing; `noteit` in identifiers and file names.
 - The app stays native: system font, SF Symbols in app chrome, system semantic colours. The `brand-*` colours are for the icon, Quick Capture tile, About pane and marketing only.
 - HTML previews are visual specs. Rebuild natively in SwiftUI/AppKit; never embed web views.
+
+## Banners
+
+README banners and the GitHub social preview image live in [`.github/assets/`](../.github/assets/). The hero and strip banners are animated SVGs, with static PNG versions alongside.

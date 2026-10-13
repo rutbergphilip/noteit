@@ -1,12 +1,11 @@
-<!--
-  PLACEHOLDER: https://github.com/rutbergphilip/noteit is a placeholder repository URL.
-  The repository has not been created yet. Update the links in this file, CONTRIBUTING.md,
-  SECURITY.md, CODE_OF_CONDUCT.md and .github/ if it ends up somewhere else.
--->
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset=".github/assets/noteit-banner-hero-dark.svg">
+    <img alt="NoteIt: notes at the speed of thought. A native macOS notes app." src=".github/assets/noteit-banner-hero-light.svg" width="100%">
+  </picture>
+</p>
 
-# NoteIt
-
-**Notes at the speed of thought.** A native macOS notes app with Apple Notes speed, power-user formatting, capture from anywhere, and optional end-to-end encrypted sync through storage you own.
+A native macOS notes app with Apple Notes speed, power-user formatting, capture from anywhere, and optional end-to-end encrypted sync through storage you own.
 
 [![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![CI](https://github.com/rutbergphilip/noteit/actions/workflows/ci.yml/badge.svg)](https://github.com/rutbergphilip/noteit/actions/workflows/ci.yml)
@@ -20,6 +19,8 @@ NoteIt is a SwiftUI and AppKit app with no third-party dependencies. Your notes 
 > **Status:** working app, single user, macOS 14 Sonoma or later. There are no signed or notarized release builds yet, so build it from source. See [Known limitations](docs/known-limitations.md) for what's missing.
 
 ## Features
+
+![Quick Capture: capture anything, from anywhere](.github/assets/noteit-banner-capture.png)
 
 - **Capture from anywhere**
   - Global hotkeys for *Show / Hide NoteIt*, *New Note* and *Quick Capture*. They're unbound by default, you record your own, and they need no Accessibility permission.
@@ -175,3 +176,5 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 ## Design
 
 [`design/`](design/) contains NoteIt's brand guidelines, design tokens, component specs and icon assets. Start with [`design/README.md`](design/README.md).
+
+<p align="center"><img alt="NoteIt" src=".github/assets/noteit-banner-strip.svg" width="100%"></p>
