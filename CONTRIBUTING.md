@@ -33,7 +33,7 @@ Debug builds also accept launch arguments for screenshots, such as `--debug-open
 ## Tests
 
 ```sh
-# Unit tests (149 cases; the 3 live emulator tests are skipped)
+# Unit tests (the 3 live emulator tests are skipped unless configured)
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 
 # A subset
@@ -48,7 +48,7 @@ NOTEIT_LIVE_S3_ACCESS_KEY=… NOTEIT_LIVE_S3_SECRET=… NOTEIT_LIVE_S3_CREATE_BU
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter LiveS3EmulatorTests
 ```
 
-- The app layer has no XCTest target. It's covered by the debug-only `NOTEIT_SYNC_SELFTEST=1` and `NOTEIT_EDITOR_SELFTEST=1` modes. Always run them with `NOTEIT_DATA_DIR` set.
+- App-layer logic is tested in `Tests/NoteItTests/`. UI flows are also covered by the debug-only `NOTEIT_SYNC_SELFTEST=1` and `NOTEIT_EDITOR_SELFTEST=1` modes. Always run them with `NOTEIT_DATA_DIR` set.
 - CI runs `swift build`, `swift test` and `swift build -c release` on every push and pull request to `main`. It can't run the live emulator tests, because the macOS runners have no Docker. If your change touches the S3 backend, run `./scripts/live_s3_tests.sh` locally and say so in the PR.
 
 ## Code style

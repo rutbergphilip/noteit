@@ -95,7 +95,7 @@ Debug builds accept extra launch arguments and environment variables for screens
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 ```
 
-- 198 XCTest cases in `Tests/NoteItSyncTests/` and `Tests/NoteItTests/` cover the sync planner, the engine against in-memory and faulty backends, the folder backend (including a cross-process lock test), S3 request handling, SigV4 signing, list parsing, crypto, the migration from Inkwell, and how the app picks, migrates and seeds its library at launch.
+- 200 XCTest cases in `Tests/NoteItSyncTests/` and `Tests/NoteItTests/` cover the sync planner, the engine against in-memory and faulty backends, the folder backend (including a cross-process lock test), S3 request handling, SigV4 signing, list parsing, crypto, the migration from Inkwell, and how the app picks, migrates and seeds its library at launch.
 - `DEVELOPER_DIR` points SwiftPM at Xcode's toolchain without changing `xcode-select`.
 - **Live S3 tests** (`LiveS3EmulatorTests`) are skipped by default. With Docker running, this starts [Floci](https://github.com/floci-io/floci) emulators, runs the suite against each one, and removes the containers:
 
