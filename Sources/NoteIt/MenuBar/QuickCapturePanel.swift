@@ -38,6 +38,9 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
     private var keyMonitor: Any?
     private let model = QuickCaptureModel()
     private var shownAt = Date.distantPast
+    /// Bumped by every presentation, so a dismissal animation that finishes after the panel was
+    /// shown again doesn't hide it.
+    private(set) var presentationGeneration = 0
 
     var isVisible: Bool { panel?.isVisible ?? false }
 
@@ -79,22 +82,32 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
         }
         installKeyMonitor()
         model.focusToken += 1
+        beginPresentation()
+    }
+
+    func beginPresentation() {
+        presentationGeneration += 1
         QuickCaptureVisibility.shared.isCapturing = true
     }
 
     func dismiss() {
         guard let panel, panel.isVisible else { return }
         removeKeyMonitor()
-        QuickCaptureVisibility.shared.isCapturing = false
+        let generation = presentationGeneration
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.1
             panel.animator().alphaValue = 0
         }, completionHandler: {
-            MainActor.assumeIsolated {
-                panel.orderOut(nil)
-                panel.alphaValue = 1
-            }
+            MainActor.assumeIsolated { self.finishDismissal(panel, generation: generation) }
         })
+    }
+
+    /// Ends a dismissal unless the panel was presented again while it animated out.
+    func finishDismissal(_ panel: NSWindow, generation: Int) {
+        guard generation == presentationGeneration else { return }
+        panel.orderOut(nil)
+        panel.alphaValue = 1
+        QuickCaptureVisibility.shared.isCapturing = false
     }
 
     func save() {

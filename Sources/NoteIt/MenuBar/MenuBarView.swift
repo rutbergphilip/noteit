@@ -139,7 +139,8 @@ struct MenuBarView: View {
         guard let meta = store.captureNote(title: "", body: draft, in: draftNotebook) else { return }
         draft = ""
         let name = store.notebook(with: meta.notebookID)?.name
-        savedNotice = "Saved to \(name ?? "All Notes")"
+        // A note without a notebook has no destination to name (the sidebar has no row for it).
+        savedNotice = name.map { "Saved to \($0)" } ?? "Saved"
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
             MainActor.assumeIsolated { savedNotice = nil }
         }
