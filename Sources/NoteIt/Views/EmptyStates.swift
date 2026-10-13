@@ -12,7 +12,7 @@ struct EmptyStateView: View {
         VStack(spacing: 14) {
             ZStack {
                 Circle()
-                    .fill(tint.opacity(0.12))
+                    .fill(tint.opacity(Tokens.Opacity.tintGlyph))
                     .frame(width: Tokens.Size.emptyStateCircle, height: Tokens.Size.emptyStateCircle)
                 Image(systemName: symbol)
                     .font(.system(size: 36, weight: .light))
@@ -36,7 +36,7 @@ struct EmptyStateView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .tint(tint)
+                .tint(Tokens.Color.accent)
                 .padding(.top, 6)
             }
         }

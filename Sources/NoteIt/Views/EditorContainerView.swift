@@ -115,10 +115,11 @@ struct NotebookChip: View {
         HStack(spacing: 5) {
             Image(systemName: notebook?.symbol ?? "tray")
                 .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(tint)
             Text(notebook?.name ?? "No Notebook")
                 .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Tokens.Color.ink)
         }
-        .foregroundStyle(tint)
         .padding(.horizontal, 9)
         .padding(.vertical, 4)
         .background(Capsule().fill(tint.opacity(Tokens.Opacity.tintChip)))

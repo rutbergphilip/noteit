@@ -740,7 +740,7 @@ final class NoteItLayoutManager: NSLayoutManager {
             NSColor.white.setStroke()
             check.stroke()
         } else {
-            NSColor.tertiaryLabelColor.setStroke()
+            NSColor.secondaryLabelColor.setStroke()
             circle.lineWidth = 1.3
             circle.stroke()
         }

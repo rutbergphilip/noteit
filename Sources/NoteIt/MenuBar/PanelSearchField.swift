@@ -19,7 +19,7 @@ struct PanelSearchField: NSViewRepresentable {
         field.delegate = context.coordinator
         field.font = .systemFont(ofSize: 13)
         field.controlSize = .large
-        field.focusRingType = .none
+        field.focusRingType = .default
         field.sendsSearchStringImmediately = true
         field.sendsWholeSearchString = false
         (field.cell as? NSSearchFieldCell)?.cancelButtonCell?.isEnabled = true

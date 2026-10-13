@@ -98,9 +98,7 @@ struct MenuBarView: View {
                 NotebookMenuPicker(selection: $draftNotebook, store: store)
                 Spacer()
                 if let savedNotice {
-                    Label(savedNotice, systemImage: "checkmark.circle.fill")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Tokens.Color.success)
+                    SavedToast(message: savedNotice)
                         .transition(.opacity.combined(with: .move(edge: .trailing)))
                 }
                 IconButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open in Quick Capture") {
@@ -141,7 +139,7 @@ struct MenuBarView: View {
         guard let meta = store.captureNote(title: "", body: draft, in: draftNotebook) else { return }
         draft = ""
         let name = store.notebook(with: meta.notebookID)?.name
-        savedNotice = name.map { "Saved to \($0)" } ?? "Saved"
+        savedNotice = "Saved to \(name ?? "All Notes")"
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
             MainActor.assumeIsolated { savedNotice = nil }
         }
@@ -451,5 +449,25 @@ enum RelativeDate {
             return date.formatted(.dateTime.month(.abbreviated).day())
         }
         return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+}
+
+/// Save confirmation (`design/components/Toast.md`): capsule on surface-raised with a hairline.
+private struct SavedToast: View {
+    let message: String
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Tokens.Color.success)
+            Text(message)
+                .foregroundStyle(Tokens.Color.ink)
+                .lineLimit(1)
+        }
+        .font(.system(size: 11, weight: .medium))
+        .padding(.horizontal, Tokens.Space.s8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(Tokens.Color.surfaceRaised))
+        .overlay(Capsule().strokeBorder(Tokens.Color.hairline, lineWidth: Tokens.Size.hairline))
     }
 }

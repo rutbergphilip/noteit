@@ -39,7 +39,7 @@ private struct HotkeyRow: View {
                 .frame(width: 28, height: 28)
                 .background(
                     RoundedRectangle(cornerRadius: Tokens.Radius.tile, style: .continuous)
-                        .fill(LinearGradient(colors: [tint.opacity(0.85), tint], startPoint: .top, endPoint: .bottom))
+                        .fill(tint)
                 )
             VStack(alignment: .leading, spacing: 2) {
                 Text(action.title)

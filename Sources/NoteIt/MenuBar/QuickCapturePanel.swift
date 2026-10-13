@@ -264,7 +264,7 @@ struct QuickCaptureView: View {
 
             HStack(spacing: 10) {
                 HStack(spacing: 4) {
-                    Keycap(label: "esc", size: 10)
+                    Keycap(label: "esc")
                     Text("to dismiss — draft is kept")
                 }
                 .font(.system(size: 11))

@@ -253,7 +253,7 @@ enum ShortcutRecordingSession {
 /// Row of keycap-style chips, e.g. ⌃ ⌘ E.
 struct KeycapRow: View {
     let keys: [String]
-    var size: CGFloat = 11
+    var size: CGFloat = 12
 
     var body: some View {
         HStack(spacing: 3) {
@@ -264,24 +264,24 @@ struct KeycapRow: View {
     }
 }
 
+/// One key of a shortcut (`design/components/Keycap.md`): mono face on surface-raised with a hairline.
 struct Keycap: View {
     let label: String
-    var size: CGFloat = 11
+    var size: CGFloat = 12
 
     var body: some View {
         Text(label)
-            .font(.system(size: size, weight: .medium, design: .rounded))
-            .foregroundStyle(.primary)
+            .font(.system(size: size, weight: .medium, design: .monospaced))
+            .foregroundStyle(Tokens.Color.ink)
             .padding(.horizontal, label.count > 1 ? 5 : 0)
             .frame(minWidth: size + 8, minHeight: size + 7)
             .background(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-                    .shadow(color: .black.opacity(0.18), radius: 0, x: 0, y: 1)
+                    .fill(Tokens.Color.surfaceRaised)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.5)
+                    .strokeBorder(Tokens.Color.hairline, lineWidth: Tokens.Size.hairline)
             )
     }
 }

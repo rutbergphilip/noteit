@@ -86,8 +86,7 @@ struct NoteListView: View {
             EmptyStateView(
                 symbol: "magnifyingglass",
                 title: "No Results",
-                message: "No notes match “\(store.searchText)”.",
-                tint: .secondary
+                message: "No notes match “\(store.searchText)”."
             )
         } else {
             switch selection {
@@ -178,7 +177,7 @@ struct NoteRow: View {
             HStack(spacing: 6) {
                 Text(note.updatedAt, format: .relative(presentation: .named))
                     .font(Tokens.Font.cardMeta)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Tokens.Color.inkSecondary)
                 if let notebook {
                     Spacer(minLength: 4)
                     HStack(spacing: 4) {

@@ -121,8 +121,8 @@ struct ToolbarHoverBackground: View {
     var hovering: Bool
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(active ? Color.accentColor.opacity(0.16) : (hovering ? Color.primary.opacity(0.08) : Color.clear))
+        RoundedRectangle(cornerRadius: Tokens.Radius.toolbar, style: .continuous)
+            .fill(active || hovering ? Color.primary.opacity(0.08) : Color.clear)
     }
 }
 
