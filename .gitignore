@@ -8,3 +8,4 @@ build/
 .build-model/
 .selftest/
 .build-*/
+*.xcuserstate

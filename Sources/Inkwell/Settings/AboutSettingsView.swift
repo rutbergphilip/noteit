@@ -26,6 +26,9 @@ struct AboutSettingsView: View {
             Text("© 2026 Inkwell. Made for macOS.")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
+            Text("Open source · AGPL-3.0")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity)
         .frame(height: 300)
