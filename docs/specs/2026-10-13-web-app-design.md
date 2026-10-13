@@ -711,6 +711,60 @@ Decisions:
      version, conversion step 5) on every store.
 
      Orphans count toward the quota (§6.2) until they are removed.
+   - **Stranded bodies: meta refresh and release tombstones.** A body whose tag is still live (a hashed
+     tag equal to `baseTag(<listed meta ETag>)` and not referenced, or `new` with neither meta nor
+     tombstone) is kept by the sweep, and only its own device resolves it. If that device was wiped or
+     never comes back, the body would stay until somebody edits or deletes the note, and a user at the
+     quota limit can't edit. So any v2 device turns such bodies stale with a small **recovery write**
+     that needs no body upload. Only on stores with atomic conditional writes (the only stores where the
+     sweep deletes by tag; every NoteIt server is one).
+     - **Who and when.** Each v2 engine keeps `SyncState.strandedBodies: [<body key>: {firstSeenPass,
+       firstSeenAt}]` and a pass counter. A body enters when the sweep keeps it only because its tag is
+       live and it isn't this device's own pending version; it leaves when it disappears or stops being
+       kept for that reason, so the map holds at most the bodies currently listed. Once a body has been
+       stranded for **20 passes** of this device **and 24 hours** of its clock, the device writes the
+       recovery write for its note, at most **5 per pass**. The pass count and the clock decide only
+       *when* to recover, never whether a deletion is safe; a device that is still publishing just finds
+       its tag stale and republishes (below), so a wrong clock costs one extra upload, never a note.
+     - **Meta refresh** (hashed tag). Conditions: the note's listed meta is known (equals `base`), is a
+       noteit-doc envelope, the local record's revision equals `base.revision` (no unpushed edit), and this
+       device has no pending entry for the note. The device `GET`s the meta, requires the listed ETag,
+       decrypts and validates it, seals **the same envelope plaintext** again (a fresh random AES-GCM
+       nonce, so new bytes and a new ETag; revision, `bodyVersion`, `bodySHA256` and every other field
+       unchanged) and sends `PUT notes/<id>.meta` with `If-Match: <listed ETag>`. 2xx: `base.remoteMetaETag`
+       becomes the new ETag. 412 or in doubt: nothing to resolve; the meta moved on either way or the next
+       pass sees whichever ETag is current. It keeps no pending state, because both outcomes are correct.
+       The refreshed meta still references the same body, so condition (a) still keeps it, while every
+       body built against the old ETag now has a stale tag, its writer's `If-Match` can never succeed, and
+       the next sweep deletes it.
+     - **Release tombstone** (`new` tag). Conditions: the note has no meta, no tombstone and no local
+       record on this device. The device writes `tombstones/<id>` with `If-None-Match: *` and the
+       contents `{deletedAt: 0 (the 2001 reference date), deviceID, id, kind: note}`, without
+       `deletedMetaETag`. The sweep then deletes the note's bodies (a tombstone and no meta), and the same
+       device deletes the release tombstone with `If-Match` once no body and no meta of the note is
+       listed (it records the id in `strandedBodies` until then, so a crash doesn't strand the
+       tombstone). A release tombstone can't delete anybody's note: a device that still holds the
+       unsynced note sees a tombstone without a base and with a `deletedAt` older than any edit, so the
+       planner chooses `resurrectPush` (row 11, `SyncPlanner.swift:49`); a device without the note
+       forgets it (row 14, `:65`). If the stalled create's own commit lands after its body was deleted, that is
+       the "Late creates" case below, and its writer repairs it.
+     - **Readers of a refresh.** A refresh changes only the ETag, so it must not look like a remote edit.
+       When a v2 engine would pull or resolve a conflict for a note and the fetched envelope has
+       `base.revision` and `base.bodyVersion`, it only moves `base.remoteMetaETag` to the fetched ETag and
+       plans again with the remote unchanged: a pull becomes `.none` (no body download), a conflict
+       becomes a push of the local edit against the new ETag. A device with an `uploading` entry built
+       against the old ETag finds its tag stale, deletes its version and republishes (as above).
+     - **Quota.** A refresh is admitted under the control allowance (§6.2), and its settle credits the
+       replaced meta, whose size is the same. A release tombstone is a control object. Deleting is always
+       allowed. So a user at the limit gets the space of stranded bodies back without freeing anything
+       first.
+     - **v1 binaries are not affected.** A v1 binary can't open a v2 store. One whose session was already
+       running before the upgrade (§2.12 fact 1) only ever meets a refresh on a noteit-doc meta, which it
+       already can't read: its pull of such a note is skipped and an edit of it is retried every pass
+       (item 7, "Old (v1) client"; §2.12 fact 2), and a refresh changes neither. A release tombstone
+       concerns a note it has never seen (row 14). Legacy metas are never refreshed. A stranded body under a legacy meta (a conversion abandoned by a vanished
+       device) goes stale when another device converts the note, which every v2 device does automatically;
+       at the quota limit that conversion has to wait until the user frees space.
    - **Why the sweep can't delete a body that will be committed.** This argument applies to stores with
      atomic conditional writes. A body becomes referenced only through the conditional meta write of the
      publish that created it, or of a re-send with the same tag. So it doesn't matter how late that write
@@ -725,6 +779,11 @@ Decisions:
      - Condition (a) covers the publish that did commit: its version is the current `bodyVersion`.
      - Versions are never reused: every new publish, repair and conversion picks a fresh one, and a device
        re-sends only the version it has pending.
+     - Recovery writes keep this. A meta refresh is a conditional meta write that keeps the referenced
+       version, so (a) still protects it, and its new ETag was never issued before (fresh nonce, and the
+       ETag requirement under "ABA" below), so a tag built against an earlier ETag matches again only if old meta bytes are copied back (ABA).
+       A release tombstone makes only `new` bodies of a note without a meta deletable; a create that
+       commits after that is a late create (below).
      - A retried or replayed request can't turn a landed commit into a deletion: NoteIt sends conditional
        requests once, and every 412 is checked with a `GET` before the writer deletes anything. After an
        in-doubt attempt the writer deletes nothing and leaves the version to the rules above.
@@ -767,10 +826,11 @@ Decisions:
      - **What it costs.** On stores with atomic conditional writes, uncommitted bodies whose tag still
        matches are kept. Each device has at most one pending version per note; it deletes it on its next
        pass once the version can no longer be committed, and resolves an in-doubt one on its next pass
-       with a connection. Only a device that never comes back leaves something behind: at most one body
-       per note it was publishing, kept until that note's meta changes or the note is deleted (for `new`:
-       until a meta or a tombstone appears). An upload that lands after its writer abandoned it has a
-       stale tag and is swept. On stores **without** them (folder stores and S3 providers that fail the
+       with a connection. Only a device that never comes back (or is wiped) leaves something behind: at
+       most one body per note it was publishing, kept until that note's meta changes, the note is deleted,
+       or another device's recovery write makes it stale (after 20 of that device's passes and 24 hours,
+       above). The one exception is a body under a legacy meta at the quota limit, which waits for the
+       conversion. An upload that lands after its writer abandoned it has a stale tag and is swept. On stores **without** them (folder stores and S3 providers that fail the
        canary; never a NoteIt server, which has no such mode) the leak is larger: every body that its
        writer didn't delete stays until the note is deleted. That is one body per failed step-6 or
        step-4 delete, per crash between steps 5 and 6, per in-doubt commit that ended in a 412, per
@@ -998,8 +1058,13 @@ server. Neither mode gives anyone but the user's own devices the keys or the pla
   ETags**: at startup the server runs the extended canary (§6.4) on
   `<NOTEIT_S3_PREFIX>/server-canary/<UUID>` and refuses to start if the upstream ignores a precondition,
   answers `501`/`NotImplemented`, or reissues an ETag (the log names the failed check). If the canary
-  can't reach the upstream, it retries every 10 seconds; until it passes, `/api/health` answers `503
-  {ok: false, mode: "server", reason: "storeUnavailable"}` and every other route answers 503. The
+  can't reach the upstream, the process keeps running and retries every 10 seconds; until it passes,
+  readiness (`/api/health`) answers `503 {ok: false, mode: "server", reason: "storeUnavailable"}`, every
+  other route except liveness (`/api/health/live`) answers 503, and liveness stays 200. Later, while the
+  upstream is unavailable (3 consecutive upstream requests failed with a network error, timeout or 5xx),
+  readiness answers the same 503 and a probe (a one-key listing of the server prefix) runs every 10
+  seconds; the first success makes it ready again. Routes keep serving in that state and report their
+  own errors (`502 storeUnavailable`). Neither state ever restarts the process. The
   HEAD-verify fallback is never used by the server, so every client of a NoteIt server gets atomic
   conditional writes. Like every NoteIt `S3Backend`, the driver sends conditional requests once and never
   retries them (§3.4 item 9).
@@ -1058,8 +1123,8 @@ no "unlimited" setting, because one user must never be able to fill storage that
   absent its entry is removed, and if a concurrent PUT recreated it the entry is left for that PUT's settle.
   Any other error marks the user dirty and is returned as `502 storeUnavailable` / `500 InternalError`.
   A hung PUT therefore never blocks deletes, the canary sweeper, or another user.
-- **Reconcile** is an authoritative recount, and it is the only thing that clears dirty or drops an
-  unresolved reservation. It runs before the next PUT of a dirty user, at most once a minute per user
+- **Reconcile** is an authoritative recount, and it is the only thing that clears dirty, drops an
+  unresolved reservation or ends a quarantine (see "Restarts"). It runs before the next PUT of a dirty user, at most once a minute per user
   (inside that minute such PUTs get the busy response), plus 15 minutes after every ambiguous result and
   every 6 hours. It notes a settle counter, lists the namespace without the lock (bounded by the timeout),
   and then, under the lock:
@@ -1070,21 +1135,48 @@ no "unlimited" setting, because one user must never be able to fill storage that
 
   A reservation is therefore released only after **both** the grace has passed since its request ended
   **and** a recount that began after that has run.
-- **Restarts.** Reservations and the dirty flags survive a restart in `/data/quota-state.json`, written
-  atomically (temp file → `fsync` → `rename`) by one writer queue, never under a per-user lock.
+- **Restarts.** Reservations, dirty flags and quarantines survive a restart in `/data/quota-state.json`.
+  - **Contents, bounded.** The file holds only what can't be rebuilt from a listing:
+    `{version: 1, quarantine?: {pending: true}, users: {<id>: {dirty?, quarantine?, reservations?}}}`. A
+    user appears only while they have a reservation (in flight or unresolved), are dirty, or are
+    quarantined; settled sizes are never stored (the startup listing rebuilds them). Each user has at
+    most 4 reservations, since unresolved ones keep their in-flight slot, so the file is at most a fixed
+    header plus about 1 KiB per such user, however many PUTs have settled before.
+  - **Writing.** Every write serializes the current in-memory state in full (temp file → `fsync` →
+    `rename`), from one writer queue that coalesces requests and never runs under a per-user lock. So
+    every write is also a compaction: whatever settled, was reconciled or was deleted since the last
+    write is gone from the file. A write is requested when a reservation is admitted, turns unresolved
+    or is dropped by a settle, when dirty is set or cleared, when a quarantine starts or ends, and when
+    an account is deleted (its entry is removed at once, before the namespace purge).
   - A PUT's reservation is persisted after admission and before the driver call. If that write fails,
-    the reservation is dropped and the PUT fails with `502 storeUnavailable` before any I/O.
-  - A reservation turning unresolved and a dirty flag being set are persisted when they happen. Removals
-    after a settle may be written lazily: a stale entry only makes the next start more conservative.
-  - Settled sizes aren't persisted; the startup listing rebuilds them. The disk driver also removes
-    leftover temp files at startup, so a write interrupted by a crash never becomes an object.
-  - At startup every persisted reservation, whether it was in flight or unresolved when the server
-    stopped, becomes unresolved with its end time set to the **startup time**: a conservative stand-in
-    for the unknown moment the old process stopped, which can only be earlier. Its user is dirty, the
-    reservations keep counting and keep their in-flight slots, and that user's PUTs get the busy response
-    until a reconcile that began at least `AMBIGUOUS_GRACE` after startup has run. That reconcile drops
-    them. Users without persisted reservations are not affected. An unreadable or corrupt
-    `quota-state.json` makes every user dirty and busy in the same way (logged), never admitted early.
+    the reservation is dropped and the PUT fails with `502 storeUnavailable` before any I/O. Writes for
+    removals may be coalesced with later ones: a stale entry only makes the next start more
+    conservative.
+  - The disk driver removes leftover temp files at startup, so a write interrupted by a crash never
+    becomes an object.
+  - **Startup with a readable file.** Every persisted reservation, whether it was in flight or
+    unresolved when the server stopped, becomes unresolved with its end time set to the **startup
+    time**: a conservative stand-in for the unknown moment the old process stopped, which can only be
+    earlier. Its user is dirty, the reservations keep counting and keep their in-flight slots, and that
+    user's PUTs get the busy response until a reconcile that began at least `AMBIGUOUS_GRACE` after
+    startup has run. That reconcile drops them. Users without persisted reservations are not affected.
+  - **Quarantine (unreadable or corrupt file).** The server can't know which writes were in flight, so it
+    sets a global `quarantineUntil = startup + AMBIGUOUS_GRACE` (monotonic clock) and copies it to every
+    user that exists at startup, in any status, as their own `quarantineUntil`, then persists
+    `quarantine: {pending: true}` and each such user's `quarantine` flag (logged). The quarantine is a
+    separate check from dirty and from reservations:
+    - before `quarantineUntil` the user's PUTs get the busy response, without a reconcile;
+    - from `quarantineUntil` on, the user needs a reconcile that **began at or after** `quarantineUntil`;
+      the next PUT runs it (rate-limited like any reconcile), and when it completes the user's
+      quarantine ends and is removed from the file. A reconcile that began earlier doesn't end it;
+    - a user created during the quarantine has a new, empty namespace that no earlier request can
+      target, so they get no `quarantineUntil` and are admitted at once; the global value only decides
+      which users exist at startup and is cleared, with the file's `quarantine` marker, once no user is
+      quarantined any more;
+    - a restart while `quarantine` or any user's flag is still persisted quarantines those users again
+      with a full `AMBIGUOUS_GRACE` from the new startup; wall-clock times are never compared across
+      processes.
+
 - **What is guaranteed.**
   - **Hard ceiling:** a user's stored bytes stay ≤ `quotaBytes + 1 MiB + in-flight reservations`, and the
     in-flight term is at most 4 × 50 MB. The object count stays ≤ `maxObjects + 1000 + 4`.
@@ -1098,7 +1190,10 @@ no "unlimited" setting, because one user must never be able to fill storage that
   - The disk driver's call returns only once its write is finished or rolled back (the abort is checked
     between steps, and the temp file is removed before it rejects), so a disk write can't land after its
     reservation is dropped.
-  - These bounds hold across restarts, because reservations and their slots are persisted.
+  - These bounds hold across restarts, because reservations and their slots are persisted. If the file
+    is lost, the quarantine admits no PUT for any existing user until a recount that began after the
+    old process's requests (at most 4 per user, each admitted within the bounds) have landed or been
+    discarded, so the bound still holds.
   - **Assumption** (upstream S3 only): the upstream applies or discards every request within 15 minutes
     (`AMBIGUOUS_GRACE`) after the server's connection for it ended, or after the server process stopped,
     whichever came first. A request applied later than that adds at most its own size until the next
@@ -1106,9 +1201,13 @@ no "unlimited" setting, because one user must never be able to fill storage that
     The disk driver needs no such assumption: its writes finish or roll back inside the call, and die
     with the process.
 - **Control allowance.** For ordinary objects the limits are `quotaBytes` and `maxObjects`. For control
-  objects (`manifest.json`, `tombstones/*`, `devices/*`, `.canary/*`), each capped at 64 KB, the limits are
-  `quotaBytes + 1 MiB` and `maxObjects + 1000`. This small, bounded headroom lets a full user still connect,
-  run the canary and sync deletions. It is not an exemption: no mix of objects takes a user past the hard
+  objects (`manifest.json`, `tombstones/*`, `devices/*`, `.canary/*`, and a `PUT` of
+  `notes/<id>.meta` with `If-Match` on an existing key, which covers the meta refresh of §3.4 item 9),
+  each capped at 64 KB, the limits are `quotaBytes + 1 MiB` and `maxObjects + 1000`. This small, bounded
+  headroom lets a full user still connect, run the canary, sync deletions and reclaim stranded bodies.
+  (The server can't tell a refresh from a metadata-only edit, so both are admitted; either way the
+  object is at most 64 KB and replaces one of the same key. A meta `PUT` above 64 KB, or one without
+  `If-Match`, is an ordinary object rather than a rejected control object.) It is not an exemption: no mix of objects takes a user past the hard
   ceiling above.
 - **Canaries.** At most 4 `.canary/*` objects may exist per user; another PUT is rejected with
   `quotaExceeded`. Clients delete their canary right after the probe, as native does today. The server also
@@ -1120,7 +1219,7 @@ no "unlimited" setting, because one user must never be able to fill storage that
   - Native classifies the unknown 400 code as `invalidResponse`, which is also a non-fatal per-record error
     (`S3Backend.swift` `classify`; `SyncEngine.swift:280-290`).
   - The web shows "Storage full — delete notes or ask your admin for more space" in the sync details.
-- Busy (in-flight cap or a rate-limited reconcile): `/s3` returns `503 SlowDown`, which rclone retries and
+- Busy (in-flight cap, a rate-limited reconcile, or a quarantine): `/s3` returns `503 SlowDown`, which rclone retries and
   native classifies as `network` (retried on the next pass); REST returns `429 {error: "busy"}` with
   `Retry-After`, which `@noteit/core` maps to `network`. The sync engines upload one object at a time, so
   only parallel tools such as rclone (4 transfers by default) ever meet the cap.
@@ -1218,7 +1317,8 @@ Account and their own sync passphrase, so every Mac in a family syncs with its o
 
 | Route | Auth | Purpose |
 |---|---|---|
-| `GET /api/health` | none | 200 `{ok: true, mode: "server"\|"static", needsSetup}`; 503 `{ok: false, mode: "server", reason: "storeUnavailable"}` until the upstream canary passed (§6.2) |
+| `GET /api/health/live` | none | liveness: always 200 `{ok: true}` while the process runs, including its upstream retry loop; the Docker `HEALTHCHECK` target |
+| `GET /api/health` | none | readiness: 200 `{ok: true, mode: "server"\|"static", needsSetup}`; 503 `{ok: false, mode: "server", reason: "storeUnavailable"}` before the upstream canary passed and while the upstream is unavailable (§6.2) |
 | `GET /api/server-info` | none | `ServerInfo` (below) |
 | `POST /api/setup` | setup token | create the first admin (§7.1) |
 | `POST /api/login`, `POST /api/logout` | — / session | password login; logout |
@@ -1240,7 +1340,8 @@ users.
 1. `noteit-web-static-<version>.tar.gz`, a release asset for any static host (Caddy, nginx, Cloudflare
    Pages, an S3 static website). It contains `noteit-client.json` = `{"mode": "direct"}`.
 2. Inside the Docker image. With `NOTEIT_MODE=static` the image serves only those files plus
-   `GET /api/health`: no other `/api` routes, no `/s3`, nothing written to `/data`. The server generates
+   `GET /api/health` and `GET /api/health/live`: no other `/api` routes, no `/s3`, nothing written to
+   `/data`. The server generates
    `noteit-client.json` from `NOTEIT_MODE` (`direct` in static mode, `server` otherwise).
 
 `noteit-client.json` is the only runtime configuration: `{mode: "server" | "direct", sourceUrl?: string}`,
@@ -1417,9 +1518,10 @@ this (§11.1).
     identity and consumes the token under the same mutex. The allowed-groups rule doesn't apply here,
     because the token already proves control of the server.
   - While setup is pending, every `/api/*` and `/s3` route returns 503 `setupRequired`, **except**
-    `GET /api/health`, `GET /api/server-info`, `POST /api/setup`, `POST /api/oidc/start` (setup intent
-    only) and `GET /api/oidc/callback`. Health stays green so the Docker `HEALTHCHECK` doesn't mark a fresh
-    container unhealthy.
+    `GET /api/health/live`, `GET /api/health`, `GET /api/server-info`, `POST /api/setup`,
+    `POST /api/oidc/start` (setup intent only) and `GET /api/oidc/callback`. Both health routes are exempt
+    from the setup gate and report setup only as `needsSetup`, so the Docker `HEALTHCHECK` doesn't mark a
+    fresh container unhealthy.
   - **Pre-seeding.** If `NOTEIT_PASSWORD_HASH` (or `NOTEIT_PASSWORD_HASH_FILE` for Docker secrets) is set
     and no account exists at startup, the server creates the admin `NOTEIT_ADMIN_USERNAME` (default
     `admin`) with that hash and skips setup: `needsSetup` is false and `/api/setup` returns 404. Once
@@ -1522,7 +1624,8 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 
 - One image `ghcr.io/rutbergphilip/noteit` built from `web/Dockerfile`: multi-stage, `node:24-alpine`,
   `pnpm build` → `.output/`, runs `node .output/server/index.mjs` as uid 1000, `PORT=3000`, `VOLUME /data`,
-  `HEALTHCHECK` → `/api/health`. The same image serves the static direct-mode client with
+  `HEALTHCHECK` → `/api/health/live` (liveness, so an upstream outage never gets the container
+  restarted; orchestrators that route traffic use `/api/health` as readiness). The same image serves the static direct-mode client with
   `NOTEIT_MODE=static` (§6.4). The static tarball `noteit-web-static-<version>.tar.gz` is a release asset
   built from the same commit.
 - `docker-compose.yml`: one service, named volume `noteit-data:/data`, env file; documented reverse-proxy
@@ -1797,6 +1900,19 @@ remain open (§15) and are not v1 guarantees.
        deleted once either exists (and isn't referencing them); a hashed-tag body whose note has no meta is
        deleted; each device has at most one pending version per note, also after repeated in-doubt
        outcomes; a first-attempt meta 412 deletes the uncommitted version;
+     - **stranded bodies after repeated wipes** (§3.4 item 9): on an atomic backend with the user's quota
+       full, device W publishes a version of note N against meta `E` and is wiped before its commit, five
+       times (five fresh installs, five live-tag bodies), and also uploads a `new` body for a note M and is
+       wiped. Device B keeps them for 19 passes, and also after 20 passes within 24 hours; after 20 passes
+       and 24 hours it refreshes N's meta (same plaintext, new ETag, admitted by the server at full quota)
+       and writes a release tombstone for M; the next sweep deletes all six bodies and the server's usage
+       drops by their size; B then deletes M's release tombstone. N reads the same on every device, no
+       conflict copy appears, and a device D with an unpushed edit of N pushes it against the refreshed
+       ETag without a conflict copy. Variants: B refreshes no more than 5 notes per pass; B skips the
+       refresh while it has its own pending entry or an unpushed edit of N; a refresh that gets 412 or is
+       in doubt leaves no state behind; a still-alive W whose entry went stale deletes its version and
+       republishes; a device holding M unsynced resurrects it over the release tombstone instead of
+       deleting it; legacy metas are never refreshed; a running v1 engine is unaffected;
      - a running v1 engine never deletes or rewrites anything under `bodies/`, and skips (doesn't wedge)
        notes whose legacy body is gone;
      - the orphan sweep never deletes a referenced version, a body whose tag matches the listed meta, or
@@ -1858,8 +1974,22 @@ remain open (§15) and are not v1 guarantees.
      to the stored total; (2) one client request repeated several times (each attempt times out and lands
      late, some after the restart) gives the same result and never exceeds the ceiling; a failing write
      of `quota-state.json` refuses the PUT before any I/O; a disk-driver restart leaves no temp file;
+   - **bounded quota state**: after thousands of settled PUTs and DELETEs and the creation and deletion of
+     hundreds of accounts, `quota-state.json` holds only users with a reservation, a dirty flag or a
+     quarantine, and its size stays within the header plus a fixed amount per such user; with nothing in
+     flight and no dirty user it is the bare header. Deleting an account removes its entry;
+   - **quarantine**: a corrupt `quota-state.json` at startup quarantines every existing user; a PUT just
+     before `quarantineUntil` gets busy with no reconcile, a PUT just after it runs a reconcile that began
+     after the deadline and is then admitted, and a reconcile that began before the deadline doesn't end
+     the quarantine; a user created during the quarantine is admitted at once; a restart during the
+     quarantine starts a full grace again;
    - the server's upstream canary: an upstream that ignores preconditions or reissues ETags stops startup;
      an ambiguous driver result reaches clients as `502 storeUnavailable` / `500 InternalError`, never 412;
+   - **liveness and readiness**: with the upstream down at startup, `/api/health/live` answers 200 and
+     `/api/health` 503 while the retry loop runs; when the upstream comes back, readiness turns 200 with
+     the same process (no restart); a later outage turns readiness 503 and back to 200 again, liveness
+     staying 200 throughout; both health routes answer during setup; in Docker the container stays
+     `healthy` with restart count 0 across the outage;
    - **ceiling**: randomized concurrent PUTs, DELETEs, timeouts, late landings and restarts (disk and S3 drivers,
      within the grace) never take stored bytes above `quotaBytes + 1 MiB + in-flight reservations` or
      objects above `maxObjects + 1004`, and with no ambiguous outcomes never above `quotaBytes + 1 MiB`;
@@ -1928,7 +2058,9 @@ remain open (§15) and are not v1 guarantees.
 | A create lands after its note was deleted (meta back without a body) | pre-existing in every format version; readers skip and report it; documented (§3.4 item 9, "Late creates") |
 | An abandoned device leaves uncommitted bodies | at most one per note per device, kept only while the note's meta is unchanged; counted in quota (§3.4 item 9) |
 | Stores without atomic conditional writes (folder stores, S3 providers failing the canary) keep orphaned bodies | the sweep deletes only bodies of deleted notes there; writers still delete what they replace; the larger bound is documented (§3.4 item 9, "What it costs"); a NoteIt server never runs in this mode (§6.2) |
-| One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper; conservative reservations, ambiguous results reconciled, in-flight cap; reservations persisted across restarts (§6.2) |
+| One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper; conservative reservations, ambiguous results reconciled, in-flight cap; reservations persisted across restarts in a bounded, compacted file; a quarantine after a lost state file (§6.2) |
+| A wiped or vanished device leaves bodies with a live tag, and a full user can't edit to make them stale | any v2 device's body-free meta refresh (or release tombstone for `new`) after 20 passes and 24 hours, admitted under the control allowance; the sweep then deletes them (§3.4 item 9) |
+| An upstream outage gets the container restarted in a loop | separate liveness (`/api/health/live`, the `HEALTHCHECK`) and readiness (`/api/health`) (§6.2, §8) |
 | "Remember on this device" lets served code decrypt without an unlock | off by default, explicit warning, honest threat model (§4.2, §11.1) |
 | Planner/engine drift between Swift and TS | exhaustive planner vectors + scenario traces in one CI |
 | Large inline images bloat bodies and re-uploads | size cap with warning; content-addressed attachments later |
