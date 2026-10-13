@@ -155,6 +155,9 @@ Implements the plan's 17-row table with these changes:
 - **Staged editor snapshots.** Editor commits made during a SwiftUI update are staged in `NoteStore`. Before applying a remote change to a note, the adapter commits staged and open-editor edits; if the revision moved since the engine read it, the apply is refused and the next pass resolves it as a conflict.
 - **Scheduling.** Passes run at `.utility` QoS: every 60 s while active or with a visible window, 600 s otherwise, 2 s after local edits (10 s max), 5 s after wake, and on Sync Now. Failures back off from 15 s to 10 min. Nothing is scheduled while sync isn't configured.
 - **S3 without conditional writes.** On 501/`NotImplemented`, the backend falls back to HEAD-check, PUT, HEAD-verify, and reports a lost race when the verify fails.
+- **Conditional-request canary.** Some servers accept `If-Match` / `If-None-Match` but ignore them; Floci's GCS emulator does, as does GCS's S3-compatible XML API, which uses `x-goog-if-generation-match` instead. Before its first conditional request, `S3Backend` writes a throwaway `inkwell/.canary/<uuid>` object. It then repeats the create with `If-None-Match: *`, writes with a bogus `If-Match`, and deletes with a bogus `If-Match`. Any of these succeeding switches writes or deletes to the verified fallback. The probe runs once per backend instance, and runs again after a network or auth failure.
+- **Google Cloud preset.** `storage.googleapis.com`, region `auto`, path-style addressing, with HMAC interoperability keys. It goes through the same SigV4 S3 path; the canary routes it onto the fallback if needed.
+- **Emulator testing.** `LiveS3EmulatorTests` plus `scripts/live_s3_tests.sh` run against Floci (AWS S3 on :4566, GCS on :4588) in Docker. Floci AWS honours conditional requests natively; Floci GCS passes using the fallback.
 
 ### Remaining known limitations
 - Folder sync through a sync tool (iCloud Drive, Dropbox) relies on advisory locking that doesn't span Macs; races are caught later through sidecar import rather than prevented.
@@ -162,4 +165,4 @@ Implements the plan's 17-row table with these changes:
 - No WebDAV backend, no side-by-side conflict compare view, no Trash UI.
 - No passphrase change or switching encryption on/off without a new store.
 - No iOS app.
-- Unit tests cover `InkwellSync` only (142 tests); the app layer relies on the debug `INKWELL_SYNC_SELFTEST` mode.
+- Unit tests cover `InkwellSync` only (149 tests, plus 3 opt-in live emulator tests); the app layer relies on the debug `INKWELL_SYNC_SELFTEST` mode.

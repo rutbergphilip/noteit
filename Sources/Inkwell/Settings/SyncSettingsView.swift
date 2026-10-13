@@ -376,13 +376,28 @@ private struct SyncSetupView: View {
 private struct ProviderGrid: View {
     @Binding var selection: SyncProvider?
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 8), count: 3)
+    private let perRow = 3
 
+    private var rows: [[SyncProvider]] {
+        stride(from: 0, to: SyncProvider.allCases.count, by: perRow).map {
+            Array(SyncProvider.allCases[$0..<min($0 + perRow, SyncProvider.allCases.count)])
+        }
+    }
+
+    /// Each card spans two of 2×perRow columns so a short last row can be centred.
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 8) {
-            ForEach(SyncProvider.allCases) { provider in
-                ProviderCard(provider: provider, isSelected: selection == provider) {
-                    withAnimation(.easeOut(duration: 0.15)) { selection = provider }
+        Grid(horizontalSpacing: 8, verticalSpacing: 8) {
+            ForEach(rows, id: \.self) { row in
+                GridRow {
+                    let inset = perRow - row.count
+                    if inset > 0 { Color.clear.gridCellColumns(inset).frame(height: 0) }
+                    ForEach(row) { provider in
+                        ProviderCard(provider: provider, isSelected: selection == provider) {
+                            withAnimation(.easeOut(duration: 0.15)) { selection = provider }
+                        }
+                        .gridCellColumns(2)
+                    }
+                    if inset > 0 { Color.clear.gridCellColumns(inset).frame(height: 0) }
                 }
             }
         }
@@ -451,6 +466,7 @@ struct ProviderIcon: View {
         case .awsS3: Color(hex: "#FF9F0A")
         case .cloudflareR2: Color(hex: "#5E5CE6")
         case .backblazeB2: Color(hex: "#FF453A")
+        case .googleCloud: Color(hex: "#34C759")
         case .minio: Color(hex: "#30B0C7")
         case .customS3: Color(hex: "#8E8E93")
         }

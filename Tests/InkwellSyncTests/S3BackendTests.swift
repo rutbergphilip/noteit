@@ -65,7 +65,7 @@ final class StubURLProtocol: URLProtocol {
 final class S3BackendTests: XCTestCase {
     private let credentials = S3Credentials(accessKeyID: "AKIDEXAMPLE", secretAccessKey: "secret/key")
 
-    private func makeBackend(pathStyle: Bool = true, prefix: String = "", endpoint: String = "http://localhost:9000") -> S3Backend {
+    private func makeBackend(pathStyle: Bool = true, prefix: String = "", endpoint: String = "http://localhost:9000", verifyConditionals: Bool = false) -> S3Backend {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let config = S3Config(endpoint: URL(string: endpoint)!, region: "eu-north-1", bucket: "notes", pathStyle: pathStyle, prefix: prefix)
@@ -74,7 +74,8 @@ final class S3BackendTests: XCTestCase {
             credentials: credentials,
             session: URLSession(configuration: configuration),
             retryDelays: [0, 0],
-            now: { Date(timeIntervalSince1970: 1_700_000_000) }
+            now: { Date(timeIntervalSince1970: 1_700_000_000) },
+            verifyConditionals: verifyConditionals
         )
     }
 
@@ -256,8 +257,9 @@ final class S3BackendTests: XCTestCase {
         }
         XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["DELETE", "HEAD"])
         try await backend.delete("k", ifMatch: "current")
-        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["DELETE", "HEAD", "DELETE", "HEAD", "DELETE"])
-        XCTAssertNil(StubURLProtocol.requests[4].request.value(forHTTPHeaderField: "If-Match"))
+        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["DELETE", "HEAD", "HEAD", "DELETE"], "unsupported conditional DELETE is remembered")
+        XCTAssertNil(StubURLProtocol.requests[3].request.value(forHTTPHeaderField: "If-Match"))
+        XCTAssertFalse(backend.conditionalDeletesSupported)
         XCTAssertTrue(backend.conditionalWritesSupported, "a DELETE limitation must not disable conditional PUTs")
     }
 
@@ -336,6 +338,92 @@ final class S3BackendTests: XCTestCase {
             XCTAssertEqual(error, .preconditionFailed("k"))
         }
         XCTAssertFalse(backend.conditionalWritesSupported)
+    }
+
+    /// A tiny object store behind the stub; `honorsConditions == false` mimics the GCS XML API.
+    private func fakeServer(honorsConditions: Bool) -> (URLRequest) -> StubURLProtocol.Response {
+        let lock = NSLock()
+        var objects: [String: Int] = [:]
+        var version = 0
+        return { request in
+            lock.lock(); defer { lock.unlock() }
+            let path = request.url!.path
+            let current = objects[path]
+            let ifMatch = request.value(forHTTPHeaderField: "If-Match")
+            let ifNoneMatch = request.value(forHTTPHeaderField: "If-None-Match")
+            if honorsConditions {
+                if ifNoneMatch != nil, current != nil { return .init(status: 412) }
+                if let ifMatch, ifMatch != current.map({ "\"v\($0)\"" }) { return .init(status: 412) }
+            }
+            switch request.httpMethod {
+            case "PUT":
+                version += 1
+                objects[path] = version
+                return .init(status: 200, headers: ["ETag": "\"v\(version)\""])
+            case "HEAD", "GET":
+                return current.map { .init(status: 200, headers: ["ETag": "\"v\($0)\""]) } ?? .init(status: 404)
+            case "DELETE":
+                objects[path] = nil
+                return .init(status: 204)
+            default:
+                return .init(status: 400)
+            }
+        }
+    }
+
+    func testCanaryKeepsConditionalsOnHonestServerAndCleansUp() async throws {
+        StubURLProtocol.reset(fakeServer(honorsConditions: true))
+        let backend = makeBackend(verifyConditionals: true)
+        try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
+        try await backend.put("k2", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
+        XCTAssertTrue(backend.conditionalWritesSupported)
+        XCTAssertTrue(backend.conditionalDeletesSupported)
+        let canary = StubURLProtocol.requests.filter { $0.request.url!.path.contains("inkwell/.canary/") }
+        XCTAssertEqual(canary.map { $0.request.httpMethod! }, ["PUT", "PUT", "PUT", "DELETE", "DELETE"], "probe runs once")
+        XCTAssertEqual(StubURLProtocol.requests.count, canary.count + 2)
+    }
+
+    func testCanaryDetectsSilentlyIgnoredConditionsAndFallsBack() async throws {
+        StubURLProtocol.reset(fakeServer(honorsConditions: false))
+        let backend = makeBackend(verifyConditionals: true)
+        let first = try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
+        XCTAssertFalse(backend.conditionalWritesSupported)
+        XCTAssertFalse(backend.conditionalDeletesSupported)
+        do {
+            try await backend.put("k", data: Data([2]), ifMatch: nil, ifNoneMatch: true)
+            XCTFail("fallback must catch the existing key")
+        } catch StorageError.preconditionFailed {}
+        do {
+            try await backend.put("k", data: Data([2]), ifMatch: "stale", ifNoneMatch: false)
+            XCTFail("fallback must catch the stale etag")
+        } catch StorageError.preconditionFailed {}
+        do {
+            try await backend.delete("k", ifMatch: "stale")
+            XCTFail("fallback must catch the stale delete")
+        } catch StorageError.preconditionFailed {}
+        try await backend.delete("k", ifMatch: first)
+    }
+
+    func testCanaryNetworkFailureIsRetriedLater() async throws {
+        let lock = NSLock()
+        var failing = true
+        let server = fakeServer(honorsConditions: true)
+        StubURLProtocol.reset { request in
+            let fail = lock.withLock { failing }
+            if fail { return .init(status: 503) }
+            return server(request)
+        }
+        let backend = makeBackend(verifyConditionals: true)
+        do {
+            try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
+            XCTFail("expected network error")
+        } catch StorageError.network {}
+        XCTAssertTrue(backend.conditionalWritesSupported, "an unreachable server says nothing about conditionals")
+        lock.withLock { failing = false }
+        try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
+        let canaryPuts = StubURLProtocol.requests.filter { $0.request.url!.path.contains("inkwell/.canary/") && $0.request.httpMethod == "PUT" }
+        XCTAssertGreaterThanOrEqual(canaryPuts.count, 4, "probe ran again after recovery")
+        XCTAssertTrue(backend.conditionalWritesSupported)
     }
 
     func testUnconditionalPutIsNotVerified() async throws {

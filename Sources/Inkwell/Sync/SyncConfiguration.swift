@@ -4,7 +4,7 @@ import InkwellSync
 
 /// Where the library syncs to. S3 presets only differ in their defaults and help text.
 enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
-    case folder, awsS3, cloudflareR2, backblazeB2, minio, customS3
+    case folder, awsS3, cloudflareR2, backblazeB2, googleCloud, minio, customS3
 
     var id: String { rawValue }
 
@@ -14,6 +14,7 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .awsS3: "Amazon S3"
         case .cloudflareR2: "Cloudflare R2"
         case .backblazeB2: "Backblaze B2"
+        case .googleCloud: "Google Cloud"
         case .minio: "MinIO / NAS"
         case .customS3: "Custom S3"
         }
@@ -25,6 +26,7 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .awsS3: "shippingbox.fill"
         case .cloudflareR2: "cloud.fill"
         case .backblazeB2: "flame.fill"
+        case .googleCloud: "globe"
         case .minio: "externaldrive.fill.badge.wifi"
         case .customS3: "server.rack"
         }
@@ -37,6 +39,7 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .awsS3: "Your own AWS bucket"
         case .cloudflareR2: "No egress fees"
         case .backblazeB2: "Low-cost cloud storage"
+        case .googleCloud: "Cloud Storage with HMAC keys"
         case .minio: "Self-hosted S3 on your network"
         case .customS3: "Wasabi, Synology C2 and more"
         }
@@ -52,6 +55,8 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
             "Create an R2 bucket and an API token with Object Read & Write access. Your account ID is shown on the R2 overview page."
         case .backblazeB2:
             "Create a private bucket and an application key for it. The endpoint is listed on the bucket's details page."
+        case .googleCloud:
+            "In Cloud Storage → Settings → Interoperability, create an HMAC key for a service account with access to your bucket."
         case .minio:
             "Use the S3 API address of your MinIO server or NAS (Synology, QNAP, TrueNAS), usually on port 9000."
         case .customS3:
@@ -70,6 +75,7 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .awsS3: "https://s3.<region>.amazonaws.com"
         case .cloudflareR2: "https://<account-id>.r2.cloudflarestorage.com"
         case .backblazeB2: "https://s3.<region>.backblazeb2.com"
+        case .googleCloud: "https://storage.googleapis.com"
         case .minio: "http://<nas-host>:9000"
         case .customS3: "https://"
         }
@@ -78,14 +84,14 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
     var defaultRegion: String {
         switch self {
         case .awsS3: "us-east-1"
-        case .cloudflareR2: "auto"
+        case .cloudflareR2, .googleCloud: "auto"
         case .backblazeB2: "us-west-004"
         case .minio, .customS3: "us-east-1"
         case .folder: ""
         }
     }
 
-    var defaultPathStyle: Bool { self == .minio || self == .customS3 }
+    var defaultPathStyle: Bool { self == .minio || self == .customS3 || self == .googleCloud }
 }
 
 /// Non-secret sync settings, stored as JSON in UserDefaults. Secrets live in the keychain.

@@ -285,7 +285,7 @@ A 520 pt wide tabbed window:
 
 *Disconnected (setup):*
 
-- **Storage:** a 3 × 2 grid of **provider cards**, each with a gradient icon tile, a name and a one-line hint:
+- **Storage:** a 3-column grid of **provider cards** (the short last row is centred), each with a gradient icon tile, a name and a one-line hint:
 
   | Card | SF Symbol | Tile color | Hint |
   |---|---|---|---|
@@ -293,12 +293,13 @@ A 520 pt wide tabbed window:
   | Amazon S3 | `shippingbox.fill` | `#FF9F0A` | Your own AWS bucket |
   | Cloudflare R2 | `cloud.fill` | `#5E5CE6` | No egress fees |
   | Backblaze B2 | `flame.fill` | `#FF453A` | Low-cost cloud storage |
+  | Google Cloud | `globe` | `#34C759` | Cloud Storage with HMAC keys |
   | MinIO / NAS | `externaldrive.fill.badge.wifi` | `#30B0C7` | Self-hosted S3 on your network |
   | Custom S3 | `server.rack` | `#8E8E93` | Wasabi, Synology C2 and more |
 
   Before a card is picked, the footer reads "Your notes sync through storage you own. Inkwell doesn't run a server and never sees your data."
 - **Folder form:** a *Choose Folder…* button and the chosen path. Inkwell keeps its files in an `inkwell` subfolder.
-- **S3 form:** Endpoint (prefilled per provider), Region, Bucket, *Folder inside bucket* (optional), *Path-style addressing*, Access key ID, Secret access key. Each provider has its own help text. Amazon S3, R2 and B2 require `https://`; MinIO / NAS and Custom S3 also accept `http://` for servers on the local network.
+- **S3 form:** Endpoint (prefilled per provider), Region, Bucket, *Folder inside bucket* (optional), *Path-style addressing*, Access key ID, Secret access key. Each provider has its own help text. Amazon S3, R2, B2 and Google Cloud require `https://`; MinIO / NAS and Custom S3 also accept `http://` for servers on the local network.
 - **Encryption:** an *End-to-end encryption* toggle, **on by default**, with Passphrase (at least 8 characters), Confirm passphrase, a 4-segment strength meter (Too short / Weak / Fair / Good / Strong) and an orange warning that a lost passphrase means the synced notes can't be decrypted. Turning encryption off shows "anyone with access to the storage can read your notes". If the location already holds an encrypted library, the section switches to a single "Enter the passphrase used on your other Mac" field.
 - **Action bar:** **Test Connection** reports what it found (an empty location, an unencrypted or encrypted Inkwell library, or one from a newer version). **Connect & Sync** is the default button.
 
@@ -343,7 +344,7 @@ None are preassigned, so we never steal someone's existing shortcut. The user re
 
 - **Where your notes can live:**
   - **Any folder:** a NAS share, iCloud Drive, Dropbox, or a USB drive.
-  - **Any S3-compatible bucket:** Amazon S3, Cloudflare R2, Backblaze B2, MinIO on your NAS, or a custom S3 service (Wasabi, Synology C2 and others).
+  - **Any S3-compatible bucket:** Amazon S3, Cloudflare R2, Backblaze B2, Google Cloud Storage, MinIO on your NAS, or a custom S3 service (Wasabi, Synology C2 and others).
 - **Setup** takes about a minute in Settings › Sync: pick a provider card, fill in the folder or bucket, set a passphrase, and click **Connect & Sync**. On your second Mac, point it at the same place and enter the same passphrase. Sample notes from that Mac's first launch that were never edited are removed before it joins, so the library doesn't get a second Welcome note.
 - **End-to-end encryption is on by default.** Notes are encrypted on the Mac before they're uploaded. The storage only sees encrypted files named by random IDs, plus one small unencrypted file that describes the format. The passphrase stays in the Mac's keychain and is never uploaded. **If it's lost, the data can't be recovered**, and the setup screen says so.
 - **Conflicts never lose data.** If a note changes on two Macs before they sync, both versions are kept:
@@ -421,7 +422,7 @@ Everything uses the **system font (SF Pro)**; code uses **SF Mono**. Editor size
 | Notebook palette | `#0A84FF` `#5E5CE6` `#BF5AF2` `#FF375F` `#FF453A` `#FF9F0A` `#FFD60A` `#30D158` `#64D2FF` `#8E8E93` | Apple system hues. Used for sidebar icons, list dots, header chip (14% tint), empty states, menu bar glyphs (16% tint) — `Model/Models.swift` |
 | Pinned | System orange | Pin icons, Pinned row |
 | Sync conflicts / sync problems | System orange | Conflict badge and triangle, Conflicts row, pill in *Sync Issue* and *Locked* states |
-| Sync provider tiles | `#0A84FF` `#FF9F0A` `#5E5CE6` `#FF453A` `#30B0C7` `#8E8E93` | Folder, Amazon S3, R2, B2, MinIO / NAS, Custom S3 — `Settings/SyncSettingsView.swift` |
+| Sync provider tiles | `#0A84FF` `#FF9F0A` `#5E5CE6` `#FF453A` `#34C759` `#30B0C7` `#8E8E93` | Folder, Amazon S3, R2, B2, Google Cloud, MinIO / NAS, Custom S3 — `Settings/SyncSettingsView.swift` |
 | Recent | System teal | Sidebar icon |
 | Text colors | Red, Orange, Yellow, Green, Teal, Blue, Purple, Pink, Gray + custom | `EditorStyle.textColors` |
 | Highlights | Yellow, Green, Blue, Pink, Purple, Orange (pastels) | `EditorStyle.highlightColors` |
@@ -568,7 +569,7 @@ The working name is **Inkwell**, with **NoteIt** as backup. Before investing in 
 |---|---|
 | Brand | **Placeholder app icon** (code-drawn) and SF Symbol menu bar icon; no brand accent color |
 | Sync: folders | Folders kept in sync by another tool (iCloud Drive, Dropbox) rely on **advisory file locking** (`flock`), which only helps when Macs write to the same volume that supports it, such as a NAS share. A sync tool copies files between Macs after the fact, so two Macs can still race. The tool's own conflict files (e.g. `<id> 2.meta`) are detected and imported as conflict copies, and unusable ones are cleaned up after 30 days |
-| Sync: S3 | Providers without conditional writes (`If-Match` / `If-None-Match`) get **best-effort** protection: Inkwell checks before and after each write, which narrows but doesn't close the race between two Macs |
+| Sync: S3 | Providers without conditional writes (`If-Match` / `If-None-Match`) get **best-effort** protection: Inkwell checks before and after each write, which narrows but doesn't close the race between two Macs. This includes providers that silently ignore the headers, such as Google Cloud Storage's S3-compatible API; Inkwell detects these with a one-time probe |
 | Sync: providers | **No WebDAV** backend yet |
 | Sync: conflicts | **No side-by-side compare** view; the user compares the two notes manually |
 | Sync: passphrase | Encryption is chosen at connect time; there's no "change passphrase" or "turn encryption on later" without starting a new library |
@@ -755,7 +756,7 @@ Design and decisions: [`docs/specs/2026-10-12-sync-design.md`](docs/specs/2026-1
 
 | Folder | Contents |
 |---|---|
-| `Storage/` | `StorageBackend` protocol: `list`, `get`, `put(ifMatch:ifNoneMatch:)`, conditional `delete(ifMatch:)`, `probe`. Backends: **`FolderBackend`** (atomic temp-file + rename, `renamex_np(RENAME_EXCL)` for create-if-absent, content-hash etags for files ≤ 256 KB, stat etags for larger bodies, and an in-process lock plus a cross-process `flock` on `<root>/.inkwell-lock` around every write and delete); **`S3Backend`** (path-style or virtual-host URLs, optional key prefix, `If-Match` / `If-None-Match`, falling back to HEAD-check, PUT, HEAD-verify when a provider answers 501/`NotImplemented`); **`InMemoryBackend`** (tests). `SigV4Signer` implements AWS Signature V4 with CryptoKit and is checked against AWS's published examples. `S3ListParser` parses `ListObjectsV2`. |
+| `Storage/` | `StorageBackend` protocol: `list`, `get`, `put(ifMatch:ifNoneMatch:)`, conditional `delete(ifMatch:)`, `probe`. Backends: **`FolderBackend`** (atomic temp-file + rename, `renamex_np(RENAME_EXCL)` for create-if-absent, content-hash etags for files ≤ 256 KB, stat etags for larger bodies, and an in-process lock plus a cross-process `flock` on `<root>/.inkwell-lock` around every write and delete); **`S3Backend`** (path-style or virtual-host URLs, optional key prefix, `If-Match` / `If-None-Match`, falling back to HEAD-check, PUT, HEAD-verify when a provider answers 501/`NotImplemented` or a one-time canary shows it silently ignores the headers); **`InMemoryBackend`** (tests). `SigV4Signer` implements AWS Signature V4 with CryptoKit and is checked against AWS's published examples. `S3ListParser` parses `ListObjectsV2`. |
 | `Crypto/` | `KeyDerivation`: PBKDF2-HMAC-SHA256, **210,000 iterations**, 16-byte random salt, 32-byte key. `AESGCMCipher`: AES-GCM, `nonce ‖ ciphertext ‖ tag`, with the object key relative to `inkwell/v1/` (e.g. `notes/<id>.meta`) as **AAD**, so a sealed object can't be replayed under another key. `PassthroughCipher` for unencrypted stores. |
 | `Engine/` | **`SyncPlanner`**: the pure decision table (local record / local deletion / remote meta / remote tombstone / base → `push`, `pull`, `conflict`, `pushDeletion`, `applyRemoteDeletion`, `resurrectPush`, `forgetBase`, `none`). **`SyncEngine`** (actor): runs passes one at a time, each resuming from the persisted `SyncState`; connects/creates the store and verifies the passphrase; imports sync-tool sidecar copies; sweeps tombstones after 30 days; writes its device record at most every 10 minutes. `RemoteLayout`: object keys. |
 | `Model/` | `Manifest` (format version, optional encryption parameters), `SyncState` (per-record bases, pending pushes, tombstone dates, sidecar first-seen dates), record/envelope/tombstone/device types. |
@@ -766,7 +767,7 @@ Design and decisions: [`docs/specs/2026-10-12-sync-design.md`](docs/specs/2026-1
 - **`NoteStoreSyncAdapter`** implements the engine's `SyncLocalStore`. RTFD parsing and body writes happen off the main actor, and main-actor hops only swap prepared files in. Before a remote change replaces or deletes a note, it commits staged and open-editor edits; if the revision moved since the engine read it, the apply is refused and the next pass sees a conflict.
 - **`SyncController`** owns scheduling and status. Nothing (no timers, tasks or observers) exists until sync is configured. Then one loop runs passes in `Task.detached(priority: .utility)`: every 60 s while Inkwell is active or has a visible window, every 600 s otherwise; 2 s after a local edit (at most 10 s); 5 s after wake; on activation if the last pass is more than 15 s old; and on **Sync Now**. Failures back off from 15 s, doubling up to 10 minutes. Wrong/missing passphrase, rejected credentials, an unsupported format and a missing manifest pause sync until the user acts.
 - **Keychain:** generic passwords under service **`com.inkwell.app.sync`**, accounts `s3-access-key`, `s3-secret` and `passphrase` (`kSecAttrAccessibleAfterFirstUnlock`). Non-secret settings are JSON in `UserDefaults` (`syncConfiguration`); folders are kept as security-scoped bookmarks.
-- **ATS:** `build_app.sh` sets `NSAppTransportSecurity` → `NSAllowsLocalNetworking`. In the app, plain `http://` endpoints are accepted **only for the MinIO / NAS and Custom S3 presets**; Amazon S3, R2 and B2 require `https://`. If macOS still blocks an `http://` request (e.g. a non-local host), sync stops with an explanation.
+- **ATS:** `build_app.sh` sets `NSAppTransportSecurity` → `NSAllowsLocalNetworking`. In the app, plain `http://` endpoints are accepted **only for the MinIO / NAS and Custom S3 presets**; Amazon S3, R2, B2 and Google Cloud require `https://`. If macOS still blocks an `http://` request (e.g. a non-local host), sync stops with an explanation.
 
 **Remote layout** (under the chosen folder, or the bucket plus the optional *Folder inside bucket*):
 
@@ -796,7 +797,8 @@ Everything except `manifest.json` is AES-GCM sealed when encryption is on. A bod
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 ```
 
-- 142 XCTest cases in `Tests/InkwellSyncTests/`: the planner table, the engine against in-memory and faulty backends, folder backend (including a cross-process lock test), S3 request and response handling with a stubbed URL protocol, SigV4, list parsing and crypto.
+- 149 XCTest cases in `Tests/InkwellSyncTests/`: the planner table, the engine against in-memory and faulty backends, folder backend (including a cross-process lock test), S3 request and response handling with a stubbed URL protocol (including the conditional-request canary), SigV4, list parsing and crypto.
+- **Live cloud emulator tests** (`LiveS3EmulatorTests`, skipped by default) run the S3 backend contract, 1,005-key pagination and an encrypted two-Mac sync against a real server. `scripts/live_s3_tests.sh [aws] [gcp]` starts [Floci](https://github.com/floci-io/floci) emulators for Amazon S3 and Google Cloud Storage in Docker, runs the suite against each, and removes the containers. To target another server (e.g. MinIO), set `INKWELL_LIVE_S3_ENDPOINT` and optionally `_REGION`, `_BUCKET`, `_ACCESS_KEY`, `_SECRET` and `_CREATE_BUCKET=1`.
 - **Command Line Tools alone don't include XCTest**, so `swift test` fails without Xcode. `DEVELOPER_DIR` points SwiftPM at Xcode's toolchain without changing `xcode-select`.
 - The app layer (NoteStore, adapter, seed handling) is covered by the debug-only `INKWELL_SYNC_SELFTEST` mode below.
 
@@ -813,7 +815,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 | `--debug-quick-capture` | Opens Quick Capture at launch |
 | `--debug-dark` | Forces dark appearance |
 | `--debug-show-conflicts` | Selects the Conflicts filter and its first note |
-| `--debug-sync-provider <folder\|awsS3\|cloudflareR2\|backblazeB2\|minio\|customS3>` | Preselects that provider card in Settings › Sync. For `folder` with `INKWELL_DATA_DIR` set, the folder is prefilled as a `remote` sibling of the data dir; for S3 presets, region, path style and endpoint get the preset defaults |
+| `--debug-sync-provider <folder\|awsS3\|cloudflareR2\|backblazeB2\|googleCloud\|minio\|customS3>` | Preselects that provider card in Settings › Sync. For `folder` with `INKWELL_DATA_DIR` set, the folder is prefilled as a `remote` sibling of the data dir; for S3 presets, region, path style and endpoint get the preset defaults |
 | `--debug-sync-endpoint <url>` | With an S3 `--debug-sync-provider`, prefills the endpoint |
 
 Environment variables (currently read in **all** builds):

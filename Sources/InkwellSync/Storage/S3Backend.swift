@@ -35,13 +35,24 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
     private let keyPrefix: String
     private let lock = NSLock()
     private var _conditionalWritesSupported = true
+    private var _conditionalDeletesSupported = true
+    private let verifiesConditionals: Bool
+    private var conditionalCheck: Task<Void, Never>?
 
     public var conditionalWritesSupported: Bool {
         lock.withLock { _conditionalWritesSupported }
     }
 
+    public var conditionalDeletesSupported: Bool {
+        lock.withLock { _conditionalDeletesSupported }
+    }
+
     private func markConditionalWritesUnsupported() {
         lock.withLock { _conditionalWritesSupported = false }
+    }
+
+    private func markConditionalDeletesUnsupported() {
+        lock.withLock { _conditionalDeletesSupported = false }
     }
 
     public init(
@@ -49,8 +60,10 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
         credentials: S3Credentials,
         session: URLSession = .shared,
         retryDelays: [TimeInterval] = [0.5, 1.5],
-        now: @escaping @Sendable () -> Date = { Date() }
+        now: @escaping @Sendable () -> Date = { Date() },
+        verifyConditionals: Bool = true
     ) {
+        verifiesConditionals = verifyConditionals
         self.config = config
         self.credentials = credentials
         self.session = session
@@ -90,6 +103,7 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
     @discardableResult
     public func put(_ key: String, data: Data, ifMatch: String?, ifNoneMatch: Bool) async throws -> String {
         let conditional = ifMatch != nil || ifNoneMatch
+        if conditional { await ensureConditionalsVerified() }
         if conditional, conditionalWritesSupported {
             var headers: [String: String] = [:]
             if ifNoneMatch { headers["If-None-Match"] = "*" }
@@ -113,12 +127,14 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
 
     public func delete(_ key: String, ifMatch: String?) async throws {
         guard let ifMatch else { return try await delete(key) }
-        if conditionalWritesSupported {
+        await ensureConditionalsVerified()
+        if conditionalDeletesSupported {
             do {
                 _ = try await send(method: "DELETE", key: key, headers: ["If-Match": "\"\(ifMatch)\""], conditional: true)
                 return
             } catch S3Failure.conditionalNotSupported {
                 // Some providers support conditional PUT but not DELETE; fall back without changing the PUT path.
+                markConditionalDeletesUnsupported()
             }
         }
         try await checkPreconditions(key, ifMatch: ifMatch, ifNoneMatch: false)
@@ -129,6 +145,61 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
         let query = [("list-type", "2"), ("max-keys", "1"), ("prefix", keyPrefix)]
         let (data, _) = try await send(method: "GET", key: nil, query: query)
         _ = try S3ListParser.parse(data)
+    }
+
+    // MARK: - Conditional request verification
+
+    /// Some S3-compatible servers (e.g. the GCS XML API) accept If-Match/If-None-Match but silently ignore them,
+    /// which would turn every conflict into a lost update. Probe once with a throwaway object before trusting them.
+    private func ensureConditionalsVerified() async {
+        guard verifiesConditionals else { return }
+        let check: Task<Void, Never> = lock.withLock {
+            if let conditionalCheck { return conditionalCheck }
+            let task = Task { await self.runConditionalCanary() }
+            conditionalCheck = task
+            return task
+        }
+        await check.value
+    }
+
+    private func runConditionalCanary() async {
+        let key = "inkwell/.canary/\(UUID().uuidString)"
+        let bogus = ["If-Match": "\"inkwell-canary-mismatch\""]
+        do {
+            do {
+                _ = try await upload(key, data: Data("canary".utf8), headers: ["If-None-Match": "*"])
+                let ignoresNoneMatch = try await accepts { _ = try await self.upload(key, data: Data("again".utf8), headers: ["If-None-Match": "*"]) }
+                let ignoresMatch = try await accepts { _ = try await self.upload(key, data: Data("again".utf8), headers: bogus) }
+                if ignoresNoneMatch || ignoresMatch { markConditionalWritesUnsupported() }
+            } catch S3Failure.conditionalNotSupported {
+                markConditionalWritesUnsupported()
+                _ = try await upload(key, data: Data("canary".utf8), headers: [:])
+            }
+            if try await accepts({ _ = try await self.send(method: "DELETE", key: key, headers: bogus, conditional: true) }) {
+                markConditionalDeletesUnsupported()
+            }
+            try? await delete(key)
+            if !conditionalWritesSupported || !conditionalDeletesSupported {
+                NSLog("InkwellSync: %@ ignores conditional requests (writes=%d deletes=%d); using verified fallback",
+                      config.endpoint.host ?? "endpoint", conditionalWritesSupported ? 1 : 0, conditionalDeletesSupported ? 1 : 0)
+            }
+        } catch {
+            // Unreachable or unauthorized: real requests will surface the error; check again next time.
+            try? await delete(key)
+            lock.withLock { conditionalCheck = nil }
+        }
+    }
+
+    /// True when the server performed a request whose precondition should have failed.
+    private func accepts(_ request: () async throws -> Void) async throws -> Bool {
+        do {
+            try await request()
+            return true
+        } catch StorageError.preconditionFailed {
+            return false
+        } catch S3Failure.conditionalNotSupported {
+            return true
+        }
     }
 
     // MARK: - Requests
