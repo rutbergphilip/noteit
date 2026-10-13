@@ -725,11 +725,12 @@ Decisions:
        writer's own version after a definite 412 (step 4) or with a stale tag (an `uploading` entry whose
        commit was never sent), and, only where conditional writes are atomic, step 6's previous version.
        No other writer ever writes a version key
-       it didn't create, and a deleted version becomes referenced again only through a commit that was
-       checked before a newer one and lands after it, which is the fallback's known lost-update window
-       ("Assumptions", below); repair then restores the body;
-     - **"Clean up unused storage…"** stays available: it deletes only `new` versioned bodies (immutable
-       keys) with a plain `DELETE`, after the same confirmation and with the same warning.
+       it didn't create, and with atomic conditional writes a late meta write that still names the previous
+       version is conditioned on an older ETag and fails, so that version can't become referenced again;
+     - **"Clean up unused storage…"** stays available only where conditional writes are atomic: there it
+       deletes only `new` versioned bodies (immutable keys) with a plain `DELETE`, after the same
+       confirmation and with the same warning. Where conditional writes aren't atomic either (every
+       folder store), it is disabled (next bullet).
 
      **What is left over** on such a store (every native folder store, and S3 providers that fail the
      delete part of the canary; never a NoteIt server): for each deleted note, its meta, its body and its
@@ -753,7 +754,10 @@ Decisions:
      **no device deletes a committed body**:
      - **skipped**: step 6 (previous version and legacy body), conversion step 5, the body delete of a
        user delete (`pushDeletion` writes the tombstone and, where conditional deletes are atomic, deletes
-       the meta with `If-Match`; the body stays), and every body deletion of the orphan sweep (below);
+       the meta with `If-Match`; the body stays), the body delete of the meta-plus-tombstone resolution
+       when the tombstone wins (`SyncEngine.swift:327`; the leftover meta is deleted with `If-Match` where
+       deletes are atomic, the body stays), every body deletion of the orphan sweep (below), and
+       "Clean up unused storage…" (below);
      - **still deleted**: only a version this device uploaded and never committed: its own version after
        a definite 412 (the fallback's pre-write check failed, so no `PUT` was sent, and no earlier attempt
        was in doubt) and its own stale-tag `uploading` version (its commit was never sent). Only the
@@ -761,9 +765,15 @@ Decisions:
      - **cost**: one retained body per published edit (every previous version of every note), plus each
        converted note's legacy RTFD body and each deleted note's last body. Storage grows with the edit
        history and counts toward a quota where there is one;
-     - **reclaiming the space**: "Clean up unused storage…" doesn't reclaim it. It removes only `new`
-       bodies of notes that never got a meta, and nothing can safely remove a retained version on such a
-       store, because a late meta write may reference it again. The space is reclaimed only by moving
+     - **cleanup is disabled**: "Clean up unused storage…" deletes no body on such a store. Its listing
+       can't tell a `new` body that will never be committed from one whose fallback create (a check, then
+       a plain `PUT`) lands between the listing and the `DELETE`, and on these stores nothing makes that
+       `DELETE` fail. So in both apps' Settings → Sync the button is **disabled** with the caption "Needs
+       storage that supports conditional writes. This storage keeps earlier copies of your notes; to free
+       the space, move sync to a NoteIt server or a compatible S3 bucket." The engine refuses too:
+       `cleanUpUnusedStorage()` throws `cleanupUnavailable` before listing and sends nothing;
+     - **reclaiming the space**: nothing can safely remove a retained body on such a store, because a late
+       meta write may reference it again. The space is reclaimed only by moving
        sync to a store with atomic conditional writes and deletes (a NoteIt server, or an S3 provider
        that passes the canary): set up every device with the new, empty store, which receives only each
        note's current body, then remove the old folder or bucket prefix.
@@ -856,12 +866,15 @@ Decisions:
        syncing. Only run this when your other devices are idle. A note being saved on another device at
        the same moment could be lost if that device is then lost before it syncs again." Buttons: Cancel
        (default) and Clean Up. Native and web tests assert this complete text and that Cancel is the
-       default action. On confirmation the engine runs a pass, then
+       default action. The action is available only on a store with atomic conditional writes (every
+       NoteIt server, S3 providers that pass the write part of the canary); on any other store the button
+       is disabled with the caption under "Committed bodies on stores without atomic conditional writes"
+       and the engine refuses with `cleanupUnavailable`, deleting nothing. On confirmation the engine runs a pass, then
        deletes, with `If-Match: <listed ETag>` (a plain `DELETE` on a store without atomic conditional
        deletes: the key is immutable, and the condition was never what made this safe), every `new` body whose note has no meta and no tombstone
        in that pass's listing and that isn't this device's own pending version, and reports how many
-       objects and bytes it removed. It works on every store, at full quota (deleting is always allowed),
-       and in direct mode. There is no protocol coordination with other devices; the confirmation is the
+       objects and bytes it removed. It works at full quota (deleting is always allowed) and in direct
+       mode (when the bucket passes the canary). There is no protocol coordination with other devices; the confirmation is the
        only safeguard, and the dialog says so. If another device is in fact mid-create, its create can
        commit between the cleanup's listing and its `DELETE`, leaving a meta whose body is gone. That is
        the "missing committed body" case below: the creating device republishes the note on its next
@@ -932,14 +945,14 @@ Decisions:
        changes, the note is deleted, or another device's meta refresh makes it stale (after 20 of that
        device's passes and 24 hours, above); the one exception is a body under a legacy meta at the quota
        limit, which waits for the conversion. For a note that was never created (`new`) it is kept until
-       the user runs "Clean up unused storage…" (above): at most one body per wiped device per
+       the user runs "Clean up unused storage…" (above; available on these stores only): at most one body per wiped device per
        never-committed note, counted toward the quota. An upload that lands after its writer abandoned it has a stale tag and is swept. On stores **without** them (folder stores and S3 providers that fail the
        canary; never a NoteIt server, which has no such mode) the leak is larger: every committed body
        stays (one per published edit, plus the legacy body of each converted note and the last body of
        each deleted note), and so does every uncommitted version its writer didn't delete (a failed step-4
        delete, an in-doubt commit that ended in a 412, an abandoned upload that landed late, a device that
-       vanished mid-publish, an old-binary same-revision re-upload). None of it is removed automatically;
-       "Clean up unused storage…" reclaims only the `new` ones, and the rest goes only by moving sync to
+       vanished mid-publish, an old-binary same-revision re-upload). None of it is removed automatically
+       or by "Clean up unused storage…", which is disabled there; it goes only by moving sync to
        an atomic store ("Committed bodies on stores without atomic conditional writes"). Where conditional
        deletes aren't atomic either (every folder store), the list under "Deletes on stores without atomic
        conditional deletes" applies as well. Bodies count toward the owner's quota where there is one.
@@ -2305,8 +2318,13 @@ remain open (§15) and are not v1 guarantees.
        its next pass. M is then unreadable on every device (body 404, listed in the sync report every
        pass, no conflict copy, no crash), no device ever repairs it (none holds its revision; the repair
        grace passes with no write), the other notes sync normally, and deleting M from any device
-       removes its meta and writes a tombstone as usual; the dialog text in both apps equals the spec
-       string;
+       removes its meta and writes a tombstone as usual (these cleanup cases run on atomic backends);
+       the dialog text in both apps equals the spec string; **non-atomic stores** (`InMemoryBackend` with
+       `atomic: false`, a real `FolderBackend`, and an S3 stub failing only the write steps): the button is
+       disabled with the spec's caption in both apps, `cleanUpUnusedStorage()` throws `cleanupUnavailable`
+       and sends no `LIST`, `GET` or `DELETE` (spy), a held fallback create whose `PUT` lands after that
+       call still reads on every device, and the stub that fails only the delete steps (atomic writes)
+       still allows cleanup with plain `DELETE`s;
      - **late-landing mutations** (§3.4 item 10), on a store with both capabilities: a spy over every v2
        run asserts that every `PUT` and `DELETE` the engine sends carries `If-Match` or `If-None-Match`,
        except device records and canaries; with `hold`, a conditional mutation of A (a meta commit, a
@@ -2522,7 +2540,7 @@ remain open (§15) and are not v1 guarantees.
 | A create lands after its note was deleted (meta back without a body) | pre-existing in every format version; readers skip and report it; documented (§3.4 item 9, "Late creates") |
 | An abandoned device leaves uncommitted bodies | at most one per note per device, kept only while the note's meta is unchanged; counted in quota (§3.4 item 9) |
 | A wiped device leaves the body of a note it never created (`new`) | never collected automatically, since no write can make it stale without racing a valid create; at most one per wiped device per never-committed note, counted in quota; the user reclaims it with the confirmed "Clean up unused storage…" action (§3.4 item 9) |
-| "Clean up unused storage…" runs while another device is creating a note | user-initiated only, never automatic; the dialog warns plainly that such a note can be lost if that device is lost before it syncs again; otherwise the creator repairs it (§3.4 item 9) |
+| "Clean up unused storage…" runs while another device is creating a note | user-initiated only, never automatic, and disabled on stores without atomic conditional writes (where nothing could stop its `DELETE` from removing a just-committed body); the dialog warns plainly that such a note can be lost if that device is lost before it syncs again; otherwise the creator repairs it (§3.4 item 9) |
 | A deleted user's late upstream write lands after the purge | the operation gate closes atomically before the snapshot, every store operation runs in `withLease` (released in `finally` and at a hard `Promise.race` deadline), leases are aborted; the final purge pass runs only with no lease running and a grace after the latest request end (a detached call counts as ending at its deadline); passes have hard deadlines and are retried; the persisted `deleting` record keeps the namespace reserved until it succeeds (§7.4) |
 | Stores without atomic conditional writes or deletes (folder stores, S3 providers failing the canary) keep orphaned bodies, without atomic writes every previous body version (one per edit), and, without atomic deletes, deleted notes' objects, converted notes' RTFD bodies and sidecars | without atomic writes no committed body is ever deleted (step 6, conversion step 5 and every body deletion of the sweep are skipped, since a late fallback meta write can reference any earlier body again), only versions a writer uploaded and never committed, and the space comes back only by moving to an atomic store; without atomic deletes nothing but immutable versioned bodies is ever deleted, user deletes write only a tombstone, and the sweep doesn't run; both bounds are documented (§3.4 item 9, "What it costs" and "Deletes on stores without atomic conditional deletes"); a NoteIt server never runs in this mode (§6.2) |
 | One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper; conservative reservations, ambiguous results reconciled, in-flight cap; reservations persisted across restarts in a bounded, compacted file; a quarantine after a lost state file (§6.2) |
