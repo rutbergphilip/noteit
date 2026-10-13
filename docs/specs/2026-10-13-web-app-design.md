@@ -282,7 +282,7 @@ Nodes (block):
 | `doc` | — | `block+` | whole attributed string |
 | `paragraph` | `align?: "left"\|"center"\|"right"\|"justify"`, `indent?: 0-8` | inline* | body paragraph (sentinel 29) |
 | `heading` | `level: 1\|2\|3`, `align?`, `indent?` | inline* | 1 = Title (37), 2 = Heading (39), 3 = Subheading (41) |
-| `codeBlock` | — | text* (no marks) | code block (31), monospaced |
+| `codeBlock` | `align?`, `indent?` | inline* (all marks, `hardBreak`, `image`, `attachment`) | **one** code paragraph (31), monospaced base font; consecutive `codeBlock` nodes render as one visual block |
 | `blockquote` | `indent?` | `paragraph+` | quote (33) |
 | `horizontalRule` | — | — | divider (35, NBSP text) |
 | `listItem` | `kind: "bullet"\|"ordered"\|"task"`, `level: 0-8`, `number?: int` (ordered), `checked?: bool` (task), `align?` | inline* | paragraph with marker `•/◦/▪\t`, `N.\t`, `☐/☑\t`; level = (firstLineHeadIndent − 4)/24 |
@@ -306,6 +306,21 @@ Decisions:
   ordered `number` is stored (native stores literal "N."), renumbering is an editor command.
 - Checked styling (strikethrough + gray `checkedTextColor`) is **derived** from `checked`, not stored as
   marks; the converter strips those attributes on export and re-applies them on import.
+- **Code blocks keep full formatting.** Native applies every character and paragraph command inside a code
+  block: bold/italic toggle font traits on the monospaced font, underline/strike/color/highlight/size are
+  plain attributes, alignment is per paragraph, and links and pasted images can land there
+  (`Editor/TextFormatter.swift:12-29, 158-181, 472-486`). Normalizing on export would silently strip
+  formatting that users see on the Mac, the first time they open the note on the web. So `codeBlock` uses the
+  same inline content and mark model as `paragraph`, with three differences:
+  - The base font is monospaced.
+  - Whitespace is preserved (`whitespace: pre`).
+  - The `code` mark is redundant inside a code block, so export drops it and import ignores it.
+
+  One `codeBlock` node is one native code paragraph, mirroring the per-paragraph sentinel. This keeps
+  per-line alignment and makes Enter behave like native, where it creates the next code paragraph. Tag
+  derivation masks the whole code block, as native does for monospaced ranges. The cost is a custom TipTap
+  node instead of the stock `CodeBlock`, which only allows unmarked text. Syntax highlighting is
+  therefore out of scope for v1.
 - Absent attrs mean defaults (`align` natural/left, `indent` 0).
 
 ### 3.4 Versioning and migration
@@ -313,27 +328,94 @@ Decisions:
 1. **Envelope** gains optional `bodyFormat: string` — `"inkwell-doc/1"`. Absent ⇒ legacy RTFD. Old engines
    ignore it (unknown key) and drop it when they re-publish — which is correct, because they only ever
    publish RTFD.
-2. **`RecordPayload`/`LocalRecord`** (engine ↔ app boundary) gain `bodyFormat` so the engine stays body-agnostic.
+2. **`RecordPayload`** (engine ↔ app boundary) gains `bodyFormat` so the engine stays body-agnostic: the
+   adapter sets it on export and receives it on pull.
 3. **Manifest** gains `formatVersion: 2` and optional `features: [string]` (initially `["inkwell-doc"]`).
    Readers refuse `formatVersion > 2` or any unknown feature. Old (v1-only) native clients refuse new
    connections to a v2 store with their existing "unsupported format — update Inkwell" message.
 4. **Native v2** accepts `formatVersion ≤ 2`. In a **v1 store it writes RTFD** (unchanged behavior, so mixed
    native fleets keep working); in a **v2 store it writes inkwell-doc**. It reads both body formats in both
    stores, dispatching on the envelope's `bodyFormat` (with an RTFD magic-byte sniff as a fallback).
-5. **Upgrade is explicit**: native Settings → Sync → "Enable web access" (also offered by the web app's
-   error screen with instructions):
-   1. run a clean sync pass;
-   2. conditional `PUT manifest.json` with `If-Match: <manifest etag>`, same salt/iterations/keyCheck,
-      `formatVersion: 2`, `features: ["inkwell-doc"]`;
-   3. re-push every in-sync note's body as inkwell-doc **with the same revision** (a format change is not a
-      user change, so peers see `.none`/body-ETag repush, not conflicts);
-   4. thereafter, any legacy body pulled later (from a still-running old session, §2.12) is lazily converted
-      and re-pushed by the next v2 native pass.
-6. **Web app**: refuses v1 stores with an explanatory screen ("Open Inkwell on your Mac → Settings → Sync →
+5. **The store format travels with the session.** `connect` returns a `StoreSession`:
+   - `manifest`;
+   - `manifestETag`;
+   - `formatVersion`;
+   - the cipher.
+
+   The engine and `NoteStoreSyncAdapter` share one `StoreSessionRef`, and `export` reads its body encoding
+   from it (RTFD for v1, inkwell-doc for v2). Today `SyncController.ensureSession` keeps only the cipher
+   and discards the manifest (`SyncController.swift:603-620`); v2 keeps the whole session.
+
+   Every pass already lists the root, and the listing includes the manifest's ETag. When that ETag differs
+   from `session.manifestETag`, a v2 engine re-reads the manifest before processing any record. It then
+   checks that salt, iterations and keyCheck are unchanged; if they changed, the pass fails with
+   `encryptionMismatch`. Finally it swaps the session. A v2 Mac with a long-lived session therefore
+   notices an upgrade made by another device on its next pass. Running *v1* binaries still can't notice
+   (§2.12), which is what item 8 handles.
+6. **Upgrade is explicit**: native Settings → Sync → "Enable web access". The web app's legacy-store screen
+   explains how to do it. `SyncEngine.upgradeToV2()` is serialized with passes, on the same queue as
+   `sync()`, so no pass can observe a half-upgraded session. It runs these steps:
+   1. Run a sync pass. If it reports errors, abort the upgrade.
+   2. Send a conditional `PUT manifest.json` with `If-Match: <session.manifestETag>`. The body keeps the
+      same `createdAt`, salt, iterations and keyCheck, and sets `formatVersion: 2` and
+      `features: ["inkwell-doc"]`. On 412, re-read the manifest:
+      - If it is already v2 with the same encryption, adopt it, because another device upgraded first.
+      - Otherwise, abort with "store changed, try again".
+   3. Replace the shared `StoreSessionRef` with the new manifest and ETag. Only then does any export
+      produce inkwell-doc.
+   4. Run the **conversion sweep** (item 7) and then a normal pass.
+7. **Conversion sweep — a revision-preserving meta rewrite, intentionally pulled by peers.** Adding
+   `bodyFormat` changes the envelope bytes, so the meta ETag changes. A body-only re-upload
+   (`repushBody`, `SyncEngine.swift:511-519`) can't publish `bodyFormat`, and peers would never learn the
+   new format. So conversion re-publishes **meta and body** through the normal push path
+   (`SyncEngine.swift:394-424`), with **the same revision**. A record is a *conversion candidate* when all
+   of these hold:
+   - this is a v2 session;
+   - the last envelope seen for the note had no `bodyFormat`; the engine tracks this in the new
+     `SyncState.legacyBodies: Set<UUID>`, filled on pull and on `.none` with a legacy remote;
+   - the local revision equals `base.revision`, meaning no unpushed local edit;
+   - no `pendingPushes` entry exists.
+
+   For each candidate, the engine:
+   1. Records the candidate in `pendingPushes` (revision unchanged), so a crash resumes like any push.
+   2. Sends `PUT notes/<id>.meta` with **`If-Match: base.remoteMetaETag`**. The new envelope has the same
+      `revision`, this device's `deviceID`/`deviceName`, `bodyFormat: "inkwell-doc/1"` and a new
+      `bodySHA256`.
+   3. Sends `PUT notes/<id>.body` with the inkwell-doc container.
+   4. Sets `base = {revision (unchanged), remoteMetaETag: new, replacedMetaETag: old, bodyETag}` and removes
+      the id from `legacyBodies` and `pendingPushes`.
+
+   **Peers:** the meta ETag changed and their local revision didn't, so `SyncPlanner.decide` yields
+   **`.pull`** (row 5, `SyncPlanner.swift:35-38`). The peer fetches meta and body, checks `bodySHA256`, and
+   applies the payload with the unchanged revision. No conflict copy is created, but every peer
+   re-downloads each converted note once. This is the intended cost.
+
+   **412 on the meta PUT:** another device changed the record after our pass, for example an old client
+   that edited it. The engine:
+   - abandons the conversion of that record and clears `pendingPushes`, exactly as `push` does;
+   - does **not** retry immediately;
+   - leaves the id in `legacyBodies`.
+
+   The next pass handles the record through the planner, as `.pull` or `.conflict`. If the body it then
+   holds is still legacy, the record becomes a candidate again. Conversion runs at the end of **every**
+   v2 pass, not only during the upgrade. That is also how legacy bodies are lazily converted after the
+   upgrade, when they come from an old session still running (§2.12). It is capped at 200 records per
+   pass to bound pass time. Retries are therefore bounded by the planner's own progress: a record is
+   converted once its meta stops changing between two passes.
+
+   **Old (v1) client that edits a note after its conversion:**
+   1. Its push gets 412 because its base ETag is stale.
+   2. Its planner then reports `.conflict`.
+   3. `importConflictCopy` fails to decode the inkwell-doc body (§2.12 fact 2) and the record is retried
+      every pass.
+
+   The edit stays safe on that Mac, unsynced, until it is updated. The upgrade confirmation dialog states
+   this.
+8. **Web app**: refuses v1 stores with an explanatory screen ("Open Inkwell on your Mac → Settings → Sync →
    Enable web access"); creates new stores directly at v2 (always encrypted). Legacy-RTFD notes found in a v2
    store are shown **read-only** with a placeholder ("Formatted on an older Mac — open Inkwell on macOS to
    convert") plus the meta title/preview; pin/move/delete are allowed and re-push the opaque body bytes
-   **without** `bodyFormat`.
+   **without** `bodyFormat`. The web never converts bodies (it cannot parse RTFD).
 
 ### 3.5 Native converter
 
@@ -354,7 +436,9 @@ Fidelity tests (`Tests/InkwellDocTests`):
 - **doc → NSAS → doc is exact** for fixtures and for a seeded random doc generator (every node/mark/attr).
 - **NSAS → doc → NSAS is semantically equal**: block kind, marker, level, alignment, marks, colors, links,
   attachment hash per paragraph range (not byte-equal RTFD).
-- Corpus: the app's seed notes, every `FormatCommand` applied to sample text, tables, mixed lists, images.
+- Corpus: the app's seed notes, every `FormatCommand` applied to sample text, tables, mixed lists, images,
+  and a code-block set that applies every `FormatCommand` (marks, colors, highlight, bigger/smaller,
+  alignment, indent), a link and an inline image inside a code block.
 - Derivations: title/preview/tags computed from the NSAS equal those computed from the doc (feeds TS vectors).
 
 ### 3.6 Keep RTFD alongside? — No
@@ -460,7 +544,20 @@ publishing and version pinning for no benefit. `web/` keeps Node tooling out of 
 
 ### 6.2 Server store drivers
 
-- `disk` (default): files under `/data/store/<key>`; ETag = `"` + hex(SHA-256(bytes))[0..32] + `"`;
+**ETag rule (all server code):**
+- *Inside* the server, every ETag is an **unquoted opaque string**. This covers `StoreDriver` results,
+  the in-memory index, `/api/storage` JSON bodies and the TS `StorageBackend` API. It matches the Swift
+  convention: `S3Backend` strips quotes on read and `S3ListParser.stripQuotes` removes `W/` and quotes
+  (`S3ListParser.swift:31-38`).
+- Quotes appear **only on the wire in HTTP**: in the `ETag` response header (`ETag: "<etag>"`) and in S3
+  XML `<ETag>"<etag>"</ETag>`.
+- Incoming `If-Match` values are normalized exactly once, at the route boundary: strip an optional `W/`,
+  then one pair of surrounding quotes. Accept a quoted or a bare value, since Swift sends it quoted
+  (`S3Backend.swift:104-110, 128-134`).
+- `If-None-Match` is accepted only as `*`. Any other value gets 400 `badRequest`.
+- Drivers never see quotes.
+
+- `disk` (default): files under `/data/store/<key>`; ETag = hex(SHA-256(bytes))[0..32] (unquoted);
   per-key async mutex; writes go temp file → `fsync` → `rename`; in-memory ETag index revalidated by
   `stat` (mtime/size); single-instance only (documented). Conditional semantics identical to S3.
 - `s3` (upstream): server uses `@inkwell/core`'s `S3Backend` (same SigV4 code the browser *could* use) with
@@ -472,9 +569,9 @@ publishing and version pinning for no benefit. `web/` keeps Node tooling out of 
 
 | Method & path | Request | Response |
 |---|---|---|
-| `GET /api/storage/list?prefix=inkwell/v1/&continuationToken=` | — | `200 {objects:[{key,etag,size}], nextContinuationToken?}` (≤1000/page) |
-| `GET /api/storage/object/<key>` | — | `200` bytes, `ETag: "<etag>"`; `404` |
-| `PUT /api/storage/object/<key>` | bytes; `If-Match: "<etag>"` or `If-None-Match: *` | `200 {etag}` + `ETag`; `412` precondition failed |
+| `GET /api/storage/list?prefix=inkwell/v1/&continuationToken=` | — | `200 {objects:[{key,etag,size}], nextContinuationToken?}` (etags unquoted, ≤1000/page) |
+| `GET /api/storage/object/<key>` | — | `200` bytes, header `ETag: "<etag>"` (quoted on the wire); `404` |
+| `PUT /api/storage/object/<key>` | bytes; `If-Match: "<etag>"` (bare accepted) or `If-None-Match: *` | `200 {etag}` (JSON, unquoted) + header `ETag: "<etag>"`; `412` precondition failed |
 | `DELETE /api/storage/object/<key>` | optional `If-Match` | `204`; `404`; `412` |
 
 Keys must match `^inkwell/(v1/(manifest\.json|notebooks/[0-9A-F-]{36}\.json|notes/[0-9A-F-]{36}\.(meta|body)|tombstones/[0-9A-F-]{36}\.json|devices/[0-9A-Za-z-]{1,64}\.json)|\.canary/[0-9A-F-]{36})$`
@@ -499,7 +596,8 @@ needed: native adds an "Inkwell Server" provider preset (endpoint = server URL +
   ciphertext).
 
 **Other endpoints**: `GET /api/health`, `GET /api/server-info` → `{version, commit, sourceUrl, authMode, storage:
-"disk"|"s3"}`, `POST /api/login`, `POST /api/logout`, `GET /api/session`, `GET|POST|DELETE /api/credentials`.
+"disk"|"s3", needsSetup}` (self-reported; carries no integrity claims, see §11.1), `POST /api/setup`,
+`POST /api/login`, `POST /api/logout`, `GET /api/session`, `GET|POST|DELETE /api/credentials`.
 
 ### 6.4 Future: direct mode
 
@@ -510,8 +608,24 @@ bring your own CORS bucket" mode is a configuration change, not a rewrite.
 
 `INKWELL_AUTH` selects one mode:
 
-- `password` (default): single user; argon2id hash from `INKWELL_PASSWORD_HASH` or set on first-run setup
-  screen (stored in `/data/config.json`). Session = signed, `HttpOnly; Secure; SameSite=Strict` cookie
+- `password` (default): single user with an argon2id password hash. There are two ways to set it:
+  - **`INKWELL_PASSWORD_HASH`** (or `INKWELL_PASSWORD_HASH_FILE` for Docker secrets). Setup is skipped
+    entirely: `needsSetup` is false and `/api/setup` returns 404.
+  - **First-run setup, guarded by a one-time bootstrap token.** The server must not be claimable by
+    whoever reaches it first.
+    - At startup, when no hash is configured and `/data/config.json` holds none, the server takes its
+      token from `INKWELL_SETUP_TOKEN` or `INKWELL_SETUP_TOKEN_FILE`.
+    - If neither is set, it generates 32 random bytes (base64url), writes them to `/data/setup-token`
+      (mode 0600), and prints them once to the container log:
+      `Inkwell setup token: … (docker logs <container>)`.
+    - `POST /api/setup {token, password}` compares the token in constant time and is rate-limited like
+      login. It runs under a process-wide mutex, so two concurrent requests cannot both succeed.
+    - On success it writes the hash to `/data/config.json` with temp + rename and mode 0600, deletes
+      `/data/setup-token`, and clears the in-memory token. The token is **single-use**: any later setup
+      call returns 404.
+    - While setup is pending, every other `/api/*` and `/s3` route returns 503 `setupRequired`.
+
+  Session = signed, `HttpOnly; Secure; SameSite=Strict` cookie
   (`INKWELL_SESSION_SECRET` or generated), 30-day sliding; login rate limiting with exponential backoff per IP.
 - `forward-auth`: trust `Remote-User` (configurable header) **only** from `INKWELL_TRUSTED_PROXIES` CIDRs —
   Authelia/Authentik/Traefik forward-auth friendly.
@@ -536,7 +650,7 @@ uses its own SigV4 credentials regardless of mode.
 | Native feature (HANDOFF §5.3, `FormatCommand.swift`) | Native representation | inkwell-doc | TipTap |
 |---|---|---|---|
 | Title / Heading / Subheading / Body | sentinel 37/39/41/29 | `heading 1/2/3`, `paragraph` | `Heading` (levels 1-3), `Paragraph` + align/indent attrs |
-| Code block | sentinel 31, mono | `codeBlock` | `CodeBlock` (no lowlight in v1) |
+| Code block | sentinel 31 per paragraph, mono base font, all marks allowed | `codeBlock{align?,indent?}` with inline content | custom `InkwellCodeBlock` node (`marks: '_'`, `whitespace: 'pre'`, inline images); not the stock `CodeBlock`, which forbids marks |
 | Quote | sentinel 33 | `blockquote` | `Blockquote` |
 | Divider | sentinel 35 + NBSP | `horizontalRule` | `HorizontalRule` |
 | Bulleted / numbered / checklist, nesting | text marker + indent | `listItem{kind,level,number,checked}` | custom flat `InkwellListItem` node, Tab/Shift-Tab change `level`, Enter continues, empty Enter exits |
@@ -614,13 +728,38 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
 | Actor | Can | Cannot |
 |---|---|---|
 | Storage (bucket/disk, backups) — **untrusted** | see sizes, counts, timing, UUIDs, device IDs in key names, the plaintext manifest; delete or roll back objects | read or undetectably modify content (AES-GCM + key-bound AAD) |
-| Inkwell server — **semi-trusted** | all of the above; see login identity and IPs; **serve modified JS** | read content *if it serves honest JS* |
-| Network attacker | nothing with HTTPS | — |
-| XSS via note content | — mitigated by schema rendering + CSP | |
+| Inkwell server, honest operator — **semi-trusted** | all of the above; see login identity, IPs and access patterns | read content |
+| Inkwell server, **compromised** (or a malicious operator) | everything above, plus serve modified HTML/JS/service worker, and capture the passphrase and every note the next time a user unlocks in the browser | read content of users who only use the native app, or who don't unlock in the browser while it is compromised |
+| Network attacker | nothing with valid HTTPS | — |
+| Malicious note content (from a peer device or a tampered-but-validly-encrypted store) | — | run script: rendering goes through the schema, plus CSP (§11.2) |
 
-Honest limitation: **a compromised server can serve JavaScript that captures the passphrase.** This is inherent
-to web E2EE; the native app (signed binary) is the trust anchor. Mitigations: reproducible image builds, SRI on
-all assets, a published asset hash list in `/api/server-info`, and no third-party code.
+**Honest limitation:** web E2EE protects against the *storage*, not against the server that delivers the
+code. A compromised server can serve JavaScript that captures the passphrase. No in-browser mechanism
+prevents this:
+- **SRI** only guards against accidental corruption or a tampered sub-resource. The same server serves the
+  HTML that declares the hashes, so it can change both.
+- **Self-reported hashes** (for example in `/api/server-info`) are worthless for the same reason, so the
+  server publishes none.
+- An installed **PWA's service worker** is replaced whenever the server serves a new one.
+
+The native app, a signed binary, is the trust anchor. Users who don't trust their server host should not
+unlock in the browser.
+
+What v1 does provide (plan task 4.6), as **detection** only:
+1. **Signed release manifest.** CI builds the client reproducibly. It publishes `web-client-<version>.json`,
+   listing the SHA-256 of every file in `.output/public`, as a GitHub release asset signed with the
+   project's minisign key. The public key is committed in the repo (`scripts/inkwell-release.pub`) and
+   printed in each release's notes.
+2. **Out-of-band verifier.** `node scripts/verify-web-client.mjs https://notes.example.com` runs from any
+   machine. It fetches `/api/server-info` for the claimed version, then the served `index.html`, every
+   referenced asset and `sw.js`. It compares them with the signed manifest and reports any difference.
+
+   The verifier can only detect *untargeted* tampering. A server that fingerprints clients could serve
+   honest files to the verifier and malicious ones to the victim. The docs say so.
+
+A separately hosted, version-pinned static client is the real fix. It would be loaded from a different
+origin than the storage server, with the server acting only as a ciphertext store, which is the §6.4
+direct/proxy mode. It is recorded as future work and as an open question (§15), not as a v1 guarantee.
 
 ### 11.2 Controls
 
@@ -650,19 +789,50 @@ all assets, a published asset hash list in `/api/server-info`, and no third-part
    search fold), `doc-convert.json` (inkwell-doc fixtures + expected derived text).
 2. **Reverse vectors** `fixtures/golden/from-web/*.json` written by Vitest, decoded by a Swift test (catches date/UUID
    case/base64 drift).
-3. **Swift**: `InkwellSyncTests` (existing 149) + new format-v2 tests; `InkwellDocTests` fidelity suite.
+3. **Swift**:
+   - `InkwellSyncTests` (existing 149).
+   - New format-v2 tests:
+     - session refresh when the manifest ETag changes;
+     - `upgradeToV2` 412 handling;
+     - conversion as a revision-preserving meta+body rewrite, which peers see as `.pull` and never as a
+       conflict;
+     - a conversion 412 leaves the record in `legacyBodies` and it converts on a later pass;
+     - **an old-client race**: a simulated v1 engine edits a note between the upgrade's clean pass and its
+       conversion. The conversion gets 412, the next pass pulls the old client's RTFD edit, and the pass
+       after that converts it. No revision is lost and no conflict copy is created. The reverse order is
+       also tested: an old client editing *after* conversion gets 412 and then a non-fatal per-record
+       `importConflictCopy` error. Its local edit survives.
+   - `InkwellDocTests` fidelity suite, including code blocks with every `FormatCommand`, a link and an image.
 4. **TS unit** (Vitest): core against all vectors; engine scenarios ported from the 53 `SyncEngineTests` using an
    `InMemoryBackend`; fast-check property tests for derivations and doc validation; server routes with
    `@nuxt/test-utils`.
-5. **Playwright E2E**: first run setup, login, create store, unlock/lock, CRUD notes/notebooks, formatting
+5. **Playwright E2E**: first-run setup (rejected without the bootstrap token; the token can't be reused), login, create store, unlock/lock, CRUD notes/notebooks, formatting
    round-trip, offline edit → reconnect, two browser contexts producing a conflict copy, shortcuts, CSP, no
    passphrase on the wire.
 6. **Interop** (`scripts/interop_tests.sh`, opt-in, mirrors `scripts/live_s3_tests.sh` with Floci on :4566):
    config A — server `disk` store, native `SyncEngine` via `/s3`, web via `/api/storage`; config B — server upstream
-   Floci S3, native direct to Floci, web via the proxy. Native side = opt-in `LiveInteropTests` (SyncEngine +
-   `FakeLocalStore` + InkwellDoc bodies); web side = Playwright. Scenarios: create on each side and read on the other,
-   concurrent edit → one conflict copy each side, delete/tombstone, legacy RTFD note read-only on web, v1→v2 upgrade.
-   Optional manual real-app run via `INKWELL_SYNC_CONFIG` + `INKWELL_DATA_DIR`.
+   Floci S3, native direct to Floci, web via the proxy. Two native drivers run in both configs:
+   - **Engine level:** opt-in `LiveInteropTests`, using `SyncEngine`, `FakeLocalStore` and InkwellDoc
+     bodies. It is fast and covers protocol edge cases.
+   - **Real app (release gate):** the app binary in the existing debug self-test mode, extended as
+     `INKWELL_SYNC_SELFTEST=interop`, with `INKWELL_DATA_DIR=<repo>/.selftest/interop-<config>` and
+     `INKWELL_SYNC_CONFIG` pointing at the store.
+     - It drives a real `NoteStore` through `NoteStoreSyncAdapter` and `SyncController`'s session code.
+     - It authors notes through the real editor formatting path (`TextFormatter` applying every
+       `FormatCommand`, a table, every list kind, a code block with marks, a link, PNG and TIFF
+       attachments).
+     - It syncs, then waits for the web side's step file. It pulls the web-authored notes and asserts on
+       the resulting `NSAttributedString`: block sentinels, list markers and levels, fonts and traits,
+       colors, alignment, attachments by hash.
+     - It exits non-zero on any failure.
+
+   Web side = Playwright. Scenarios:
+   - create on each side and read on the other, with formatted content and attachments compared
+     structurally;
+   - concurrent edit → one conflict copy on each side;
+   - delete → tombstone;
+   - a legacy RTFD note is read-only on the web until a native v2 pass converts it;
+   - v1→v2 upgrade, including peers pulling converted notes without conflicts.
 
 ## 13. Risks
 
@@ -674,7 +844,7 @@ all assets, a published asset hash list in `/api/server-info`, and no third-part
 | Large inline images bloat bodies and re-uploads | size cap with warning; content-addressed attachments later |
 | Browser storage eviction | `navigator.storage.persist()`; remote is source of truth |
 | Safari ITP clears IDB after 7 days without interaction | documented; installed PWA exempt; re-sync is lossless |
-| Compromised server serves malicious JS | honest threat model, SRI, reproducible builds, native as anchor |
+| Compromised server serves malicious JS | cannot be prevented in-browser; honest threat model, signed release manifest + out-of-band verifier (detection only), native app as anchor, pinned static client as future work |
 | S3-subset incompatibilities with other clients | only Inkwell + rclone are supported; conformance tests reuse Swift `S3Backend` |
 | Shortcut collisions per browser/OS | Playwright matrix (Chromium/WebKit/Firefox) |
 
@@ -701,3 +871,7 @@ all assets, a published asset hash list in `/api/server-info`, and no third-part
 11. Priority of Safari/iOS PWA support.
 12. Web trash UI (restore deleted notes from the local trash) in v1?
 13. Default body font size: 15 (HANDOFF) or 14 (code)?
+14. Should the project host a version-pinned static web client on a separate origin, for users who don't
+    fully trust their server host (§11.1)? Who holds the release-signing (minisign) key?
+15. Is a one-time full re-download of every note by every peer acceptable during the v2 conversion
+    (§3.4.7)? For large libraries with images, this can be hundreds of MB.
