@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head><link rel="stylesheet" href="../../tokens.css">
+<meta charset="utf-8">
+<title>NoteIt</title>
+<style>
+  html, body { margin:0; height:100%; }
+  body { background:var(--surface-editor); color:var(--ink); font-family:var(--font-sans); overflow:hidden; }
+  .cover { position:relative; width:960px; height:288px; overflow:hidden; }
+  .art { position:absolute; top:0; left:480px; width:480px; height:288px; overflow:hidden; }
+  .art svg { display:block; width:480px; height:288px; }
+  .violet { fill:var(--brand-violet); }
+  .paper { fill:var(--brand-paper); }
+  .pencil { fill:var(--brand-pencil); }
+  .deep { fill:var(--brand-deep); }
+  .panel { rx:var(--radius-panel); }
+  .card { rx:var(--radius-card); }
+  .words { position:absolute; left:40px; bottom:36px; max-width:440px; }
+  .name { margin:0; font-family:var(--font-sans); font-size:96px; line-height:.92; font-weight:800; font-style:italic; letter-spacing:-.02em; color:var(--ink); }
+  .name .it { color:var(--brand-violet); }
+  .tag { margin:var(--space-10) 0 0 4px; font-size:14px; line-height:20px; color:var(--ink-secondary); }
+</style>
+</head>
+<body>
+<div class="cover">
+<div class="art" aria-hidden="true">
+<svg viewBox="0 0 480 288" width="480" height="288">
+<!--
+  blocks      brand-violet 224×272 slab bled off the top (the icon ground, largest) · brand-paper 128×176 page inside it · brand-pencil 208×104 bled off the right edge · brand-deep only as pills on paper and pencil (it vanishes on the Dark ground) — ≈ 33% of 960×288
+  arrangement one tall slab with a page set into it and a satellite bleeding right, bottoms on one line 32 above the edge, space-16 gutters
+  pattern     capsules from the Swift Page mark: text lines on the page and speed streaks flying in from the left, pencil pills on violet, deep pills on paper and pencil; rows at a 24 pitch (space-16 + space-8)
+  scales      sides in space-8/space-16 multiples; corners radius-panel (slab, pencil block), radius-card (page); pills 8 or 6 tall with rx half the height
+-->
+<rect class="violet panel" x="48" y="-16" width="224" height="272" rx="16"/>
+<rect class="paper card" x="128" y="56" width="128" height="176" rx="10"/>
+<rect class="deep" x="144" y="84" width="64" height="10" rx="5"/>
+<rect class="violet" x="144" y="110" width="96" height="6" rx="3"/>
+<rect class="violet" x="144" y="132" width="96" height="6" rx="3"/>
+<rect class="violet" x="144" y="154" width="64" height="6" rx="3"/>
+<rect class="violet" x="144" y="176" width="88" height="6" rx="3"/>
+<rect class="pencil" x="80" y="85" width="32" height="8" rx="4"/>
+<rect class="pencil" x="64" y="109" width="48" height="8" rx="4"/>
+<rect class="pencil" x="88" y="131" width="24" height="8" rx="4"/>
+<rect class="pencil panel" x="288" y="152" width="208" height="104" rx="16"/>
+<rect class="deep" x="312" y="176" width="96" height="8" rx="4"/>
+<rect class="deep" x="312" y="200" width="144" height="8" rx="4"/>
+<rect class="deep" x="312" y="224" width="64" height="8" rx="4"/>
+</svg>
+</div>
+<div class="words">
+<h1 class="name">Note<span class="it">It</span></h1>
+<p class="tag">Notes that keep up with your thinking.</p>
+</div>
+</div>
+</body>
+</html>
