@@ -22,6 +22,11 @@ let package = Package(
             name: "NoteItSyncTests",
             dependencies: ["NoteItSync"],
             path: "Tests/NoteItSyncTests"
+        ),
+        .testTarget(
+            name: "NoteItTests",
+            dependencies: ["NoteIt", "NoteItSync"],
+            path: "Tests/NoteItTests"
         )
     ]
 )

@@ -15,7 +15,7 @@
 
 NoteIt is a SwiftUI and AppKit app with no third-party dependencies. Your notes are files on your Mac. There's no account and no NoteIt server. If you want your Macs in sync, point NoteIt at a folder or an S3-compatible bucket you control, such as a MinIO instance on your NAS, and it encrypts everything before it leaves the machine.
 
-> NoteIt was formerly called Inkwell. Existing notes, settings and sync setup migrate automatically the first time NoteIt launches.
+> NoteIt was formerly called Inkwell. Existing notes, settings and sync setup migrate automatically the first time NoteIt launches; if Inkwell is still open, NoteIt asks to quit it first. Afterwards `~/Library/Application Support/Inkwell` is a link to the NoteIt folder, so an old copy of Inkwell opens the same notes, and NoteIt asks you to quit Inkwell if both are open.
 
 > **Status:** working app, single user, macOS 14 Sonoma or later. The visuals are engineering defaults and the app icon is a code-drawn placeholder. There are no signed or notarized release builds yet, so build it from source.
 
@@ -95,7 +95,7 @@ Debug builds accept extra launch arguments and environment variables for screens
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 ```
 
-- 164 XCTest cases in `Tests/NoteItSyncTests/` cover the sync planner, the engine against in-memory and faulty backends, the folder backend (including a cross-process lock test), S3 request handling, SigV4 signing, list parsing, crypto and the migration from Inkwell.
+- 198 XCTest cases in `Tests/NoteItSyncTests/` and `Tests/NoteItTests/` cover the sync planner, the engine against in-memory and faulty backends, the folder backend (including a cross-process lock test), S3 request handling, SigV4 signing, list parsing, crypto, the migration from Inkwell, and how the app picks, migrates and seeds its library at launch.
 - `DEVELOPER_DIR` points SwiftPM at Xcode's toolchain without changing `xcode-select`.
 - **Live S3 tests** (`LiveS3EmulatorTests`) are skipped by default. With Docker running, this starts [Floci](https://github.com/floci-io/floci) emulators, runs the suite against each one, and removes the containers:
 

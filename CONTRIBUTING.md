@@ -26,7 +26,7 @@ swift run NoteIt                              # run the app unbundled
 NOTEIT_DATA_DIR=~/scratch/noteit swift run NoteIt
 ```
 
-The older `INKWELL_*` names still work as a fallback. To try the Inkwell → NoteIt library migration without touching your real notes, debug builds accept `NOTEIT_APP_SUPPORT_DIR=<folder>` as a stand-in for `~/Library/Application Support`.
+The older `INKWELL_*` names still work as a fallback. To try the Inkwell → NoteIt library migration without touching your real notes, debug builds accept `NOTEIT_APP_SUPPORT_DIR=<folder>` as a stand-in for `~/Library/Application Support`, and `NOTEIT_DEBUG_LEGACY_BUNDLE_ID=<bundle id>` to treat another running app as Inkwell (to exercise the "Quit Inkwell" prompt, both at launch and when that app opens while NoteIt runs). After a move, the legacy folder becomes a relative link to `NoteIt`.
 
 Debug builds also accept launch arguments for screenshots, such as `--debug-open-settings --debug-settings-tab sync` and `--debug-dark`, plus self-test environment variables. They're all listed in the [engineer section of the design handoff](docs/design/HANDOFF.md#11-for-engineers), which is also the best map of the architecture.
 

@@ -75,7 +75,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SyncController.shared.start()
 
         handleDebugArguments()
-        DispatchQueue.main.async { LaunchMigration.presentPendingNotices() }
+        DispatchQueue.main.async {
+            LaunchMigration.presentPendingNotices()
+            LegacyAppMonitor.shared.start()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

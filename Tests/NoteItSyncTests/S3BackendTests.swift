@@ -371,6 +371,17 @@ final class S3BackendTests: XCTestCase {
         }
     }
 
+    func testCanaryUsesFrozenWireBytes() async throws {
+        StubURLProtocol.reset(fakeServer(honorsConditions: true))
+        let backend = makeBackend(verifyConditionals: true)
+        try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
+        let canary = StubURLProtocol.requests.filter { $0.request.url!.path.contains("/inkwell/.canary/") }
+        XCTAssertFalse(canary.isEmpty)
+        let ifMatch = canary.compactMap { $0.request.value(forHTTPHeaderField: "If-Match") }
+        XCTAssertFalse(ifMatch.isEmpty)
+        XCTAssertEqual(Set(ifMatch), ["\"inkwell-canary-mismatch\""])
+    }
+
     func testCanaryKeepsConditionalsOnHonestServerAndCleansUp() async throws {
         StubURLProtocol.reset(fakeServer(honorsConditions: true))
         let backend = makeBackend(verifyConditionals: true)

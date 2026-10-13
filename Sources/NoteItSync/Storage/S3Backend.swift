@@ -163,8 +163,8 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
     }
 
     private func runConditionalCanary() async {
-        let key = "\(RemoteLayout.folder)/.canary/\(UUID().uuidString)"
-        let bogus = ["If-Match": "\"noteit-canary-mismatch\""]
+        let key = RemoteLayout.canaryPrefix + UUID().uuidString
+        let bogus = ["If-Match": "\"\(RemoteLayout.canaryMismatchETag)\""]
         do {
             do {
                 _ = try await upload(key, data: Data("canary".utf8), headers: ["If-None-Match": "*"])

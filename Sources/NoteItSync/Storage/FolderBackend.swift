@@ -4,6 +4,8 @@ import Foundation
 /// Stores objects as files under a root directory (NAS mount, iCloud Drive, Dropbox, ...).
 public final class FolderBackend: StorageBackend, @unchecked Sendable {
     static let hashedSizeLimit: Int64 = 256 * 1024
+    // Legacy name kept on purpose: Macs still running Inkwell lock the same file.
+    static let lockFileName = ".inkwell-lock"
 
     public let root: URL
     private let lock = NSLock()
@@ -137,8 +139,7 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
     /// locking, falls back to the in-process lock only.
     private func withStoreLock<T>(_ body: () throws -> T) throws -> T {
         try lock.withLock {
-            // Legacy name kept on purpose: Macs still running Inkwell lock the same file.
-            let fd = Darwin.open(root.appendingPathComponent(".inkwell-lock").path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
+            let fd = Darwin.open(root.appendingPathComponent(Self.lockFileName).path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
             guard fd >= 0 else { return try body() }
             defer { close(fd) }
             var locked = false
