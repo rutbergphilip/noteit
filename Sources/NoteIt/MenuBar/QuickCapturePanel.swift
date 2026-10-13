@@ -223,8 +223,7 @@ struct QuickCaptureView: View {
                     .frame(width: 20, height: 20)
                     .background(
                         RoundedRectangle(cornerRadius: Tokens.Radius.toolbar, style: .continuous)
-                            .fill(LinearGradient(colors: [Tokens.Color.brandViolet, Color(hex: Tokens.Hex.legacyIconIndigo)],
-                                                 startPoint: .top, endPoint: .bottom))
+                            .fill(Tokens.Color.brandViolet)
                     )
                 Text("Quick Capture")
                     .font(.system(size: 12, weight: .semibold))

@@ -12,8 +12,7 @@ struct AboutSettingsView: View {
         VStack(spacing: 10) {
             AppIconView(size: Tokens.Size.aboutIcon)
                 .padding(.bottom, 4)
-            Text("NoteIt")
-                .font(.system(size: 26, weight: .bold, design: .rounded))
+            wordmark
             Text(version)
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -32,5 +31,13 @@ struct AboutSettingsView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(height: 300)
+    }
+
+    /// Two-tone wordmark: "Note" in label colour, "It" in brand violet.
+    private var wordmark: some View {
+        (Text("Note").foregroundColor(Tokens.Color.ink) + Text("It").foregroundColor(Tokens.Color.brandViolet))
+            .font(Tokens.Font.wordmark(size: 26))
+            .tracking(Tokens.Tracking.wordmark)
+            .accessibilityLabel("NoteIt")
     }
 }

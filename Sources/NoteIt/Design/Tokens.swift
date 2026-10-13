@@ -90,8 +90,6 @@ enum Tokens {
 
         static let syncGreen = "#34C759"
         static let syncTeal = "#30B0C7"
-        /// Mid stop of the pre-NoteIt placeholder icon gradient; goes away with the real artwork.
-        static let legacyIconIndigo = "#3A3FD9"
     }
 
     // MARK: - Type

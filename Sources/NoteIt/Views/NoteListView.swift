@@ -73,7 +73,7 @@ struct NoteListView: View {
             Button("Delete Note", role: .destructive) { store.deleteNote(note.id) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("The note will be removed from NoteIt.")
+            Text("This note will be deleted.")
         }
         .onChange(of: store.selection) { _, _ in store.reconcileSelection() }
         .onChange(of: store.searchText) { _, _ in store.reconcileSelection() }
@@ -110,7 +110,7 @@ struct NoteListView: View {
             default:
                 EmptyStateView(
                     symbol: "note.text",
-                    title: "No Notes",
+                    title: "No Notes Yet",
                     message: "Notes you create will appear here.",
                     actionTitle: "New Note"
                 ) { store.createNoteInCurrentContext() }
