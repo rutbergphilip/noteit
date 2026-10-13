@@ -453,7 +453,7 @@ enum RelativeDate {
     }
 }
 
-/// Save confirmation (`design/components/Toast.md`): capsule on surface-raised with a hairline.
+/// Save confirmation: capsule on surface-raised with a hairline.
 private struct SavedToast: View {
     let message: String
 

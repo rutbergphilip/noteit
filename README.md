@@ -127,7 +127,7 @@ These items aren't built yet. Contributions and design discussion are welcome.
 - **Search:** ranking and highlighting of matches.
 - **Onboarding:** a first-run flow for hotkeys, the menu bar and the second-Mac sync setup.
 - **Polish:**
-  - a motion language for Quick Capture, checklists, pinning and sync status (see [`design/BRAND.md`](design/BRAND.md#motion))
+  - a motion language for Quick Capture, checklists, pinning and sync status
   - an accessibility audit
   - notarized builds and auto-update
 
@@ -152,7 +152,7 @@ Sources/NoteItSync/           sync engine with no AppKit dependency
 └── Migration/                app identity, env vars, Inkwell → NoteIt migration
 Tests/NoteItSyncTests/        XCTest suite (+ opt-in live S3 tests)
 scripts/                      build_app.sh, live_s3_tests.sh, make_icon.swift, render_icon.sh
-design/                       design system: brand, tokens, components, icon assets
+design/                       logo and icon assets, brand guidelines
 docs/                         architecture, development, keyboard shortcuts, known limitations
 docs/specs/, docs/plans/      design specs and implementation plans
 ```
@@ -175,6 +175,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## Design
 
-[`design/`](design/) contains NoteIt's brand guidelines, design tokens, component specs and icon assets. Start with [`design/README.md`](design/README.md).
+[`design/`](design/) has NoteIt's logo, icon assets and logo usage guidelines; see [`design/BRAND.md`](design/BRAND.md).
 
 <p align="center"><img alt="NoteIt" src=".github/assets/noteit-banner-strip.svg" width="100%"></p>

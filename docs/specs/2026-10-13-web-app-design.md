@@ -169,7 +169,7 @@ Sealed at the meta key (`notes/<UUID>.meta` or `notebooks/<UUID>.json`).
 
 `Notebook` (`Models.swift:4-12`): `colorHex: "#RRGGBB"`, `id`, `modifiedAt?: ISO`, `name`,
 `revision?: UUID`, `sortIndex: Int`, `symbol: string` (an SF Symbol name from the curated picker; the palette
-has 10 colors — see `design/tokens.md`).
+has 10 colors — see `Sources/NoteIt/Design/Tokens.swift`).
 
 ### 2.7 Bodies today
 
@@ -1127,20 +1127,17 @@ Browser (desktop)                               Nuxt/Nitro server (Docker, NOTEI
   (`{mode: "server" | "direct", sourceUrl?}`, §6.4) and the sync worker's `backendFactory` builds either a
   `ServerBackend` (`/api/storage`, server mode) or an `S3Backend` (direct mode). Everything above the
   `StorageBackend` interface is identical in both modes.
-- **Design system.** The web UI follows the NoteIt design system, kept in the repository as `design/`
-  (kept unchanged: `README.md`, `BRAND.md`, `tokens.md`, `tokens.css`,
-  `components/`, `assets/icons/`).
-  - `design/tokens.css` is the design system's CSS export, which it designates for the website. The web app
-    imports it **unchanged** as the only source of color, type, spacing, radius, shadow and motion values,
-    including its light/dark theme switch. Web components reference token names only. This spec and the
+- **Design system.** The web UI follows the native app's design tokens (`Sources/NoteIt/Design/Tokens.swift`) and uses
+  the assets in `design/` unchanged (`README.md`, `BRAND.md`, `assets/icons/`).
+  - The web app defines the tokens once as CSS custom properties, mirroring `Tokens.swift`, as the only
+    source of color, type, spacing, radius, shadow and motion values, including a light/dark theme switch. Web components reference token names only. This spec and the
     plan never restate token values.
   - `design/BRAND.md` governs naming and copy: the product is always "NoteIt" with that exact casing, and
     UI labels use Title Case. Brand colors are for the logo, the app icon and marketing only, never for
     app chrome or note content.
-  - `design/components/*.md` specify each component the web reuses (sidebar row, note card, notebook glyph
-    and chip, toolbar button, editor blocks, empty state, toast, checkbox, keycap). Their previews are
-    visual specs, not code to port.
-  - Chrome icons use the NoteIt icon set (`design/assets/icons`, `components/IconSet.md`), which exists
+  - The web reuses the native app's components (sidebar row, note card, notebook glyph and chip, toolbar
+    button, editor blocks, empty state, toast, checkbox, keycap), rebuilt for the web.
+  - Chrome icons use the NoteIt icon set (`design/assets/icons`), which exists
     for places where SF Symbols can't be used, such as the web.
   - No UI component framework. The native app's source, [`docs/architecture.md`](../architecture.md) and
     [`docs/keyboard-shortcuts.md`](../keyboard-shortcuts.md) remain the reference for native *behaviour* the
@@ -1240,7 +1237,7 @@ web/
   apps/web/         Nuxt 4 app (SPA) + Nitro server routes (accounts, OIDC, admin, storage, /s3)
   e2e/              Playwright (server mode, multi-user, direct mode)
   Dockerfile, docker-compose.yml
-design/             NoteIt design system (tokens.css, BRAND.md, tokens.md, components/, assets/icons/)
+design/             NoteIt logo and icon assets (BRAND.md, assets/icons/)
 fixtures/golden/    shared vectors (Swift writes, TS reads; from-web/ the reverse)
 ```
 
@@ -2148,16 +2145,16 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
 ## 10. UX parity (native app, NoteIt design system)
 
 - **Three panes**: sidebar and note list sized by the layout tokens `sidebar-w` and `note-list-w` (ideal width
-  and min–max range as documented in `design/tokens.md`), editor content max-width 760 (`reading-max`), resizable
+  and min–max range as in `Sources/NoteIt/Design/Tokens.swift`), editor content max-width 760 (`reading-max`), resizable
   splitters persisted; below 900 px collapses to two panes, below 600 px one pane with back
   navigation (narrow desktop windows; phones are not supported in v1, §4.4).
 - **Sidebar**: Library rows All Notes / Pinned / Recent (7 days) / Conflicts (only when any exist); Notebooks
-  shown as `NotebookGlyph` (`design/components/NotebookGlyph.md`; SF Symbol → open-licensed inline SVG mapping
+  shown as `NotebookGlyph` (SF Symbol → open-licensed inline SVG mapping
   table for the 32 curated symbols, fallback `book`), drag-to-reorder (`sortIndex`), rename, recolor; Tags
   section from derived tags.
 - **Note list**: cards with title, preview, date, pin, conflict badge; sort by `updatedAt` desc with pinned first;
-  empty states copied from the native app (`Views/NoteListView.swift`, `Views/EditorContainerView.swift`), laid out as
-  `design/components/EmptyState.md`.
+  empty states copied from the native app (`Views/NoteListView.swift`, `Views/EditorContainerView.swift`), laid out
+  the same way.
 - **Brand-new store**: opens to the designed empty state, with no sample notes or notebooks (§4.2).
 - **Deleting** works as in the native app (`Views/NoteListView.swift`, `Views/SidebarView.swift`):
   - Delete… in a note's context menu, or the Delete key with a note selected, asks first: "Delete
@@ -2179,11 +2176,11 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
   time by the same luminance inversion native uses (`usesAdaptiveColorMappingForDarkAppearance`,
   `NoteItTextView.swift:54`) approximated by an OKLCH lightness flip, tested with snapshots.
 - **Look and copy**: the NoteIt design system (§4.1). Colors, type, spacing, radii, shadows and motion come
-  from `design/tokens.css` and its light/dark themes; components follow `design/components/`; labels and
-  messages follow `design/BRAND.md` (Title Case, "NoteIt"). Where the native app and the design system differ on
-  appearance, the design system wins; the native app still defines behaviour.
-- **Typography**: the type tokens in `design/tokens.css`. The editor body size setting defaults to **15**,
-  adjustable from 11 to 24, and every editor style scales from it (`design/tokens.md`, Editor `body`;
+  from the CSS tokens and their light/dark themes; components follow the native app; labels and
+  messages follow `design/BRAND.md` (Title Case, "NoteIt").
+  The native app defines both appearance and behaviour.
+- **Typography**: the type tokens (`Tokens.Font`, `EditorStyles`). The editor body size setting defaults to **15**,
+  adjustable from 11 to 24, and every editor style scales from it (`Editor/EditorStyles.swift`;
   native `PrefDefault.editorFontSize = 15`, `Settings/Preferences.swift:13`).
 
 ## 11. Security

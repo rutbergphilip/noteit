@@ -264,7 +264,7 @@ struct KeycapRow: View {
     }
 }
 
-/// One key of a shortcut (`design/components/Keycap.md`): mono face on surface-raised with a hairline.
+/// One key of a shortcut: mono face on surface-raised with a hairline.
 struct Keycap: View {
     let label: String
     var size: CGFloat = 12

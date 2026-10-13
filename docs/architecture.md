@@ -18,7 +18,7 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 | Folder | What's in it |
 |---|---|
 | `App/` | `NoteItApp` (main window, Settings, menu bar extra and menu commands), `AppDelegate` (activation policy, hotkey wiring, debug arguments), `WindowRouter` (show, hide and focus), and the launch-time migration from Inkwell (`LaunchMigration`, `LibraryLauncher`, `LegacyAppQuitter`, `LegacyAppMonitor`) |
-| `Design/` | `Tokens` (colors, spacing, radii and type from [`design/tokens.md`](../design/tokens.md)) and `AppResources` (app icon and menu bar glyph images) |
+| `Design/` | `Tokens` (colors, spacing, radii and chrome type styles) and `AppResources` (app icon and menu bar glyph images) |
 | `Model/` | `Models` (notebooks, note metadata, sidebar selection, palette), `NoteStore` (the single observable store: queries, editing, tags and persistence), seed content |
 | `Views/` | The main window: three-column split, sidebar, note list, editor container with the note header and conflict badge, empty states, notebook sheet and the sync status pill |
 | `Editor/` | `RichTextEditor` (the SwiftUI wrapper), `NoteItTextView` (an `NSTextView` subclass whose layout manager draws code blocks, quotes, dividers and checkboxes), `TextFormatter`, `MarkdownShortcuts`, `FormatCommand` (every formatting command and its shortcut), `FormattingToolbar`, `EditorStyles` (type scale, colors and block kinds) |
@@ -66,7 +66,7 @@ NoteIt used to be called Inkwell. On launch, `LibraryLauncher` and `LaunchMigrat
 The editor is an `NSTextView` that stores each note as RTFD.
 
 - **Block types.** RTFD drops custom attributes, so the kind of each paragraph (title, heading, subheading, body, code block, quote, divider) is stored as a sentinel `defaultTabInterval` value in its paragraph style. That way a heading stays a heading even if you change the default font size. Paragraphs without a sentinel, from older notes, fall back to guessing from the font size. See `BlockKind` and the `*Sentinel` constants in `EditorStyles.swift`.
-- **Type scale.** Every editor style is derived from the *Default font size* setting (15 pt by default). The scale is documented in [`design/tokens.md`](../design/tokens.md).
+- **Type scale.** Every editor style is derived from the *Default font size* setting (15 pt by default). Title is body + 12 pt (bold), heading body + 5 (semibold), subheading body + 1.5 (semibold), and code body − 1 (SF Mono); see `EditorStyles.swift`.
 - **Drawing.** `NoteItTextView`'s layout manager draws code block backgrounds, quote bars, dividers and round checkboxes.
 - **Markdown shortcuts** are handled in `MarkdownShortcuts.swift`, and every formatting command, with its menu title, toolbar icon and shortcut, is defined in `FormatCommand.swift`. The full list is in [keyboard-shortcuts.md](keyboard-shortcuts.md).
 - **Tags.** `#hashtags` are collected from note text, lowercased. A `#` counts only at the start of the text or after whitespace, an opening bracket or quote, `,` or `;`. Hashtags inside inline code, code blocks and links are ignored.

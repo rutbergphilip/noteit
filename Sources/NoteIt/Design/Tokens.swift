@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// NoteIt design tokens, mirrored from `design/tokens.json` / `design/tokens.md`.
+/// NoteIt design tokens.
 ///
 /// Semantic colours map to macOS system colours (they adapt to appearance, accent and accessibility
 /// settings); only fixed colours (notebook palette, hotkey tiles, `brand-*`) are hard-coded hex.
@@ -51,7 +51,7 @@ enum Tokens {
         static let brandPencil = SwiftUI.Color(hex: Hex.brandPencil)
         static let brandPaper = SwiftUI.Color(hex: Hex.brandPaper)
 
-        /// Settings › Sync provider tiles (fixed). Not in tokens.md; the extra two keep the
+        /// Settings › Sync provider tiles (fixed). The two extra hex values keep the
         /// light-mode values of `success` and `recent` fixed so the tiles look the same in Dark.
         enum SyncProvider {
             static let folder = notebookBlue
