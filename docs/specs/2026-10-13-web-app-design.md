@@ -448,8 +448,22 @@ Decisions:
    **Wire rule (both implementations):** the envelope's `bodyFormat` key is either `"inkwell-doc/1"` or
    **omitted**. It is never `null`, `""` or any legacy marker such as `"rtfd"`. Local stores keep exactly
    the wire value: `undefined`/`nil` means legacy, and there is no internal `'rtfd'` tag that could leak.
-   The envelope builder (`encodeEnvelope` in TS; in Swift, `BodyFormat.validateForPublish`, called in `SyncEngine.push` before the envelope is built or any backend call is made) rejects any other value
-   with an internal error and never publishes it.
+   Any other value is rejected **per record** with `invalidPayload`. In TS the check is in
+   `encodeEnvelope`; in Swift it is `BodyFormat.validateForPublish`, called in `SyncEngine.push` right after
+   `local.export`. Either way it runs before `pendingPushes` is written, the envelope is built, or any
+   backend call is made, so the bad note causes no remote write and no sync-state change.
+   - The error is **not** fatal for the pass. It is a non-`StorageError`, so the existing per-record catch
+     (`processSafely`, `SyncEngine.swift:280-290`) records `"<UUID>: invalidPayload(…)"` in
+     `SyncReport.errors`, and every other record keeps syncing. `sync()` returns normally.
+   - The conversion sweep applies the same per-record catch to each note it converts.
+   - The note is retried on every pass. The fix is a code change, and an upgraded client syncs the note
+     normally.
+   - **UI:**
+     - Native uses the existing per-record failure path: Settings → Sync shows "N items will be retried
+       on the next sync" with the error lines as a tooltip (`SyncSettingsView.swift:636-641`). The status
+       stays idle, so one bad note doesn't turn the pill into "Sync Issue".
+     - The web `SyncDetailsPopover` shows the same count and lists each failed note by title, linking
+       to it.
 
 ### 3.5 Native converter
 
