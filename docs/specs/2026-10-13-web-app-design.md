@@ -33,7 +33,7 @@ Design principles:
 
 ### Non-goals (v1)
 
-- Menu bar icon, global hotkeys, Quick Capture panel, launch at login (OS features; a PWA share target may come later).
+- Menu bar icon, global hotkeys, Quick Capture panel, launch at login (OS features; a share target is future work, §16).
 - **Shared notebooks between users.** Every user's store is encrypted with that user's own key, so sharing
   needs key sharing (wrapping a notebook key for several users) and a new store layout. Future work (§16).
 - Horizontal scaling: a server instance owns its data directory; run exactly one server process per data
@@ -41,7 +41,8 @@ Design principles:
 - Real-time collaborative editing; CRDTs. NoteIt's model stays "conflict copies, never silent merge".
 - Rollback/freshness protection against a malicious store (same as native today).
 - Server-side search, previews, or any server-side plaintext.
-- iOS/Android native apps (the PWA is the mobile story).
+- iOS/Android native apps, iOS/iPadOS Safari and an installable PWA. v1 supports desktop browsers only (§4.4);
+  phones and tablets are future work (§16).
 - Forward-auth (trusting a `Remote-User` header from a reverse proxy). It was considered and dropped (§7.3).
 
 ## 2. Existing format — byte-level reference (verified against Swift source)
@@ -112,7 +113,9 @@ Because inner dates are second-precision, a note's `updatedAt` round-trips with 
 
 - **KDF** (`Crypto/KeyDerivation.swift`): PBKDF2-HMAC-SHA256 over the passphrase's raw UTF-8 bytes
   (**no Unicode normalization**), 16-byte random salt, 32-byte output used **directly** as the AES-256-GCM
-  key (no HKDF). Default iterations **210 000**. A manifest is accepted only if `iterations ∈
+  key (no HKDF). Passphrases are therefore compared byte for byte. v1 keeps this in both apps, because
+  existing stores and native clients use the raw bytes (§7); normalization behind a KDF version is future
+  work (§16). Default iterations **210 000**. A manifest is accepted only if `iterations ∈
   100 000…10 000 000` (`SyncEngine.swift:66`), `salt.count == 16` (`SyncEngine.swift:190`), and `keyCheck`
   is non-empty.
 - **AEAD** (`Crypto/SyncCipher.swift:18-33`): AES-256-GCM, random 96-bit nonce, output is CryptoKit's
@@ -267,6 +270,7 @@ deviations"; the TS port reproduces it exactly and is tested against an exhausti
    extraction, not "natural" HTML text.
 4. Device IDs leak in cleartext key names; object sizes and counts leak (inherent).
 5. The passphrase is not NFC-normalized: "é" typed as precomposed vs combining produces different keys.
+   v1 keeps it that way and tells users in the passphrase fields (§7).
 
 ## 3. Phase 0 — Portable note format
 
@@ -301,6 +305,13 @@ UTF-8 JSON:
 - Attachments are inline so the body stays one atomic object covered by `bodySHA256`, with no per-attachment
   objects. (The body itself moves to a versioned key in v2 stores, §3.4 item 9.) Content-addressed
   attachment objects are future work (§16).
+- **Attachment size cap: 25 MB** (25 × 1024 × 1024 bytes) per attachment, measured on the bytes the user
+  adds, before base64. Both apps check it when an attachment is added (insert, paste and drag-and-drop)
+  and refuse a larger file with a clear message: **"“<name>” is too large to add. Attachments can be up
+  to 25 MB."** Nothing is added in that case. The cap applies only when adding: a reader never rejects or
+  drops a received attachment because of its size, and an image converted on export (§3.5) may end up
+  larger than 25 MB. A note's whole sealed body is still limited by the server's 50 MB object limit
+  (§6.2). The constant lives in `NoteItDoc` and `@noteit/doc` and is the same in both.
 - Unknown top-level fields must be preserved by readers that re-save (forward compatibility), and unknown
   node/mark types make a reader treat the note as **read-only** rather than dropping content.
 - No byte-level canonicalization is required: ETags/`bodySHA256` are computed over whatever bytes the
@@ -1061,7 +1072,13 @@ New SwiftPM library target **`NoteItDoc`** (depends on AppKit; used by the `Note
 - The block-kind sentinel constants (29…41) move from `EditorStyle` into `NoteItDoc` so both sides share them;
   legacy font-based classification is reused for pre-sentinel content.
 - Image export: PNG/JPEG/GIF/WebP pass through; TIFF/BMP → PNG; HEIC/HEIF → JPEG (q 0.9); anything else →
-  `attachment` (download chip). Foreign rich-paste attributes (arbitrary fonts, kerning, shadows) degrade to
+  `attachment` (download chip). This conversion exists only because browsers can't display HEIC or TIFF,
+  and it happens only here, when the native converter exports a note to noteit-doc for the store. It never
+  rewrites anything already stored: legacy RTFD bodies keep their original images, an attachment already
+  in a noteit-doc body keeps its bytes and `sha` when the note is imported and exported again, and the
+  note's local RTFD on the Mac keeps the original file. The web app never transcodes images; it stores
+  what the user adds and shows anything it can't display as a download chip.
+- Foreign rich-paste attributes (arbitrary fonts, kerning, shadows) degrade to
   the nearest supported mark or are dropped — documented in the converter's README comment table.
 
 Fidelity tests (`Tests/NoteItDocTests`):
@@ -1087,7 +1104,7 @@ native cache remains RTFD on disk, so nothing changes for offline native use.
 ## 4. Architecture
 
 ```
-Browser (PWA)                                   Nuxt/Nitro server (Docker, NOTEIT_MODE=server)
+Browser (desktop)                               Nuxt/Nitro server (Docker, NOTEIT_MODE=server)
 ┌──────────────────────────────┐               ┌─────────────────────────────────────┐
 │ Vue UI (3 panes, TipTap)     │               │ /api/setup, login, oidc, session    │
 │   ⇅ Comlink                  │  HTTPS        │ /api/account, /api/admin, invites   │
@@ -1104,7 +1121,8 @@ Browser (PWA)                                   Nuxt/Nitro server (Docker, NOTEI
 ### 4.1 Nuxt app
 
 - Nuxt 4, `ssr: false` (SPA; nothing to render server-side since the server holds no plaintext), Nitro
-  `node-server` preset. Vue 3, Pinia for UI state, VueUse, `@vite-pwa/nuxt` for the app-shell service worker.
+  `node-server` preset. Vue 3, Pinia for UI state, VueUse. v1 ships no service worker and no web app
+  manifest (no PWA, §4.4).
 - **One client build, two storage modes.** The client reads `/noteit-client.json` at startup
   (`{mode: "server" | "direct", sourceUrl?}`, §6.4) and the sync worker's `backendFactory` builds either a
   `ServerBackend` (`/api/storage`, server mode) or an `S3Backend` (direct mode). Everything above the
@@ -1146,8 +1164,8 @@ Browser (PWA)                                   Nuxt/Nitro server (Docker, NOTEI
     > server yourself or fully trust whoever does, and only on a device nobody else uses.
 
     In direct mode, "this NoteIt server" reads "the site hosting this app".
-  - **Why keep it.** In the common homelab case the operator is the user, and an installed phone PWA that
-    asks for a long passphrase on every launch would push users to weaker passphrases. Dropping it for
+  - **Why keep it.** In the common homelab case the operator is the user, and a browser tab that asks for
+    a long passphrase every time it opens would push users to weaker passphrases. Dropping it for
     server mode would hurt exactly those users and add no protection when the operator is the user. An
     explicit, warned opt-in keeps the default safe for families where the admin is someone else.
 - **Engine in a Web Worker**: crypto, planner, storage I/O and the search index run off the main thread
@@ -1157,12 +1175,15 @@ Browser (PWA)                                   Nuxt/Nitro server (Docker, NOTEI
   missing on Chrome Android.)
 - **Local cache (IndexedDB, via `idb`)**: stores `records` (each value sealed with the store key under context
   `local/<storeName>/<id>`), `deletions`, `syncState`, `trash` (deleted bodies kept locally — native moves them
-  to `.trash` and never deletes them outright, `NoteStore.swift:481, 1091-1099`; the web caps this at 30 days
-  because browser quota is finite), `settings`.
+  to `.trash` and never deletes them outright, `NoteStore.swift:498-531, 1106-1128`; the web caps this at 30
+  days because browser quota is finite), `settings`. Like native's `.trash`, the web's `trash` store is a
+  safety copy with no UI: v1 has no restore or "delete forever" in either app (§10).
   Locking makes the cache unreadable; wiping is "Sign out & forget this device".
 - **Offline**: edits apply to IDB immediately; sync passes run after local changes (2 s debounce, 10 s max
   delay), every 60 s while visible and 600 s while hidden, and on `online`/focus — the native constants
-  (`SyncController.swift:71-74`); failures show "Offline"/"Sync Issue".
+  (`SyncController.swift:71-74`); failures show "Offline"/"Sync Issue". With no service worker in v1
+  (§4.4), an open tab keeps working offline, but loading the page needs a connection to the server or
+  static host.
 - **One cache per account.** The IndexedDB database is named per account so that two people who share a
   browser profile never share a cache: `noteit-<USER-UUID>` in server mode, and
   `noteit-direct-<hex(SHA-256(endpoint, bucket, prefix))[0..16]>` in direct mode. Signing out keeps the
@@ -1174,7 +1195,9 @@ Browser (PWA)                                   Nuxt/Nitro server (Docker, NOTEI
   `"Web — <Browser> on <OS>"`, editable in Settings (it appears in other devices' conflict copies).
 - **Dates**: envelopes carry Double2001 numbers (kept raw, converted at the edge); inner metas written as
   second-precision ISO `Z`.
-- The web app never seeds sample notes into a synced store.
+- **No sample notes.** The web app never creates sample notes or notebooks, in any store. A brand-new store
+  opens to the designed empty state (§10). Only the native app seeds its first-launch content (the Welcome
+  note and its notebooks), as it does today (`Model/SeedData.swift`).
 
 ### 4.3 Sharing logic: TypeScript port + golden vectors (recommended) vs WASM
 
@@ -1189,6 +1212,20 @@ Browser (PWA)                                   Nuxt/Nitro server (Docker, NOTEI
 **Decision: TS port**, kept honest by **golden vectors exported by the Swift tests** into `fixtures/golden/`
 and a reverse set (`fixtures/golden/from-web/`) written by TS and decoded by Swift tests. Both suites run in
 one CI workflow, so a format change in Swift that is not mirrored in TS fails the build.
+
+### 4.4 Browser support
+
+- **Supported in v1:** desktop Safari, Chrome, Firefox and Edge, each in its current and previous major
+  version. The client build targets exactly those versions.
+- **Tested in CI:** the Playwright E2E suite (§12 item 5) runs in Chromium (the engine of Chrome and Edge),
+  Firefox and WebKit (the engine of Safari). CI runs the engines Playwright ships, which track the
+  current versions; the previous majors are covered by the build target and by not depending on
+  anything newer.
+- **Unsupported browsers** (no WebCrypto, IndexedDB, Web Locks or module workers) see a short "This browser
+  isn't supported" page listing the supported browsers, instead of a broken app.
+- **Not in v1:** iOS/iPadOS Safari, an installable PWA (web app manifest, service worker, offline launch)
+  and a share target. They are future work (§16). Narrow windows still get the two- and one-pane layouts
+  (§10), but phones and tablets are not tested or supported.
 
 ## 5. Monorepo layout
 
@@ -1734,6 +1771,15 @@ that is never sent to the server. The server, its admin and the identity provide
 resetting a login password doesn't change or reveal it, and nobody can recover notes if it's forgotten.
 The server never derives keys from login credentials.
 
+**Passphrases are compared byte for byte.** The key comes from the passphrase's raw UTF-8 bytes with no
+Unicode normalization (§2.3), in both apps, because existing stores and native clients already work that
+way. Two passphrases that look the same but were typed differently (for example an accented letter typed
+as one character on one keyboard and as a letter plus an accent on another) give different keys, and
+unlocking fails with "wrong passphrase". Every passphrase field in both apps (create, confirm and unlock,
+including the web's direct-mode wizard) shows this hint under it: **"Type it exactly as on your other devices. Letters
+with accents can differ between keyboards."** Normalizing passphrases needs a KDF version in the manifest
+and a migration for existing stores, so it is future work (§16).
+
 **What this does and doesn't protect.** It protects your notes from the storage, from other users, from the
 identity provider and from an admin who only uses the admin screens. It can't protect them from whoever
 controls the server's code: the browser runs whatever JavaScript the server sends. A modified server can
@@ -2103,13 +2149,24 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
 - **Three panes**: sidebar and note list sized by the layout tokens `sidebar-w` and `note-list-w` (ideal width
   and min–max range as documented in `design/tokens.md`), editor content max-width 760 (HANDOFF), resizable
   splitters persisted; below 900 px collapses to two panes, below 600 px one pane with back
-  navigation (PWA on phones).
+  navigation (narrow desktop windows; phones are not supported in v1, §4.4).
 - **Sidebar**: Library rows All Notes / Pinned / Recent (7 days) / Conflicts (only when any exist); Notebooks
   shown as `NotebookGlyph` (`design/components/NotebookGlyph.md`; SF Symbol → open-licensed inline SVG mapping
   table for the 32 curated symbols, fallback `book`), drag-to-reorder (`sortIndex`), rename, recolor; Tags
   section from derived tags.
 - **Note list**: cards with title, preview, date, pin, conflict badge; sort by `updatedAt` desc with pinned first;
   empty states copied from HANDOFF, laid out as `design/components/EmptyState.md`.
+- **Brand-new store**: opens to the designed empty state, with no sample notes or notebooks (§4.2).
+- **Deleting** works as in the native app (`Views/NoteListView.swift`, `Views/SidebarView.swift`):
+  - Delete… in a note's context menu, or the Delete key with a note selected, asks first: "Delete
+    “<title>”?" with "This note will be deleted." and the buttons Delete Note and Cancel. Confirming removes
+    the note and syncs a tombstone. There is no undo.
+  - Delete Notebook… asks "Delete “<name>”?" with "Notes in this notebook will be kept in All Notes." The
+    notes move to no notebook.
+  - **No trash UI in v1.** The native app has no restorable trash: it moves a deleted note's body to a
+    hidden `.trash/` folder and offers no restore or "delete forever" (`NoteStore.swift:498-531`). The web
+    matches it: the body goes to the local `trash` store (§4.2), which no screen shows. A Recently Deleted
+    view with restore and delete forever, in both apps, is future work (§16).
 - **Search**: fold rules of §2.8, in the worker.
 - **Conflicts**: badge "Conflict" + source device on copies; "Mark Resolved" clears fields with a new revision;
   Conflicts library filter.
@@ -2151,7 +2208,8 @@ prevents this:
   HTML that declares the hashes, so it can change both.
 - **Self-reported hashes** (for example in `/api/server-info`) are worthless for the same reason, so the
   server publishes none.
-- An installed **PWA's service worker** is replaced whenever the server serves a new one.
+- **A service worker** doesn't help either. v1 ships none (§4.4), and any service worker is replaced
+  whenever the server serves a new one.
 
 The native app, a signed binary, is the trust anchor. Users who don't trust their server host should not
 unlock in the browser.
@@ -2159,8 +2217,9 @@ unlock in the browser.
 What v1 does provide (plan task 4.6), as **detection** only:
 1. **Signed release manifest.** CI builds the client reproducibly. It publishes `web-client-<version>.json`,
    listing the SHA-256 of every file in `.output/public`, as a GitHub release asset signed with the
-   project's minisign key. The public key is committed in the repo (`scripts/noteit-release.pub`) and
-   printed in each release's notes.
+   project's minisign key. The maintainer (rutbergphilip) holds the secret key. The public key is
+   committed in the repo (`scripts/noteit-release.pub`) and, from the first release that ships signed
+   artifacts, published in the README and in each GitHub release's notes.
 2. **Out-of-band verifier.** `node scripts/verify-web-client.mjs https://notes.example.com --expect <version>`
    (or `--latest`) runs from any machine.
    - **The expected version comes from the user, never from the server.** `--expect` takes it on the
@@ -2169,7 +2228,7 @@ What v1 does provide (plan task 4.6), as **detection** only:
    - It downloads and verifies the signed manifest for the *expected* version. It checks that the
      `version` field inside the signed manifest equals the expected version, so a renamed older manifest
      is rejected.
-   - It fetches the served `index.html`, every referenced asset and `sw.js`, and compares them with that
+   - It fetches the served `index.html` and every referenced asset, and compares them with that
      manifest.
    - `/api/server-info` is only read to report the claimed version. If it differs from the expected
      version, or if the served files match a different signed release, the verifier fails with
@@ -2185,13 +2244,13 @@ A version-pinned static client on an origin the user trusts is the real fix. Dir
 possible in v1 for bucket users: anyone can verify the signed `noteit-web-static-<version>.tar.gz` and host it
 on an origin they control. The same files are covered by the signed release manifest and the verifier. An
 official, project-hosted pinned client, and a pinned client that talks to a NoteIt server on another origin,
-remain open (§15) and are not v1 guarantees.
+are not part of v1. Both are future work (§16).
 
 ### 11.2 Controls
 
 - CSP via `nuxt-security` (server mode, sent as a header): `default-src 'none'; script-src 'self' 'strict-dynamic' 'nonce-…'; style-src 'self'
   'unsafe-inline'` (ProseMirror writes `style` attributes for alignment/colors; inline *scripts* remain
-  forbidden); `img-src 'self' blob: data:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self';
+  forbidden); `img-src 'self' blob: data:; connect-src 'self'; worker-src 'self' blob:;
   font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`. Plus HSTS,
   `X-Content-Type-Options`, `Referrer-Policy: no-referrer`, COOP/CORP. Trusted Types is a stretch goal.
 - **Direct mode.** A static host can't add per-request nonces, so the generated HTML carries a `<meta>` CSP
@@ -2483,7 +2542,9 @@ remain open (§15) and are not v1 guarantees.
    - setup: token required and single-use (also via OIDC), pre-seeded admin, `needsSetup` gating.
 5. **Playwright E2E**: first-run setup (rejected without the bootstrap token; the token can't be reused), login, create store, unlock/lock, CRUD notes/notebooks, formatting
    round-trip, offline edit → reconnect, two browser contexts producing a conflict copy, shortcuts, CSP, no
-   passphrase on the wire. Also:
+   passphrase on the wire, an attachment over 25 MB refused with the §3.2 message, delete confirmations
+   (§10), and a brand-new store showing the empty state with no sample notes. The whole suite runs in
+   Chromium, Firefox and WebKit (§4.4). Also:
    - `multiuser.spec.ts`: an admin invites a second user, who redeems the link, creates a store with a
      different passphrase and syncs; neither sees the other's notes; the admin disables the user, whose open
      tab drops to the login screen; the admin can't delete themselves as last admin; a quota-limited user
@@ -2548,9 +2609,9 @@ remain open (§15) and are not v1 guarantees.
 | An upstream outage gets the container restarted in a loop | separate liveness (`/api/health/live`, the `HEALTHCHECK`) and readiness (`/api/health`) (§6.2, §8) |
 | "Remember on this device" lets served code decrypt without an unlock | off by default, explicit warning, honest threat model (§4.2, §11.1) |
 | Planner/engine drift between Swift and TS | exhaustive planner vectors + scenario traces in one CI |
-| Large inline images bloat bodies and re-uploads | size cap with warning; content-addressed attachments later |
+| Large inline images bloat bodies and re-uploads | 25 MB cap per attachment with a clear error in both apps (§3.2); content-addressed attachments are future work (§16) |
 | Browser storage eviction | `navigator.storage.persist()`; remote is source of truth |
-| Safari ITP clears IDB after 7 days without interaction | documented; installed PWA exempt; re-sync is lossless |
+| Safari ITP clears IDB after 7 days without interaction | documented; re-sync is lossless (an installable PWA, which would be exempt, is future work, §16) |
 | Compromised server serves malicious JS | cannot be prevented in-browser; honest threat model, signed release manifest + out-of-band verifier (detection only), native app as anchor, pinned static client as future work |
 | S3-subset incompatibilities with other clients | only NoteIt + rclone are supported; conformance tests reuse Swift `S3Backend`; a pinned-rclone round trip runs in CI (§12 item 7) |
 | Shortcut collisions per browser/OS | Playwright matrix (Chromium/WebKit/Firefox) |
@@ -2576,22 +2637,31 @@ remain open (§15) and are not v1 guarantees.
   chrome uses the NoteIt icon set (`design/assets/icons`).
 - A6: Direct-mode users can set CORS rules on their bucket, or on their MinIO server.
 
-## 15. Open questions for the owner
+## 15. Resolved decisions
 
-1. Attachment size cap per note (proposed 25 MB), and whether to build content-addressed attachments in v1.
-2. HEIC→JPEG and TIFF→PNG conversion on export — acceptable quality/size trade-off?
-3. Should the web create sample notes for brand-new stores?
-4. Priority of Safari/iOS PWA support.
-5. Web trash UI (restore deleted notes from the local trash) in v1?
-6. Should the project host an official version-pinned static web client on a separate origin, and should a
-   pinned client be able to use a NoteIt server on another origin (§11.1)? Who holds the release-signing
-   (minisign) key?
-7. Normalize passphrases to NFC? Requires a KDF version field in the manifest; affects existing stores.
+No open questions remain. Each decision lives in the section that describes the behaviour:
 
-Resolved since the previous revision: repository and image names (§8), multi-user (§7), the format upgrade
-(automatic, §3.4), direct mode (§6.4), OIDC (§7.2), the default body size (15, §10), the minimum native
-version (any v2 build; pre-release builds without v2 get `unsupportedFormat`), and the one-time re-download
-during conversion (accepted, explained to users in §3.4 item 6).
+1. **Attachments:** a hard cap of 25 MB per attachment, with a clear error in both apps (§3.2). No
+   content-addressed attachments in v1 (§16).
+2. **Image conversion:** HEIC/HEIF → JPEG (quality 0.9) and TIFF → PNG, only when the native converter
+   exports a note for the web; stored originals are never rewritten (§3.5).
+3. **Sample notes:** the web never creates them; a brand-new store shows the empty state. Only the native
+   app seeds its Welcome note (§4.2, §10).
+4. **Browsers:** desktop Safari, Chrome, Firefox and Edge, current and previous major versions, with E2E
+   in Chromium, Firefox and WebKit in CI (§4.4, §12 item 5). iOS/iPadOS Safari and a PWA are future work
+   (§16).
+5. **Trash:** the native app has no restorable trash, so the web matches it: confirmed deletes, a hidden
+   local safety copy, and no trash UI in v1 (§4.2, §10). A trash UI for both apps is future work (§16).
+6. **Official clients and signing:** no officially hosted static client and no cross-origin pinned client
+   in v1 (§11.1, §16). The maintainer (rutbergphilip) holds the minisign key; its public key is published
+   in the README and in each release from the first signed release (§11.1).
+7. **Passphrases:** not normalized in v1; compared byte for byte, with a hint in every passphrase field
+   of both apps (§2.3, §7). KDF-versioned normalization is future work (§16).
+
+Also resolved earlier: repository and image names (§8), multi-user (§7), the format upgrade (automatic,
+§3.4), direct mode (§6.4), OIDC (§7.2), the default body size (15, §10), the minimum native version (any v2
+build; pre-release builds without v2 get `unsupportedFormat`), and the one-time re-download during
+conversion (accepted, explained to users in §3.4 item 6).
 
 ## 16. Future work
 
@@ -2599,6 +2669,14 @@ during conversion (accepted, explained to users in §3.4 item 6).
   sharing: a per-notebook key wrapped for each member (which needs per-user public keys), a store layout for
   shared notebooks, and a new conflict and revocation story. Out of scope for v1.
 - OIDC RP-initiated logout and back-channel logout.
-- An official pinned static client (§15 question 6).
-- Content-addressed attachments (§15 question 1).
-- A PWA share target.
+- **An official pinned static client.** A project-hosted, version-pinned static web client on its own
+  origin, and pinned clients that use a NoteIt server on another origin (which needs CORS and a session
+  model that works across origins). v1 has neither (§11.1).
+- **Content-addressed attachments.** Attachments stored as separate objects keyed by hash, so a large image
+  is uploaded once instead of with every edit of its note (§3.2).
+- **Phones and tablets.** iOS/iPadOS Safari support and an installable PWA (web app manifest, service
+  worker, offline launch), then a share target (§4.4).
+- **Trash in both apps.** A Recently Deleted view with restore and delete forever, which needs the deleted
+  note's metadata kept next to its body. Today neither app offers one (§10).
+- **Passphrase normalization.** NFC-normalizing passphrases behind a KDF version field in the manifest,
+  with a way to move existing stores over, since today the key comes from the raw bytes (§2.3, §7).
