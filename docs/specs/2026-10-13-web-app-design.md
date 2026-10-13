@@ -26,7 +26,9 @@ Design principles:
    `NoteItSync` plus the note model, not a client of a server-side API that understands notes.
 2. **Zero knowledge server.** The NoteIt server only ever stores and relays ciphertext. Passphrases and keys
    live only in browsers and on native devices. This holds for every user on the instance, and for the
-   instance admin too (§7.4, §11.1).
+   instance admin too (§7.4, §11.1). It protects against the storage and other users, not against whoever
+   controls the code the server sends to browsers: a modified server can capture a passphrase at unlock,
+   or use a key remembered in the browser (§7, §11.1).
 3. **One image, one volume** for homelabs; the same server also gives native apps a no-cloud sync target.
 
 ### Non-goals (v1)
@@ -63,7 +65,8 @@ including the portable body format `noteit-doc` (§3), uses the NoteIt name.
 | `inkwell/v1/manifest.json` | `Manifest` | **No** (plaintext JSON) |
 | `inkwell/v1/notebooks/<UUID>.json` | sealed `RemoteEnvelope` (kind `notebook`) | yes |
 | `inkwell/v1/notes/<UUID>.meta` | sealed `RemoteEnvelope` (kind `note`) | yes |
-| `inkwell/v1/notes/<UUID>.body` | sealed note body | yes |
+| `inkwell/v1/notes/<UUID>.body` | sealed note body (legacy RTFD) | yes |
+| `inkwell/v1/bodies/<UUID>.<VERSION>.body` | **new in format v2:** sealed noteit-doc body, one immutable object per publish (§3.4 item 9) | yes |
 | `inkwell/v1/tombstones/<UUID>.json` | sealed `Tombstone` | yes |
 | `inkwell/v1/devices/<deviceID>.json` | sealed `DeviceInfo` | yes |
 
@@ -148,6 +151,8 @@ Sealed at the meta key (`notes/<UUID>.meta` or `notebooks/<UUID>.json`).
 | `meta` | base64 | bytes of the inner meta JSON (§2.6) |
 | `modifiedAt` | Double2001 | notes: `meta.updatedAt`; notebooks: `modifiedAt` |
 | `revision` | UUID | the record revision being published |
+| `bodyFormat` | string? | **new in v2:** `"noteit-doc/1"` or omitted (legacy RTFD); §3.4 item 1 |
+| `bodyVersion` | UUID? | **new in v2:** present exactly when `bodyFormat` is; names the versioned body object (§3.4 item 9) |
 
 `Tombstone`: `{deletedAt: Double2001, deletedMetaETag?: string, deviceID, id, kind}`.
 `DeviceInfo`: `{deviceID, lastSync: Double2001, name}`, rewritten at most every 10 min.
@@ -229,6 +234,9 @@ sweepTombstones older than 30 days (:647); writeDeviceRecordIfDue every 10 min (
 fatal (abort pass): unauthorized, clockSkew, insecureConnectionBlocked (:273)
 ```
 
+This is the v1 engine. In a v2 session, noteit-doc bodies are published body-first to a versioned key and
+committed by the meta write, and every pass ends with the conversion and orphan sweeps (§3.4 items 7 and 9).
+
 `SyncState` (`Model/SyncState.swift:4-44`) persists: `bases[id] = {revision, remoteMetaETag, replacedMetaETag?,
 bodyETag?}`, `knownTombstones`, `tombstoneDates`, `pendingPushes` (id → revision), `sidecarFirstSeen`,
 `lastDeviceWrite`. It is device-local (never uploaded), so the web may store it in its own shape. The planner is a 17-row
@@ -249,8 +257,11 @@ deviations"; the TS port reproduces it exactly and is tested against an exhausti
    (`SyncController.swift:588`) reads it only when creating a session, which then lives until an error or
    reconnect. A `formatVersion` bump therefore does **not** fence an already-running old client; it can
    keep pushing RTFD bodies into an upgraded store. → v2 readers must handle legacy bodies **per record** (§3.4).
-2. An old client that pulls a non-RTFD body fails `deserializeBody` with a per-record error and retries
-   forever; it does not overwrite or lose data (and `importConflictCopy` throws before pushing). Safe, but noisy.
+2. An old client that can't get a usable body for a record skips it with a per-record error and retries
+   forever: a non-RTFD body fails `deserializeBody`, and a missing body or one whose hash doesn't match the
+   meta is skipped by `pull` (`SyncEngine.swift:427-432`). It doesn't overwrite or lose data, and
+   `importConflictCopy` throws before pushing. Safe, but noisy. In v2 stores old clients only meet the
+   second case, because noteit-doc bodies live under `bodies/` (§3.4 item 9), which they never read.
 3. Titles include list markers and table text collapsing — the web derivation must mimic native text
    extraction, not "natural" HTML text.
 4. Device IDs leak in cleartext key names; object sizes and counts leak (inherent).
@@ -286,8 +297,9 @@ UTF-8 JSON:
 }
 ```
 
-- Attachments are inline so the body stays one atomic object covered by `bodySHA256` (no orphan
-  GC, no new key types). Content-addressed attachment objects are future work (§12).
+- Attachments are inline so the body stays one atomic object covered by `bodySHA256`, with no per-attachment
+  objects. (The body itself moves to a versioned key in v2 stores, §3.4 item 9.) Content-addressed
+  attachment objects are future work (§16).
 - Unknown top-level fields must be preserved by readers that re-save (forward compatibility), and unknown
   node/mark types make a reader treat the note as **read-only** rather than dropping content.
 - No byte-level canonicalization is required: ETags/`bodySHA256` are computed over whatever bytes the
@@ -373,9 +385,10 @@ Decisions:
 
 ### 3.4 Versioning and migration
 
-1. **Envelope** gains optional `bodyFormat: string` — `"noteit-doc/1"`. Absent ⇒ legacy RTFD. Old engines
-   ignore it (unknown key) and drop it when they re-publish — which is correct, because they only ever
-   publish RTFD.
+1. **Envelope** gains optional `bodyFormat: string` — `"noteit-doc/1"` — and `bodyVersion: UUID`, which
+   names the versioned body object (item 9). Absent ⇒ legacy RTFD at `notes/<UUID>.body`. Old engines
+   ignore both (unknown keys) and drop them when they re-publish — which is correct, because they only ever
+   publish RTFD at the legacy key.
 2. **`RecordPayload`** (engine ↔ app boundary) gains `bodyFormat` so the engine stays body-agnostic: the
    adapter sets it on export and receives it on pull.
 3. **Manifest** gains `formatVersion: 2` and optional `features: [string]` (initially `["noteit-doc"]`).
@@ -441,26 +454,45 @@ Decisions:
    > note once, which can take a while for a large library with images. After that, the web app can open
    > all your notes. Older NoteIt builds stop syncing with that storage and ask you to update NoteIt;
    > nothing on those Macs is lost.
-7. **Conversion sweep — a revision-preserving meta rewrite, intentionally pulled by peers.** Adding
+7. **Conversion sweep — a revision-preserving republish, intentionally pulled by peers.** Adding
    `bodyFormat` changes the envelope bytes, so the meta ETag changes. A body-only re-upload
    (`repushBody`, `SyncEngine.swift:511-519`) can't publish `bodyFormat`, and peers would never learn the
-   new format. So conversion re-publishes **meta and body** through the normal push path
-   (`SyncEngine.swift:394-424`), with **the same revision**. A record is a *conversion candidate* when all
-   of these hold:
+   new format. So conversion re-publishes **meta and body** with **the same revision**, through the
+   crash-safe v2 publish of item 9 (body first, to a new versioned key; the conditional meta write commits).
+   A record is a *conversion candidate* when all of these hold:
    - this is a v2 session;
    - the last envelope seen for the note had no `bodyFormat`; the engine tracks this in the new
      `SyncState.legacyBodies: Set<UUID>`, filled on pull and on `.none` with a legacy remote;
    - the local revision equals `base.revision`, meaning no unpushed local edit;
-   - no `pendingPushes` entry exists.
+   - no `pendingPushes` entry exists, **or** the entry was left by an interrupted conversion of this note
+     (its revision equals `base.revision` and `pendingBodyVersions` has the note), which the sweep resumes.
 
-   For each candidate, the engine:
-   1. Records the candidate in `pendingPushes` (revision unchanged), so a crash resumes like any push.
-   2. Sends `PUT notes/<id>.meta` with **`If-Match: base.remoteMetaETag`**. The new envelope has the same
-      `revision`, this device's `deviceID`/`deviceName`, `bodyFormat: "noteit-doc/1"` and a new
-      `bodySHA256`.
-   3. Sends `PUT notes/<id>.body` with the noteit-doc container.
-   4. Sets `base = {revision (unchanged), remoteMetaETag: new, replacedMetaETag: old, bodyETag}` and removes
-      the id from `legacyBodies` and `pendingPushes`.
+   For each candidate, the engine runs item 9's publish with the unchanged revision:
+   1. Exports the note as noteit-doc and records `pendingPushes[id] = revision` and
+      `pendingBodyVersions[id] = <new VERSION>`. A resumed conversion first deletes the version recorded
+      by the interrupted attempt (it was never committed, see below) and picks a new one.
+   2. Uploads `bodies/<id>.<VERSION>.body` with `If-None-Match: *`. The legacy meta and body are untouched,
+      so every reader still sees a consistent legacy note.
+   3. Sends `PUT notes/<id>.meta` with **`If-Match: base.remoteMetaETag`**. The new envelope has the same
+      `revision`, this device's `deviceID`/`deviceName`, `bodyFormat: "noteit-doc/1"`,
+      `bodyVersion: <VERSION>` and the new `bodySHA256`. This write is the commit point.
+   4. Checks that the version still exists (item 9 step 4), sets
+      `base = {revision (unchanged), remoteMetaETag: new, replacedMetaETag: old, bodyVersion}`, removes the
+      id from `legacyBodies`, `pendingPushes` and `pendingBodyVersions`.
+   5. Deletes the legacy `notes/<id>.body` with `If-Match: <its listed ETag>`. If that fails, the orphan
+      sweep (item 9) removes it later.
+
+   **Crash at any step** leaves a consistent store, because nothing a reader can reach changes before the
+   commit point:
+   - before step 2, or after step 2 but before step 3: the legacy meta and body are intact; at most one
+     uncommitted version object exists. The next sweep resumes the conversion (deleting that version
+     first); if this device never comes back, the orphan sweep of any other v2 device removes the version
+     after 7 days, and the note stays a conversion candidate on every v2 device, so another one converts it;
+   - after step 3: the new meta and the new body both exist. On the next pass the listed meta ETag differs
+     from `base` and the local revision doesn't, so the planner pulls our own committed write, which
+     restores `base` and clears the pending entries (`adopt`, `SyncEngine.swift:438-443`); the legacy body is
+     then an orphan;
+   - after step 4: only the legacy body is left over, and the orphan sweep removes it.
 
    **Peers:** the meta ETag changed and their local revision didn't, so `SyncPlanner.decide` yields
    **`.pull`** (row 5, `SyncPlanner.swift:35-38`). The peer fetches meta and body, checks `bodySHA256`, and
@@ -483,8 +515,10 @@ Decisions:
    **Old (v1) client that edits a note after its conversion:**
    1. Its push gets 412 because its base ETag is stale.
    2. Its planner then reports `.conflict`.
-   3. `importConflictCopy` fails to decode the noteit-doc body (§2.12 fact 2) and the record is retried
-      every pass.
+   3. It fetches the legacy `notes/<id>.body`, which is either gone (step 5) or no longer matches the
+      envelope's `bodySHA256`. Without a payload, `importConflictCopy` can't run, and the record is retried
+      every pass (§2.12 fact 2). Without an edit, the old client's pull is simply skipped
+      (`SyncEngine.swift:427-432`).
 
    The edit stays safe on that Mac, unsynced, until NoteIt on it is updated. That Mac shows the record in
    its existing "N items will be retried" line. Only pre-release builds can be in this state.
@@ -496,10 +530,12 @@ Decisions:
    `connect` in `@noteit/core`. The web creates new stores directly at v2 (always encrypted). Legacy-RTFD notes found in a v2
    store are shown **read-only** with a placeholder ("Formatted on an older Mac — open NoteIt on macOS to
    convert") plus the meta title/preview; pin/move/delete are allowed and re-push the opaque body bytes
-   **without** `bodyFormat`. The web never converts bodies (it cannot parse RTFD).
+   **without** `bodyFormat` or `bodyVersion`, at the legacy key, exactly as a v1 engine would. The web never converts bodies (it cannot parse RTFD).
 
    **Wire rule (both implementations):** the envelope's `bodyFormat` key is either `"noteit-doc/1"` or
-   **omitted**. It is never `null`, `""` or any legacy marker such as `"rtfd"`. Local stores keep exactly
+   **omitted**. It is never `null`, `""` or any legacy marker such as `"rtfd"`. `bodyVersion` is present
+   (an uppercase UUID) exactly when `bodyFormat` is, and omitted otherwise; a pulled envelope that breaks
+   this is the same per-record `invalidPayload`. Local stores keep exactly
    the wire value: `undefined`/`nil` means legacy, and there is no internal `'rtfd'` tag that could leak.
    Any other value is rejected **per record** with `invalidPayload`. In TS the check is in
    `encodeEnvelope`; in Swift it is `BodyFormat.validateForPublish`, called in `SyncEngine.push` right after
@@ -517,6 +553,86 @@ Decisions:
        stays idle, so one bad note doesn't turn the pill into "Sync Issue".
      - The web `SyncDetailsPopover` shows the same count and lists each failed note by title, linking
        to it.
+
+9. **Versioned noteit-doc bodies: crash-safe publishing.** Rewriting `notes/<UUID>.body` in place can't be
+   made atomic with the meta write. Today's push writes the meta first and the body second
+   (`SyncEngine.swift:394-424`); a crash in between leaves a meta whose `bodySHA256` matches no stored
+   body, and noteit-doc bytes aren't canonical (§3.2), so nobody but the writer can produce matching bytes.
+   For RTFD that window is tolerated by existing clients; for every noteit-doc publish (edits, new notes,
+   conflict copies and conversions, native and web alike) v2 removes it:
+   - **Layout.** A noteit-doc body lives at `inkwell/v1/bodies/<NOTE-UUID>.<VERSION>.body`, sealed with the
+     usual key-bound context `bodies/<NOTE-UUID>.<VERSION>.body` (§2.3). `<VERSION>` is a fresh random
+     uppercase UUID per publish, recorded in the envelope's `bodyVersion`. Objects under `bodies/` are
+     written once and never overwritten. Legacy RTFD bodies stay at `notes/<UUID>.body`.
+   - **Why a new directory, not body-first at the legacy key.**
+     - A v1 binary that is still running (§2.12 fact 1) classifies any unknown name under `notes/` as a
+       sync-tool sidecar and deletes it after 30 days (`RemoteIndex`, `SyncEngine.swift:820-833`;
+       `resolveSidecars`, `:521-559`). It ignores every other directory under `inkwell/v1/` (the
+       `default: break` branch), so `bodies/` is invisible to it.
+     - Writing the new body first at `notes/<UUID>.body` isn't safe either: until the meta switches, the
+       old meta points at a body with a different hash, and the meta owner's `repushBody` (`:511-519`),
+       which old binaries still run, can overwrite the new body between the two writes, after which the meta
+       would commit to bytes that no longer exist.
+     - The version is random rather than the body hash, because a plaintext hash in a cleartext key name
+       would let the storage confirm guesses about note content.
+   - **Publish order** (`@noteit/core` and native, in a v2 session):
+     1. Export and validate; compute `bodySHA256`; persist `pendingPushes[id] = revision` and
+        `pendingBodyVersions[id] = <VERSION>` (new).
+     2. `PUT bodies/<id>.<VERSION>.body` with `If-None-Match: *`.
+     3. `PUT notes/<id>.meta` with `If-Match: base.remoteMetaETag` (`If-None-Match: *` for a new record),
+        carrying `bodyFormat`, `bodyVersion` and `bodySHA256`. **This is the commit point.** On 412 the
+        publish is abandoned as `push` does today; the engine also deletes the uncommitted version (best
+        effort) and clears both pending entries.
+     4. Confirm the version exists by listing its exact key (`list(prefix: <key>)`; the storage protocol
+        has no `HEAD`). If it is missing — only possible when this device stalled between steps 2 and 3
+        for longer than the 7-day orphan retention below — re-`PUT` the same bytes, still in memory.
+     5. Save `base = {revision, remoteMetaETag, replacedMetaETag, bodyETag, bodyVersion}` and clear the
+        pending entries.
+     6. Delete the body the previous meta referenced (the previous version or the legacy body) with
+        `If-Match: <its listed ETag>`. A failure is only logged; the orphan sweep removes it later.
+   - **Crash after each step:**
+
+     | Crash after | Remote state | Recovery |
+     |---|---|---|
+     | 1 | unchanged | the next pass publishes again with a fresh version |
+     | 2 | old meta and body intact, one uncommitted version | the next publish deletes the recorded version first; otherwise the orphan sweep |
+     | 3 | new meta and new body | the listed meta differs from `base`: the existing same-revision branch of `resolveConflict` (`SyncEngine.swift:450-457`), or a pull for a conversion, adopts our own write without a conflict copy |
+     | 5 | new meta and body; previous body left over | orphan sweep |
+
+     Readers never see a committed meta without its body. The one benign race: a peer that listed the old
+     meta before step 3 may `GET` the previous body after step 6 and get 404. A 404 on a body is handled
+     like a hash mismatch today: the record is skipped for this pass (`pull`, `SyncEngine.swift:427-432`),
+     and the next pass sees the new meta.
+   - **Pull** reads `bodies/<id>.<bodyVersion>.body` for noteit-doc envelopes and `notes/<id>.body` for
+     legacy ones, then checks `bodySHA256` as today. **Deletion** (`pushDeletion`) deletes the referenced
+     body after the meta, as today; any other versions are left to the sweep.
+   - **Orphan sweep** (end of every v2 pass, both engines, at most 200 deletions per pass). An orphan is:
+     - an object under `bodies/` whose version isn't the `bodyVersion` of its note's current meta and isn't
+       in this device's `pendingBodyVersions`. The current meta is known only when the listed meta ETag
+       equals `base.remoteMetaETag`; notes whose meta changed since are skipped until a later pass. A
+       version whose note has no meta at all is also an orphan;
+     - a legacy `notes/<id>.body` whose current meta (known as above) is a noteit-doc envelope;
+     - an unparsable name under `bodies/`.
+
+     The engine records when it first saw each orphan, per key and ETag, in `SyncState.orphanFirstSeen`.
+     It deletes an orphan with `If-Match: <listed ETag>` once it has been an orphan for **7 days**, a
+     window far longer than any healthy writer needs between steps 2 and 3. Orphans count toward the
+     quota (§6.2) until they are removed.
+   - **Missing committed body (repair).** If the current meta references a version that the listing
+     lacks (lost storage, a partial restore), the device that wrote the meta republishes the note with a
+     fresh version and the **same revision** when its local revision equals the meta's. Any other v2
+     device whose local revision equals the meta's does the same once the body has been missing for 24
+     hours. The meta `If-Match` lets one writer win, and peers pull the result once. For noteit-doc
+     bodies this replaces both places where today's engine re-uploads a body in place: `repushBody`
+     (`SyncEngine.swift:345-349, 511-519`) and the missing-payload case of `resolveConflict`'s
+     same-revision branch (`:450-463`). In a v2 engine both still apply to legacy envelopes only; for a
+     noteit-doc envelope they never write `notes/<id>.body` and hand the note to repair instead.
+   - **Old binaries and versioned notes.** A running v1 binary never touches `bodies/`. After a note is
+     converted, its listed meta no longer matches the v1 binary's base, so `repushBody` doesn't fire. The
+     only v1 path that still writes is the same-revision branch of `resolveConflict`, when the v1 binary
+     had pushed exactly the revision that was then converted: it re-uploads its RTFD bytes to
+     `notes/<id>.body` and adopts the meta. That object is a legacy body under a noteit-doc meta, so the
+     orphan sweep removes it after 7 days, and no reader of the doc meta ever looks at it.
 
 ### 3.5 Native converter
 
@@ -601,8 +717,23 @@ Browser (PWA)                                   Nuxt/Nitro server (Docker, NOTEI
   salt, iterations}, …, {name:"AES-GCM", length:256}, extractable: false, ["encrypt","decrypt"])`.
   Golden vectors also need raw bits, so tests use `deriveBits`; production code never exports the key.
 - **Key caching**: default **in memory only** (re-enter passphrase per browser session; Locked state in the
-  pill). Opt-in "Remember on this device" stores the non-extractable `CryptoKey` in IndexedDB (structured-clone
-  of CryptoKey keeps it non-extractable: script on this origin can *use* it but not read it). "Lock" deletes it.
+  pill). "Remember on this device" is **off by default** in server and direct mode. It stores the
+  non-extractable `CryptoKey` in IndexedDB (structured-clone of CryptoKey keeps it non-extractable: script
+  on this origin can *use* it but not export it). "Lock" deletes it.
+  - **What that means.** Non-extractable stops a key from being copied out, not from being used. Whatever
+    JavaScript the origin serves on the next page load can decrypt every note with the remembered key, with
+    no passphrase typed. So whoever controls the server or static host can read a remembered browser's
+    notes at any time they choose to serve modified code, not only the next time the user unlocks.
+  - **Turning it on** shows this warning, and the checkbox stays unchecked until the user confirms:
+    > Remembering your passphrase on this device means whoever runs this NoteIt server can read your notes
+    > the next time this page loads, without you typing your passphrase. Only turn this on if you run the
+    > server yourself or fully trust whoever does, and only on a device nobody else uses.
+
+    In direct mode, "this NoteIt server" reads "the site hosting this app".
+  - **Why keep it.** In the common homelab case the operator is the user, and an installed phone PWA that
+    asks for a long passphrase on every launch would push users to weaker passphrases. Dropping it for
+    server mode would hurt exactly those users and add no protection when the operator is the user. An
+    explicit, warned opt-in keeps the default safe for families where the admin is someone else.
 - **Engine in a Web Worker**: crypto, planner, storage I/O and the search index run off the main thread
   (PBKDF2 210k ≈ 100-300 ms; large bodies). UI talks to it via Comlink.
 - **Multi-tab**: Web Locks (`navigator.locks.request("noteit-sync")`) guarantee one pass at a time across
@@ -696,7 +827,7 @@ server. Neither mode gives anyone but the user's own devices the keys or the pla
 - `If-None-Match` is accepted only as `*`. Any other value gets 400 `badRequest`.
 - Drivers never see quotes.
 
-- `disk` (default): files under `/data/store/users/<USER-UUID>/<key>` (per-user namespaces, below); ETag = hex(SHA-256(bytes))[0..32] (unquoted);
+- `disk` (default): files under `/data/store/users/<USER-UUID>/<key>` (per-user namespaces, below); ETag = hex(MD5(bytes)) (unquoted), the same form S3 uses for single-part uploads, so backup tools such as rclone can verify copies with it;
   per-key async mutex; writes go temp file → `fsync` → `rename`; in-memory ETag index revalidated by
   `stat` (mtime/size); single-instance only (documented). Conditional semantics identical to S3.
 - `s3` (upstream): server uses `@noteit/core`'s `S3Backend` (same SigV4 code the browser uses in direct
@@ -721,22 +852,37 @@ Each namespace is a complete, independent NoteIt store, with its own manifest, s
 own passphrase and E2E key. There is no server-wide store. The server is the only writer to its upstream
 prefix; this is documented.
 
-**Quotas.** An optional per-user `quotaBytes`, set by an admin (default `NOTEIT_DEFAULT_QUOTA_MB`; unset
-means unlimited).
-- Usage is the sum of object sizes in the namespace. It is computed by listing at startup, kept in memory
-  and updated after every successful write or delete.
-- A PUT is admitted under a per-user lock when `used − size(existing object) + size(new) ≤ quota`. The
-  bytes are reserved before the driver write and adjusted or released after it, so concurrent uploads can't
-  overshoot.
+**Quotas.** Every user has two finite limits, set by an admin: `quotaBytes` (default
+`NOTEIT_DEFAULT_QUOTA_MB`, 10240) and `maxObjects` (default `NOTEIT_DEFAULT_MAX_OBJECTS`, 100000). There is
+no "unlimited" setting, because one user must never be able to fill storage that other users share.
+- **Every object counts**, toward both bytes and object count: bodies, metas, orphaned versions (§3.4
+  item 9), tombstones, device records, the manifest and canaries. Usage is computed by listing at startup,
+  kept in memory and updated after every successful write or delete.
+- **Admission.** A PUT is admitted under a per-user lock when, after the write,
+  `usedBytes ≤ limitBytes` and `usedObjects ≤ limitObjects`, counting `size(new) − size(existing object)`
+  and one more object only when the key is new. The bytes are reserved before the driver write and adjusted
+  or released after it, so concurrent uploads can't overshoot.
+- **Control allowance.** For ordinary objects the limits are `quotaBytes` and `maxObjects`. For control
+  objects (`manifest.json`, `tombstones/*`, `devices/*`, `.canary/*`), each capped at 64 KB, the limits are
+  `quotaBytes + 1 MiB` and `maxObjects + 1000`. This small, bounded headroom lets a full user still connect,
+  run the canary and sync deletions. It is not an exemption: the **hard ceiling** for any user is
+  `quotaBytes + 1 MiB` and `maxObjects + 1000`, whatever mix of objects they write.
+- **Canaries.** At most 4 `.canary/*` objects may exist per user; another PUT is rejected with
+  `quotaExceeded`. Clients delete their canary right after the probe, as native does today. The server also
+  deletes every canary older than 10 minutes, at startup and every 10 minutes, so a crashed or hostile
+  client can't keep them around.
 - Over quota: REST returns `507 {error: "quotaExceeded"}`; `/s3` returns `400 QuotaExceeded` XML.
   - TS adds `StorageErrorKind` `quotaExceeded`. It is non-fatal: the per-record catch records it and the
     other records keep syncing.
   - Native classifies the unknown 400 code as `invalidResponse`, which is also a non-fatal per-record error
     (`S3Backend.swift` `classify`; `SyncEngine.swift:280-290`).
   - The web shows "Storage full — delete notes or ask your admin for more space" in the sync details.
-- DELETE is always allowed, so a full user can free space. The control objects `manifest.json`,
-  `tombstones/*`, `devices/*` and `.canary/*` are exempt from the quota, so a full user can still connect,
-  run the canary and sync deletions, but each of them is capped at 64 KB.
+- DELETE is always allowed, so a full user can free space. Because a noteit-doc edit writes the new body
+  version before deleting the previous one (§3.4 item 9), saving a note briefly needs room for both copies;
+  a user right at the limit gets "Storage full" for that note until they free space.
+- Admins can raise both limits per user, up to `NOTEIT_MAX_USER_QUOTA_MB` (default 1048576) and 10 million
+  objects. Sizing the shared disk or bucket for the sum of all users' ceilings is the operator's job, and
+  the admin view shows that sum next to the free space the disk driver reports.
 
 ### 6.3 Front doors
 
@@ -750,7 +896,7 @@ relative to the signed-in user's namespace (§6.2):
 | `PUT /api/storage/object/<key>` | bytes; `If-Match: "<etag>"` (bare accepted) or `If-None-Match: *` | `200 {etag}` (JSON, unquoted) + header `ETag: "<etag>"`; `412` precondition failed; `507` quotaExceeded |
 | `DELETE /api/storage/object/<key>` | optional `If-Match` | `204`; `404`; `412` |
 
-Keys must match `^inkwell/(v1/(manifest\.json|notebooks/[0-9A-F-]{36}\.json|notes/[0-9A-F-]{36}\.(meta|body)|tombstones/[0-9A-F-]{36}\.json|devices/[0-9A-Za-z-]{1,64}\.json)|\.canary/[0-9A-F-]{36})$`
+Keys must match `^inkwell/(v1/(manifest\.json|notebooks/[0-9A-F-]{36}\.json|notes/[0-9A-F-]{36}\.(meta|body)|bodies/[0-9A-F-]{36}\.[0-9A-F-]{36}\.body|tombstones/[0-9A-F-]{36}\.json|devices/[0-9A-Za-z-]{1,64}\.json)|\.canary/[0-9A-F-]{36})$`
 (case-insensitive hex accepted for reads, writes uppercase-only). Body limit `NOTEIT_MAX_OBJECT_MB` (default 50).
 Errors are JSON `{error: code, message}`; `401` → client shows login.
 
@@ -759,9 +905,42 @@ needed: native adds a "NoteIt Server" provider preset (endpoint = server URL + `
 `noteit`, region `us-east-1`). Each person enters **their own** access key from the web app's Settings →
 Account and their own sync passphrase, so every Mac in a family syncs with its owner's store only.
 
-- Operations: `ListObjectsV2` (`list-type=2`, `prefix`, `continuation-token`, `max-keys`; XML
-  `ListBucketResult` with `Contents/Key/ETag/Size`, `IsTruncated`, `NextContinuationToken`), `GetObject`,
-  `HeadObject`, `PutObject`, `DeleteObject`; `If-Match` / `If-None-Match: *` → `412 PreconditionFailed` XML.
+- Operations: `ListObjectsV2`, `GetObject`, `HeadObject`, `PutObject`, `DeleteObject`; `If-Match` /
+  `If-None-Match: *` → `412 PreconditionFailed` XML. `ListObjects` v1 (no `list-type`) gets
+  `501 NotImplemented`; tools must use v2.
+- **`ListObjectsV2`** (`GET /s3/noteit?list-type=2`), complete enough for rclone's normal listings:
+  - Parameters: `prefix` (empty or any string; keys outside the store simply don't match), `delimiter`
+    (any non-empty string, in practice `/`), `max-keys` (1–1000, default 1000; 0 returns an empty,
+    untruncated page), `continuation-token`, `start-after`, `encoding-type=url`, `fetch-owner` (ignored).
+  - **Grouping.** Keys are scanned in ascending UTF-8 byte order after the prefix filter. With a delimiter,
+    a key whose remainder after `Prefix` contains the delimiter is rolled up into the `CommonPrefix`
+    `Prefix + remainder up to and including the first delimiter`, listed once.
+  - **Paging.** `Contents` and `CommonPrefixes` entries together count toward `max-keys`, in key order.
+    `KeyCount` is their sum for this page. When more remain, `IsTruncated` is `true` and
+    `NextContinuationToken` is an opaque token (base64url of the last key or common prefix returned); the
+    next page resumes strictly after it, skipping every key under a common prefix already returned.
+    `start-after` applies only when no continuation token is given.
+  - **Response.** `ListBucketResult` with `Name` (`noteit`), echoed `Prefix`, `Delimiter`, `MaxKeys`,
+    `EncodingType`, `StartAfter` and `ContinuationToken` (each only when sent), `KeyCount`, `IsTruncated`,
+    `NextContinuationToken`, `Contents` (`Key`, `LastModified`, quoted `ETag`, `Size`, `StorageClass`
+    `STANDARD`) and `CommonPrefixes/Prefix`. With `encoding-type=url`, `Key`, `Prefix`, `Delimiter`,
+    `StartAfter` and every `CommonPrefixes/Prefix` are URL-encoded.
+  - The disk driver lists the namespace directly. The `s3` upstream driver lists without a delimiter and
+    groups in the server, so the result is identical across drivers.
+- **Other request details.** Unknown query parameters (for example `x-id`) are ignored, though they stay in
+  the SigV4 canonical query. `PutObject` accepts and drops `Content-Type`, `x-amz-meta-*` and
+  `x-amz-storage-class`; it verifies `Content-MD5` (`400 BadDigest` on mismatch) and any
+  `x-amz-checksum-crc32|crc32c|sha1|sha256` header (`400 BadDigest`). `GetObject`/`HeadObject` return
+  `Last-Modified`, `Content-Length` and the quoted `ETag`.
+- **rclone (supported).** The documented remote: `type = s3`, `provider = Other`,
+  `endpoint = https://<server>/s3`, `force_path_style = true`, `region = us-east-1`, `list_version = 2`,
+  `no_check_bucket = true`, plus the user's access key and secret; the path is `noteit:noteit/inkwell/`. Use
+  `rclone copy --checksum` and `rclone check`: the disk ETag is the MD5 of the bytes, as rclone expects,
+  and upstream-S3 ETags are passed through. If the upstream provider's ETags aren't MD5s (for example
+  SSE-KMS on AWS), use `--size-only` with `rclone check --download` instead. A backup restored with rclone must be copied back as-is into an
+  empty store; the native app or the web app then connects to it normally. A pinned rclone runs this in CI
+  (§12). The supported rclone version range is the one CI tests; if a newer rclone starts sending
+  `aws-chunked` uploads, the CI test fails before release and the server gains decoding for them.
 - Auth: SigV4 `Authorization` header only (no presigned URLs), signed headers incl. `host`, `x-amz-date`,
   `x-amz-content-sha256` (`UNSIGNED-PAYLOAD` or hex payload hash, verified when hex; `aws-chunked` rejected with
   `NotImplemented`), `if-match`/`if-none-match` (`SigV4Signer.swift:31-39`). Clock skew > 15 min →
@@ -795,7 +974,7 @@ Account and their own sync passphrase, so every Mac in a family syncs with its o
 | `GET /api/server-info` | none | `ServerInfo` (below) |
 | `POST /api/setup` | setup token | create the first admin (§7.1) |
 | `POST /api/login`, `POST /api/logout` | — / session | password login; logout |
-| `GET /api/session` | session | `{user: {id, username, displayName, role, mustChangePassword, oidcLinked}, quota: {usedBytes, limitBytes?}}` |
+| `GET /api/session` | session | `{user: {id, username, displayName, role, mustChangePassword, oidcLinked}, quota: {usedBytes, limitBytes, usedObjects, limitObjects}}` |
 | `PATCH /api/account`, `POST /api/account/password`, `POST /api/account/logout-everywhere` | session | display name; change password; end all sessions |
 | `GET\|POST\|DELETE /api/account/s3-keys…` | session | per-user `/s3` keys (above) |
 | `POST /api/oidc/start`, `GET /api/oidc/callback`, `POST /api/account/oidc/unlink` | varies | OIDC (§7.2) |
@@ -839,7 +1018,9 @@ driver, which ports the native one:
 - Before the first conditional request of a session it runs the native canary once
   (`S3Backend.swift:160-190`) on `inkwell/.canary/<UUID>`: a `PUT If-None-Match: *`; a second one, which must
   get 412; a `PUT` with the bogus `If-Match: "inkwell-canary-mismatch"`, which must get 412; and a `DELETE`
-  with the same bogus `If-Match`, which must get 412. Then it deletes the canary. A provider that ignores
+  with the same bogus `If-Match`, which must get 412. Then it deletes the canary, and also deletes any
+  other `inkwell/.canary/` object whose `LastModified` is more than 10 minutes old (left by a crashed
+  client), so canaries never accumulate in a bucket without a server. A provider that ignores
   the write preconditions (or answers `501`/`400 NotImplemented`) is marked "conditional writes
   unsupported"; one that ignores the delete precondition is marked "conditional deletes unsupported".
   Whether a provider supports them is decided by this probe at runtime, never assumed per provider. If the
@@ -913,8 +1094,9 @@ driver, which ports the native one:
   For a plaintext store (a native option), the user picks a device passphrase that protects only the vault.
 - The S3 secret is never written to `localStorage`, `sessionStorage`, cookies or URLs, and never leaves
   the device; requests carry only SigV4 signatures.
-- "Remember on this device" stores the non-extractable `credKey` and store key in IDB, as in §4.2. Lock
-  deletes them. "Sign out & forget this device" deletes the vault and the cache.
+- "Remember on this device" (off by default, with the §4.2 warning) stores the non-extractable `credKey`
+  and store key in IDB, as in §4.2. Code served on a later page load can then use the S3 key and decrypt
+  notes without the passphrase. Lock deletes them. "Sign out & forget this device" deletes the vault and the cache.
 
 **Threat model differences** (also in §11.1). The S3 key lives in the browser. Script running on the app's
 origin, a malicious static host, or someone with the unlocked device can use it, and with it delete or roll
@@ -932,9 +1114,17 @@ their own isolated store (§6.2) and their own sync passphrase.
 
 **Login and the sync passphrase are separate.** Your NoteIt account — a password or a sign-in through your
 identity provider — only lets you into the server. Your notes are encrypted with a separate sync passphrase
-that never leaves your devices. The server, its admin and the identity provider never see it, resetting a
-login password doesn't change or reveal it, and nobody can recover notes if it's forgotten. The server
-never derives keys from login credentials.
+that is never sent to the server. The server, its admin and the identity provider never receive it,
+resetting a login password doesn't change or reveal it, and nobody can recover notes if it's forgotten.
+The server never derives keys from login credentials.
+
+**What this does and doesn't protect.** It protects your notes from the storage, from other users, from the
+identity provider and from an admin who only uses the admin screens. It can't protect them from whoever
+controls the server's code: the browser runs whatever JavaScript the server sends. A modified server can
+capture your passphrase the next time you unlock in the browser, and, if you turned on "Remember on this
+device" (§4.2), can use the remembered key on any later page load without you unlocking. Use the browser
+only with a server you run or trust; the native app doesn't load code from the server and isn't exposed to
+this (§11.1).
 
 ### 7.1 Accounts, first admin and sessions
 
@@ -945,7 +1135,7 @@ never derives keys from login credentials.
   - `displayName` (≤ 64 characters, always rendered as text);
   - `role`: `admin` or `user`; `status`: `active` or `disabled`;
   - `passwordHash` (argon2id) or none; `oidc: {issuer, sub}` or none;
-  - `sessionEpoch`, `mustChangePassword`, `quotaBytes?`, `s3Keys[]`, `createdAt`, `lastSeenAt`.
+  - `sessionEpoch`, `mustChangePassword`, `quotaBytes`, `maxObjects`, `s3Keys[]`, `createdAt`, `lastSeenAt`.
 
   Invites live in the same file (§7.4).
 - **Passwords.** argon2id (`@node-rs/argon2`) with the OWASP parameters m = 19 MiB, t = 2, p = 1; 10 to 256
@@ -1037,10 +1227,10 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 
 - **Roles.** `admin` and `user`. Admins have everything a user has, plus Settings → Users.
 - **Creating users.** An admin either:
-  - creates a user directly (username, display name, role, optional quota); a temporary password is shown
+  - creates a user directly (username, display name, role, optional limits overriding the defaults); a temporary password is shown
     once and the user must change it at first sign-in; or
   - creates an **invite**.
-- **Invites.** `POST /api/admin/invites {role, quotaBytes?, ttlHours?}` returns `{id, token, expiresAt}`.
+- **Invites.** `POST /api/admin/invites {role, quotaBytes?, maxObjects?, ttlHours?}` returns `{id, token, expiresAt}`.
   - The token is 32 random bytes (base64url). Only its SHA-256 is stored.
   - The link is `<origin>/invite#<token>`, built by the client. The token sits in the URL fragment, so it
     never reaches server logs or `Referer` headers.
@@ -1059,10 +1249,11 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 - **Last admin.** Any change that would leave no active admin — disabling, demoting or deleting the last
   one, including yourself — returns 409 `lastAdmin`, checked under the accounts mutex.
 - **Password reset.** An admin sets a temporary password; the epoch is bumped and the user must change it.
-  The dialog says: "This doesn't give you access to their notes. Notes stay encrypted with their own sync
-  passphrase."
+  The dialog says: "This lets you sign in as them, but not read their notes: notes stay encrypted with
+  their own sync passphrase, which this server never receives. Changing the server's code to capture it
+  would be a different matter, and users who trust you with the server are trusting you with that."
 - **Quotas.** Per user, set at creation, in an invite or later (§6.2).
-- **What admins see**: username, display name, role, status, sign-in methods, quota, used bytes, object
+- **What admins see**: username, display name, role, status, sign-in methods, byte and object limits, used bytes, object
   count and last seen. Never note content, titles or notebook names, which are encrypted with keys the
   server never has.
 - **Isolation.** The namespace is derived from the session or the `/s3` key alone (§6.2), keys are validated
@@ -1096,7 +1287,9 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
   | `NOTEIT_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_REDIRECT_URL`, `_SCOPES`, `_LABEL` | —, —, —, `<PUBLIC_URL>/api/oidc/callback`, `openid profile`, `Single Sign-On` | OIDC (§7.2) |
   | `NOTEIT_OIDC_GROUPS_CLAIM`, `_AUTO_PROVISION`, `_ALLOWED_GROUPS`, `_ADMIN_GROUPS` | `groups`, `false`, —, — | provisioning and roles (§7.2) |
   | `NOTEIT_INVITE_TTL_HOURS` | `72` | invite lifetime (max 720) |
-  | `NOTEIT_DEFAULT_QUOTA_MB` | unlimited | quota for new users |
+  | `NOTEIT_DEFAULT_QUOTA_MB` | `10240` | byte quota for new users (§6.2) |
+  | `NOTEIT_DEFAULT_MAX_OBJECTS` | `100000` | object-count limit for new users |
+  | `NOTEIT_MAX_USER_QUOTA_MB` | `1048576` | highest byte quota an admin can set |
   | `NOTEIT_MAX_OBJECT_MB` | `50` | body limit per object |
 
 - **AGPL-3.0 §13**: every page footer links "Source" to `NOTEIT_SOURCE_URL` (default: the canonical repo
@@ -1196,10 +1389,10 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
 | Storage (bucket/disk, backups) — **untrusted** | see sizes, counts, timing, UUIDs, device IDs in key names, the plaintext manifest; delete or roll back objects | read or undetectably modify content (AES-GCM + key-bound AAD) |
 | NoteIt server, honest operator — **semi-trusted** | all of the above for every user; see login identities, IPs and access patterns; read `/data/accounts.json` (password hashes, `/s3` secrets), so reach any user's ciphertext | read content |
 | Another user on the same instance | use their own store and `/s3` keys | list, read, write or delete another user's objects through REST or `/s3`; see the user list (admins only); decrypt anything |
-| Instance admin (app role) | create, disable and delete users (deleting destroys that user's data); set quotas; reset a login password and so sign in as that user and fetch their ciphertext | decrypt it: the sync passphrase is separate from login (§7) and never reaches the server |
+| Instance admin (app role only, no control of the deployment) | create, disable and delete users (deleting destroys that user's data); set quotas; reset a login password and so sign in as that user and fetch their ciphertext | decrypt it: the sync passphrase is separate from login (§7) and never reaches the server. An admin who also runs the server is the "malicious operator" row below |
 | Identity provider admin (OIDC) | sign in as any OIDC-linked user, like an instance admin; with an admin group claim, become an instance admin | decrypt content |
-| NoteIt server, **compromised** (or a malicious operator) | everything above, plus serve modified HTML/JS/service worker, and capture the passphrase and every note the next time a user unlocks in the browser | read content of users who only use the native app, or who don't unlock in the browser while it is compromised |
-| Static host of a direct-mode client (§6.4) — trusted like the server above | serve modified code that captures the passphrase and the S3 key the next time a user unlocks | read anything for users who don't unlock in the browser while it is compromised |
+| NoteIt server, **compromised** (or a malicious operator, including an instance admin who controls the deployment) | everything above, plus serve modified HTML/JS/service worker; capture the passphrase and every note the next time a user unlocks in the browser; and, for any browser with "Remember on this device" on, decrypt every note on the next page load with the remembered key, without the user unlocking | read content of users who only use the native app, or who neither unlock in the browser nor have "Remember" on while it is compromised |
+| Static host of a direct-mode client (§6.4) — trusted like the server above | serve modified code that captures the passphrase and the S3 key the next time a user unlocks, or, with "Remember" on, uses the remembered keys on the next page load | read anything for users who neither unlock in the browser nor have "Remember" on while it is compromised |
 | Holder of a direct-mode S3 key (script on the app origin, an unlocked device with "Remember" on) | list, delete or roll back objects in the buckets that key reaches, like the storage actor | read content without the passphrase; reach other buckets if the key is bucket-scoped (recommended, §6.4) |
 | Network attacker | nothing with valid HTTPS | — |
 | Malicious note content (from a peer device or a tampered-but-validly-encrypted store) | — | run script: rendering goes through the schema, plus CSP (§11.2) |
@@ -1294,8 +1487,23 @@ remain open (§15) and are not v1 guarantees.
      - two v2 clients upgrading at once: one PUT wins, the other gets 412 and adopts the v2 manifest;
        412 with different encryption gives `encryptionMismatch`; 412 on a still-v1 manifest retries later;
      - new stores are created at v2; a v1-only build refuses a v2 store with `unsupportedFormat`;
-     - conversion as a revision-preserving meta+body rewrite, which peers see as `.pull` and never as a
-       conflict;
+     - conversion as a revision-preserving republish (versioned body, then meta), which peers see as
+       `.pull` and never as a conflict;
+     - **crash safety of the v2 publish** (§3.4 item 9), for both an edit and a conversion, using a
+       backend that fails at a chosen request and a fresh engine over the persisted state: crash before
+       the body PUT, after the body and before the meta, after the meta and before the state save, and
+       after the state save and before the old-body delete. After each, a second device always reads a
+       consistent note, no conflict copy appears, the next pass converges, and once the orphan sweep has
+       run (with the clock advanced 7 days) exactly the referenced body remains;
+     - a stall longer than the orphan retention between body and meta: the step-4 check re-uploads the
+       body; a meta 412 deletes the uncommitted version;
+     - a running v1 engine never deletes or rewrites anything under `bodies/`, and skips (doesn't wedge)
+       notes whose legacy body is gone;
+     - the orphan sweep never deletes a referenced or pending version, nor anything for a note whose meta
+       changed since the last pull, and respects its 7-day window and 200-per-pass limit;
+     - repair of a missing referenced version by the meta owner, and by another device after 24 hours,
+       with one winner;
+     - the `bodyFormat`/`bodyVersion` wire rule on publish and pull;
      - a conversion 412 leaves the record in `legacyBodies` and it converts on a later pass;
      - **an old-client race**: a simulated v1 engine edits a note between the upgrade's clean pass and its
        conversion. The conversion gets 412, the next pass pulls the old client's RTFD edit, and the pass
@@ -1311,6 +1519,14 @@ remain open (§15) and are not v1 guarantees.
      `501`/`NotImplemented`), the HEAD-verify fallback, `cache: "no-store"` on every request, the
      missing-`ETag` HEAD fallback and `invalidResponse("ETag not exposed")`, and CORS `TypeError` → `network`;
    - the credential vault: round trip, wrong passphrase, nothing in `localStorage`/`sessionStorage`;
+   - the engine crash and orphan-sweep scenarios listed under Swift, run from shared `engine-scenarios.json`
+     traces so both engines behave the same;
+   - "Remember on this device": off by default in both modes, the confirmation warning must be accepted
+     before anything is stored, and Lock deletes the stored keys;
+   - `/s3` `ListObjectsV2`: delimiter grouping, `CommonPrefixes`, the echoed fields, `KeyCount`,
+     `max-keys` counting prefixes, continuation across a common prefix, `start-after`,
+     `encoding-type=url`, `ListObjects` v1 → 501, `Content-MD5`/`x-amz-checksum-*` verification, the disk
+     ETag equal to the MD5 of the bytes, and the same listing from the disk and upstream-S3 drivers;
    - **isolation**: user A can't read, write, delete or list user B's keys through REST or `/s3`,
      including `..`, percent-encoded, mixed-case and other-bucket attempts; fast-check over random keys
      asserts every driver path stays under the caller's namespace;
@@ -1319,8 +1535,11 @@ remain open (§15) and are not v1 guarantees.
      Everywhere" end other sessions;
    - invites: single use (two concurrent redemptions, one wins), expiry, revoke, one error for every
      invalid token;
-   - quota: REST 507 and `/s3` `QuotaExceeded` at the limit, DELETE always allowed, exempt control objects,
-     concurrent uploads can't overshoot;
+   - quota: REST 507 and `/s3` `QuotaExceeded` at the byte limit and at the object-count limit, DELETE
+     always allowed, control objects admitted only within the 1 MiB / 1000-object allowance, a user who
+     writes only control objects (tombstones, device records, canaries) is stopped at the hard ceiling,
+     the fifth live canary is rejected, the sweeper deletes canaries older than 10 minutes, orphaned
+     versions count, concurrent uploads can't overshoot;
    - last admin: disabling, demoting or deleting the last active admin (including yourself) returns 409,
      and an OIDC admin-group demotion of the last admin is skipped;
    - OIDC against a mock provider: PKCE S256, `state`/`nonce` mismatch rejected, mapping by `(iss, sub)`
@@ -1370,6 +1589,11 @@ remain open (§15) and are not v1 guarantees.
    - automatic v1→v2 upgrade: the web shows the notice on a v1 store, the native app upgrades on connect
      with no user action, the web then reads every note, and peers pull converted notes without conflicts;
    - config A only: user B's native client, with B's key, never sees user A's objects.
+7. **rclone compatibility** (`scripts/rclone_compat.sh`, CI with a pinned rclone, against the disk and the
+   upstream-S3 driver): with the documented remote (§6.3b) on a store of more than 1000 objects written by
+   the TS engine, `rclone lsd` and `rclone lsf -R` match the REST listing; `rclone copy --checksum` out
+   produces byte-identical files; after wiping the namespace, `rclone copy` back and `rclone check
+   --checksum` report no differences, and `connect` plus a full pull restores every note.
 
 ## 13. Risks
 
@@ -1377,12 +1601,15 @@ remain open (§15) and are not v1 guarantees.
 |---|---|
 | NSAttributedString ⇄ doc fidelity gaps (foreign paste) | documented fallbacks; random-doc round-trip tests; read-only for unknown nodes |
 | Old native session keeps writing RTFD after upgrade (§2.12) | per-record `bodyFormat`, lazy reconversion, web read-only fallback |
+| A crash between body and meta writes wedges a noteit-doc note | versioned bodies written before the meta commits; orphan sweep; repair path; crash tests at every step (§3.4 item 9) |
+| One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper (§6.2) |
+| "Remember on this device" lets served code decrypt without an unlock | off by default, explicit warning, honest threat model (§4.2, §11.1) |
 | Planner/engine drift between Swift and TS | exhaustive planner vectors + scenario traces in one CI |
 | Large inline images bloat bodies and re-uploads | size cap with warning; content-addressed attachments later |
 | Browser storage eviction | `navigator.storage.persist()`; remote is source of truth |
 | Safari ITP clears IDB after 7 days without interaction | documented; installed PWA exempt; re-sync is lossless |
 | Compromised server serves malicious JS | cannot be prevented in-browser; honest threat model, signed release manifest + out-of-band verifier (detection only), native app as anchor, pinned static client as future work |
-| S3-subset incompatibilities with other clients | only NoteIt + rclone are supported; conformance tests reuse Swift `S3Backend` |
+| S3-subset incompatibilities with other clients | only NoteIt + rclone are supported; conformance tests reuse Swift `S3Backend`; a pinned-rclone round trip runs in CI (§12 item 7) |
 | Shortcut collisions per browser/OS | Playwright matrix (Chromium/WebKit/Firefox) |
 | A namespace bug leaks one user's ciphertext to another | one `namespacedKey` choke point fed only by the session or `/s3` key; key validation first; property tests and cross-user E2E (§12); content stays encrypted per user |
 | Admin or IdP misconfiguration grants access | auto-provisioning requires allowed groups; last-admin guard; invites single-use and expiring; forward-auth dropped (§7.3) |
