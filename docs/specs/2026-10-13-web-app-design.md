@@ -469,16 +469,17 @@ Decisions:
 
    For each candidate, the engine runs item 9's publish with the unchanged revision:
    1. Exports the note as noteit-doc and records `pendingPushes[id] = revision` and
-      `pendingBodyVersions[id] = <new VERSION>`. A resumed conversion first deletes the version recorded
-      by the interrupted attempt (it was never committed, see below) and picks a new one.
+      `pendingBodyVersions[id] = {version: <new VERSION>, uploadStartedAt: now}`. A resumed conversion
+      first deletes the version recorded by the interrupted attempt (it was never committed, see below)
+      and picks a new one.
    2. Uploads `bodies/<id>.<VERSION>.body` with `If-None-Match: *`. The legacy meta and body are untouched,
       so every reader still sees a consistent legacy note.
    3. Sends `PUT notes/<id>.meta` with **`If-Match: base.remoteMetaETag`**. The new envelope has the same
       `revision`, this device's `deviceID`/`deviceName`, `bodyFormat: "noteit-doc/1"`,
-      `bodyVersion: <VERSION>` and the new `bodySHA256`. This write is the commit point.
-   4. Checks that the version still exists (item 9 step 4), sets
-      `base = {revision (unchanged), remoteMetaETag: new, replacedMetaETag: old, bodyVersion}`, removes the
-      id from `legacyBodies`, `pendingPushes` and `pendingBodyVersions`.
+      `bodyVersion: <VERSION>` and the new `bodySHA256`. This write is the commit point, and the commit
+      deadline check of item 9 (step 3) runs right before it.
+   4. Sets `base = {revision (unchanged), remoteMetaETag: new, replacedMetaETag: old, bodyVersion}`,
+      removes the id from `legacyBodies`, `pendingPushes` and `pendingBodyVersions`.
    5. Deletes the legacy `notes/<id>.body` with `If-Match: <its listed ETag>`. If that fails, the orphan
       sweep (item 9) removes it later.
 
@@ -576,31 +577,38 @@ Decisions:
      - The version is random rather than the body hash, because a plaintext hash in a cleartext key name
        would let the storage confirm guesses about note content.
    - **Publish order** (`@noteit/core` and native, in a v2 session):
-     1. Export and validate; compute `bodySHA256`; persist `pendingPushes[id] = revision` and
-        `pendingBodyVersions[id] = <VERSION>` (new).
+     1. Export and validate; compute `bodySHA256`; pick a fresh `<VERSION>`; persist
+        `pendingPushes[id] = revision` and `pendingBodyVersions[id] = {version, uploadStartedAt: now}`
+        (new). If an older entry exists for the note, its version was never committed: delete it first
+        (best effort).
      2. `PUT bodies/<id>.<VERSION>.body` with `If-None-Match: *`.
-     3. `PUT notes/<id>.meta` with `If-Match: base.remoteMetaETag` (`If-None-Match: *` for a new record),
-        carrying `bodyFormat`, `bodyVersion` and `bodySHA256`. **This is the commit point.** On 412 the
-        publish is abandoned as `push` does today; the engine also deletes the uncommitted version (best
-        effort) and clears both pending entries.
-     4. Confirm the version exists by listing its exact key (`list(prefix: <key>)`; the storage protocol
-        has no `HEAD`). If it is missing — only possible when this device stalled between steps 2 and 3
-        for longer than the 7-day orphan retention below — re-`PUT` the same bytes, still in memory.
+     3. **Commit deadline check**, immediately before step 4: if `now − uploadStartedAt` exceeds
+        **`maxCommitDelay` = 3.5 days** (half the orphan retention), or is negative because the clock went
+        back, the version is abandoned: delete it (best effort) and start again at step 1 with a new
+        version. A version is therefore never committed more than 3.5 days after its upload began.
+     4. `PUT notes/<id>.meta` with `If-Match: base.remoteMetaETag` (`If-None-Match: *` for a new record),
+        carrying `bodyFormat`, `bodyVersion` and `bodySHA256`. **This is the commit point.** The request
+        has the engine's normal request timeout (at most 5 minutes). On 412 the publish is abandoned as
+        `push` does today; the engine also deletes the uncommitted version (best effort) and clears both
+        pending entries.
      5. Save `base = {revision, remoteMetaETag, replacedMetaETag, bodyETag, bodyVersion}` and clear the
         pending entries.
      6. Delete the body the previous meta referenced (the previous version or the legacy body) with
         `If-Match: <its listed ETag>`. A failure is only logged; the orphan sweep removes it later.
+
+     There is no check after the commit that the body still exists: the deadline in step 3 is what
+     guarantees it (below), and repair is the backstop.
    - **Crash after each step:**
 
      | Crash after | Remote state | Recovery |
      |---|---|---|
      | 1 | unchanged | the next pass publishes again with a fresh version |
-     | 2 | old meta and body intact, one uncommitted version | the next publish deletes the recorded version first; otherwise the orphan sweep |
-     | 3 | new meta and new body | the listed meta differs from `base`: the existing same-revision branch of `resolveConflict` (`SyncEngine.swift:450-457`), or a pull for a conversion, adopts our own write without a conflict copy |
+     | 2 or 3 | old meta and body intact, one uncommitted version | the next publish deletes the recorded version first; otherwise the orphan sweep |
+     | 4 | new meta and new body | the listed meta differs from `base`: the existing same-revision branch of `resolveConflict` (`SyncEngine.swift:450-457`), or a pull for a conversion, adopts our own write without a conflict copy |
      | 5 | new meta and body; previous body left over | orphan sweep |
 
      Readers never see a committed meta without its body. The one benign race: a peer that listed the old
-     meta before step 3 may `GET` the previous body after step 6 and get 404. A 404 on a body is handled
+     meta before step 4 may `GET` the previous body after step 6 and get 404. A 404 on a body is handled
      like a hash mismatch today: the record is skipped for this pass (`pull`, `SyncEngine.swift:427-432`),
      and the next pass sees the new meta.
    - **Pull** reads `bodies/<id>.<bodyVersion>.body` for noteit-doc envelopes and `notes/<id>.body` for
@@ -615,9 +623,31 @@ Decisions:
      - an unparsable name under `bodies/`.
 
      The engine records when it first saw each orphan, per key and ETag, in `SyncState.orphanFirstSeen`.
-     It deletes an orphan with `If-Match: <listed ETag>` once it has been an orphan for **7 days**, a
-     window far longer than any healthy writer needs between steps 2 and 3. Orphans count toward the
-     quota (§6.2) until they are removed.
+     It deletes an orphan with `If-Match: <listed ETag>` once it has been an orphan for **7 days**
+     (`orphanRetention`). The decision must rest on a listing taken less than **1 hour** earlier
+     (`sweepListingMaxAge`), measured right before the `DELETE` is sent; if the pass is older than that
+     (a slow pass or a suspended laptop), the remaining deletions wait for the next pass. Orphans count
+     toward the quota (§6.2) until they are removed.
+   - **Why the sweep can't delete a committed body.** A sweeper deletes an object only once it can never
+     be referenced again, so it doesn't matter how late its `DELETE` lands:
+     - versions are never reused: every publish, repair and retry picks a fresh one, so a version that a
+       meta stopped referencing is never referenced again;
+     - an uncommitted version can only be committed by its writer, and only within `maxCommitDelay`
+       (3.5 days) of the start of its upload (step 3). A sweeper first sees the object after the upload
+       started, and decides to delete it only after 7 more days on its own clock, from a listing at most
+       1 hour old — at least 3 days after the writer's last chance to commit it. That listing therefore
+       already shows the writer's committed meta, if any (its ETag differs from `base`, so the note is
+       skipped, or the sweeper has pulled it and the version is now current); otherwise the version can
+       never be committed. Durations are measured on each device's own clock; no clocks are compared;
+     - the 3.5-day margin also absorbs request timeouts (step 4 is bounded at 5 minutes) and clock jumps
+       smaller than 3.5 days. A writer whose clock jumps back abandons its version (step 3); a sweeper
+       whose clock jumps back deletes later. If a device's clock jumps forward by more than 3.5 days and it
+       deletes a version that is then committed, the meta owner's repair (below) republishes the note.
+
+     So, for example, if writer A uploads a body and then stalls for 8 days while sweeper B marks it and
+     queues the `DELETE`, A's deadline check fails when it resumes; A deletes that version, uploads a new
+     one and commits the meta with the new version. B's `DELETE` of the old version, however late it
+     lands, can't harm the note.
    - **Missing committed body (repair).** If the current meta references a version that the listing
      lacks (lost storage, a partial restore), the device that wrote the meta republishes the note with a
      fresh version and the **same revision** when its local revision equals the meta's. Any other v2
@@ -858,10 +888,20 @@ no "unlimited" setting, because one user must never be able to fill storage that
 - **Every object counts**, toward both bytes and object count: bodies, metas, orphaned versions (§3.4
   item 9), tombstones, device records, the manifest and canaries. Usage is computed by listing at startup,
   kept in memory and updated after every successful write or delete.
-- **Admission.** A PUT is admitted under a per-user lock when, after the write,
-  `usedBytes ≤ limitBytes` and `usedObjects ≤ limitObjects`, counting `size(new) − size(existing object)`
-  and one more object only when the key is new. The bytes are reserved before the driver write and adjusted
-  or released after it, so concurrent uploads can't overshoot.
+- **Admission.** Every mutation of a user's store — REST and `/s3` PUT and DELETE, the canary sweeper,
+  purge — runs inside **one per-user write lock** (an in-process async mutex; the server is a single
+  process, §11). The whole sequence is the critical section:
+  1. read the existing object's size, and whether it exists, from the driver (`head`), inside the lock;
+  2. admit the PUT only if, after the write, `usedBytes ≤ limitBytes` and `usedObjects ≤ limitObjects`,
+     counting `size(new) − size(existing)` and one more object only when the key is new;
+  3. perform the driver write or delete;
+  4. settle the in-memory counters from the result (on failure, nothing changes), then release the lock.
+
+  So two writes to the same key can never both count against a stale existing size, and the counters
+  always equal the sum of what is stored. The request body is read and checked against the 50 MB object
+  limit before the lock is taken, so the lock is held only for one driver call; reads take no lock. Writes
+  of one user are serialized, which costs little for a household's sync traffic; different users never
+  wait for each other.
 - **Control allowance.** For ordinary objects the limits are `quotaBytes` and `maxObjects`. For control
   objects (`manifest.json`, `tombstones/*`, `devices/*`, `.canary/*`), each capped at 64 KB, the limits are
   `quotaBytes + 1 MiB` and `maxObjects + 1000`. This small, bounded headroom lets a full user still connect,
@@ -1495,8 +1535,15 @@ remain open (§15) and are not v1 guarantees.
        after the state save and before the old-body delete. After each, a second device always reads a
        consistent note, no conflict copy appears, the next pass converges, and once the orphan sweep has
        run (with the clock advanced 7 days) exactly the referenced body remains;
-     - a stall longer than the orphan retention between body and meta: the step-4 check re-uploads the
-       body; a meta 412 deletes the uncommitted version;
+     - **sweep vs. late commit**: writer A uploads a version and stalls for 8 days; sweeper B marks it and
+       its `DELETE` is paused by a test hook; A resumes, its deadline check abandons the version, it uploads
+       a new one and commits; only then is B's `DELETE` released. The note stays readable everywhere,
+       A never commits the old version, and no re-listing is involved. A writer that resumes after 3 days
+       commits its original version, and B's later pass leaves it alone. A clock moved back on A also
+       abandons the version;
+     - a stall longer than `maxCommitDelay` between body and meta abandons the version and publishes a
+       new one; a stale sweep listing (pass paused for more than 1 hour) defers the `DELETE`; a meta 412
+       deletes the uncommitted version;
      - a running v1 engine never deletes or rewrites anything under `bodies/`, and skips (doesn't wedge)
        notes whose legacy body is gone;
      - the orphan sweep never deletes a referenced or pending version, nor anything for a note whose meta
@@ -1539,7 +1586,11 @@ remain open (§15) and are not v1 guarantees.
      always allowed, control objects admitted only within the 1 MiB / 1000-object allowance, a user who
      writes only control objects (tombstones, device records, canaries) is stopped at the hard ceiling,
      the fifth live canary is rejected, the sweeper deletes canaries older than 10 minutes, orphaned
-     versions count, concurrent uploads can't overshoot;
+     versions count, concurrent uploads can't overshoot. **Same-key race**: two replacements of one key
+     near the limit, issued concurrently, with driver hooks that would make them finish in the opposite
+     order: the second starts only after the first settles, and afterwards both the stored total and
+     the reported `usedBytes` stay ≤ `quotaBytes + 1 MiB` and equal each other; likewise a DELETE racing a
+     PUT of the same key;
    - last admin: disabling, demoting or deleting the last active admin (including yourself) returns 409,
      and an OIDC admin-group demotion of the last admin is skipped;
    - OIDC against a mock provider: PKCE S256, `state`/`nonce` mismatch rejected, mapping by `(iss, sub)`
