@@ -31,18 +31,24 @@ enum LaunchMigration {
             }
             if legacy != nil { migrateLoginItem(knownEnabled: copied.contains(PrefKey.launchAtLogin) && defaults.bool(forKey: PrefKey.launchAtLogin)) }
         }
-        mirrorLoginItemState()
+        // Leave a copied value alone until the pending notice has been dealt with.
+        if pendingNotice == nil { mirrorLoginItemState() }
     }
 
     /// The old login item belongs to Inkwell's bundle id, and its state can't be read from here
     /// (SMAppService only reports on this app). Re-register when a mirrored `launchAtLogin` says it
     /// was on (builds that record it); otherwise offer it once, since Inkwell never recorded it.
     private static func migrateLoginItem(knownEnabled: Bool) {
-        guard isBundled, SMAppService.mainApp.status != .enabled else { return }
-        if knownEnabled {
-            register()
-        } else {
-            pendingNotice = .offerLoginItem
+        guard isBundled else { return }
+        switch SMAppService.mainApp.status {
+        case .enabled:
+            return
+        case .requiresApproval:
+            pendingNotice = .approveLoginItem
+        default:
+            if knownEnabled { register() }
+            // Not known to be on, or the silent re-register failed: ask.
+            if pendingNotice == nil, SMAppService.mainApp.status != .enabled { pendingNotice = .offerLoginItem }
         }
     }
 
