@@ -43,6 +43,8 @@ final class NoteStore: ObservableObject {
     var recoveryURL: URL { rootURL.appendingPathComponent("recovery", isDirectory: true) }
     var syncDeletionsURL: URL { rootURL.appendingPathComponent("sync-deletions.json") }
     private var firstLaunchMarkerURL: URL { rootURL.appendingPathComponent(".initialized") }
+    /// False when migration didn't report a fresh install (see `LibraryMigration.Outcome.allowsSeeding`).
+    private let seedsFreshLibrary: Bool
 
     private var bodyCache: [UUID: NSAttributedString] = [:]
     private var bodyAccessOrder: [UUID] = []
@@ -97,8 +99,9 @@ final class NoteStore: ObservableObject {
     init(rootURL: URL? = nil) {
         if let rootURL {
             self.rootURL = rootURL
+            seedsFreshLibrary = true
         } else {
-            self.rootURL = Self.defaultRootURL()
+            (self.rootURL, seedsFreshLibrary) = Self.defaultRootURL()
         }
         load()
         NotificationCenter.default.addObserver(
@@ -113,10 +116,26 @@ final class NoteStore: ObservableObject {
     }
 
     /// `NOTEIT_DATA_DIR` if set; otherwise `Application Support/NoteIt`, first moving an Inkwell
-    /// library there if one exists (see `LibraryMigration`).
-    private static func defaultRootURL() -> URL {
+    /// library there if one exists (see `LibraryMigration`). The flag says whether a welcome library
+    /// may be seeded: for the default location, only when migration found a genuine fresh install.
+    private static func defaultRootURL() -> (URL, seedsFreshLibrary: Bool) {
+        if let resolvedDefaultRoot { return resolvedDefaultRoot }
+        let resolved = resolveDefaultRoot()
+        resolvedDefaultRoot = resolved
+        return resolved
+    }
+
+    private static var resolvedDefaultRoot: (URL, seedsFreshLibrary: Bool)?
+
+    /// Settles the library location, migration included, before SwiftUI builds any scene: asking
+    /// Inkwell to quit shows a modal alert, which mustn't run inside a SwiftUI update.
+    static func prepareDefaultLocation() {
+        _ = defaultRootURL()
+    }
+
+    private static func resolveDefaultRoot() -> (URL, seedsFreshLibrary: Bool) {
         if let override = AppEnvironment.nonEmpty("DATA_DIR") {
-            return URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+            return (URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true), true)
         }
         var base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
@@ -126,7 +145,17 @@ final class NoteStore: ObservableObject {
             base = URL(fileURLWithPath: (fakeBase as NSString).expandingTildeInPath, isDirectory: true)
         }
         #endif
-        return LibraryMigration.resolve(baseDirectory: base).directory
+        let result = LibraryMigration.resolve(
+            baseDirectory: base,
+            isLegacyAppRunning: LegacyAppQuitter.isRunning,
+            quitLegacyApp: { LegacyAppQuitter.quit() }
+        )
+        if result.outcome == .legacyAppRunning {
+            // The user chose to quit NoteIt rather than Inkwell; nothing has been opened or written.
+            NSLog("NoteIt: quitting; Inkwell must quit before its notes can move")
+            exit(0)
+        }
+        return (result.directory, result.outcome.allowsSeeding)
     }
 
     // MARK: - Queries
@@ -901,7 +930,7 @@ final class NoteStore: ObservableObject {
         if !bodyIDsOnDisk().isEmpty {
             NSLog("NoteIt: library.json missing; rebuilding from note bodies")
             rebuildFromBodies(recovered: nil)
-        } else if !fm.fileExists(atPath: firstLaunchMarkerURL.path) {
+        } else if seedsFreshLibrary, !fm.fileExists(atPath: firstLaunchMarkerURL.path) {
             SeedData.seed(into: self)
             recordSeedManifest()
         }
@@ -1231,8 +1260,7 @@ final class NoteStore: ObservableObject {
                 hasher.update(data: Data(bytes: &length, count: 8))
                 hasher.update(data: data)
             }
-            // Legacy name kept on purpose: renaming it would change every revision and force a full re-sync.
-            feed(Data("inkwell-revision-v1".utf8))
+            feed(Data(RemoteLayout.revisionHashSeed.utf8))
             feed(withUnsafeBytes(of: input.id.uuid) { Data($0) })
             for field in input.fields { feed(Data(field.utf8)) }
             if let url = input.bodyURL {

@@ -25,10 +25,31 @@ final class LibraryMigrationTests: XCTestCase {
         try Data("[]".utf8).write(to: legacy.appendingPathComponent("sync-deletions.json"))
     }
 
+    private func resolve(
+        running: @escaping () -> Bool = { false },
+        quit: () -> Bool = { XCTFail("must not ask Inkwell to quit"); return false },
+        move: ((URL, URL) throws -> Void)? = nil,
+        log: (String) -> Void = { _ in }
+    ) -> (directory: URL, outcome: LibraryMigration.Outcome) {
+        LibraryMigration.resolve(
+            baseDirectory: base, isLegacyAppRunning: running, quitLegacyApp: quit, move: move,
+            now: Date(timeIntervalSince1970: 0), log: log
+        )
+    }
+
+    private func noMove(_: URL, _: URL) throws { XCTFail("must not move") }
+
+    private func assertLegacyIntact(file: StaticString = #filePath, line: UInt = #line) {
+        for path in ["library.json", ".initialized", ".trash/abc.rtfd/TXT.rtf", "sync-deletions.json"] {
+            XCTAssertTrue(fm.fileExists(atPath: legacy.appendingPathComponent(path).path), path, file: file, line: line)
+        }
+    }
+
     func testMovesLegacyLibraryIncludingHiddenFiles() throws {
         try makeLegacyLibrary()
-        let result = LibraryMigration.resolve(baseDirectory: base, log: { _ in })
-        XCTAssertEqual(result.outcome, .moved)
+        let result = resolve()
+        XCTAssertEqual(result.outcome, .moved(setAside: nil))
+        XCTAssertFalse(result.outcome.allowsSeeding)
         XCTAssertEqual(result.directory.standardizedFileURL, current.standardizedFileURL)
         XCTAssertFalse(fm.fileExists(atPath: legacy.path))
         for path in ["library.json", ".initialized", ".trash/abc.rtfd/TXT.rtf", "sync-deletions.json"] {
@@ -36,32 +57,110 @@ final class LibraryMigrationTests: XCTestCase {
         }
     }
 
-    func testNoMoveWhenNewFolderExists() throws {
+    func testBothLibrariesKeepsNoteItAndLeavesInkwellUntouched() throws {
         try makeLegacyLibrary()
         try fm.createDirectory(at: current, withIntermediateDirectories: true)
-        let result = LibraryMigration.resolve(baseDirectory: base, move: { _, _ in XCTFail("must not move") }, log: { _ in })
-        XCTAssertEqual(result.outcome, .notNeeded)
+        try Data().write(to: current.appendingPathComponent(".initialized"))
+        var logged: [String] = []
+        let result = resolve(move: noMove, log: { logged.append($0) })
+        XCTAssertEqual(result.outcome, .existing)
+        XCTAssertFalse(result.outcome.allowsSeeding)
         XCTAssertEqual(result.directory, current)
-        XCTAssertTrue(fm.fileExists(atPath: legacy.appendingPathComponent("library.json").path))
+        XCTAssertEqual(logged.count, 1)
+        assertLegacyIntact()
+    }
+
+    func testExistingNoteItLibraryWithoutLegacy() throws {
+        try fm.createDirectory(at: current.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: current.appendingPathComponent("library.json"))
+        let result = resolve(move: noMove)
+        XCTAssertEqual(result.outcome, .existing)
+        XCTAssertEqual(result.directory, current)
+    }
+
+    func testStrayNoteItFolderIsSetAsideAndLibraryMovedIn() throws {
+        try makeLegacyLibrary()
+        try fm.createDirectory(at: current.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        try Data("log".utf8).write(to: current.appendingPathComponent("sync.log"))
+        try Data("{}".utf8).write(to: current.appendingPathComponent("search-index.json"))
+        let result = resolve()
+        let aside = base.appendingPathComponent("NoteIt.pre-migration-" + Self.stamp(Date(timeIntervalSince1970: 0)), isDirectory: true)
+        XCTAssertEqual(result.outcome, .moved(setAside: aside))
+        XCTAssertFalse(result.outcome.allowsSeeding)
+        XCTAssertEqual(result.directory, current)
+        XCTAssertTrue(fm.fileExists(atPath: current.appendingPathComponent("library.json").path))
+        XCTAssertTrue(fm.fileExists(atPath: current.appendingPathComponent(".initialized").path))
+        XCTAssertTrue(fm.fileExists(atPath: aside.appendingPathComponent("sync.log").path))
+        XCTAssertTrue(fm.fileExists(atPath: aside.appendingPathComponent("search-index.json").path))
+        XCTAssertFalse(fm.fileExists(atPath: legacy.path))
+    }
+
+    func testSetAsideNameIsUniqued() throws {
+        try makeLegacyLibrary()
+        try fm.createDirectory(at: current, withIntermediateDirectories: true)
+        let taken = base.appendingPathComponent("NoteIt.pre-migration-" + Self.stamp(Date(timeIntervalSince1970: 0)))
+        try fm.createDirectory(at: taken, withIntermediateDirectories: true)
+        let result = resolve()
+        XCTAssertEqual(result.outcome, .moved(setAside: URL(fileURLWithPath: taken.path + "-2", isDirectory: true)))
+    }
+
+    func testEachRealLibraryMarkerCounts() throws {
+        XCTAssertFalse(LibraryMigration.hasLibrary(current))
+        try fm.createDirectory(at: current.appendingPathComponent("notes/.hidden"), withIntermediateDirectories: true)
+        XCTAssertFalse(LibraryMigration.hasLibrary(current), "hidden entries in notes/ aren't bodies")
+        try fm.createDirectory(at: current.appendingPathComponent("notes/\(UUID().uuidString).rtfd"), withIntermediateDirectories: true)
+        XCTAssertTrue(LibraryMigration.hasLibrary(current))
+        for marker in ["library.json", ".initialized"] {
+            let dir = base.appendingPathComponent(marker + "-only")
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data().write(to: dir.appendingPathComponent(marker))
+            XCTAssertTrue(LibraryMigration.hasLibrary(dir), marker)
+        }
     }
 
     func testFreshInstallUsesNewFolderWithoutCreatingIt() {
-        let result = LibraryMigration.resolve(baseDirectory: base, move: { _, _ in XCTFail("must not move") }, log: { _ in })
-        XCTAssertEqual(result.outcome, .notNeeded)
+        let result = resolve(move: noMove)
+        XCTAssertEqual(result.outcome, .freshInstall)
+        XCTAssertTrue(result.outcome.allowsSeeding)
         XCTAssertEqual(result.directory, current)
         XCTAssertFalse(fm.fileExists(atPath: current.path))
+    }
+
+    func testLegacyFolderWithoutLibraryIsAFreshInstall() throws {
+        try fm.createDirectory(at: legacy, withIntermediateDirectories: true)
+        try Data("log".utf8).write(to: legacy.appendingPathComponent("sync.log"))
+        let result = resolve(move: noMove)
+        XCTAssertEqual(result.outcome, .freshInstall)
+        XCTAssertEqual(result.directory, current)
+        XCTAssertTrue(fm.fileExists(atPath: legacy.appendingPathComponent("sync.log").path))
     }
 
     func testFailedMoveFallsBackToLegacyFolder() throws {
         try makeLegacyLibrary()
         struct Boom: Error {}
         var logged: [String] = []
-        let result = LibraryMigration.resolve(baseDirectory: base, move: { _, _ in throw Boom() }, log: { logged.append($0) })
+        let result = resolve(move: { _, _ in throw Boom() }, log: { logged.append($0) })
         XCTAssertEqual(result.directory, legacy)
         guard case .failed = result.outcome else { return XCTFail("expected .failed, got \(result.outcome)") }
+        XCTAssertFalse(result.outcome.allowsSeeding)
         XCTAssertEqual(logged.count, 1)
-        XCTAssertTrue(fm.fileExists(atPath: legacy.appendingPathComponent("library.json").path))
+        assertLegacyIntact()
         XCTAssertFalse(fm.fileExists(atPath: current.path))
+    }
+
+    func testFailedMoveAfterSetAsideRestoresStrayFolder() throws {
+        try makeLegacyLibrary()
+        try fm.createDirectory(at: current, withIntermediateDirectories: true)
+        try Data("log".utf8).write(to: current.appendingPathComponent("sync.log"))
+        struct Boom: Error {}
+        let result = resolve(move: { from, to in
+            if from == self.legacy { throw Boom() }
+            try self.fm.moveItem(at: from, to: to)
+        })
+        XCTAssertEqual(result.directory, legacy)
+        guard case .failed = result.outcome else { return XCTFail("expected .failed, got \(result.outcome)") }
+        XCTAssertTrue(fm.fileExists(atPath: current.appendingPathComponent("sync.log").path))
+        assertLegacyIntact()
     }
 
     func testRealMoveFailureFallsBack() throws {
@@ -69,10 +168,53 @@ final class LibraryMigrationTests: XCTestCase {
         // A read-only base makes the rename itself fail.
         try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: base.path)
         defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: base.path) }
-        let result = LibraryMigration.resolve(baseDirectory: base, log: { _ in })
+        let result = LibraryMigration.resolve(baseDirectory: base, isLegacyAppRunning: { false }, quitLegacyApp: { false }, log: { _ in })
         XCTAssertEqual(result.directory, legacy)
         guard case .failed = result.outcome else { return XCTFail("expected .failed, got \(result.outcome)") }
         XCTAssertTrue(fm.fileExists(atPath: legacy.appendingPathComponent(".initialized").path))
+    }
+
+    func testRunningInkwellThatWontQuitBlocksTheMove() throws {
+        try makeLegacyLibrary()
+        var asked = 0
+        let result = resolve(running: { true }, quit: { asked += 1; return false }, move: noMove)
+        XCTAssertEqual(asked, 1)
+        XCTAssertEqual(result.outcome, .legacyAppRunning)
+        XCTAssertFalse(result.outcome.allowsSeeding)
+        assertLegacyIntact()
+        XCTAssertFalse(fm.fileExists(atPath: current.path))
+    }
+
+    func testRunningInkwellStillAliveAfterQuitBlocksTheMove() throws {
+        try makeLegacyLibrary()
+        let result = resolve(running: { true }, quit: { true }, move: noMove)
+        XCTAssertEqual(result.outcome, .legacyAppRunning)
+        assertLegacyIntact()
+    }
+
+    func testMovesOnceInkwellHasQuit() throws {
+        try makeLegacyLibrary()
+        var running = true
+        let result = resolve(running: { running }, quit: { running = false; return true })
+        XCTAssertEqual(result.outcome, .moved(setAside: nil))
+        XCTAssertTrue(fm.fileExists(atPath: current.appendingPathComponent("library.json").path))
+    }
+
+    func testRunningInkwellIsIgnoredWhenNothingNeedsMoving() throws {
+        try makeLegacyLibrary()
+        try fm.createDirectory(at: current, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: current.appendingPathComponent("library.json"))
+        XCTAssertEqual(resolve(running: { true }, move: noMove).outcome, .existing)
+        try fm.removeItem(at: current)
+        try fm.removeItem(at: legacy)
+        XCTAssertEqual(resolve(running: { true }, move: noMove).outcome, .freshInstall)
+    }
+
+    private static func stamp(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter.string(from: date)
     }
 }
 
@@ -191,8 +333,31 @@ final class AppEnvironmentTests: XCTestCase {
         XCTAssertNil(AppEnvironment.nonEmpty("DATA_DIR", in: ["NOTEIT_DATA_DIR": ""]))
     }
 
-    func testWireIdentifiersAreUnchanged() {
-        XCTAssertEqual(RemoteLayout.root, "inkwell/v1/")
+}
+
+/// Frozen sync wire identifiers from before the rename. Remote stores written by Inkwell must keep working.
+final class WireIdentifierTests: XCTestCase {
+    func testFrozenWireIdentifiers() async throws {
         XCTAssertEqual(RemoteLayout.folder, "inkwell")
+        XCTAssertEqual(RemoteLayout.root, "inkwell/v1/")
+        XCTAssertEqual(RemoteLayout.manifest(), "inkwell/v1/manifest.json")
+        XCTAssertEqual(RemoteLayout.canaryPrefix, "inkwell/.canary/")
+        XCTAssertEqual(RemoteLayout.canaryMismatchETag, "inkwell-canary-mismatch")
+        XCTAssertEqual(SyncEngine.keyCheckPlaintext, Data("inkwell-key-check".utf8))
+        XCTAssertEqual(FolderBackend.lockFileName, ".inkwell-lock")
+        XCTAssertEqual(RemoteLayout.revisionHashSeed, "inkwell-revision-v1")
+
+        // On disk: the folder backend locks `.inkwell-lock` and skips Finder's `inkwell/.Trash`.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("noteit-wire-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let backend = FolderBackend(root: root)
+        try await backend.put("inkwell/v1/notes/a.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".inkwell-lock").path))
+        let trash = root.appendingPathComponent("inkwell/.Trash", isDirectory: true)
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        try Data([1]).write(to: trash.appendingPathComponent("x"))
+        let keys = try await backend.list(prefix: "").map(\.key)
+        XCTAssertEqual(keys, ["inkwell/v1/notes/a.meta"])
     }
 }

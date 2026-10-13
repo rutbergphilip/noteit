@@ -8,6 +8,7 @@ struct NoteItApp: App {
 
     init() {
         LaunchMigration.run()
+        NoteStore.prepareDefaultLocation()
     }
 
     var body: some Scene {
