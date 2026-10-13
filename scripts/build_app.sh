@@ -12,7 +12,8 @@ BUNDLE_ID="$(sed -nE 's/^ *public static let bundleID = "([^"]+)".*/\1/p' Source
 [[ -n "$BUNDLE_ID" ]] || { echo "error: couldn't read AppIdentity.bundleID" >&2; exit 1; }
 BUILD_DIR="$ROOT/build"
 APP="$BUILD_DIR/$APP_NAME.app"
-INSTALL_DIR="${NOTEIT_INSTALL_DIR:-$HOME/Applications}"
+# NOTEIT_* first, then the legacy INKWELL_* names (pre-rename), then the default.
+INSTALL_DIR="${NOTEIT_INSTALL_DIR:-${INKWELL_INSTALL_DIR:-$HOME/Applications}}"
 
 echo "==> Building release binary"
 swift build -c release
@@ -23,8 +24,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 
-VERSION="${NOTEIT_VERSION:-1.0}"
-BUILD_NUMBER="${NOTEIT_BUILD:-$(date +%Y%m%d%H%M)}"
+VERSION="${NOTEIT_VERSION:-${INKWELL_VERSION:-1.0}}"
+BUILD_NUMBER="${NOTEIT_BUILD:-${INKWELL_BUILD:-$(date +%Y%m%d%H%M)}}"
 PLIST="$APP/Contents/Info.plist"
 # Build with plutil so values (version strings from env etc.) are always correctly escaped.
 plutil -create xml1 "$PLIST"
