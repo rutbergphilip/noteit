@@ -765,11 +765,13 @@ Decisions:
        note**, each at most the object limit. It counts toward the owner's quota until it is removed.
      - **Clean up unused storage…** The user can reclaim that space with an explicit action in NoteIt's
        Settings → Sync (native) and in the web app's Settings → Sync. It never runs automatically, on a
-       schedule or as part of a pass. The dialog says, in plain words: "This removes leftover copies of
+       schedule or as part of a pass. The dialog's title is "Clean up unused storage?" and its text says,
+       in plain words: "This removes leftover copies of
        notes that were never finished saving, for example from a Mac that was erased while it was
        syncing. Only run this when your other devices are idle. A note being saved on another device at
        the same moment could be lost if that device is then lost before it syncs again." Buttons: Cancel
-       (default) and Clean Up. On confirmation the engine runs a pass, then
+       (default) and Clean Up. Native and web tests assert this complete text and that Cancel is the
+       default action. On confirmation the engine runs a pass, then
        deletes, with `If-Match: <listed ETag>`, every `new` body whose note has no meta and no tombstone
        in that pass's listing and that isn't this device's own pending version, and reports how many
        objects and bytes it removed. It works on every store, at full quota (deleting is always allowed),
@@ -1190,7 +1192,7 @@ no "unlimited" setting, because one user must never be able to fill storage that
     or is dropped by a settle, when dirty is set or cleared, when a quarantine starts or ends, and when
     an account is deleted (below).
   - **Deleted accounts.** When an admin deletes an account (status `deleting`, §7.4), the server first
-    aborts and awaits the user's in-flight operations (§7.4), then removes the entry from the in-memory
+    closes the user's operation gate and aborts the user's leases (§7.4), then removes the entry from the in-memory
     state (reservations, dirty and quarantine alike) and rewrites the file; nothing is ever reconciled
     for it again. No new request can reach that namespace any more, and the purge (§7.4) removes
     whatever is there, including a late-landing write.
@@ -1657,32 +1659,66 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 - **Disable / enable.** Disabling bumps the epoch: sessions get 401 on their next request, the user's `/s3`
   keys get `403 AccessDenied`, and OIDC sign-in is refused. Data is kept. Enabling restores the keys, but
   the user has to sign in again.
+- **Operation leases (the deletion gate).** Every user has an in-memory gate (open or closed) and a set of
+  **operation leases**. Every REST and `/s3` operation that touches the user's store (PUT, DELETE, GET,
+  HEAD, listing), every settle and every reconcile (on a request or scheduled) acquires a lease for that
+  user **before any I/O, including quota admission**, and releases it only once its driver calls have
+  settled; the release records the end time on the monotonic clock. Acquisition fails when the gate is
+  closed: the request gets the same `401 unauthorized` (REST) or `403 AccessDenied` (`/s3`) as any
+  deleted account, and a background settle or reconcile does nothing. The lease's `AbortSignal` is
+  combined with the per-request timeout of every driver call made under it, and the per-user store
+  handle behind the `namespacedKey` choke point (§6.2) can only be obtained for a held lease, so no store
+  access can bypass it. Acquisition and gate closure are
+  synchronous, single-tick steps in the one Node process (no `await` in between), so they are atomic
+  with respect to each other: a lease was either acquired before the gate closed, and is in the
+  closure's snapshot, or its acquisition fails. This covers a request that passed authentication just
+  before the deletion and reaches its lease acquisition just after. Gates of `deleting` records are
+  closed at startup before the server accepts requests.
 - **Delete.** The admin types the username to confirm. Then, in order:
-  1. The record becomes `status: deleting` with a `purge` entry and is persisted in `accounts.json` before
-     anything else, so it survives a restart. All auth fails from then on and the keys are removed; no new
-     request for the user is accepted.
-  2. Every in-flight operation of the user (REST and `/s3` PUTs, DELETEs, listings, settles, reconciles)
-     is aborted through its `AbortSignal` and awaited, each for at most `NOTEIT_STORE_TIMEOUT_S`. The
-     server records the user's **latest request end time**: the moment the last of them ended, or now
-     if none was running. An operation still unsettled after that wait keeps being tracked, and when it
-     does end, a later end time replaces the recorded one.
-  3. The quota state is dropped (§6.2 "Deleted accounts").
-  4. **Pass one** purges the namespace (disk `rm -r`; upstream S3 list + delete), retried every minute
-     until it succeeds.
-  5. The **final pass** (the same list + delete) runs at `AMBIGUOUS_GRACE` after the latest request end
-     time, and is pushed back whenever a later end time is recorded. Under the §6.2 assumption, every
-     request of the user has been applied or discarded by then, so the final pass removes anything that
-     landed after pass one. A failed final pass is retried every minute.
-  6. Only when the final pass has succeeded is the record removed.
+  1. **Close the gate.** In one synchronous step the server sets the user's status to `deleting` in
+     memory, closes the gate and takes the snapshot of the user's held leases. Then it persists the record
+     with a `purge` entry in `accounts.json`, so it survives a restart; if that write fails, the gate is
+     reopened, the status restored and the admin sees `500`, with nothing aborted yet. From the closure on,
+     all auth fails, the keys are removed, and no new operation can start.
+  2. **Abort.** Every lease in the snapshot is aborted through its `AbortSignal`. The server records the
+     user's **latest request end time**: initially the moment of the closure, then replaced by every
+     later lease end, including leases that end long after the abort. `stillRunning` counts the user's
+     leases that haven't ended, plus the purge's own (below).
+  3. The quota state is dropped (§6.2 "Deleted accounts"). A settle or reconcile of an aborted lease
+     that ends later finds no state and does nothing.
+  4. **Pass one** purges the namespace once the snapshot's leases have ended or `NOTEIT_STORE_TIMEOUT_S`
+     has passed, whichever is first (it removes most data early; correctness rests on the final pass).
+  5. The **final pass** runs only when **`stillRunning === 0`** and at least `AMBIGUOUS_GRACE` has passed
+     since the latest request end time. An operation still running past the time the final pass would
+     otherwise be due holds it back; once that operation ends, its end time becomes the latest, and the
+     final pass waits a full grace from then. Under the §6.2 assumption every request of the user has
+     then been applied or discarded, so the final pass removes anything that landed after pass one.
+  6. Only when the final pass has succeeded is the record removed and the gate forgotten.
 
-  Until then the `deleting` record keeps the user's UUID, and therefore their namespace, reserved, and
+  **Purge passes** (pass one and the final pass) each run under the purge's own **internal lease**, which
+  ignores the closed gate but is tracked like any other lease. A pass is one list + delete over the
+  namespace (disk: a walk that unlinks entries and checks the signal between entries, so it stops within
+  one unlink; upstream S3: listing pages and deletes) under an `AbortSignal` with a **per-pass timeout of
+  `max(600 s, 5 × NOTEIT_STORE_TIMEOUT_S)`**. That is long enough for one pass to get through a
+  namespace at the quota (tens of thousands of objects, at most 8 concurrent deletes) or several slow
+  requests that each use most of `NOTEIT_STORE_TIMEOUT_S`. It is short enough that a listing or delete
+  that never settles is cut off and retried within minutes, well inside one `AMBIGUOUS_GRACE`. Passes are
+  idempotent and keep their progress, so a large namespace also finishes over several passes. A
+  timed-out or failing pass counts as failed and is retried every minute. Every request it aborted
+  updates the latest request end time when it ends, like the user's own. The final pass therefore
+  retries once a minute has passed **and** its conditions hold again, i.e. a grace after the last
+  aborted request ended.
+
+  Until the record is removed, it keeps the user's UUID, and therefore their namespace, reserved, and
   also their username and OIDC identity, so nothing new can be created in that namespace. On the disk
-  driver the aborted writes have finished or rolled back inside step 2, so nothing can land later, but
-  the final pass still runs, by the same rule. **After a restart** the process can't know when the old
-  process's requests ended, so every `deleting` record gets its latest request end time set to the
-  startup time, as for persisted reservations (§6.2 "Restarts"). It then resumes at pass one if that
-  hadn't finished, and otherwise at the final pass, which is due `AMBIGUOUS_GRACE` after startup.
-  Wall-clock times are never compared across processes.
+  driver the aborted writes have finished or rolled back before their lease ends, so nothing can land
+  later, but the final pass still runs, by the same rule. A request whose driver call never ends keeps
+  `stillRunning` above zero, so the deletion stays pending; the admin's user list shows the account as
+  "Deleting…" with the number of operations still running. **After a restart** the process can't know
+  when the old process's requests ended, so every `deleting` record gets a closed gate, `stillRunning = 0`
+  and its latest request end time set to the startup time, as for persisted reservations (§6.2
+  "Restarts"). It then resumes at pass one if that hadn't finished, and otherwise at the final pass, which
+  is due `AMBIGUOUS_GRACE` after startup. Wall-clock times are never compared across processes.
 - **Last admin.** Any change that would leave no active admin — disabling, demoting or deleting the last
   one, including yourself — returns 409 `lastAdmin`, checked under the accounts mutex.
 - **Password reset.** An admin sets a temporary password; the epoch is bumped and the user must change it.
@@ -2090,11 +2126,19 @@ remain open (§15) and are not v1 guarantees.
      the quarantine; a user created during the quarantine is admitted at once; **without any traffic**,
      the scheduled reconciles end every user's quarantine shortly after the deadline, including a
      disabled user's (who is later re-enabled and admitted at once); a user deleted during the quarantine
-     is removed from the state once their operations are aborted and awaited, and is never reconciled;
-     **purge timing**: a PUT whose driver call ignores the abort ends after pass one, and its write
-     lands more than one grace period after pass one but within the grace after its own end; the final
-     pass, which runs a grace after that end, removes it, and the `deleting` record (persisted, so it is
-     also there after a restart in between) keeps the username and namespace reserved until then; **repeated restarts**: a restart during the quarantine
+     is removed from the state once their gate is closed and their leases aborted, and is never
+     reconciled; **purge timing**: a PUT whose driver call ignores the abort ends after pass one, and its
+     write lands more than one grace period after pass one but within the grace after its own end; the
+     final pass, which runs a grace after that end, removes it, and the `deleting` record (persisted, so
+     it is also there after a restart in between) keeps the username and namespace reserved until then;
+     **still running**: an operation that is still running past the time the final pass was originally
+     due holds it back (`stillRunning > 0`, no final pass), and the final pass runs a full grace after
+     that operation ends and removes its late write; **gate**: a request paused between authentication
+     and lease acquisition while the deletion closes the gate fails its acquisition (401 / `403
+     AccessDenied`), makes no driver call and is not needed in the snapshot; a scheduled reconcile or a
+     settle on a closed gate does no I/O; **bounded passes**: a listing or delete that never settles is
+     aborted at the per-pass timeout, the pass counts as failed and is retried after a minute, the
+     aborted request's end time pushes the final pass back, and the purge then completes; **repeated restarts**: a restart during the quarantine
      re-quarantines exactly the users still flagged, with a full grace from the new start, and not users
      created since or whose quarantine already ended; three restarts in a row, each after some users
      were reconciled, shrink the set each time and end with an empty state file;
@@ -2174,7 +2218,7 @@ remain open (§15) and are not v1 guarantees.
 | An abandoned device leaves uncommitted bodies | at most one per note per device, kept only while the note's meta is unchanged; counted in quota (§3.4 item 9) |
 | A wiped device leaves the body of a note it never created (`new`) | never collected automatically, since no write can make it stale without racing a valid create; at most one per wiped device per never-committed note, counted in quota; the user reclaims it with the confirmed "Clean up unused storage…" action (§3.4 item 9) |
 | "Clean up unused storage…" runs while another device is creating a note | user-initiated only, never automatic; the dialog warns plainly that such a note can be lost if that device is lost before it syncs again; otherwise the creator repairs it (§3.4 item 9) |
-| A deleted user's late upstream write lands after the purge | in-flight operations aborted and awaited first; final purge pass a grace after the latest request end; the persisted `deleting` record keeps the namespace reserved until it succeeds (§7.4) |
+| A deleted user's late upstream write lands after the purge | the operation gate closes atomically before the snapshot, every store operation needs a lease, leases are aborted; the final purge pass runs only with no lease running and a grace after the latest request end; passes are time-bounded and retried; the persisted `deleting` record keeps the namespace reserved until it succeeds (§7.4) |
 | Stores without atomic conditional writes (folder stores, S3 providers failing the canary) keep orphaned bodies | the sweep deletes only bodies of deleted notes there; writers still delete what they replace; the larger bound is documented (§3.4 item 9, "What it costs"); a NoteIt server never runs in this mode (§6.2) |
 | One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper; conservative reservations, ambiguous results reconciled, in-flight cap; reservations persisted across restarts in a bounded, compacted file; a quarantine after a lost state file (§6.2) |
 | A wiped or vanished device leaves bodies with a live tag, and a full user can't edit to make them stale | any v2 device's body-free meta refresh after 20 passes and 24 hours, admitted as a zero-delta replacement even at the hard ceiling; the sweep then deletes them (§3.4 item 9, §6.2) |
