@@ -46,7 +46,7 @@ struct MenuBarView: View {
             }
             footer
         }
-        .frame(width: 340, height: 460)
+        .frame(width: Tokens.Size.menuBarPanelWidth, height: Tokens.Size.menuBarPanelHeight)
         .background(WindowReader { window in
             windowBox.attach(window)
         })
@@ -90,7 +90,7 @@ struct MenuBarView: View {
         VStack(alignment: .leading, spacing: 8) {
             TextField("Jot down a quick note…", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(Tokens.Font.row)
                 .lineLimit(1...4)
                 .onSubmit(saveDraft)
 
@@ -100,7 +100,7 @@ struct MenuBarView: View {
                 if let savedNotice {
                     Label(savedNotice, systemImage: "checkmark.circle.fill")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Tokens.Color.success)
                         .transition(.opacity.combined(with: .move(edge: .trailing)))
                 }
                 IconButton(symbol: "arrow.up.left.and.arrow.down.right", help: "Open in Quick Capture") {
@@ -123,12 +123,12 @@ struct MenuBarView: View {
         }
         .padding(10)
         .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
                 .fill(Color.primary.opacity(0.045))
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: Tokens.Radius.card, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: Tokens.Size.hairline)
         )
         .animation(.easeOut(duration: 0.2), value: savedNotice)
     }
@@ -221,8 +221,8 @@ struct MenuBarView: View {
 
     private func sectionHeader(_ title: String) -> some View {
         Text(title.uppercased())
-            .font(.system(size: 10, weight: .semibold))
-            .tracking(0.6)
+            .font(Tokens.Font.sectionLabel)
+            .tracking(Tokens.Tracking.sectionLabel)
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .padding(.top, 8)
@@ -358,20 +358,20 @@ private struct MenuBarNoteRow: View {
                     .font(.system(size: 13, weight: .medium))
                     .lineLimit(1)
                 Text(note.preview.isEmpty ? "No additional text" : note.preview)
-                    .font(.system(size: 11))
+                    .font(Tokens.Font.rowMeta)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: 6)
             Text(RelativeDate.short(note.updatedAt))
-                .font(.system(size: 11))
+                .font(Tokens.Font.rowMeta)
                 .monospacedDigit()
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: Tokens.Radius.tile, style: .continuous)
                 .fill(isHighlighted ? Color.accentColor.opacity(0.22)
                       : isHovered ? Color.primary.opacity(0.06) : .clear)
         )

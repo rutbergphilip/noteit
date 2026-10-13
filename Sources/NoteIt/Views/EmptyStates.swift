@@ -4,7 +4,7 @@ struct EmptyStateView: View {
     let symbol: String
     let title: String
     let message: String
-    var tint: Color = .accentColor
+    var tint: Color = Tokens.Color.accent
     var actionTitle: String?
     var action: (() -> Void)?
 
@@ -13,7 +13,7 @@ struct EmptyStateView: View {
             ZStack {
                 Circle()
                     .fill(tint.opacity(0.12))
-                    .frame(width: 88, height: 88)
+                    .frame(width: Tokens.Size.emptyStateCircle, height: Tokens.Size.emptyStateCircle)
                 Image(systemName: symbol)
                     .font(.system(size: 36, weight: .light))
                     .foregroundStyle(tint)

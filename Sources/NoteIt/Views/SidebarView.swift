@@ -12,9 +12,9 @@ struct SidebarView: View {
     var body: some View {
         List(selection: $store.selection) {
             Section("Library") {
-                libraryRow("All Notes", symbol: "note.text", tint: .accentColor, selection: .allNotes)
-                libraryRow("Pinned", symbol: "pin.fill", tint: .orange, selection: .pinned)
-                libraryRow("Recent", symbol: "clock", tint: .teal, selection: .recent)
+                libraryRow("All Notes", symbol: "note.text", tint: Tokens.Color.accent, selection: .allNotes)
+                libraryRow("Pinned", symbol: "pin.fill", tint: Tokens.Color.pinned, selection: .pinned)
+                libraryRow("Recent", symbol: "clock", tint: Tokens.Color.recent, selection: .recent)
                 if store.count(for: .conflicts) > 0 || store.selection == .conflicts {
                     libraryRow("Conflicts", symbol: "exclamationmark.triangle.fill", tint: .orange, selection: .conflicts)
                 }

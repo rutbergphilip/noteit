@@ -28,7 +28,7 @@ struct SettingsView: View {
                 .tabItem { Label("About", systemImage: "info.circle") }
                 .tag(Tab.about)
         }
-        .frame(width: 520)
+        .frame(width: Tokens.Size.settingsWidth)
         .onReceive(NotificationCenter.default.publisher(for: .noteItShowSettingsTab)) { note in
             if let raw = note.object as? String {
                 tabRaw = (Tab(rawValue: raw) ?? .general).rawValue

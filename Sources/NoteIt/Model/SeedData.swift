@@ -4,9 +4,9 @@ import AppKit
 @MainActor
 enum SeedData {
     static func seed(into store: NoteStore) {
-        let inbox = store.createNotebook(name: "Inbox", symbol: "tray", colorHex: "#0A84FF")
-        let shortcuts = store.createNotebook(name: "Shortcuts", symbol: "command", colorHex: "#BF5AF2")
-        _ = store.createNotebook(name: "Ideas", symbol: "lightbulb", colorHex: "#FF9F0A")
+        let inbox = store.createNotebook(name: "Inbox", symbol: "tray", colorHex: Tokens.Hex.notebookBlue)
+        let shortcuts = store.createNotebook(name: "Shortcuts", symbol: "command", colorHex: Tokens.Hex.notebookPurple)
+        _ = store.createNotebook(name: "Ideas", symbol: "lightbulb", colorHex: Tokens.Hex.notebookOrange)
 
         let shortcutsNote = store.createNote(in: shortcuts.id, initial: shortcutsBody())
         let welcome = store.createNote(in: inbox.id, initial: welcomeBody())

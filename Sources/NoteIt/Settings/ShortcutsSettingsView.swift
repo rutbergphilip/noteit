@@ -38,7 +38,7 @@ private struct HotkeyRow: View {
                 .foregroundStyle(.white)
                 .frame(width: 28, height: 28)
                 .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    RoundedRectangle(cornerRadius: Tokens.Radius.tile, style: .continuous)
                         .fill(LinearGradient(colors: [tint.opacity(0.85), tint], startPoint: .top, endPoint: .bottom))
                 )
             VStack(alignment: .leading, spacing: 2) {
@@ -57,9 +57,9 @@ private struct HotkeyRow: View {
 
     private var tint: Color {
         switch action {
-        case .showMainWindow: Color(hex: "#5E5CE6")
-        case .newNote: Color(hex: "#FF9F0A")
-        case .quickCapture: Color(hex: "#0A84FF")
+        case .showMainWindow: Tokens.Color.tileShowHide
+        case .newNote: Tokens.Color.tileNewNote
+        case .quickCapture: Tokens.Color.tileQuickCapture
         }
     }
 }

@@ -96,7 +96,7 @@ struct NoteListView: View {
                     symbol: "pin",
                     title: "No Pinned Notes",
                     message: "Pin a note to keep it at the top of your lists.",
-                    tint: .orange
+                    tint: Tokens.Color.pinned
                 )
             case .notebook(let id):
                 let notebook = store.notebook(with: id)
@@ -104,7 +104,7 @@ struct NoteListView: View {
                     symbol: notebook?.symbol ?? "book",
                     title: "No Notes Yet",
                     message: "Capture your first thought in \(notebook?.name ?? "this notebook").",
-                    tint: notebook?.color ?? .accentColor,
+                    tint: notebook?.color ?? Tokens.Color.accent,
                     actionTitle: "New Note"
                 ) { store.createNoteInCurrentContext() }
             default:
@@ -150,7 +150,7 @@ struct NoteRow: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(note.displayTitle)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(Tokens.Font.cardTitle)
                     .lineLimit(1)
                     .foregroundStyle(note.title.isEmpty ? .secondary : .primary)
                 Spacer(minLength: 4)
@@ -164,27 +164,27 @@ struct NoteRow: View {
                 if note.isPinned {
                     Image(systemName: "pin.fill")
                         .font(.system(size: 10))
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Tokens.Color.pinned)
                         .help("Pinned")
                 }
             }
 
             Text(note.preview.isEmpty ? "No additional text" : note.preview)
-                .font(.system(size: 12))
+                .font(Tokens.Font.cardPreview)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 6) {
                 Text(note.updatedAt, format: .relative(presentation: .named))
-                    .font(.system(size: 11))
+                    .font(Tokens.Font.cardMeta)
                     .foregroundStyle(.tertiary)
                 if let notebook {
                     Spacer(minLength: 4)
                     HStack(spacing: 4) {
                         Circle().fill(notebook.color).frame(width: 7, height: 7)
                         Text(notebook.name)
-                            .font(.system(size: 11))
+                            .font(Tokens.Font.cardMeta)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                     }

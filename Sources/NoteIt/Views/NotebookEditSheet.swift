@@ -33,7 +33,7 @@ struct NotebookEditSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(spacing: 14) {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: Tokens.Radius.preview, style: .continuous)
                     .fill(tint.gradient)
                     .frame(width: 52, height: 52)
                     .overlay(

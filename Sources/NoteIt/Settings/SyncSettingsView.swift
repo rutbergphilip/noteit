@@ -462,13 +462,13 @@ struct ProviderIcon: View {
 
     private var tint: Color {
         switch provider {
-        case .folder: Color(hex: "#0A84FF")
-        case .awsS3: Color(hex: "#FF9F0A")
-        case .cloudflareR2: Color(hex: "#5E5CE6")
-        case .backblazeB2: Color(hex: "#FF453A")
-        case .googleCloud: Color(hex: "#34C759")
-        case .minio: Color(hex: "#30B0C7")
-        case .customS3: Color(hex: "#8E8E93")
+        case .folder: Tokens.Color.SyncProvider.folder
+        case .awsS3: Tokens.Color.SyncProvider.awsS3
+        case .cloudflareR2: Tokens.Color.SyncProvider.cloudflareR2
+        case .backblazeB2: Tokens.Color.SyncProvider.backblazeB2
+        case .googleCloud: Tokens.Color.SyncProvider.googleCloud
+        case .minio: Tokens.Color.SyncProvider.minio
+        case .customS3: Tokens.Color.SyncProvider.customS3
         }
     }
 }

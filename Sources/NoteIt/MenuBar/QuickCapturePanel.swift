@@ -25,7 +25,7 @@ final class QuickCaptureModel: ObservableObject {
 @MainActor
 final class QuickCaptureController: NSObject, NSWindowDelegate {
     static let shared = QuickCaptureController()
-    static let size = NSSize(width: 580, height: 330)
+    static let size = NSSize(width: Tokens.Size.captureWidth, height: Tokens.Size.captureHeight)
 
     private var panel: QuickCapturePanel?
     private var keyMonitor: Any?
@@ -213,8 +213,8 @@ struct QuickCaptureView: View {
                     .foregroundStyle(.white)
                     .frame(width: 20, height: 20)
                     .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(LinearGradient(colors: [Color(hex: "#6E5BFF"), Color(hex: "#3A3FD9")],
+                        RoundedRectangle(cornerRadius: Tokens.Radius.toolbar, style: .continuous)
+                            .fill(LinearGradient(colors: [Tokens.Color.brandViolet, Color(hex: Tokens.Hex.legacyIconIndigo)],
                                                  startPoint: .top, endPoint: .bottom))
                     )
                 Text("Quick Capture")
@@ -229,7 +229,7 @@ struct QuickCaptureView: View {
 
             TextField("Title", text: $model.title)
                 .textFieldStyle(.plain)
-                .font(.system(size: 22, weight: .semibold))
+                .font(Tokens.Font.captureTitle)
                 .focused($focus, equals: .title)
                 .onSubmit { focus = .body }
                 .padding(.horizontal, 18)
@@ -238,13 +238,13 @@ struct QuickCaptureView: View {
             ZStack(alignment: .topLeading) {
                 if model.body.isEmpty {
                     Text("Start typing your note…")
-                        .font(.system(size: 14))
+                        .font(Tokens.Font.captureBody)
                         .foregroundStyle(.tertiary)
                         .padding(.leading, 5)
                         .allowsHitTesting(false)
                 }
                 TextEditor(text: $model.body)
-                    .font(.system(size: 14))
+                    .font(Tokens.Font.captureBody)
                     .scrollContentBackground(.hidden)
                     .scrollIndicators(.never)
                     .focused($focus, equals: .body)
@@ -287,10 +287,10 @@ struct QuickCaptureView: View {
         }
         .frame(width: QuickCaptureController.size.width, height: QuickCaptureController.size.height)
         .background(VisualEffectBackground(material: .popover))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: Tokens.Radius.panel, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: Tokens.Radius.panel, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: Tokens.Size.hairline)
         )
         .onChange(of: model.focusToken) {
             DispatchQueue.main.async {

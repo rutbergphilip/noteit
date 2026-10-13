@@ -10,7 +10,7 @@ struct AboutSettingsView: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            AppIconView(size: 96)
+            AppIconView(size: Tokens.Size.aboutIcon)
                 .padding(.bottom, 4)
             Text("NoteIt")
                 .font(.system(size: 26, weight: .bold, design: .rounded))

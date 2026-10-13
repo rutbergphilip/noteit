@@ -35,8 +35,8 @@ struct NotebookGlyph: View {
             .foregroundStyle(color)
             .frame(width: size, height: size)
             .background(
-                RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-                    .fill(color.opacity(0.16))
+                RoundedRectangle(cornerRadius: Tokens.Radius.glyph(side: size), style: .continuous)
+                    .fill(color.opacity(Tokens.Opacity.tintGlyph))
             )
     }
 }
@@ -97,7 +97,7 @@ struct AppIconView: View {
                 .frame(width: size, height: size)
         } else {
             RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
-                .fill(LinearGradient(colors: [Color(hex: "#6E5BFF"), Color(hex: "#3A3FD9"), Color(hex: "#1E2470")],
+                .fill(LinearGradient(colors: [Tokens.Color.brandViolet, Color(hex: Tokens.Hex.legacyIconIndigo), Tokens.Color.brandDeep],
                                      startPoint: .topLeading, endPoint: .bottomTrailing))
                 .overlay(
                     Image(systemName: "pencil.and.scribble")

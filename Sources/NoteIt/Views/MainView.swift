@@ -9,10 +9,10 @@ struct MainView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             SidebarView(notebookDraft: $notebookDraft)
-                .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 320)
+                .navigationSplitViewColumnWidth(min: Tokens.Size.sidebarMin, ideal: Tokens.Size.sidebarWidth, max: Tokens.Size.sidebarMax)
         } content: {
             NoteListView()
-                .navigationSplitViewColumnWidth(min: 240, ideal: 300, max: 440)
+                .navigationSplitViewColumnWidth(min: Tokens.Size.noteListMin, ideal: Tokens.Size.noteListWidth, max: Tokens.Size.noteListMax)
         } detail: {
             EditorContainerView()
         }

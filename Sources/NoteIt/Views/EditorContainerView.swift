@@ -18,7 +18,7 @@ struct EditorContainerView: View {
                 RichTextEditor(noteID: id, controller: editor, isEditable: !writeBlocked)
                     .id(id)
             }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Tokens.Color.surfaceEditor)
         } else {
             EmptyStateView(
                 symbol: "square.and.pencil",
@@ -26,7 +26,7 @@ struct EditorContainerView: View {
                 message: "Choose a note from the list, or start something new.",
                 actionTitle: "New Note"
             ) { store.createNoteInCurrentContext() }
-            .background(Color(nsColor: .textBackgroundColor))
+            .background(Tokens.Color.surfaceEditor)
         }
     }
 }
@@ -72,7 +72,7 @@ struct EditorHeader: View {
                 store.togglePin(note.id)
             } label: {
                 Image(systemName: note.isPinned ? "pin.fill" : "pin")
-                    .foregroundStyle(note.isPinned ? Color.orange : Color.secondary)
+                    .foregroundStyle(note.isPinned ? Tokens.Color.pinned : Color.secondary)
                     .frame(width: 22, height: 22)
             }
             .buttonStyle(.borderless)
@@ -121,7 +121,7 @@ struct NotebookChip: View {
         .foregroundStyle(tint)
         .padding(.horizontal, 9)
         .padding(.vertical, 4)
-        .background(Capsule().fill(tint.opacity(0.14)))
+        .background(Capsule().fill(tint.opacity(Tokens.Opacity.tintChip)))
     }
 }
 

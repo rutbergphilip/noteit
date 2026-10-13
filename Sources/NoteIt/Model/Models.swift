@@ -71,10 +71,7 @@ extension NSColor {
 
 /// Curated palette and symbols used by the notebook editor.
 enum NotebookPalette {
-    static let colors: [String] = [
-        "#0A84FF", "#5E5CE6", "#BF5AF2", "#FF375F", "#FF453A",
-        "#FF9F0A", "#FFD60A", "#30D158", "#64D2FF", "#8E8E93",
-    ]
+    static let colors: [String] = Tokens.Hex.notebookPalette
 
     static let symbols: [String] = [
         "tray", "command", "lightbulb", "book", "bookmark", "folder",
