@@ -6,7 +6,7 @@ import NoteItSync
 
 @MainActor
 final class NoteStore: ObservableObject {
-    static let shared = NoteStore()
+    static let shared = NoteStore(location: defaultLocation())
 
     @Published var notebooks: [Notebook] = []
     @Published var notes: [NoteMeta] = [] {
@@ -96,13 +96,14 @@ final class NoteStore: ObservableObject {
     /// A user mutation happened since the last save; the save posts `noteItLocalChange`.
     private var hasUnannouncedLocalChange = false
 
-    init(rootURL: URL? = nil) {
-        if let rootURL {
-            self.rootURL = rootURL
-            seedsFreshLibrary = true
-        } else {
-            (self.rootURL, seedsFreshLibrary) = Self.defaultRootURL()
-        }
+    /// A library at `rootURL` that may be seeded if empty (self-tests, scratch stores).
+    convenience init(rootURL: URL) {
+        self.init(location: LibraryLocation(url: rootURL, seedsFreshLibrary: true))
+    }
+
+    init(location: LibraryLocation) {
+        rootURL = location.url
+        seedsFreshLibrary = location.seedsFreshLibrary
         load()
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: nil
@@ -115,47 +116,21 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    /// `NOTEIT_DATA_DIR` if set; otherwise `Application Support/NoteIt`, first moving an Inkwell
-    /// library there if one exists (see `LibraryMigration`). The flag says whether a welcome library
-    /// may be seeded: for the default location, only when migration found a genuine fresh install.
-    private static func defaultRootURL() -> (URL, seedsFreshLibrary: Bool) {
-        if let resolvedDefaultRoot { return resolvedDefaultRoot }
-        let resolved = resolveDefaultRoot()
-        resolvedDefaultRoot = resolved
-        return resolved
-    }
-
-    private static var resolvedDefaultRoot: (URL, seedsFreshLibrary: Bool)?
+    private static var resolvedDefaultLocation: LibraryLocation?
 
     /// Settles the library location, migration included, before SwiftUI builds any scene: asking
     /// Inkwell to quit shows a modal alert, which mustn't run inside a SwiftUI update.
     static func prepareDefaultLocation() {
-        _ = defaultRootURL()
+        _ = defaultLocation()
     }
 
-    private static func resolveDefaultRoot() -> (URL, seedsFreshLibrary: Bool) {
-        if let override = AppEnvironment.nonEmpty("DATA_DIR") {
-            return (URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true), true)
-        }
-        var base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        #if DEBUG
-        // Debug-only: stand-in for Application Support, to exercise the migration against fake folders.
-        if let fakeBase = AppEnvironment.nonEmpty("APP_SUPPORT_DIR") {
-            base = URL(fileURLWithPath: (fakeBase as NSString).expandingTildeInPath, isDirectory: true)
-        }
-        #endif
-        let result = LibraryMigration.resolve(
-            baseDirectory: base,
-            isLegacyAppRunning: LegacyAppQuitter.isRunning,
-            quitLegacyApp: { LegacyAppQuitter.quit() }
-        )
-        if result.outcome == .legacyAppRunning {
-            // The user chose to quit NoteIt rather than Inkwell; nothing has been opened or written.
-            NSLog("NoteIt: quitting; Inkwell must quit before its notes can move")
-            exit(0)
-        }
-        return (result.directory, result.outcome.allowsSeeding)
+    /// Resolved once per launch by `LibraryLauncher`. If the user chose to quit NoteIt rather than
+    /// Inkwell, the process exits here, before anything is opened or written.
+    static func defaultLocation() -> LibraryLocation {
+        if let resolvedDefaultLocation { return resolvedDefaultLocation }
+        guard let location = LibraryLauncher.live.launch(open: { $0 }, quit: { exit(0) }) else { exit(0) }
+        resolvedDefaultLocation = location
+        return location
     }
 
     // MARK: - Queries

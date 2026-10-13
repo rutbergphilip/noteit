@@ -21,9 +21,21 @@ enum LegacyAppQuitter {
 
     static func isRunning() -> Bool { !instances.isEmpty }
 
+    enum Reason {
+        /// At launch, before Inkwell's library moves to NoteIt.
+        case moveNotes
+        /// While NoteIt runs, when Inkwell would open the library NoteIt has open.
+        case sharedLibrary
+    }
+
+    private static var isAsking = false
+
     /// Asks before quitting Inkwell, waits for it to exit, and offers Force Quit only after a timeout.
     /// Returns `true` once Inkwell is gone, `false` if the user chose to quit NoteIt instead.
-    static func quit(timeout: TimeInterval = 15) -> Bool {
+    static func quit(reason: Reason, timeout: TimeInterval = 15) -> Bool {
+        guard !isAsking else { return !isRunning() }
+        isAsking = true
+        defer { isAsking = false }
         _ = NSApplication.shared
         var timedOut = false
         while isRunning() {
@@ -37,9 +49,14 @@ enum LegacyAppQuitter {
                 alert.addButton(withTitle: "Try Again")
                 alert.addButton(withTitle: "Force Quit Inkwell")
                 alert.addButton(withTitle: "Quit NoteIt")
-            } else {
+            } else if reason == .moveNotes {
                 alert.messageText = "Quit Inkwell to move your notes to NoteIt"
                 alert.informativeText = "Inkwell is still open. NoteIt moves your notes over once Inkwell quits, so no edits are left behind."
+                alert.addButton(withTitle: "Quit Inkwell")
+                alert.addButton(withTitle: "Quit NoteIt")
+            } else {
+                alert.messageText = "Quit Inkwell to keep your changes safe"
+                alert.informativeText = "Inkwell opened the same notes NoteIt has open. With both running, one can overwrite the other's changes."
                 alert.addButton(withTitle: "Quit Inkwell")
                 alert.addButton(withTitle: "Quit NoteIt")
             }
