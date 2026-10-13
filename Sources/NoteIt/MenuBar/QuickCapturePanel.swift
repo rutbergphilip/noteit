@@ -21,6 +21,13 @@ final class QuickCaptureModel: ObservableObject {
     }
 }
 
+/// Whether Quick Capture is on screen; the menu bar glyph switches to its "capturing" variant.
+@MainActor
+final class QuickCaptureVisibility: ObservableObject {
+    static let shared = QuickCaptureVisibility()
+    @Published var isCapturing = false
+}
+
 /// Spotlight-style quick capture: ⌘↩ saves, Esc dismisses, clicking elsewhere dismisses.
 @MainActor
 final class QuickCaptureController: NSObject, NSWindowDelegate {
@@ -72,11 +79,13 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
         }
         installKeyMonitor()
         model.focusToken += 1
+        QuickCaptureVisibility.shared.isCapturing = true
     }
 
     func dismiss() {
         guard let panel, panel.isVisible else { return }
         removeKeyMonitor()
+        QuickCaptureVisibility.shared.isCapturing = false
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.1
             panel.animator().alphaValue = 0

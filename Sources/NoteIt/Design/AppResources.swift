@@ -36,4 +36,10 @@ enum AppResources {
 
     /// The app icon artwork (`scripts/make_icon.swift`), for unbundled runs without an `.icns`.
     @MainActor static var appIcon: NSImage? { image("AppIcon") }
+
+    /// The menu bar glyph (`scripts/make_menubar_glyph.swift`): a template image at 18 × 18 pt.
+    @MainActor static func menuBarGlyph(capturing: Bool) -> NSImage? {
+        image(capturing ? "noteit-menubar-capturingTemplate" : "noteit-menubarTemplate",
+              template: true, size: NSSize(width: Tokens.Size.menuBarGlyph, height: Tokens.Size.menuBarGlyph))
+    }
 }

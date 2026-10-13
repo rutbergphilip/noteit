@@ -28,8 +28,7 @@ struct NoteItApp: App {
             MenuBarView()
                 .environmentObject(store)
         } label: {
-            Image(systemName: "pencil.line")
-                .accessibilityLabel("NoteIt")
+            MenuBarGlyph()
         }
         .menuBarExtraStyle(.window)
     }
@@ -92,4 +91,20 @@ extension Notification.Name {
     static let noteItNewNotebook = Notification.Name("noteItNewNotebook")
     /// Posted after a user change to the library has been saved (sync uses it to schedule a pass).
     static let noteItLocalChange = Notification.Name("noteItLocalChange")
+}
+
+/// The menu bar icon: the squiggle + pencil template glyph, with a spark while Quick Capture is open.
+private struct MenuBarGlyph: View {
+    @ObservedObject private var visibility = QuickCaptureVisibility.shared
+
+    var body: some View {
+        Group {
+            if let glyph = AppResources.menuBarGlyph(capturing: visibility.isCapturing) {
+                Image(nsImage: glyph)
+            } else {
+                Image(systemName: "pencil.line")
+            }
+        }
+        .accessibilityLabel("NoteIt")
+    }
 }
