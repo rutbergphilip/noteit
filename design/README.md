@@ -2,7 +2,7 @@
 
 This folder is the design source of truth for the NoteIt macOS app (formerly developed as "Inkwell"). It was exported from the NoteIt design system and is meant to be read by people and coding agents.
 
-> **Owner decision:** the app icon and menu bar glyph use the squiggle + pencil mark; the Swift Page artwork is kept as an alternative. The shipped icon is rendered by `scripts/make_icon.swift` into `Resources/AppIcon.iconset`; the menu bar glyph by `scripts/make_menubar_glyph.swift` (PNGs in `Sources/NoteIt/Resources`, SVGs in `Resources/MenuBarGlyph`). Re-render both with `scripts/render_icon.sh`.
+> **Owner decision:** the app icon and menu bar glyph use the squiggle + pencil mark; the Swift Page artwork is kept as an alternative. The shipped icon (white squiggle + pencil on the violet → indigo gradient) is rendered by `scripts/make_icon.swift` into `Resources/AppIcon.iconset`; an earlier paper-sheet + yellow pencil artwork is kept as an alternative in `assets/app-icon/alt-paper/`; the menu bar glyph by `scripts/make_menubar_glyph.swift` (PNGs in `Sources/NoteIt/Resources`, SVGs in `Resources/MenuBarGlyph`). Re-render both with `scripts/render_icon.sh`.
 
 ## Read in this order
 
