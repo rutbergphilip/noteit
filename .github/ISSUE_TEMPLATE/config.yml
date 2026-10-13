@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/rutbergphilip/inkwell/security/advisories/new
+    url: https://github.com/rutbergphilip/noteit/security/advisories/new
     about: Please report vulnerabilities privately via GitHub private vulnerability reporting, not as a public issue.

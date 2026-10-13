@@ -37,7 +37,7 @@ This Code of Conduct applies within all community spaces, and also applies when 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement privately through GitHub, either with [GitHub private vulnerability reporting](https://github.com/rutbergphilip/inkwell/security/advisories/new) (visible only to the maintainers) or by contacting the maintainer, [@rutbergphilip](https://github.com/rutbergphilip), via GitHub. All complaints will be reviewed and investigated promptly and fairly.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the community leaders responsible for enforcement privately through GitHub, either with [GitHub private vulnerability reporting](https://github.com/rutbergphilip/noteit/security/advisories/new) (visible only to the maintainers) or by contacting the maintainer, [@rutbergphilip](https://github.com/rutbergphilip), via GitHub. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the reporter of any incident.
 

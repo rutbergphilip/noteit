@@ -1,3 +1,5 @@
+> **Note:** this is the original brief the design team worked from, written while the app was still called Inkwell. [`design/`](../../design/) is now the design source of truth; where they differ, `design/` wins.
+
 # Inkwell — design handoff
 
 > Moved from the repository `README.md`. The user-facing README is now [`../../README.md`](../../README.md).

@@ -1,10 +1,10 @@
-# Inkwell Sync — Design (draft for approval)
+# NoteIt Sync — Design (draft for approval)
 
 ## Goal
-Let a user keep their Inkwell library in **storage they choose** — an S3 bucket, a NAS, or any synced folder — and use it from several Macs, with no Inkwell-hosted server. Setup takes about a minute, and a note is never lost to a conflict.
+Let a user keep their NoteIt library in **storage they choose** — an S3 bucket, a NAS, or any synced folder — and use it from several Macs, with no NoteIt-hosted server. Setup takes about a minute, and a note is never lost to a conflict.
 
 ## Non-goals (v1)
-- An Inkwell-hosted cloud or user accounts.
+- An NoteIt-hosted cloud or user accounts.
 - Real-time co-editing or character-level merging.
 - An iOS app. The design keeps this possible, but it isn't built.
 - Sharing notes with other people.
@@ -14,7 +14,7 @@ Let a user keep their Inkwell library in **storage they choose** — an S3 bucke
 | | Approach | Pros | Cons |
 |---|---|---|---|
 | A | **"Library folder"**: move the existing library into any folder (iCloud Drive, Dropbox, a mounted NAS share) and let that tool sync it | Tiny amount of work | Two Macs both write the single `library.json`, so one silently overwrites the other. No conflict handling. Doesn't reach S3. |
-| **B (recommended)** | **Inkwell sync engine + pluggable storage backends**: a sync protocol that stores one item per note, with backends for S3-compatible storage and folders | Works with S3, MinIO/Synology (NAS), Backblaze B2, Cloudflare R2, Wasabi, SMB/AFP mounts, iCloud Drive and Dropbox. Proper conflict handling. Optional end-to-end encryption. Future iOS app can reuse it. | Real engineering: a sync engine, S3 request signing and a storage refactor |
+| **B (recommended)** | **NoteIt sync engine + pluggable storage backends**: a sync protocol that stores one item per note, with backends for S3-compatible storage and folders | Works with S3, MinIO/Synology (NAS), Backblaze B2, Cloudflare R2, Wasabi, SMB/AFP mounts, iCloud Drive and Dropbox. Proper conflict handling. Optional end-to-end encryption. Future iOS app can reuse it. | Real engineering: a sync engine, S3 request signing and a storage refactor |
 | C | **CloudKit** | Apple-native, free for the user | Not "custom storage". Needs a paid developer account and entitlements. Tied to iCloud only. |
 
 **Recommendation: B.** It is the only option that really delivers "S3 or my NAS, synced between devices", and it's a strong commercial differentiator ("your notes, your storage").
@@ -41,6 +41,9 @@ SyncEngine  ── diff local vs remote vs last-synced base; push/pull; conflict
 - **Migration** from the current layout is automatic and one-time, with a backup made first.
 
 ### Remote layout (`<bucket or folder>/inkwell/v1/`)
+
+`inkwell` is the protocol name from before the app was renamed to NoteIt. It, `inkwell/.canary/`, `.inkwell-lock`, the `inkwell-key-check` plaintext and the manifest fields are part of the wire format and stay unchanged, so existing stores keep working.
+
 ```
 manifest.json                         format version, encryption info (salt, KDF params), created
 notebooks/<uuid>.json                 Notebook record + revision
@@ -79,7 +82,7 @@ devices/<deviceID>.json               device name, last sync (for "Synced device
   - Fields for endpoint, region, bucket, access key and secret, with a "Test connection" button.
   - For Folder: a folder picker that keeps access across restarts (security-scoped bookmark).
   - Encryption toggle and passphrase.
-- Secrets are stored in the keychain, never in UserDefaults.
+- Secrets are stored in the keychain, never in UserDefaults, under the service `io.github.rutbergphilip.noteit.sync`. Secrets saved under the legacy Inkwell service `com.inkwell.app.sync` are moved to it on first read.
 - **Status UI:**
   - A sync status icon in the sidebar footer: synced, syncing, offline or error.
   - A "Last synced 2 min ago" line in the menu bar panel.
@@ -115,7 +118,7 @@ devices/<deviceID>.json               device name, last sync (for "Synced device
 
 ## Implementation notes & deviations (2026-10-12)
 
-What shipped differs from the design above in these ways. Code references are to `Sources/InkwellSync/` and `Sources/Inkwell/`.
+What shipped differs from the design above in these ways. Code references are to `Sources/NoteItSync/` and `Sources/NoteIt/`.
 
 ### Storage and revisions
 - **No local layout migration.** There's no `LocalRepository` and no per-note record files on disk; `library.json` stays the source of truth. `NoteMeta` and `Notebook` gained optional `revision: UUID?` fields (plus `conflictSource` / `conflictOriginalID` on notes), so older files load unchanged. A user edit sets a new random revision.
@@ -165,4 +168,4 @@ Implements the plan's 17-row table with these changes:
 - No WebDAV backend, no side-by-side conflict compare view, no Trash UI.
 - No passphrase change or switching encryption on/off without a new store.
 - No iOS app.
-- Unit tests cover `InkwellSync` only (149 tests, plus 3 opt-in live emulator tests); the app layer relies on the debug `INKWELL_SYNC_SELFTEST` mode.
+- Unit tests cover `NoteItSync` only (149 tests, plus 3 opt-in live emulator tests); the app layer relies on the debug `NOTEIT_SYNC_SELFTEST` mode.

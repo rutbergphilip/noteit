@@ -4,7 +4,7 @@
 
 ## How it was tested
 
-<!-- Commands run, manual steps. Sync/crypto/storage changes need tests in Tests/InkwellSyncTests. -->
+<!-- Commands run, manual steps. Sync/crypto/storage changes need tests in Tests/NoteItSyncTests. -->
 
 ## Screenshots
 
