@@ -39,13 +39,22 @@ public enum LibraryMigration {
         let legacy = baseDirectory.appendingPathComponent(AppIdentity.Legacy.dataFolderName, isDirectory: true)
         let doMove: (URL, URL) throws -> Void = move ?? { try fileManager.moveItem(at: $0, to: $1) }
 
+        // `Inkwell -> NoteIt` is the link left by an earlier migration: never a source, never followed.
+        let alreadyMigrated = isLink(legacy, to: current, fileManager)
+        let legacyHasLibrary = !alreadyMigrated && hasLibrary(legacy, fileManager)
+
         if hasLibrary(current, fileManager) {
-            if hasLibrary(legacy, fileManager) {
+            if legacyHasLibrary {
                 log("NoteIt: libraries found in both \(current.path) and \(legacy.path); using NoteIt's and leaving Inkwell's untouched")
             }
             return (current, .existing)
         }
-        guard hasLibrary(legacy, fileManager) else { return (current, .freshInstall) }
+        guard legacyHasLibrary else {
+            if alreadyMigrated {
+                log("NoteIt: \(legacy.path) links to \(current.path), which holds no library; starting fresh")
+            }
+            return (current, .freshInstall)
+        }
 
         if isLegacyAppRunning() {
             guard quitLegacyApp(), !isLegacyAppRunning() else {
@@ -72,6 +81,7 @@ public enum LibraryMigration {
             // A single rename on the same volume: hidden files (.initialized, .trash/) and sync state move with it.
             try doMove(legacy, current)
             log("NoteIt: moved library from \(legacy.path) to \(current.path)")
+            linkLegacy(legacy, to: current, fileManager, log)
             return (current, .moved(setAside: setAside))
         } catch {
             log("NoteIt: couldn't move library from \(legacy.path) to \(current.path) (\(error)); using it in place")
@@ -80,6 +90,32 @@ public enum LibraryMigration {
             }
             return (legacy, .failed(String(describing: error)))
         }
+    }
+
+    /// Whether `legacy` is the same folder as `library` (a link left by migration, or the legacy folder
+    /// used in place), so a running Inkwell would write to NoteIt's library.
+    public static func isShared(legacy: URL, with library: URL) -> Bool {
+        legacy.resolvingSymlinksInPath().standardizedFileURL.path == library.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    /// Leaves `Inkwell -> NoteIt` behind, so an Inkwell launched later (an old login item, say) opens
+    /// the same library instead of starting a second one that diverges.
+    private static func linkLegacy(_ legacy: URL, to current: URL, _ fileManager: FileManager, _ log: (String) -> Void) {
+        do {
+            // Relative, so the link survives the base folder moving.
+            try fileManager.createSymbolicLink(atPath: legacy.path, withDestinationPath: current.lastPathComponent)
+        } catch {
+            log("NoteIt: couldn't link \(legacy.path) to \(current.path) (\(error))")
+        }
+    }
+
+    /// Whether `url` is a symbolic link to `target` (without following anything else).
+    static func isLink(_ url: URL, to target: URL, _ fileManager: FileManager) -> Bool {
+        guard let destination = try? fileManager.destinationOfSymbolicLink(atPath: url.path) else { return false }
+        let resolved = destination.hasPrefix("/")
+            ? URL(fileURLWithPath: destination)
+            : url.deletingLastPathComponent().appendingPathComponent(destination)
+        return resolved.standardizedFileURL.path == target.standardizedFileURL.path
     }
 
     /// A library is real when it has `library.json`, any note body, or the first-launch marker.

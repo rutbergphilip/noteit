@@ -51,10 +51,65 @@ final class LibraryMigrationTests: XCTestCase {
         XCTAssertEqual(result.outcome, .moved(setAside: nil))
         XCTAssertFalse(result.outcome.allowsSeeding)
         XCTAssertEqual(result.directory.standardizedFileURL, current.standardizedFileURL)
-        XCTAssertFalse(fm.fileExists(atPath: legacy.path))
+        assertLegacyIsLinkToCurrent()
         for path in ["library.json", ".initialized", ".trash/abc.rtfd/TXT.rtf", "sync-deletions.json"] {
             XCTAssertTrue(fm.fileExists(atPath: current.appendingPathComponent(path).path), path)
         }
+    }
+
+    private func assertLegacyIsLinkToCurrent(file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertEqual(try? fm.destinationOfSymbolicLink(atPath: legacy.path), "NoteIt", "relative link", file: file, line: line)
+        XCTAssertTrue(LibraryMigration.isShared(legacy: legacy, with: current), file: file, line: line)
+    }
+
+    func testSecondRunAfterMoveIsAlreadyMigrated() throws {
+        try makeLegacyLibrary()
+        XCTAssertEqual(resolve().outcome, .moved(setAside: nil))
+        // An Inkwell relaunched now would be running; the link is never a source, so nothing is asked or moved.
+        let again = resolve(running: { true }, move: noMove)
+        XCTAssertEqual(again.outcome, .existing)
+        XCTAssertEqual(again.directory, current)
+        assertLegacyIsLinkToCurrent()
+    }
+
+    func testLinkToNoteItIsAlreadyMigrated() throws {
+        try fm.createDirectory(at: current, withIntermediateDirectories: true)
+        try Data().write(to: current.appendingPathComponent(".initialized"))
+        try fm.createSymbolicLink(atPath: legacy.path, withDestinationPath: "NoteIt")
+        let result = resolve(running: { true }, move: noMove)
+        XCTAssertEqual(result.outcome, .existing)
+        XCTAssertEqual(result.directory, current)
+    }
+
+    func testAbsoluteLinkToNoteItIsAlreadyMigrated() throws {
+        try fm.createDirectory(at: current.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(atPath: legacy.path, withDestinationPath: current.path)
+        // NoteIt has no library yet, and following the link would make Inkwell look like one: it mustn't.
+        var logged: [String] = []
+        let result = resolve(running: { true }, move: noMove, log: { logged.append($0) })
+        XCTAssertEqual(result.outcome, .freshInstall)
+        XCTAssertEqual(logged.count, 1)
+    }
+
+    func testLinkToMissingNoteItIsFreshAndNeverFollowed() throws {
+        try fm.createSymbolicLink(atPath: legacy.path, withDestinationPath: "NoteIt")
+        var logged: [String] = []
+        let result = resolve(running: { true }, move: noMove, log: { logged.append($0) })
+        XCTAssertEqual(result.outcome, .freshInstall)
+        XCTAssertEqual(result.directory, current)
+        XCTAssertEqual(logged.count, 1)
+        XCTAssertFalse(fm.fileExists(atPath: current.path), "nothing created")
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: legacy.path), "NoteIt", "link left alone")
+    }
+
+    func testIsShared() throws {
+        try fm.createDirectory(at: current, withIntermediateDirectories: true)
+        try fm.createDirectory(at: legacy, withIntermediateDirectories: true)
+        XCTAssertFalse(LibraryMigration.isShared(legacy: legacy, with: current), "separate libraries")
+        XCTAssertTrue(LibraryMigration.isShared(legacy: legacy, with: legacy), "legacy folder used in place")
+        try fm.removeItem(at: legacy)
+        try fm.createSymbolicLink(atPath: legacy.path, withDestinationPath: "NoteIt")
+        XCTAssertTrue(LibraryMigration.isShared(legacy: legacy, with: current))
     }
 
     func testBothLibrariesKeepsNoteItAndLeavesInkwellUntouched() throws {
@@ -92,7 +147,7 @@ final class LibraryMigrationTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: current.appendingPathComponent(".initialized").path))
         XCTAssertTrue(fm.fileExists(atPath: aside.appendingPathComponent("sync.log").path))
         XCTAssertTrue(fm.fileExists(atPath: aside.appendingPathComponent("search-index.json").path))
-        XCTAssertFalse(fm.fileExists(atPath: legacy.path))
+        assertLegacyIsLinkToCurrent()
     }
 
     func testSetAsideNameIsUniqued() throws {
