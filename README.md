@@ -8,10 +8,10 @@
 
 **Notes at the speed of thought.** A native macOS notes app with Apple Notes speed, power-user formatting, capture from anywhere, and optional end-to-end encrypted sync through storage you own.
 
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](LICENSE)
+[![License: AGPL-3.0-or-later](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
 [![CI](https://github.com/rutbergphilip/inkwell/actions/workflows/ci.yml/badge.svg)](https://github.com/rutbergphilip/inkwell/actions/workflows/ci.yml)
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-lightgrey.svg)
-![Swift](https://img.shields.io/badge/Swift-5.10%2B-orange.svg)
+![Swift](https://img.shields.io/badge/Swift-6%20toolchain-orange.svg)
 
 Inkwell is a SwiftUI and AppKit app with no third-party dependencies. Your notes are files on your Mac. There's no account and no Inkwell server. If you want your Macs in sync, point Inkwell at a folder or an S3-compatible bucket you control, such as a MinIO instance on your NAS, and it encrypts everything before it leaves the machine.
 
@@ -65,7 +65,7 @@ The full sync and encryption design is documented in [`docs/specs/2026-10-12-syn
 **Requirements**
 
 - macOS 14 Sonoma or later.
-- A Swift 6 toolchain: Xcode 16 or later, or the Command Line Tools. The package manifest uses `swift-tools-version:5.10`.
+- Xcode 16 / Swift 6 toolchain (package uses Swift 5 language mode): Xcode 16 or later, or the matching Command Line Tools. The package manifest declares `swift-tools-version:5.10`.
 - Running the unit tests needs Xcode, because the Command Line Tools don't ship XCTest.
 
 ```sh
@@ -162,9 +162,11 @@ Please don't open public issues for vulnerabilities. Report them through GitHub 
 
 ## License
 
-Inkwell is free software, licensed under the [GNU Affero General Public License v3.0](LICENSE). If you distribute Inkwell, or a modified version of it, or run a modified version as a network service, you must make the corresponding source available under the same license.
+Inkwell is free software, licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later). If you distribute Inkwell, or a modified version of it, or run a modified version as a network service, you must make the corresponding source available under the same license.
 
 Copyright © 2026 Philip Rutberg and contributors.
+
+SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## Design handoff
 

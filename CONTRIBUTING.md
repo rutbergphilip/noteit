@@ -75,10 +75,10 @@ git commit -s -m "fix(sync): handle empty listings"
 
 This adds a `Signed-off-by: Your Name <you@example.com>` line, certifying that you wrote the change or otherwise have the right to submit it under the project's license.
 
-**Why a DCO and not a CLA?** Inkwell is licensed under the AGPL-3.0, and there's no Contributor License Agreement. You keep the copyright to your contributions and license them to everyone under the same AGPL-3.0 terms as the rest of the project. Nobody, including the maintainers, gets special rights to relicense your work. The sign-off is a lightweight record that you're allowed to contribute the code.
+**Why a DCO and not a CLA?** Inkwell is licensed under the AGPL-3.0-or-later, and there's no Contributor License Agreement. You keep the copyright to your contributions and license them to everyone under the same AGPL-3.0-or-later terms as the rest of the project. Nobody, including the maintainers, gets special rights to relicense your work. The sign-off is a lightweight record that you're allowed to contribute the code.
 
 If you forgot to sign off on a commit in your PR, run `git commit --amend -s` for the latest commit, or `git rebase --signoff main` for several, on your own branch.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the [GNU AGPL-3.0](LICENSE).
+By contributing, you agree that your contributions are licensed under the [GNU AGPL-3.0-or-later](LICENSE).

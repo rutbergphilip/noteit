@@ -281,7 +281,7 @@ A 520 pt wide tabbed window:
 | **Shortcuts** | Three global-hotkey rows, each with a gradient icon tile, title, description and a **Record Shortcut** field. "Clear All" appears once any are set. Footer: "Shortcuts work from any app. No special permissions needed." |
 | **Editor** | *Default font size* slider, 11–24 pt (default 15) with a live preview line · *Default notebook for new notes* (used by Quick Capture and the menu bar) |
 | **Sync** | Connect storage, or manage the connection (see below) |
-| **About** | 96 pt app icon, "Inkwell" in SF Rounded Bold 26, version, "Notes that keep up with your thinking.", and a caption line "Open source · AGPL-3.0" |
+| **About** | 96 pt app icon, "Inkwell" in SF Rounded Bold 26, version, "Notes that keep up with your thinking.", and a caption line "Open source · AGPL-3.0-or-later" |
 
 **Settings › Sync** has two states.
 
