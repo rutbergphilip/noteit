@@ -1,4 +1,4 @@
-// Renders the Inkwell app icon into an .iconset directory.
+// Renders the NoteIt app icon into an .iconset directory.
 // Usage: make_icon <output.iconset>
 import AppKit
 

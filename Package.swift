@@ -2,25 +2,25 @@
 import PackageDescription
 
 let package = Package(
-    name: "Inkwell",
+    name: "NoteIt",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "Inkwell", targets: ["Inkwell"])
+        .executable(name: "NoteIt", targets: ["NoteIt"])
     ],
     targets: [
         .target(
-            name: "InkwellSync",
-            path: "Sources/InkwellSync"
+            name: "NoteItSync",
+            path: "Sources/NoteItSync"
         ),
         .executableTarget(
-            name: "Inkwell",
-            dependencies: ["InkwellSync"],
-            path: "Sources/Inkwell"
+            name: "NoteIt",
+            dependencies: ["NoteItSync"],
+            path: "Sources/NoteIt"
         ),
         .testTarget(
-            name: "InkwellSyncTests",
-            dependencies: ["InkwellSync"],
-            path: "Tests/InkwellSyncTests"
+            name: "NoteItSyncTests",
+            dependencies: ["NoteItSync"],
+            path: "Tests/NoteItSyncTests"
         )
     ]
 )

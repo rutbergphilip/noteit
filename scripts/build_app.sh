@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
-# Builds Inkwell.app (release), generates its icon, ad-hoc signs it and installs it atomically to
-# ~/Applications (override with INKWELL_INSTALL_DIR=/some/dir).
+# Builds NoteIt.app (release), generates its icon, ad-hoc signs it and installs it atomically to
+# ~/Applications (override with NOTEIT_INSTALL_DIR=/some/dir).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="Inkwell"
+APP_NAME="NoteIt"
+# The bundle id is defined once, in Swift (AppIdentity.bundleID).
+BUNDLE_ID="$(sed -nE 's/^ *public static let bundleID = "([^"]+)".*/\1/p' Sources/NoteItSync/Migration/AppIdentity.swift | head -n 1)"
+[[ -n "$BUNDLE_ID" ]] || { echo "error: couldn't read AppIdentity.bundleID" >&2; exit 1; }
 BUILD_DIR="$ROOT/build"
 APP="$BUILD_DIR/$APP_NAME.app"
-INSTALL_DIR="${INKWELL_INSTALL_DIR:-$HOME/Applications}"
+INSTALL_DIR="${NOTEIT_INSTALL_DIR:-$HOME/Applications}"
 
 echo "==> Building release binary"
 swift build -c release
@@ -20,8 +23,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$APP_NAME"
 
-VERSION="${INKWELL_VERSION:-1.0}"
-BUILD_NUMBER="${INKWELL_BUILD:-$(date +%Y%m%d%H%M)}"
+VERSION="${NOTEIT_VERSION:-1.0}"
+BUILD_NUMBER="${NOTEIT_BUILD:-$(date +%Y%m%d%H%M)}"
 PLIST="$APP/Contents/Info.plist"
 # Build with plutil so values (version strings from env etc.) are always correctly escaped.
 plutil -create xml1 "$PLIST"
@@ -29,7 +32,7 @@ plist_str() { plutil -replace "$1" -string "$2" "$PLIST"; }
 plist_bool() { plutil -replace "$1" -bool "$2" "$PLIST"; }
 plist_str CFBundleDevelopmentRegion "en"
 plist_str CFBundleExecutable "$APP_NAME"
-plist_str CFBundleIdentifier "com.inkwell.app"
+plist_str CFBundleIdentifier "$BUNDLE_ID"
 plist_str CFBundleName "$APP_NAME"
 plist_str CFBundleDisplayName "$APP_NAME"
 plist_str CFBundlePackageType "APPL"
@@ -41,7 +44,7 @@ plist_str LSApplicationCategoryType "public.app-category.productivity"
 plist_bool NSHighResolutionCapable YES
 plist_str NSPrincipalClass "NSApplication"
 plist_bool NSSupportsAutomaticTermination NO
-plist_str NSHumanReadableCopyright "© $(date +%Y) Inkwell"
+plist_str NSHumanReadableCopyright "© $(date +%Y) NoteIt"
 # Self-hosted sync servers (MinIO on a NAS) often only speak http on the local network.
 plutil -replace NSAppTransportSecurity -json '{"NSAllowsLocalNetworking":true}' "$PLIST"
 plutil -lint "$PLIST"

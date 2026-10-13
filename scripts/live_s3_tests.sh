@@ -44,17 +44,17 @@ FAILED=0
 for target in "${TARGETS[@]}"; do
     case "$target" in
         aws)
-            start inkwell-floci floci/floci:latest 4566 -e FLOCI_SERVICES_UI_ENABLED=false
+            start noteit-floci floci/floci:latest 4566 -e FLOCI_SERVICES_UI_ENABLED=false
             echo "==> Amazon S3 (Floci)"
-            INKWELL_LIVE_S3_ENDPOINT=http://127.0.0.1:4566 INKWELL_LIVE_S3_CREATE_BUCKET=1 \
+            NOTEIT_LIVE_S3_ENDPOINT=http://127.0.0.1:4566 NOTEIT_LIVE_S3_CREATE_BUCKET=1 \
                 swift test --filter LiveS3EmulatorTests || FAILED=1
             ;;
         gcp)
-            start inkwell-floci-gcp floci/floci-gcp:latest 4588
-            curl -s -o /dev/null -X POST "http://127.0.0.1:4588/storage/v1/b?project=inkwell" \
-                -H 'content-type: application/json' -d '{"name":"inkwell-live"}'
+            start noteit-floci-gcp floci/floci-gcp:latest 4588
+            curl -s -o /dev/null -X POST "http://127.0.0.1:4588/storage/v1/b?project=noteit" \
+                -H 'content-type: application/json' -d '{"name":"noteit-live"}'
             echo "==> Google Cloud Storage (Floci GCP)"
-            INKWELL_LIVE_S3_ENDPOINT=http://127.0.0.1:4588 INKWELL_LIVE_S3_REGION=auto \
+            NOTEIT_LIVE_S3_ENDPOINT=http://127.0.0.1:4588 NOTEIT_LIVE_S3_REGION=auto \
                 swift test --filter LiveS3EmulatorTests || FAILED=1
             ;;
         *) echo "unknown target: $target (use aws or gcp)"; exit 2 ;;
