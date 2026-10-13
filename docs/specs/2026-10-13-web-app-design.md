@@ -37,7 +37,7 @@ Design principles:
 - **Shared notebooks between users.** Every user's store is encrypted with that user's own key, so sharing
   needs key sharing (wrapping a notebook key for several users) and a new store layout. Future work (§16).
 - Horizontal scaling: a server instance owns its data directory; run exactly one server process per data
-  directory (no cluster workers, no replicas). The instance socket `/data/.noteit.sock` enforces this (§8).
+  directory (no cluster workers, no replicas). An exclusive `flock` on `/data/.noteit.lock`, taken before anything else, enforces this (§8).
 - Real-time collaborative editing; CRDTs. NoteIt's model stays "conflict copies, never silent merge".
 - Rollback/freshness protection against a malicious store (same as native today).
 - Server-side search, previews, or any server-side plaintext.
@@ -484,7 +484,8 @@ Decisions:
    4. Sets `base = {revision (unchanged), remoteMetaETag: new, replacedMetaETag: old, bodyVersion}`,
       removes the id from `legacyBodies`, `pendingPushes` and `pendingBodyVersions`.
    5. Deletes the legacy `notes/<id>.body` with `If-Match: <its listed ETag>`. If that fails, the orphan
-      sweep (item 9) removes it later.
+      sweep (item 9) removes it later. On a store without atomic conditional deletes this step is skipped
+      and the legacy body stays (item 9).
 
    **Crash at any step** leaves a consistent store, because nothing a reader can reach changes before the
    commit point:
@@ -538,8 +539,10 @@ Decisions:
    store. The server never parses the manifest (it stays zero-knowledge; §6.2), so the check lives in
    `connect` in `@noteit/core`. The web creates new stores directly at v2 (always encrypted). Legacy-RTFD notes found in a v2
    store are shown **read-only** with a placeholder ("Formatted on an older Mac — open NoteIt on macOS to
-   convert") plus the meta title/preview; pin/move/delete are allowed and re-push the opaque body bytes
-   **without** `bodyFormat` or `bodyVersion`, at the legacy key, exactly as a v1 engine would. The web never converts bodies (it cannot parse RTFD).
+   convert") plus the meta title/preview; pin/move/delete are allowed. A pin or move
+   writes **only the meta** (`If-Match` on its base), **without** `bodyFormat` or `bodyVersion` and with
+   the unchanged `bodySHA256`; the legacy `notes/<id>.body` is left untouched, since its plaintext didn't
+   change, so the web never writes a legacy body key (§3.4 item 10). The web never converts bodies (it cannot parse RTFD).
 
    **Wire rule (both implementations):** the envelope's `bodyFormat` key is either `"noteit-doc/1"` or
    **omitted**. It is never `null`, `""` or any legacy marker such as `"rtfd"`. `bodyVersion` is present
@@ -621,7 +624,10 @@ Decisions:
      5. Save `base = {revision, remoteMetaETag, replacedMetaETag, bodyETag, bodyVersion}` and clear the
         pending entries and the sealed bytes.
      6. Delete the body the previous meta referenced (the previous version or the legacy body) with
-        `If-Match: <its listed ETag>`. A failure is only logged; the orphan sweep removes it later.
+        `If-Match: <its listed ETag>`. A failure is only logged; the orphan sweep removes it later. On a
+        store without atomic conditional deletes, a previous version is deleted with a plain `DELETE`
+        (an immutable key) and a legacy body is left in place ("Deletes on stores without atomic
+        conditional deletes", below).
    - **No transparent retries of conditional requests.** A request carrying `If-Match` or `If-None-Match`
      (meta commits, body uploads, manifest writes, conditional deletes, the canary) is sent once by
      NoteIt's own code. A transport error or a timeout is returned as `network`, which the engine treats
@@ -663,7 +669,7 @@ Decisions:
      | 2 (or the body `PUT` in doubt) | old meta and body intact, one uncommitted version (or one that may still land) | the same: the re-upload gets 2xx or 412, both fine, and the same version is committed; no second version is created |
      | 3, or during 4 | old meta intact, or the new meta if the `PUT` landed | in doubt: the next pass adopts the write if it landed, otherwise re-sends the same commit |
      | 4 (2xx received) | new meta and new body | the listed meta differs from `base`: the same-revision branch of `resolveConflict`, or a pull for a conversion, adopts our own write without a conflict copy |
-     | 5 | new meta and body; previous body left over | orphan sweep (on stores with atomic conditional writes; otherwise kept, see "What it costs") |
+     | 5 | new meta and body; previous body left over | orphan sweep (on stores with atomic conditional writes and deletes; otherwise kept, see "What it costs") |
 
      Readers never see a committed meta without its body. The one benign race: a peer that listed the old
      meta before step 4 may `GET` the previous body after step 6 and get 404. A 404 on a body is handled
@@ -674,17 +680,61 @@ Decisions:
      version is unique, so at most one object matches), and `notes/<id>.body` for legacy ones, then checks
      `bodySHA256` as today. A version missing from the listing is handled like a body 404. **Deletion** (`pushDeletion`) deletes the referenced
      body after the meta, as today; any other versions are left to the sweep.
-   - **Atomic conditional writes.** The orphan sweep relies on conditional writes being atomic, which the
-     HEAD-verify fallback is not. Each backend reports `atomicConditionalWrites`:
-     - an S3 backend reports true only after the extended conditional canary (§6.4) **passed in this
-       session**: preconditions are enforced, and an overwrite with different bytes gets a new ETag that
-       makes the old one fail `If-Match`. Before the canary has passed, after it failed, or in the fallback,
-       it reports false;
-     - the native folder backend reports false: its lock covers only processes that share a working
-       `flock`, not a folder synced between Macs by a file-sync service;
-     - `HttpProxyBackend` and `/s3` on a NoteIt server report true (the server's canary passes): the disk
-       driver serializes conditional writes per key, and the server refuses to start on an upstream S3
-       store that fails the canary (§6.2).
+   - **Atomic conditional writes and deletes: two capabilities.** The orphan sweep relies on conditional
+     writes being atomic, which the HEAD-verify fallback is not, and every optional delete relies on
+     conditional deletes being atomic, which a `HEAD` check followed by a plain `DELETE` is not. Each
+     backend reports both, separately:
+     - `atomicConditionalWrites`: an S3 backend reports true only after the write steps of the extended
+       canary (§6.4) **passed in this session**: write preconditions are enforced, and an overwrite with
+       different bytes gets a new ETag that makes the old one fail `If-Match`. Before the canary has
+       passed, after it failed, or in the fallback, it reports false;
+     - `atomicConditionalDelete`: an S3 backend reports true only after the delete steps of the same
+       canary passed in this session: a `DELETE` with a wrong `If-Match` fails with 412 and leaves the
+       object, and a `DELETE` with the right one succeeds. Otherwise false;
+     - the native folder backend reports **false for both**: its lock covers only processes that share a
+       working `flock`, not a folder synced between Macs by a file-sync service;
+     - `HttpProxyBackend` and `/s3` on a NoteIt server report **true for both** (the server's canary
+       passes both parts): the disk driver serializes conditional writes and deletes per key, and the
+       server refuses to start on an upstream S3 store that fails either part (§6.2).
+   - **Deletes on stores without atomic conditional deletes.** There a "conditional" delete is a check
+     followed by a plain `DELETE`, and a write that lands between the two is removed. So a v2 engine never
+     treats such a delete as conditional, and sends **no delete whose safety depends on its condition**:
+     - **skipped**: tombstone retention (the 30-day sweep), tombstone withdrawal (a meta that wins against
+       a tombstone just leaves the tombstone in place; it keeps losing, see below), sync-tool sidecar
+       cleanup (consumed and expired sidecars stay; a consumed one is remembered by key and ETag in
+       `SyncState.consumedSidecars`, pruned when no longer listed, so it is imported once), legacy-body cleanup (conversion step 5 and the
+       legacy branch of step 6), the orphan sweep (all of it, including bodies of deleted notes and
+       unparsable names);
+     - **user deletes write only the tombstone.** `pushDeletion` writes the tombstone (bound to the meta
+       it saw through `deletedMetaETag`) and deletes neither the meta nor the body. The existing
+       meta-plus-tombstone rule (`SyncEngine.swift:309-332`) then makes every v2 reader treat the note as
+       deleted for as long as the listed meta's ETag equals `deletedMetaETag`, without deleting anything;
+       a concurrent edit gives the meta a new ETag, so the edit wins instead of being deleted.
+       Resurrecting such a note pushes with `If-Match` on the leftover meta's listed ETag (not
+       `If-None-Match: *`) and leaves the tombstone, which then loses. A tombstone without
+       `deletedMetaETag` (written before it existed) is compared by date, as today. To avoid a tombstone
+       `GET` per leftover pair per pass, the engine remembers the `deletedMetaETag` of each listed tombstone
+       by its ETag (`SyncState.tombstoneBindings`, pruned when the tombstone is no longer listed);
+     - **still sent**, as a plain `DELETE` with no precondition, only on **immutable versioned body keys**,
+       whose bytes can't change, so whatever lands between a check and the delete is the same object: a
+       writer's own version after a definite 412 (step 4) or with a stale tag (an `uploading` entry whose
+       commit was never sent), and step 6's previous version. No other writer ever writes a version key
+       it didn't create, and a deleted version becomes referenced again only through a commit that was
+       checked before a newer one and lands after it, which is the fallback's known lost-update window
+       ("Assumptions", below); repair then restores the body;
+     - **"Clean up unused storage…"** stays available: it deletes only `new` versioned bodies (immutable
+       keys) with a plain `DELETE`, after the same confirmation and with the same warning.
+
+     **What is left over** on such a store (every native folder store, and S3 providers that fail the
+     delete part of the canary; never a NoteIt server): for each deleted note, its meta, its body and its
+     tombstone (one tombstone per note id; a later delete of the same note rewrites it); for each converted
+     note, its legacy RTFD body (so a fully converted library keeps roughly one RTFD copy of every note);
+     every sync-tool sidecar; every unparsable name under `bodies/`; and the versioned bodies the writers'
+     own deletes miss (a failed delete, a crash before step 6, an in-doubt commit that ended in a 412, an
+     upload that landed after its writer dropped it, a device that vanished mid-publish). None of it is
+     ever removed automatically; all of it counts toward a quota where there is one (there is none on a
+     folder store or in direct mode). On stores with atomic conditional deletes but not atomic conditional
+     writes, deletes follow the normal rules except that the orphan sweep is limited as described below.
    - **Orphan sweep** (end of every v2 pass, both engines, at most 200 deletions per pass, each with
      `If-Match: <listed ETag>`). It uses no clock and no retention period. The current meta of a note
      is *known* to the sweeper only when the listed meta ETag equals its `base.remoteMetaETag` (it has
@@ -705,11 +755,12 @@ Decisions:
      - An **unparsable name** under `bodies/` may be deleted: no writer creates one, and no meta can
        reference one.
 
-     On a store **without** atomic conditional writes, the sweep deletes only unparsable names and the
-     bodies (versioned or legacy) of a note that has a tombstone and no meta. It never deletes a body
-     because of its tag or because a meta stopped referencing it. Writers still delete what they
-     themselves abandon or replace (step 4 after a first-attempt 412, step 6, a stale-tag `uploading`
-     version, conversion step 5) on every store.
+     On a store **with** atomic conditional deletes but **without** atomic conditional writes, the sweep
+     deletes only unparsable names and the bodies (versioned or legacy) of a note that has a tombstone and
+     no meta. It never deletes a body because of its tag or because a meta stopped referencing it. On a
+     store **without** atomic conditional deletes it doesn't run at all (above). Writers still delete what
+     they themselves abandon or replace (step 4 after a first-attempt 412, step 6, a stale-tag
+     `uploading` version, conversion step 5) on every store, within the limits above.
 
      Orphans count toward the quota (§6.2) until they are removed.
    - **Stranded bodies: meta refresh.** A body whose hashed tag is still live (equal to
@@ -717,8 +768,8 @@ Decisions:
      own device resolves it. If that device was wiped or never comes back, the body would stay until
      somebody edits or deletes the note, and a user at the quota limit can't edit. So any v2 device turns
      such bodies stale with a small **recovery write** that needs no body upload. Only on stores with
-     atomic conditional writes (the only stores where the sweep deletes by tag; every NoteIt server is
-     one).
+     atomic conditional writes and deletes (the only stores where the sweep deletes by tag; every NoteIt
+     server is one).
      - **Who and when.** Each v2 engine keeps `SyncState.strandedBodies: [<body key>: {firstSeenPass,
        firstSeenAt}]` and a pass counter. A body with a hashed tag enters when the sweep keeps it only
        because its tag is live and it isn't this device's own pending version; it leaves when it
@@ -773,7 +824,8 @@ Decisions:
        the same moment could be lost if that device is then lost before it syncs again." Buttons: Cancel
        (default) and Clean Up. Native and web tests assert this complete text and that Cancel is the
        default action. On confirmation the engine runs a pass, then
-       deletes, with `If-Match: <listed ETag>`, every `new` body whose note has no meta and no tombstone
+       deletes, with `If-Match: <listed ETag>` (a plain `DELETE` on a store without atomic conditional
+       deletes: the key is immutable, and the condition was never what made this safe), every `new` body whose note has no meta and no tombstone
        in that pass's listing and that isn't this device's own pending version, and reports how many
        objects and bytes it removed. It works on every store, at full quota (deleting is always allowed),
        and in direct mode. There is no protocol coordination with other devices; the confirmation is the
@@ -833,8 +885,8 @@ Decisions:
        below) and list it in the sync report, and its writer repairs it.
      - **Assumptions.** Listings and conditional writes are strongly consistent, conditional requests are
        atomic, and ETags are never reused for different bytes: exactly what the canary checks. On stores
-       without them, the sweep's tag and reference rules are off. The only body it then deletes belongs to
-       a note with a tombstone and no meta; a fallback commit that was checked before the deletion and
+       without them, the sweep's tag and reference rules are off. The only body it then deletes (and only
+       where conditional deletes are atomic) belongs to a note with a tombstone and no meta; a fallback commit that was checked before the deletion and
        lands after it resurrects the note as a late create, and its writer repairs it. Writers' own
        deletions stay on: a first-attempt 412 from the fallback's pre-write check sent no `PUT`, a
        stale-tag `uploading` version was never committed, and step 6 removes a version whose meta the
@@ -856,7 +908,9 @@ Decisions:
        writer didn't delete stays until the note is deleted. That is one body per failed step-6 or
        step-4 delete, per crash between steps 5 and 6, per in-doubt commit that ended in a 412, per
        abandoned upload that landed late, per device that vanished mid-publish, and per old-binary
-       same-revision re-upload; all of them go once the note's tombstone is seen. Bodies count toward the
+       same-revision re-upload. Where conditional deletes are atomic, all of them go once the note's
+       tombstone is seen; where they aren't (every folder store), nothing goes automatically, and the
+       list under "Deletes on stores without atomic conditional deletes" applies. Bodies count toward the
        owner's quota where there is one.
    - **Missing committed body (repair).** If the current meta references a version that the listing
      lacks (lost storage, a partial restore), the device that wrote the meta republishes the note with a
@@ -865,21 +919,35 @@ Decisions:
      hours. The meta `If-Match` lets one writer win, and peers pull the result once. For noteit-doc
      bodies this replaces both places where today's engine re-uploads a body in place: `repushBody`
      (`SyncEngine.swift:345-349, 511-519`) and the missing-payload case of `resolveConflict`'s
-     same-revision branch (`:450-463`). In a v2 engine both still apply to legacy envelopes only; for a
-     noteit-doc envelope they never write `notes/<id>.body` and hand the note to repair instead.
+     same-revision branch (`:450-463`). For a noteit-doc envelope a v2 engine never writes
+     `notes/<id>.body` and hands the note to repair instead.
+   - **Legacy-body repair (atomic stores only).** For a legacy envelope, a v2 engine repairs the body in
+     place only when it is **missing** from the listing, only on a store with atomic conditional writes,
+     and only with **`PUT notes/<id>.body` `If-None-Match: *`**: the write can create the key but never
+     replace anything, so a late landing either recreates the missing body or fails with 412 because
+     somebody else recreated it (412 is success: the key exists; the readers' `bodySHA256` check decides
+     whether it is usable). A legacy body that is present but has a changed ETag (today's `repushBody`
+     trigger) is never rewritten by a v2 engine, and on a store without atomic conditional writes a
+     missing legacy body is never repaired in place. In both cases the note is left to the existing paths:
+     readers skip it as a body 404 or hash mismatch and list it in the sync report, and the conversion
+     sweep (item 7) on any v2 Mac whose local revision equals the meta's republishes it as noteit-doc from
+     its local copy, with a new versioned body; an edit on any device publishes a new revision.
    - **Old binaries and versioned notes.** A running v1 binary never touches `bodies/`. After a note is
      converted, its listed meta no longer matches the v1 binary's base, so `repushBody` doesn't fire. The
      only v1 path that still writes is the same-revision branch of `resolveConflict`, when the v1 binary
      had pushed exactly the revision that was then converted: it re-uploads its RTFD bytes to
      `notes/<id>.body` and adopts the meta. That object is a legacy body under a noteit-doc meta, so the
      orphan sweep removes it on a later pass (on a store without atomic conditional writes it stays until
-     the note is deleted), and no reader of the doc meta ever looks at it.
+     the note is deleted; without atomic conditional deletes it stays), and no reader of the doc meta ever looks at it.
 10. **Late-landing mutations: the ordering guarantee.** A request that NoteIt has given up on (a timeout, a
     lost response, or a server call detached at its hard deadline, §7.4) can still be applied by the store
     later, after newer writes. There is **no per-key fence**. Instead, the protocol's safety rests on
-    conditions that the store evaluates **when it applies the request**, and on immutable keys. A
-    late-landing NoteIt mutation therefore either applies to exactly the state it was conditioned on, or
-    fails. Every v2 mutation (native and web engine alike) is in one of these classes:
+    conditions that the store evaluates **when it applies the request**, and on immutable keys. This
+    holds only where the store evaluates conditions atomically: a conditional write relies on
+    `atomicConditionalWrites` and a conditional delete on `atomicConditionalDelete` (item 9). **On a store
+    with both** (every NoteIt server, and S3 providers that pass the whole canary), a late-landing NoteIt
+    mutation either applies to exactly the state it was conditioned on, or fails. Every v2 mutation
+    (native and web engine alike) is then in one of these classes:
     - **Conditional on the key's current state:**
       - meta writes (`notes/*.meta`, `notebooks/*.json`, including the meta refresh): `If-Match: <base>`,
         or `If-None-Match: *` for a new record;
@@ -889,6 +957,8 @@ Decisions:
         <listed ETag>`. A 412 skips the deletion for this pass and the next pass re-plans it. A tombstone
         also carries `deletedMetaETag`, so even one that lands late loses against any meta newer than the
         one its deleter saw (the existing meta-plus-tombstone rule, `SyncEngine.swift:309-332`);
+      - **legacy-body repair**: only `If-None-Match: *` on a missing `notes/<id>.body` (item 9), so it
+        can create the key but never replace it;
       - **every delete**: meta deletes and tombstone withdrawals are already `If-Match`; v2 replaces today's
         unconditional `deleteIfPresent` (`SyncEngine.swift:741-745`), used for tombstone retention,
         resurrection, sync-tool sidecars and legacy bodies, with `deleteIfUnchanged(key, listedETag)`
@@ -905,11 +975,30 @@ Decisions:
         write (at most 10 minutes);
       - the connectivity canary `.canary/<UUID>`: a fresh key per check, written and deleted only by that
         check. A late `PUT` recreates a key nobody else uses, which counts toward the 4-canary cap and is
-        removed by the 10-minute canary sweep (§6.2); a late `DELETE` removes only that check's own object;
-      - a v2 engine's re-upload of a **legacy** body (`notes/<id>.body`, for a note not yet converted):
-        it carries the plaintext of the revision the meta's `bodySHA256` describes, so a late landing
-        either restores identical content or lands under a meta that has since been converted, where no
-        reader of the noteit-doc meta looks at it and the sweep removes it.
+        removed by the 10-minute canary sweep (§6.2); a late `DELETE` removes only that check's own object.
+
+    No v2 engine writes a legacy body key in any other way: conversion writes versioned keys, the web's
+    pin and move of a legacy note write only the meta (item 8), and a present legacy body is never
+    rewritten.
+
+    **On a store without one or both capabilities** (every native folder store, S3 providers that fail
+    part of the canary; never a NoteIt server) the guarantee is narrower (the web's Settings shows
+    "Conditional Writes: Not Supported" or "Conditional Deletes: Not Supported", §6.4):
+    - without atomic conditional **deletes**, no delete is treated as conditional: the engine sends only
+      plain deletes of immutable versioned body keys, and skips every delete whose safety would depend on
+      a condition (item 9, "Deletes on stores without atomic conditional deletes"). So no late delete can
+      remove a newer object, at the cost of the leftover objects listed there;
+    - without atomic conditional **writes**, a meta, tombstone or manifest write is the HEAD-verify
+      fallback (§6.4): a check, then a plain `PUT`. A write that was checked before a newer one and lands
+      after it overwrites it. This is today's native behaviour on such stores, and its consequences are
+      the known lost-update window: for a meta, the later-landing edit wins and the overwritten one
+      survives only on its writer's device, which sees the meta move and re-plans (a conflict copy where
+      it still holds an unpushed edit); for a tombstone, an older tombstone can replace a newer one, so a
+      deleted note can come back (never the reverse: a tombstone deletes only the meta it names); for the
+      manifest, two racing upgrades write the same content, and a create race on an empty store (today's
+      behaviour) is caught by the next pass, which re-reads a changed manifest and stops with
+      `encryptionMismatch` if the encryption differs. Legacy bodies are never repaired in place there.
+      Body keys stay immutable, so bodies are never overwritten, only possibly left unreferenced.
 
     Pre-release v1 binaries keep their unconditional calls, but they stop at a v2 store
     (`unsupportedFormat`, item 4). Quota needs nothing extra: a late landing is covered by the existing
@@ -1111,14 +1200,16 @@ server. Neither mode gives anyone but the user's own devices the keys or the pla
 - `disk` (default): files under `/data/store/users/<USER-UUID>/<key>` (per-user namespaces, below); ETag = hex(MD5(bytes)) (unquoted), the same form S3 uses for single-part uploads, so backup tools such as rclone can verify copies with it;
   per-key async mutex; writes go temp file → `fsync` → `rename`; in-memory ETag index revalidated by
   `stat` (mtime/size); single-instance only (documented). Conditional semantics identical to S3, and
-  atomic: the check and the rename happen under the key's mutex. Because the ETag is the MD5 of the
+  atomic: the check and the rename (or the unlink, for a conditional delete) happen under the key's
+  mutex, so the disk driver has both atomic conditional writes and atomic conditional deletes. Because the ETag is the MD5 of the
   bytes, an equal ETag means identical bytes; a different write never gets an ETag issued before
   (§3.4 item 9, "ABA and ETag reuse").
 - `s3` (upstream): server uses `@noteit/core`'s `S3Backend` (same SigV4 code the browser uses in direct
-  mode) with credentials from env (§8). The upstream must have **atomic conditional writes and unique
-  ETags**: at startup the server runs the extended canary (§6.4) on
-  `<NOTEIT_S3_PREFIX>/server-canary/<UUID>` and refuses to start if the upstream ignores a precondition,
-  answers `501`/`NotImplemented`, or reissues an ETag (the log names the failed check). If the canary
+  mode) with credentials from env (§8). The upstream must have **atomic conditional writes, atomic
+  conditional deletes and unique ETags**: at startup the server runs the extended canary (§6.4) on
+  `<NOTEIT_S3_PREFIX>/server-canary/<UUID>` and refuses to start if the upstream ignores a write or delete
+  precondition, rejects a correct `If-Match` `DELETE`, answers `501`/`NotImplemented`, or reissues an ETag
+  (the log names the failed check). If the canary
   can't reach the upstream, the process keeps running and retries every 10 seconds; until it passes,
   readiness (`/api/health`) answers `503 {ok: false, mode: "server", reason: "storeUnavailable"}`, every
   other route except liveness (`/api/health/live`) answers 503, and liveness stays 200. Later, while the
@@ -1127,7 +1218,7 @@ server. Neither mode gives anyone but the user's own devices the keys or the pla
   seconds; the first success makes it ready again. Routes keep serving in that state and report their
   own errors (`502 storeUnavailable`). Neither state ever restarts the process. The
   HEAD-verify fallback is never used by the server, so every client of a NoteIt server gets atomic
-  conditional writes. Like every NoteIt `S3Backend`, the driver sends conditional requests once and never
+  conditional writes and deletes. Like every NoteIt `S3Backend`, the driver sends conditional requests once and never
   retries them (§3.4 item 9).
 
 **Per-user namespaces.** Every user has a fully isolated store. Each storage operation, REST or `/s3`, runs
@@ -1478,23 +1569,35 @@ driver, which ports the native one:
   with the same bogus `If-Match`, which must get 412. v2 extends it with two steps that check the ETag
   requirement of §3.4 item 9 ("different bytes never get a previously issued ETag"): a `PUT` of different
   bytes with `If-Match: <first ETag>`, which must succeed with a **different** ETag, and then a `PUT` with
-  `If-Match: <first ETag>` again, which must get 412. Then it deletes the canary, and also deletes any
+  `If-Match: <first ETag>` again, which must get 412. v2 also checks deletes both ways: after the bogus
+  `If-Match` `DELETE` got 412, a `HEAD` must still find the canary, and the final `DELETE` carries
+  `If-Match: <current ETag>` and must succeed (a following `HEAD` gets 404). That final `DELETE` removes
+  the canary; the client also deletes any
   other `inkwell/.canary/` object whose `LastModified` is more than 10 minutes old (left by a crashed
   client), so canaries never accumulate in a bucket without a server. A provider that ignores
   the write preconditions (or answers `501`/`400 NotImplemented`) is marked "conditional writes
   unsupported"; so is one that fails either ETag step (the same ETag twice, or the old ETag still
-  matching). One that ignores the delete precondition is marked "conditional deletes unsupported". The
-  backend reports `atomicConditionalWrites` (§3.4 item 9) only once the whole canary has passed in this
-  session.
+  matching). One that ignores the delete precondition (the bogus `If-Match` `DELETE` succeeds or the
+  object is gone), answers it with `501`/`400 NotImplemented`, or rejects the right one is marked
+  "conditional deletes unsupported". The backend reports the two capabilities of §3.4 item 9
+  separately: `atomicConditionalWrites` once the write steps passed in this session, and
+  `atomicConditionalDelete` once the delete steps passed in this session. (If the bogus `DELETE` removed
+  the canary, the remaining steps run on a fresh canary key.)
   Whether a provider supports them is decided by this probe at runtime, never assumed per provider. If the
   canary itself fails (network, credentials), nothing is marked and it runs again next time.
 - When unsupported, writes use the native fallback (`S3Backend.swift:104-121`): a `HEAD` precondition check,
   an unconditional `PUT`, and a `HEAD` that verifies the stored ETag. A failed pre-write check is
   `preconditionFailed`; a failed verification after the `PUT` is `network` (in doubt, §3.4 item 9), because
-  the `PUT` was sent. Deletes check the precondition with `HEAD` and then delete unconditionally. As in
-  native, this narrows the race window but can't close it; Settings shows "Conditional Writes: Not
-  Supported", and the orphan sweep keeps every body of a live note (§3.4 item 9), so such a bucket grows
-  until notes are deleted.
+  the `PUT` was sent. As in native, this narrows the race window but can't close it; Settings shows
+  "Conditional Writes: Not Supported", and the orphan sweep keeps every body of a live note (§3.4 item
+  9), so such a bucket grows until notes are deleted.
+- When conditional deletes are unsupported, there is **no delete fallback**: today's `HEAD` check
+  followed by a plain `DELETE` (`S3Backend.swift:128-141`) is removed, and `delete(key, ifMatch:)`
+  (including after a `501` mid-session, which also clears the capability) fails with
+  `conditionalDeleteUnsupported` instead of pretending to be conditional. The engine never calls it on
+  such a store; it sends only the plain deletes of immutable body keys and skips the rest (§3.4 item 9,
+  "Deletes on stores without atomic conditional deletes"). Settings shows "Conditional Deletes: Not
+  Supported", and the bucket keeps the objects listed there.
 - Error classification is the native `classify` (`S3Backend.swift:285-305`): `501` or `400 NotImplemented`
   on a conditional request → unsupported (fallback); `RequestTimeTooSkewed` → `clockSkew` (the browser signs
   with the device clock); `InvalidAccessKeyId`/`SignatureDoesNotMatch`/401/403 → `unauthorized`; 404 →
@@ -1812,7 +1915,7 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 ## 8. Deployment & licensing
 
 - One image `ghcr.io/rutbergphilip/noteit` built from `web/Dockerfile`: multi-stage, `node:24-alpine`,
-  `pnpm build` → `.output/`, runs `node .output/server/index.mjs` as uid 1000, `PORT=3000`, `VOLUME /data`,
+  `pnpm build` → `.output/`, runs `node --import ./instance-lock.mjs .output/server/index.mjs` as uid 1000 (the lock below), `PORT=3000`, `VOLUME /data`,
   `HEALTHCHECK` → `/api/health/live` (liveness, so an upstream outage never gets the container
   restarted; orchestrators that route traffic use `/api/health` as readiness). The same image serves the static direct-mode client with
   `NOTEIT_MODE=static` (§6.4). The static tarball `noteit-web-static-<version>.tar.gz` is a release asset
@@ -1824,41 +1927,46 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
   directory and takes no lock.
 - **Local filesystem only.** `/data` must be a local filesystem (ext4, xfs, btrfs, zfs, APFS, or a Docker
   named volume on one), **not NFS, SMB/CIFS or another network share**. The server relies on atomic
-  `rename` after `fsync` (§6.2, §7.1) and on Unix domain sockets that live in `/data` (below); neither is
-  reliable on network filesystems. Startup checks the filesystem type (`statfs`) and refuses to start on
+  `rename` after `fsync` (§6.2, §7.1) and on `flock(2)` on a file in `/data` (below); neither is
+  reliable on network filesystems (NFS emulates `flock` with byte-range locks that a server reboot or a
+  lease expiry can drop; SMB and FUSE network filesystems vary). Startup checks the filesystem type (`statfs`) and refuses to start on
   NFS, SMB/CIFS or FUSE network filesystems with a message naming the requirement.
-- **Instance socket (the lock).** Before loading anything else, the server takes ownership of
-  `/data/.noteit.sock`, a Unix domain socket it listens on for its whole life. The kernel releases a
-  listening socket only when the process exits, so liveness is decided by the kernel, not by timestamps:
-  a garbage-collection pause or a stalled process still holds the socket, and can never be mistaken for a
-  dead one. Startup:
-  1. `bind` + `listen` on `/data/.noteit.sock`. `bind` on an existing path fails (`EADDRINUSE`), so it is
-     an atomic create: if it succeeds, no other process can hold that path.
-  2. If the path exists, `connect` to it. If the connection succeeds and the peer answers the handshake
-     (a line naming a NoteIt server and its instance ID), another live server owns `/data`: exit with
-     "Another NoteIt server is using /data. Run one server process per data directory." Only
-     `ECONNREFUSED` means stale (no process listens on it). Then the stale file is removed **by inode**:
-     note its inode, `rename` it to a unique `/data/.noteit.sock.stale.<random>`, and check that the
-     moved file still has that inode. If it does, unlink it and go back to step 1. If it doesn't, a live
-     server bound the path in between, so put its socket back with `link` and start again at step 2.
-  3. **Connect after binding.** Once bound, the server connects to `/data/.noteit.sock` and checks that
-     the handshake returns its own instance ID (retried for up to 5 s while the path is briefly absent
-     during another starter's step 2); any other answer means it lost the path, and it exits before
-     serving.
-  4. While running, it repeats that check every second (the path's inode is still its socket's, and the
-     handshake reaches itself) and exits at once if not. A starter that, in step 2, displaced a live
-     socket and could not put it back connects to that socket and sends `displaced`, and its owner exits
-     at once.
+- **Instance lock.** The server holds an exclusive `flock(2)` on `/data/.noteit.lock` for its whole life:
+  1. **First thing in the process.** The Docker image starts Node with `--import ./instance-lock.mjs`, a
+     small plain-ESM preload that runs before any server module is loaded. In server mode it checks the
+     filesystem (above), opens (creating if needed) `/data/.noteit.lock` with mode `0600`, and calls
+     `flock(fd, LOCK_EX | LOCK_NB)`. If that fails with `EWOULDBLOCK`, another live process holds the lock:
+     it exits with code 1 and "Another NoteIt server is using /data. Run one server process per data
+     directory." before loading any mutable state (accounts, quota state, purge records) and before
+     listening. Any other error also exits. A process started as a cluster worker exits here too.
+  2. **Held for life.** On success it keeps the file descriptor open in a module-level reference until
+     the process exits, and records it for the server. The descriptor is opened with `O_CLOEXEC` (Node's
+     default), so no child process inherits it. The lock file is **never unlinked** (unlinking would let
+     a second process lock a new file at the same path) and never written; it may stay forever.
+  3. **Belt and braces.** The first Nitro plugin, `00.instanceLock.ts`, exits at once in server mode if
+     the preload didn't record a held lock (for example when someone runs `.output/server/index.mjs`
+     without the preload), so the server can't run unlocked by accident.
 
-  **Why connect-after-bind rather than bind-to-a-temporary-name-and-rename:** `rename` replaces its
-  target unconditionally, so a starter that wrongly judged the path stale would silently replace a live
-  server's socket that was bound after its check. That would recreate the race instead of closing it.
-  `bind` on the final path is an atomic create, so the only window left is removing a stale file. The
-  inode check makes that removal touch only the file that refused the connection. With two starters
-  racing over a stale socket, one binds and the other always finds it live. Only if a third starter binds
-  in the moment between another starter's `rename` and `link` back can two servers run at once, and then
-  the step-4 check or the `displaced` message stops the older one within a second. Outside such a
-  simultaneous start of three processes after an unclean exit, a second server never starts serving.
+  The kernel owns the lock and drops it only when the last descriptor of that open file is closed, which
+  for this process means its exit (including `SIGKILL` or a crash). A garbage-collection pause, a
+  `SIGSTOP` or a hung filesystem call doesn't release it, so a stalled server can never be mistaken for
+  a dead one, and `LOCK_NB` acquisition is atomic: of any number of starters, at most one gets the lock,
+  and the others exit before doing anything else. There are no timestamps, no refresh, no stale-lock
+  detection and no watchdog. Static mode takes no lock.
+
+  **Binding:** Node has no `flock` of its own, so the preload uses **`fs-ext`, pinned at exactly
+  `2.1.1`** (`flockSync(fd, 'exnb')`). It calls `flock(2)` itself (the semantics above, on Linux and
+  macOS), is a single small C++ file under the MIT licence with a 2024 release, and has no runtime
+  dependencies besides `nan`. It ships no prebuilds, so the Docker build stage compiles it with
+  `node-gyp` for the image's pinned Node major and copies the built module into the runtime stage; the
+  runtime image has no compiler. Right after acquiring the lock, the preload opens the lock file a second time
+  and tries `LOCK_EX | LOCK_NB` on that new descriptor, which must fail with `EWOULDBLOCK` (with
+  `flock`, two open file descriptions conflict even within one process); if it succeeds the binding or
+  the filesystem isn't giving `flock` semantics and the server refuses to start. The second descriptor is
+  then closed, which doesn't affect the lock held through the first. Alternatives
+  considered: `fs-native-extensions` ships prebuilds but uses `fcntl` OFD byte-range locks on Linux, not
+  `flock`; `os-lock` has had no release since 2022; `proper-lockfile` is timestamp-based, which is what
+  this replaces.
 - `docker-compose.yml`: one service, named volume `noteit-data:/data`, env file; documented reverse-proxy
   examples (Caddy/Traefik) because WebCrypto requires a secure context (HTTPS or `localhost`).
 - **Environment** (every `…_SECRET`, `…_HASH` and `…_TOKEN` variable also has a `…_FILE` form for Docker
@@ -2160,13 +2268,27 @@ remain open (§15) and are not v1 guarantees.
        grace passes with no write), the other notes sync normally, and deleting M from any device
        removes its meta and writes a tombstone as usual; the dialog text in both apps equals the spec
        string;
-     - **late-landing mutations** (§3.4 item 10): a spy over every v2 run asserts that every `PUT` and
-      `DELETE` the engine sends carries `If-Match` or `If-None-Match`, except device records, canaries and
-      legacy-body re-uploads; with `hold`, a conditional mutation of A (a meta commit, a tombstone `PUT`, a
-      tombstone-retention `DELETE`, a sidecar `DELETE`) is held, B commits on top, A is released and fails
-      its condition at apply time, and B's object survives; a late tombstone with an older
-      `deletedMetaETag` loses against the newer meta;
-    - a running v1 engine never deletes or rewrites anything under `bodies/`, and skips (doesn't wedge)
+     - **late-landing mutations** (§3.4 item 10), on a store with both capabilities: a spy over every v2
+       run asserts that every `PUT` and `DELETE` the engine sends carries `If-Match` or `If-None-Match`,
+       except device records and canaries; with `hold`, a conditional mutation of A (a meta commit, a
+       tombstone `PUT`, a tombstone-retention `DELETE`, a sidecar `DELETE`, a legacy-body repair `PUT`
+       with `If-None-Match: *`) is held, B commits on top, A is released and fails its condition at apply
+       time, and B's object survives; a late tombstone with an older `deletedMetaETag` loses against the
+       newer meta; a legacy body that is present with a changed ETag is never written, and a missing one
+       on a store without atomic conditional writes isn't either (the note is reported and later
+       converted from a Mac holding its revision);
+     - **stores without atomic conditional deletes** (the folder backend over two `FolderBackend`
+       instances whose lock is disabled, simulating two Macs on a synced folder, and an S3 stub that
+       ignores the delete precondition): the spy sees no `DELETE` with `If-Match` and no `DELETE` of any
+       key except versioned bodies (own version after a definite 412, own stale-tag version, step 6's
+       previous version); races: A deletes a note while B's edit of it lands → B's edit survives and the
+       tombstone loses; A's tombstone retention, sidecar cleanup, conversion step 5 and the orphan sweep
+       send nothing, while B writes the keys they would have deleted; a deleted note stays deleted on
+       every device with its meta, body and tombstone left in place, and resurrecting it pushes with
+       `If-Match` on the leftover meta; a consumed sidecar is imported once; the leftover counts match
+       §3.4 item 9's list; the stub that fails only the delete steps still has atomic conditional writes,
+       and the stub that fails only the write steps still runs the limited sweep;
+     - a running v1 engine never deletes or rewrites anything under `bodies/`, and skips (doesn't wedge)
        notes whose legacy body is gone;
      - the orphan sweep never deletes a referenced version, a body whose tag matches the listed meta, or
        anything for a note whose meta changed since the last pull, and respects its 200-per-pass limit;
@@ -2185,12 +2307,14 @@ remain open (§15) and are not v1 guarantees.
    `@nuxt/test-utils`. Also:
    - `connect` on a v1 store returns the "Open NoteIt on your Mac…" state and never writes;
    - `S3Backend` with a mocked `fetch`: the canary (supported, ignored `If-None-Match`, ignored `If-Match`,
-     `501`/`NotImplemented`, a reissued ETag, an old ETag still matching), `atomicConditionalWrites` only
-     after a passed canary, conditional requests sent once (a lost response → `network`, no second
+     `501`/`NotImplemented`, a reissued ETag, an old ETag still matching, an ignored delete precondition,
+     a rejected correct `If-Match` `DELETE`), `atomicConditionalWrites` and `atomicConditionalDelete`
+     each only after their own steps passed, `delete` with `ifMatch` failing with
+     `conditionalDeleteUnsupported` (no `HEAD`-then-`DELETE`) when deletes are unsupported, conditional requests sent once (a lost response → `network`, no second
      request), the HEAD-verify fallback (a failed verification → `network`), `cache: "no-store"` on every request, the
      missing-`ETag` HEAD fallback and `invalidResponse("ETag not exposed")`, and CORS `TypeError` → `network`;
    - the credential vault: round trip, wrong passphrase, nothing in `localStorage`/`sessionStorage`;
-   - the engine crash and orphan-sweep scenarios listed under Swift, run from shared `engine-scenarios.json`
+   - the engine crash, orphan-sweep, late-landing and no-atomic-delete scenarios listed under Swift, run from shared `engine-scenarios.json`
      traces so both engines behave the same;
    - "Remember on this device": off by default in both modes, the confirmation warning must be accepted
      before anything is stored, and Lock deletes the stored keys;
@@ -2268,19 +2392,22 @@ remain open (§15) and are not v1 guarantees.
      log registry only; **exception-safe leases**: a synchronous throw inside `fn`, a refused admission
      (`quotaExceeded`, `busy`), a rejected driver call and a client disconnect mid-request each leave
      `stillRunning` at 0 afterwards; **one process**: a second server started on the same data directory
-     exits with the instance-socket message while the first keeps serving, also when the first is
-     **stalled** (`SIGSTOP`) for 60 s, well past any timeout: the second never starts serving and the
-     first resumes as the only server; after the first is killed (`SIGKILL`, leaving a stale socket file),
-     a new one finds it refused, removes it by inode and binds; two starters racing over a stale socket
-     end with exactly one server; a cluster worker exits at startup, and an NFS-backed `/data` is
-     refused; **late-landing conditional mutation**: a conditional meta PUT A (`If-Match: E0`) is
+     exits with the instance-lock message while the first keeps serving, also when the first is
+     **stalled** (`SIGSTOP`) for 60 s, well past any timeout: the second never loads state or answers a
+     request, and the first resumes as the only server; **three starters after an unclean exit**: the
+     holder is killed with `SIGKILL` (the kernel drops its lock; the lock file stays), three servers are
+     started at the same moment, and over 50 rounds at most one of them per round ever reaches state
+     loading or HTTP readiness (each process logs both milestones to the test), the other two exit with
+     the instance-lock message, and the lock file is never unlinked; a cluster worker exits at startup,
+     and an NFS-backed `/data` is refused; **late-landing conditional mutation**: a conditional meta PUT A (`If-Match: E0`) is
      detached at its hard deadline, B commits `E1` on top, then A is applied late by the upstream and
      fails its condition (412 at apply time): the meta stays `E1`, A's body stays unreferenced, and the
      same holds for a late tombstone `PUT` and a late `If-Match` delete; **repeated restarts**: a restart during the quarantine
      re-quarantines exactly the users still flagged, with a full grace from the new start, and not users
      created since or whose quarantine already ended; three restarts in a row, each after some users
      were reconciled, shrink the set each time and end with an empty state file;
-   - the server's upstream canary: an upstream that ignores preconditions or reissues ETags stops startup;
+   - the server's upstream canary: an upstream that ignores write or delete preconditions, rejects a correct
+     `If-Match` `DELETE`, or reissues ETags stops startup;
      an ambiguous driver result reaches clients as `502 storeUnavailable` / `500 InternalError`, never 412;
    - **liveness and readiness**: with the upstream down at startup, `/api/health/live` answers 200 and
      `/api/health` 503 while the retry loop runs; when the upstream comes back, readiness turns 200 with
@@ -2357,7 +2484,7 @@ remain open (§15) and are not v1 guarantees.
 | A wiped device leaves the body of a note it never created (`new`) | never collected automatically, since no write can make it stale without racing a valid create; at most one per wiped device per never-committed note, counted in quota; the user reclaims it with the confirmed "Clean up unused storage…" action (§3.4 item 9) |
 | "Clean up unused storage…" runs while another device is creating a note | user-initiated only, never automatic; the dialog warns plainly that such a note can be lost if that device is lost before it syncs again; otherwise the creator repairs it (§3.4 item 9) |
 | A deleted user's late upstream write lands after the purge | the operation gate closes atomically before the snapshot, every store operation runs in `withLease` (released in `finally` and at a hard `Promise.race` deadline), leases are aborted; the final purge pass runs only with no lease running and a grace after the latest request end (a detached call counts as ending at its deadline); passes have hard deadlines and are retried; the persisted `deleting` record keeps the namespace reserved until it succeeds (§7.4) |
-| Stores without atomic conditional writes (folder stores, S3 providers failing the canary) keep orphaned bodies | the sweep deletes only bodies of deleted notes there; writers still delete what they replace; the larger bound is documented (§3.4 item 9, "What it costs"); a NoteIt server never runs in this mode (§6.2) |
+| Stores without atomic conditional writes or deletes (folder stores, S3 providers failing the canary) keep orphaned bodies and, without atomic deletes, deleted notes' objects, converted notes' RTFD bodies and sidecars | without atomic writes the sweep deletes only bodies of deleted notes; without atomic deletes nothing but immutable versioned bodies is ever deleted, user deletes write only a tombstone, and the sweep doesn't run; writers still delete the versions they replace; both bounds are documented (§3.4 item 9, "What it costs" and "Deletes on stores without atomic conditional deletes"); a NoteIt server never runs in this mode (§6.2) |
 | One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper; conservative reservations, ambiguous results reconciled, in-flight cap; reservations persisted across restarts in a bounded, compacted file; a quarantine after a lost state file (§6.2) |
 | A wiped or vanished device leaves bodies with a live tag, and a full user can't edit to make them stale | any v2 device's body-free meta refresh after 20 passes and 24 hours, admitted as a zero-delta replacement even at the hard ceiling; the sweep then deletes them (§3.4 item 9, §6.2) |
 | An upstream outage gets the container restarted in a loop | separate liveness (`/api/health/live`, the `HEALTHCHECK`) and readiness (`/api/health`) (§6.2, §8) |
@@ -2369,8 +2496,8 @@ remain open (§15) and are not v1 guarantees.
 | Compromised server serves malicious JS | cannot be prevented in-browser; honest threat model, signed release manifest + out-of-band verifier (detection only), native app as anchor, pinned static client as future work |
 | S3-subset incompatibilities with other clients | only NoteIt + rclone are supported; conformance tests reuse Swift `S3Backend`; a pinned-rclone round trip runs in CI (§12 item 7) |
 | Shortcut collisions per browser/OS | Playwright matrix (Chromium/WebKit/Firefox) |
-| Two server processes share one data directory, splitting the in-memory leases and quota | exactly one process per data directory, enforced by the kernel-held instance socket `/data/.noteit.sock` (a stalled owner still holds it); `/data` must be local (network filesystems refused); a cluster worker exits (§8) |
-| A detached or retried mutation lands after newer writes | no fence: every NoteIt mutation is conditional (evaluated at apply time), immutable, or argued harmless (§3.4 item 10); generic `/s3` clients get plain-S3 last-writer-wins (§6.3b) |
+| Two server processes share one data directory, splitting the in-memory leases and quota | exactly one process per data directory, enforced by a kernel-held `flock` on `/data/.noteit.lock` (a stalled owner still holds it); `/data` must be local (network filesystems refused); a cluster worker exits (§8) |
+| A detached or retried mutation lands after newer writes | no fence: on stores with atomic conditional writes and deletes every NoteIt mutation is conditional (evaluated at apply time), immutable, or argued harmless (§3.4 item 10); without atomic deletes only immutable body keys are deleted and the rest is left over; without atomic writes the fallback's lost-update window remains, as today; generic `/s3` clients get plain-S3 last-writer-wins (§6.3b) |
 | A namespace bug leaks one user's ciphertext to another | one `namespacedKey` choke point fed only by the session or `/s3` key; key validation first; property tests and cross-user E2E (§12); content stays encrypted per user |
 | Admin or IdP misconfiguration grants access | auto-provisioning requires allowed groups; last-admin guard; invites single-use and expiring; forward-auth dropped (§7.3) |
 | Direct mode: CORS misconfigured or `ETag` not exposed | connect wizard CORS check with specific hints; provider examples (§6.4) |
@@ -2384,7 +2511,7 @@ remain open (§15) and are not v1 guarantees.
   has not been released.
 - A2: Homelab users terminate TLS at a reverse proxy (WebCrypto needs a secure context).
 - A3: An instance serves a family or small group (up to about 20 users), so a JSON account file and in-memory
-  usage counters are enough, and one server process per data directory (enforced by the instance socket, §8) is
+  usage counters are enough, and one server process per data directory (enforced by the `flock` instance lock, §8) is
   enough; `/data` is on a local filesystem.
 - A4: Notes rarely exceed tens of MB including images (inline attachments).
 - A5: The curated SF Symbol list (32) can be mapped to open-licensed SVG icons compatible with AGPL; web
