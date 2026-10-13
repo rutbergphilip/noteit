@@ -1,31 +1,45 @@
-# Inkwell Web — Self-Hostable Web App Design
+# NoteIt Web — Self-Hostable Web App Design
 
 Status: proposed · Date: 2026-10-13 · Companion plan: `docs/plans/2026-10-13-web-app.md`
 
 ## 1. Goal
 
-Ship a **self-hostable Inkwell web app** (Nuxt) that is a *full sync peer* of the native macOS app: same
+Ship a **self-hostable NoteIt web app** (Nuxt) that is a *full sync peer* of the native macOS app: same
 end-to-end-encrypted remote store, same conflict semantics, same notebooks/pins/tags, and an editor that
 round-trips every formatting feature the native editor produces. The pitch for the AGPL-3.0 open-source
 release is **native app + self-hosted web app + sync**, deployable on a homelab with one Docker image.
+NoteIt was developed under the working name Inkwell; the product name everywhere user-facing is now
+**NoteIt** (`BRAND.md`).
+
+v1 ships three ways to use the web app:
+
+1. **Server mode** (default): the Docker image runs the web client plus a Nitro server that stores
+   ciphertext on disk or in an upstream S3 bucket. One instance serves **several people** (a family or a
+   small group). Each person has an isolated store and their own encryption passphrase (§7).
+2. **Direct mode**: the same web client, served by any static host or by the image with the server turned
+   off, talks straight to the user's own S3-compatible bucket over CORS (§6.4).
+3. The server also gives native apps a no-cloud sync target through an S3-compatible endpoint (§6.3b).
 
 Design principles:
 
 1. **The storage format is the contract.** The web app is a second implementation of
-   `InkwellSync` plus the note model, not a client of a server-side API that understands notes.
-2. **Zero knowledge server.** The Inkwell server only ever stores and relays ciphertext. Passphrase and key
-   live only in the browser (and on native devices).
+   `NoteItSync` plus the note model, not a client of a server-side API that understands notes.
+2. **Zero knowledge server.** The NoteIt server only ever stores and relays ciphertext. Passphrases and keys
+   live only in browsers and on native devices. This holds for every user on the instance, and for the
+   instance admin too (§7.4, §11.1).
 3. **One image, one volume** for homelabs; the same server also gives native apps a no-cloud sync target.
 
 ### Non-goals (v1)
 
 - Menu bar icon, global hotkeys, Quick Capture panel, launch at login (OS features; a PWA share target may come later).
-- Multi-user / multi-tenant servers (one store, one user per instance).
-- Direct browser→S3 mode (architecturally possible later because `@inkwell/core` is isomorphic; see §6.4).
-- Real-time collaborative editing; CRDTs. Inkwell's model stays "conflict copies, never silent merge".
+- **Shared notebooks between users.** Every user's store is encrypted with that user's own key, so sharing
+  needs key sharing (wrapping a notebook key for several users) and a new store layout. Future work (§16).
+- Horizontal scaling: a server instance owns its data directory; run one replica.
+- Real-time collaborative editing; CRDTs. NoteIt's model stays "conflict copies, never silent merge".
 - Rollback/freshness protection against a malicious store (same as native today).
 - Server-side search, previews, or any server-side plaintext.
 - iOS/Android native apps (the PWA is the mobile story).
+- Forward-auth (trusting a `Remote-User` header from a reverse proxy). It was considered and dropped (§7.3).
 
 ## 2. Existing format — byte-level reference (verified against Swift source)
 
@@ -34,9 +48,15 @@ implementer must be able to interoperate from this section alone. "Double2001" m
 seconds since 2001-01-01T00:00:00Z (Apple reference date; `Date.timeIntervalSinceReferenceDate`), i.e.
 `unixSeconds - 978307200`.
 
+**Legacy protocol identifiers.** The `inkwell/v1/` key prefix, the `inkwell/.canary/` canary prefix, the
+manifest field names, the AAD contexts and the KDF and key-check parameters (including the
+`inkwell-key-check` plaintext) are legacy protocol identifiers from the working name; they already shipped
+and are kept unchanged for compatibility, and are never shown to users. Everything that has not shipped,
+including the portable body format `noteit-doc` (§3), uses the NoteIt name.
+
 ### 2.1 Key layout
 
-`RemoteLayout.root = "inkwell/v1/"` (`Sources/InkwellSync/Engine/RemoteLayout.swift:4`).
+`RemoteLayout.root = "inkwell/v1/"` (`Sources/NoteItSync/Engine/RemoteLayout.swift:4`).
 
 | Key (relative to the backend root) | Content | Encrypted? |
 |---|---|---|
@@ -77,7 +97,7 @@ escaping: every object is either sealed (compared by revision/SHA, never by byte
 manifest (compared by ETag only).
 
 **Inner metas** (the `meta` field inside an envelope) use `NoteStore.encoder`
-(`Sources/Inkwell/Model/NoteStore.swift:798-808`): `.prettyPrinted`, `.sortedKeys`, **`.iso8601`** dates.
+(`Sources/NoteIt/Model/NoteStore.swift:798-808`): `.prettyPrinted`, `.sortedKeys`, **`.iso8601`** dates.
 Swift writes `"2025-10-09T08:53:20Z"` (second precision, `Z`, fractional seconds dropped). The Swift
 `.iso8601` decoder on current macOS accepted fractional seconds and offsets in a probe, but this varies
 with Foundation versions. **Rule: TS writes `YYYY-MM-DDTHH:MM:SSZ` exactly (truncate milliseconds).**
@@ -132,7 +152,7 @@ Sealed at the meta key (`notes/<UUID>.meta` or `notebooks/<UUID>.json`).
 `Tombstone`: `{deletedAt: Double2001, deletedMetaETag?: string, deviceID, id, kind}`.
 `DeviceInfo`: `{deviceID, lastSync: Double2001, name}`, rewritten at most every 10 min.
 
-### 2.6 Inner metas (`Sources/Inkwell/Model/Models.swift`)
+### 2.6 Inner metas (`Sources/NoteIt/Model/Models.swift`)
 
 `NoteMeta` (`Models.swift:14-28`): `conflictOriginalID?: UUID`, `conflictSource?: string`, `createdAt: ISO`,
 `id: UUID`, `isPinned: bool`, `notebookID?: UUID` (nil = no notebook), `preview: string`,
@@ -145,7 +165,7 @@ has 10 colors — see HANDOFF §6).
 ### 2.7 Bodies today
 
 A note body is the **flattened RTFD** of the editor's `NSAttributedString`
-(`Sources/Inkwell/Model/NoteStore+Sync.swift:127-139`; `serializeBody` uses `rtfd(from:)`, bytes start with
+(`Sources/NoteIt/Model/NoteStore+Sync.swift:127-139`; `serializeBody` uses `rtfd(from:)`, bytes start with
 ASCII `rtfd\0\0\0\0`; `deserializeBody` throws "body is not RTFD"). Images are `NSTextAttachment`
 file wrappers inside the RTFD, often TIFF (pasteboard) and possibly HEIC. Browsers can neither parse
 nor render this → Phase 0 (§3).
@@ -242,11 +262,11 @@ deviations"; the TS port reproduces it exactly and is tested against an exhausti
 
 | Option | Fidelity vs NSAttributedString | Attachments | Safety in browser | Diffability | Native cost |
 |---|---|---|---|---|---|
-| Sanitized HTML subset | good via `NSAttributedString(html:)`, but import is WebKit-backed, slow, main-thread, and lossy (lists become `NSTextList`, not Inkwell markers; sentinels lost) | data URIs / cid | must sanitize every render (XSS surface) | poor | custom writer + parser anyway |
+| Sanitized HTML subset | good via `NSAttributedString(html:)`, but import is WebKit-backed, slow, main-thread, and lossy (lists become `NSTextList`, not NoteIt markers; sentinels lost) | data URIs / cid | must sanitize every render (XSS surface) | poor | custom writer + parser anyway |
 | Markdown + extensions | cannot express text color, highlight, underline, alignment, font size, column widths without HTML escapes | links to files | good | best | custom parser |
-| **ProseMirror/TipTap JSON with an Inkwell schema** | exact: we define one node/mark per native feature | content-addressed map | rendered through a schema, no HTML parsing | good (structured) | Codable types + converter |
+| **ProseMirror/TipTap JSON with a NoteIt schema** | exact: we define one node/mark per native feature | content-addressed map | rendered through a schema, no HTML parsing | good (structured) | Codable types + converter |
 
-**Decision: "inkwell-doc" — a versioned, ProseMirror-compatible JSON document with an Inkwell-specific
+**Decision: "noteit-doc" — a versioned, ProseMirror-compatible JSON document with a NoteIt-specific
 schema.** It is the editor's native model on the web (TipTap), maps 1:1 onto the native block/mark
 model, needs no HTML sanitization on render, and is easy to validate (`Node.fromJSON` + `check()`).
 Markdown export stays a separate, lossy feature.
@@ -257,7 +277,7 @@ UTF-8 JSON:
 
 ```json
 {
-  "format": "inkwell-doc",
+  "format": "noteit-doc",
   "version": 1,
   "doc": { "type": "doc", "content": [ ... ] },
   "attachments": {
@@ -273,7 +293,7 @@ UTF-8 JSON:
 - No byte-level canonicalization is required: ETags/`bodySHA256` are computed over whatever bytes the
   writer produced; vectors compare parsed structure.
 
-### 3.3 Schema (`inkwell-doc` v1)
+### 3.3 Schema (`noteit-doc` v1)
 
 Nodes (block):
 
@@ -324,7 +344,7 @@ Decisions:
 - **What each `FormatCommand` does inside a code block.** These outcomes were verified against
   `Editor/FormatCommand.swift:4-21` and `Editor/TextFormatter.swift`, and the web editor matches them:
 
-  | `FormatCommand` | Native effect in a code paragraph | inkwell-doc result |
+  | `FormatCommand` | Native effect in a code paragraph | noteit-doc result |
   |---|---|---|
   | `bold`, `italic` | font trait on the monospaced font (`:99-115`) | `bold` / `italic` mark |
   | `underline`, `strikethrough` | line attribute (`:117-130`) | mark |
@@ -353,17 +373,20 @@ Decisions:
 
 ### 3.4 Versioning and migration
 
-1. **Envelope** gains optional `bodyFormat: string` — `"inkwell-doc/1"`. Absent ⇒ legacy RTFD. Old engines
+1. **Envelope** gains optional `bodyFormat: string` — `"noteit-doc/1"`. Absent ⇒ legacy RTFD. Old engines
    ignore it (unknown key) and drop it when they re-publish — which is correct, because they only ever
    publish RTFD.
 2. **`RecordPayload`** (engine ↔ app boundary) gains `bodyFormat` so the engine stays body-agnostic: the
    adapter sets it on export and receives it on pull.
-3. **Manifest** gains `formatVersion: 2` and optional `features: [string]` (initially `["inkwell-doc"]`).
-   Readers refuse `formatVersion > 2` or any unknown feature. Old (v1-only) native clients refuse new
-   connections to a v2 store with their existing "unsupported format — update Inkwell" message.
-4. **Native v2** accepts `formatVersion ≤ 2`. In a **v1 store it writes RTFD** (unchanged behavior, so mixed
-   native fleets keep working); in a **v2 store it writes inkwell-doc**. It reads both body formats in both
-   stores, dispatching on the envelope's `bodyFormat` (with an RTFD magic-byte sniff as a fallback).
+3. **Manifest** gains `formatVersion: 2` and optional `features: [string]` (initially `["noteit-doc"]`).
+   Readers refuse `formatVersion > 2` or any unknown feature. Old (v1-only) native builds refuse new
+   connections to a v2 store with their existing "unsupported format — update NoteIt" message
+   (`SyncError.unsupportedFormat`). They fail safely and lose nothing. Locking them out is acceptable
+   because NoteIt has not been released: only pre-release builds lack v2 support.
+4. **Native v2** accepts `formatVersion ≤ 2` and creates new stores directly at v2. On a **v1 store it
+   writes RTFD** only until its first clean pass, which upgrades the store automatically (item 6); in a
+   **v2 store it writes noteit-doc**. It reads both body formats in both stores, dispatching on the
+   envelope's `bodyFormat` (with an RTFD magic-byte sniff as a fallback).
 5. **The store format travels with the session.** `connect` returns a `StoreSession`:
    - `manifest`;
    - `manifestETag`;
@@ -371,7 +394,7 @@ Decisions:
    - the cipher.
 
    The engine and `NoteStoreSyncAdapter` share one `StoreSessionRef`, and `export` reads its body encoding
-   from it (RTFD for v1, inkwell-doc for v2). Today `SyncController.ensureSession` keeps only the cipher
+   from it (RTFD for v1, noteit-doc for v2). Today `SyncController.ensureSession` keeps only the cipher
    and discards the manifest (`SyncController.swift:603-620`); v2 keeps the whole session.
 
    Every pass already lists the root, and the listing includes the manifest's ETag. When that ETag differs
@@ -380,18 +403,44 @@ Decisions:
    `encryptionMismatch`. Finally it swaps the session. A v2 Mac with a long-lived session therefore
    notices an upgrade made by another device on its next pass. Running *v1* binaries still can't notice
    (§2.12), which is what item 8 handles.
-6. **Upgrade is explicit**: native Settings → Sync → "Enable web access". The web app's legacy-store screen
-   explains how to do it. `SyncEngine.upgradeToV2()` is serialized with passes, on the same queue as
-   `sync()`, so no pass can observe a half-upgraded session. It runs these steps:
-   1. Run a sync pass. If it reports errors, abort the upgrade.
+6. **Upgrade is automatic.** There is no button and no setting. A native build that supports noteit-doc
+   (a "v2 client") upgrades a v1 store by itself, with no user action:
+   - **When.** `SyncEngine.sync()` on a v1 session runs the normal pass first. If that pass finished
+     without a fatal error and `report.errors` is empty (a *clean pass*), the same `sync()` call then runs
+     `upgradeToV2()`. The first pass after connecting is usually clean, so a v2 client normally upgrades
+     on connect. If the pass had errors, the store stays v1 and the next clean pass tries again. The clean
+     pass first publishes every pending local edit as RTFD, so nothing is left behind in the old format.
+   - **Serialized.** `upgradeToV2()` runs inside that `sync()` call, on the pass queue, so no other pass
+     can observe a half-upgraded session. It is not exposed to the UI; it is public only for tests.
+
+   `upgradeToV2()` runs these steps:
+   1. Precondition: the pass that just finished was clean (above).
    2. Send a conditional `PUT manifest.json` with `If-Match: <session.manifestETag>`. The body keeps the
-      same `createdAt`, salt, iterations and keyCheck, and sets `formatVersion: 2` and
-      `features: ["inkwell-doc"]`. On 412, re-read the manifest:
+      same `createdAt`, salt, iterations and keyCheck (or no `encryption` for a plaintext store), and sets
+      `formatVersion: 2` and `features: ["noteit-doc"]`. On 412, re-read the manifest:
       - If it is already v2 with the same encryption, adopt it, because another device upgraded first.
-      - Otherwise, abort with "store changed, try again".
+        Two v2 clients upgrading at the same time therefore end with one write and one adoption.
+      - If it is v2 with different encryption, fail with `encryptionMismatch`, as a session refresh would.
+      - If it is still v1, leave the store as it is and try again after the next clean pass.
    3. Replace the shared `StoreSessionRef` with the new manifest and ETag. Only then does any export
-      produce inkwell-doc.
+      produce noteit-doc.
    4. Run the **conversion sweep** (item 7) and then a normal pass.
+
+   A non-fatal failure in steps 2–4 (network, 412) does not make `sync()` throw. It is logged, and the
+   next pass continues from the state that was reached: still v1 if the manifest PUT did not land, or v2
+   with the remaining notes converted by later sweeps. Fatal errors (`unauthorized`, `clockSkew`,
+   `insecureConnectionBlocked`) propagate as for any pass. The web app and the server never upgrade a
+   store (item 8).
+
+   **What users see** (plain words, reused in the web notice, `web/README.md` and native help text):
+
+   > Notes on your Mac are saved in Apple's rich text format (RTFD), which web browsers can't read. The
+   > first time an up-to-date NoteIt for Mac syncs with your storage, it switches the storage to a
+   > portable format that both the Mac and the browser understand, and converts your notes in the
+   > background. You don't need to do anything. While this happens, each of your devices downloads every
+   > note once, which can take a while for a large library with images. After that, the web app can open
+   > all your notes. Older NoteIt builds stop syncing with that storage and ask you to update NoteIt;
+   > nothing on those Macs is lost.
 7. **Conversion sweep — a revision-preserving meta rewrite, intentionally pulled by peers.** Adding
    `bodyFormat` changes the envelope bytes, so the meta ETag changes. A body-only re-upload
    (`repushBody`, `SyncEngine.swift:511-519`) can't publish `bodyFormat`, and peers would never learn the
@@ -407,9 +456,9 @@ Decisions:
    For each candidate, the engine:
    1. Records the candidate in `pendingPushes` (revision unchanged), so a crash resumes like any push.
    2. Sends `PUT notes/<id>.meta` with **`If-Match: base.remoteMetaETag`**. The new envelope has the same
-      `revision`, this device's `deviceID`/`deviceName`, `bodyFormat: "inkwell-doc/1"` and a new
+      `revision`, this device's `deviceID`/`deviceName`, `bodyFormat: "noteit-doc/1"` and a new
       `bodySHA256`.
-   3. Sends `PUT notes/<id>.body` with the inkwell-doc container.
+   3. Sends `PUT notes/<id>.body` with the noteit-doc container.
    4. Sets `base = {revision (unchanged), remoteMetaETag: new, replacedMetaETag: old, bodyETag}` and removes
       the id from `legacyBodies` and `pendingPushes`.
 
@@ -434,18 +483,22 @@ Decisions:
    **Old (v1) client that edits a note after its conversion:**
    1. Its push gets 412 because its base ETag is stale.
    2. Its planner then reports `.conflict`.
-   3. `importConflictCopy` fails to decode the inkwell-doc body (§2.12 fact 2) and the record is retried
+   3. `importConflictCopy` fails to decode the noteit-doc body (§2.12 fact 2) and the record is retried
       every pass.
 
-   The edit stays safe on that Mac, unsynced, until it is updated. The upgrade confirmation dialog states
-   this.
-8. **Web app**: refuses v1 stores with an explanatory screen ("Open Inkwell on your Mac → Settings → Sync →
-   Enable web access"); creates new stores directly at v2 (always encrypted). Legacy-RTFD notes found in a v2
-   store are shown **read-only** with a placeholder ("Formatted on an older Mac — open Inkwell on macOS to
+   The edit stays safe on that Mac, unsynced, until NoteIt on it is updated. That Mac shows the record in
+   its existing "N items will be retried" line. Only pre-release builds can be in this state.
+8. **Web app**: never upgrades or converts a store; a browser can't parse RTFD, so it must not try. When
+   it connects to a v1 store (through the server or in direct mode) it shows **"Open NoteIt on your Mac
+   once to finish setting up web access"**, followed by the plain-words explanation from item 6, and
+   re-checks the manifest every 60 s and on focus, so it continues on its own once a Mac has upgraded the
+   store. The server never parses the manifest (it stays zero-knowledge; §6.2), so the check lives in
+   `connect` in `@noteit/core`. The web creates new stores directly at v2 (always encrypted). Legacy-RTFD notes found in a v2
+   store are shown **read-only** with a placeholder ("Formatted on an older Mac — open NoteIt on macOS to
    convert") plus the meta title/preview; pin/move/delete are allowed and re-push the opaque body bytes
    **without** `bodyFormat`. The web never converts bodies (it cannot parse RTFD).
 
-   **Wire rule (both implementations):** the envelope's `bodyFormat` key is either `"inkwell-doc/1"` or
+   **Wire rule (both implementations):** the envelope's `bodyFormat` key is either `"noteit-doc/1"` or
    **omitted**. It is never `null`, `""` or any legacy marker such as `"rtfd"`. Local stores keep exactly
    the wire value: `undefined`/`nil` means legacy, and there is no internal `'rtfd'` tag that could leak.
    Any other value is rejected **per record** with `invalidPayload`. In TS the check is in
@@ -467,19 +520,19 @@ Decisions:
 
 ### 3.5 Native converter
 
-New SwiftPM library target **`InkwellDoc`** (depends on AppKit; used by the `Inkwell` app):
+New SwiftPM library target **`NoteItDoc`** (depends on AppKit; used by the `NoteIt` app):
 
 - `Codable` schema types, container encode/decode, validation (unknown types → `.readOnly`).
 - `DocConverter.export(NSAttributedString, styles:) -> BodyContainer` and
   `DocConverter.import(BodyContainer, styles:) -> NSAttributedString`, with an injected `DocStyleProvider`
   (fonts, colors, base size) so the converter is testable headless.
-- The block-kind sentinel constants (29…41) move from `EditorStyle` into `InkwellDoc` so both sides share them;
+- The block-kind sentinel constants (29…41) move from `EditorStyle` into `NoteItDoc` so both sides share them;
   legacy font-based classification is reused for pre-sentinel content.
 - Image export: PNG/JPEG/GIF/WebP pass through; TIFF/BMP → PNG; HEIC/HEIF → JPEG (q 0.9); anything else →
   `attachment` (download chip). Foreign rich-paste attributes (arbitrary fonts, kerning, shadows) degrade to
   the nearest supported mark or are dropped — documented in the converter's README comment table.
 
-Fidelity tests (`Tests/InkwellDocTests`):
+Fidelity tests (`Tests/NoteItDocTests`):
 
 - **doc → NSAS → doc is exact** for fixtures and for a seeded random doc generator (every node/mark/attr).
 - **NSAS → doc → NSAS is semantically equal**: block kind, marker, level, alignment, marks, colors, links,
@@ -494,7 +547,7 @@ Fidelity tests (`Tests/InkwellDocTests`):
 
 ### 3.6 Keep RTFD alongside? — No
 
-Storing RTFD next to inkwell-doc would double image bytes, create two sources of truth that can disagree
+Storing RTFD next to noteit-doc would double image bytes, create two sources of truth that can disagree
 (which wins on a conflicting web edit?), and need sidecar GC. The schema covers everything the native editor
 *produces*; only foreign paste attributes are lossy, and those are equally lost to the web. A note's local
 native cache remains RTFD on disk, so nothing changes for offline native use.
@@ -502,22 +555,45 @@ native cache remains RTFD on disk, so nothing changes for offline native use.
 ## 4. Architecture
 
 ```
-Browser (PWA)                                   Nuxt/Nitro server (Docker)
-┌──────────────────────────────┐               ┌───────────────────────────────┐
-│ Vue UI (3 panes, TipTap)     │               │ /api/auth, /api/server-info   │
-│   ⇅ Comlink                  │  HTTPS        │ /api/storage/*  (browser REST)│
-│ Sync Worker: @inkwell/core   │──ciphertext──▶│ /s3/*  (S3 subset, SigV4)     │◀── native apps
-│  WebCrypto, planner, engine  │               │ StoreDriver: disk | upstream S3│
-│  IndexedDB (sealed cache)    │               └──────────────┬────────────────┘
-└──────────────────────────────┘                              ▼
-                                               /data/store  or  S3/MinIO/R2 bucket
+Browser (PWA)                                   Nuxt/Nitro server (Docker, NOTEIT_MODE=server)
+┌──────────────────────────────┐               ┌─────────────────────────────────────┐
+│ Vue UI (3 panes, TipTap)     │               │ /api/setup, login, oidc, session    │
+│   ⇅ Comlink                  │  HTTPS        │ /api/account, /api/admin, invites   │
+│ Sync Worker: @noteit/core    │──ciphertext──▶│ /api/storage/*  (per-user namespace)│
+│  WebCrypto, planner, engine  │               │ /s3/*  (S3 subset, per-user SigV4)  │◀── native apps, rclone
+│  IndexedDB (sealed cache)    │               │ StoreDriver: disk | upstream S3     │
+└──────────────┬───────────────┘               └──────────────┬──────────────────────┘
+               │ direct mode (§6.4):                          ▼
+               │ SigV4 over CORS, no server     /data/store/users/<USER-UUID>/…
+               ▼                                or <NOTEIT_S3_PREFIX>/users/<USER-UUID>/…
+   the user's own S3-compatible bucket
 ```
 
 ### 4.1 Nuxt app
 
 - Nuxt 4, `ssr: false` (SPA; nothing to render server-side since the server holds no plaintext), Nitro
   `node-server` preset. Vue 3, Pinia for UI state, VueUse, `@vite-pwa/nuxt` for the app-shell service worker.
-- No UI component framework; hand-written CSS custom properties implementing HANDOFF §6 tokens.
+- **One client build, two storage modes.** The client reads `/noteit-client.json` at startup
+  (`{mode: "server" | "direct", sourceUrl?}`, §6.4) and the sync worker's `backendFactory` builds either a
+  `ServerBackend` (`/api/storage`, server mode) or an `S3Backend` (direct mode). Everything above the
+  `StorageBackend` interface is identical in both modes.
+- **Design system.** The web UI follows the NoteIt design system, kept in the repository as `design/`
+  (copied unchanged from the design handoff: `README.md`, `BRAND.md`, `tokens.md`, `tokens.css`,
+  `components/`, `assets/icons/`).
+  - `design/tokens.css` is the handoff's CSS export, which it designates for the website. The web app
+    imports it **unchanged** as the only source of color, type, spacing, radius, shadow and motion values,
+    including its light/dark theme switch. Web components reference token names only. This spec and the
+    plan never restate token values.
+  - `design/BRAND.md` governs naming and copy: the product is always "NoteIt" with that exact casing, and
+    UI labels use Title Case. Brand colors are for the logo, the app icon and marketing only, never for
+    app chrome or note content.
+  - `design/components/*.md` specify each component the web reuses (sidebar row, note card, notebook glyph
+    and chip, toolbar button, editor blocks, empty state, toast, checkbox, keycap). Their previews are
+    visual specs, not code to port.
+  - Chrome icons use the NoteIt icon set (`design/assets/icons`, `components/IconSet.md`), which exists
+    for places where SF Symbols can't be used, such as the web.
+  - No UI component framework. `docs/design/HANDOFF.md` remains the reference for native *behaviour* the
+    web mirrors (§10).
 
 ### 4.2 Browser as the sync client
 
@@ -529,8 +605,8 @@ Browser (PWA)                                   Nuxt/Nitro server (Docker)
   of CryptoKey keeps it non-extractable: script on this origin can *use* it but not read it). "Lock" deletes it.
 - **Engine in a Web Worker**: crypto, planner, storage I/O and the search index run off the main thread
   (PBKDF2 210k ≈ 100-300 ms; large bodies). UI talks to it via Comlink.
-- **Multi-tab**: Web Locks (`navigator.locks.request("inkwell-sync")`) guarantee one pass at a time across
-  tabs; `BroadcastChannel("inkwell")` fans out "records changed"/"status" events. (SharedWorker is not used:
+- **Multi-tab**: Web Locks (`navigator.locks.request("noteit-sync")`) guarantee one pass at a time across
+  tabs; `BroadcastChannel("noteit")` fans out "records changed"/"status" events. (SharedWorker is not used:
   missing on Chrome Android.)
 - **Local cache (IndexedDB, via `idb`)**: stores `records` (each value sealed with the store key under context
   `local/<storeName>/<id>`), `deletions`, `syncState`, `trash` (deleted bodies kept locally — native moves them
@@ -540,6 +616,13 @@ Browser (PWA)                                   Nuxt/Nitro server (Docker)
 - **Offline**: edits apply to IDB immediately; sync passes run after local changes (2 s debounce, 10 s max
   delay), every 60 s while visible and 600 s while hidden, and on `online`/focus — the native constants
   (`SyncController.swift:71-74`); failures show "Offline"/"Sync Issue".
+- **One cache per account.** The IndexedDB database is named per account so that two people who share a
+  browser profile never share a cache: `noteit-<USER-UUID>` in server mode, and
+  `noteit-direct-<hex(SHA-256(endpoint, bucket, prefix))[0..16]>` in direct mode. Signing out keeps the
+  database sealed; "Sign out & forget this device" deletes it.
+- **Direct-mode credential vault** (§6.4): the S3 access key and secret are stored only inside an
+  AES-GCM-sealed IDB record under a key derived from the user's passphrase. They are never written to
+  `localStorage`, `sessionStorage`, cookies or URLs.
 - **Device identity**: one uppercase UUID per browser profile in IDB; name defaults to
   `"Web — <Browser> on <OS>"`, editable in Settings (it appears in other devices' conflict copies).
 - **Dates**: envelopes carry Double2001 numbers (kept raw, converted at the edge); inner metas written as
@@ -548,7 +631,7 @@ Browser (PWA)                                   Nuxt/Nitro server (Docker)
 
 ### 4.3 Sharing logic: TypeScript port + golden vectors (recommended) vs WASM
 
-| | TS port + golden vectors | SwiftWasm build of InkwellSync |
+| | TS port + golden vectors | SwiftWasm build of NoteItSync |
 |---|---|---|
 | Crypto | WebCrypto (native speed, non-extractable keys) | CryptoKit unavailable; swift-crypto/BoringSSL in WASM, keys in WASM memory |
 | Bundle | ~tens of KB | multi-MB runtime |
@@ -567,11 +650,12 @@ one CI workflow, so a format change in Swift that is not mirrored in TS fails th
 ```
 web/
   package.json, pnpm-workspace.yaml, tsconfig.base.json
-  packages/core/    @inkwell/core — crypto, formats, layout, planner, engine, StorageBackend, S3 (SigV4) — no DOM
-  packages/doc/     @inkwell/doc  — schema, container, TipTap extensions, derivations, sanitize
-  apps/web/         Nuxt 4 app (SPA) + Nitro server routes
-  e2e/              Playwright
+  packages/core/    @noteit/core — crypto, formats, layout, planner, engine, StorageBackend, S3 (SigV4) — no DOM
+  packages/doc/     @noteit/doc  — schema, container, TipTap extensions, derivations, sanitize
+  apps/web/         Nuxt 4 app (SPA) + Nitro server routes (accounts, OIDC, admin, storage, /s3)
+  e2e/              Playwright (server mode, multi-user, direct mode)
   Dockerfile, docker-compose.yml
+design/             NoteIt design system (tokens.css, BRAND.md, tokens.md, components/, assets/icons/)
 fixtures/golden/    shared vectors (Swift writes, TS reads; from-web/ the reverse)
 ```
 
@@ -583,15 +667,19 @@ publishing and version pinning for no benefit. `web/` keeps Node tooling out of 
 
 ### 6.1 Options
 
-| | Direct browser → S3 | **Server proxy (Nitro)** |
+| | **Server mode** (default) | **Direct mode** (browser → S3) |
 |---|---|---|
-| Bucket CORS | required (many homelab users can't/won't) | not needed |
-| S3 credentials | in the browser (IDB), exposed to XSS and to anyone with the device | stay on the server |
-| No-cloud homelab | needs MinIO | built-in disk store |
-| Native app target | user's bucket | user's bucket **or** the Inkwell server itself |
-| Server trust | none for storage | sees ciphertext + metadata only |
+| Bucket CORS | not needed | required (§6.4) |
+| S3 credentials | stay on the server; each user gets `/s3` keys for native apps | in the browser, sealed in IDB under the passphrase |
+| No-cloud homelab | built-in disk store | needs a self-hosted S3 (MinIO, Garage) |
+| Several people | yes: accounts, isolated stores, quotas (§7) | one person per bucket or prefix; no accounts |
+| Native app target | user's bucket **or** the NoteIt server's `/s3` | the same bucket |
+| Who serves the code | the server | any static host, or the image with `NOTEIT_MODE=static` |
+| Server trust | sees ciphertext and metadata only | no server; trust moves to the static host |
 
-**Decision: server proxy is the default and only v1 mode.** The server holds no keys and never sees plaintext.
+**Decision: both modes ship in v1, from one client build.** Server mode is the default and the recommended
+setup. Direct mode is for people who already have a bucket, can set its CORS rules, and don't want to run a
+server. Neither mode gives anyone but the user's own devices the keys or the plaintext.
 
 ### 6.2 Server store drivers
 
@@ -608,30 +696,68 @@ publishing and version pinning for no benefit. `web/` keeps Node tooling out of 
 - `If-None-Match` is accepted only as `*`. Any other value gets 400 `badRequest`.
 - Drivers never see quotes.
 
-- `disk` (default): files under `/data/store/<key>`; ETag = hex(SHA-256(bytes))[0..32] (unquoted);
+- `disk` (default): files under `/data/store/users/<USER-UUID>/<key>` (per-user namespaces, below); ETag = hex(SHA-256(bytes))[0..32] (unquoted);
   per-key async mutex; writes go temp file → `fsync` → `rename`; in-memory ETag index revalidated by
   `stat` (mtime/size); single-instance only (documented). Conditional semantics identical to S3.
-- `s3` (upstream): server uses `@inkwell/core`'s `S3Backend` (same SigV4 code the browser *could* use) with
-  credentials from env; supports any provider the native app supports.
+- `s3` (upstream): server uses `@noteit/core`'s `S3Backend` (same SigV4 code the browser uses in direct
+  mode) with credentials from env (§8); supports any provider the native app supports.
+
+**Per-user namespaces.** Every user has a fully isolated store. Each storage operation, REST or `/s3`, runs
+for exactly one authenticated user and reaches a driver only through one choke point,
+`namespacedKey(user, key)` in `server/utils/namespace.ts`:
+1. The key (or list prefix) is validated first, against the key regex of §6.3 for objects, and for list
+   prefixes against "starts with `inkwell/`, no `..` segment, no NUL, no `\`" after percent-decoding.
+   Anything else is 400 `badRequest` before a driver is called.
+2. The namespace comes only from the user's immutable id (an uppercase UUID assigned at creation), never
+   from the username, the display name or any request input:
+   - disk: `/data/store/users/<USER-UUID>/<key>`, for example
+     `/data/store/users/<USER-UUID>/inkwell/v1/manifest.json`;
+   - upstream S3: `<NOTEIT_S3_PREFIX>/users/<USER-UUID>/<key>` in `NOTEIT_S3_BUCKET` (an empty prefix gives
+     `users/<USER-UUID>/<key>`).
+3. Drivers have no un-namespaced entry point. List results are returned with the namespace stripped and
+   can only enumerate inside it.
+
+Each namespace is a complete, independent NoteIt store, with its own manifest, salt and key check and so its
+own passphrase and E2E key. There is no server-wide store. The server is the only writer to its upstream
+prefix; this is documented.
+
+**Quotas.** An optional per-user `quotaBytes`, set by an admin (default `NOTEIT_DEFAULT_QUOTA_MB`; unset
+means unlimited).
+- Usage is the sum of object sizes in the namespace. It is computed by listing at startup, kept in memory
+  and updated after every successful write or delete.
+- A PUT is admitted under a per-user lock when `used − size(existing object) + size(new) ≤ quota`. The
+  bytes are reserved before the driver write and adjusted or released after it, so concurrent uploads can't
+  overshoot.
+- Over quota: REST returns `507 {error: "quotaExceeded"}`; `/s3` returns `400 QuotaExceeded` XML.
+  - TS adds `StorageErrorKind` `quotaExceeded`. It is non-fatal: the per-record catch records it and the
+    other records keep syncing.
+  - Native classifies the unknown 400 code as `invalidResponse`, which is also a non-fatal per-record error
+    (`S3Backend.swift` `classify`; `SyncEngine.swift:280-290`).
+  - The web shows "Storage full — delete notes or ask your admin for more space" in the sync details.
+- DELETE is always allowed, so a full user can free space. The control objects `manifest.json`,
+  `tombstones/*`, `devices/*` and `.canary/*` are exempt from the quota, so a full user can still connect,
+  run the canary and sync deletions, but each of them is capped at 64 KB.
 
 ### 6.3 Front doors
 
-**(a) Browser REST — `/api/storage`** (session cookie + `X-Inkwell: 1` header + `Origin` check):
+**(a) Browser REST — `/api/storage`** (session cookie + `X-NoteIt: 1` header + `Origin` check). Every key is
+relative to the signed-in user's namespace (§6.2):
 
 | Method & path | Request | Response |
 |---|---|---|
 | `GET /api/storage/list?prefix=inkwell/v1/&continuationToken=` | — | `200 {objects:[{key,etag,size}], nextContinuationToken?}` (etags unquoted, ≤1000/page) |
 | `GET /api/storage/object/<key>` | — | `200` bytes, header `ETag: "<etag>"` (quoted on the wire); `404` |
-| `PUT /api/storage/object/<key>` | bytes; `If-Match: "<etag>"` (bare accepted) or `If-None-Match: *` | `200 {etag}` (JSON, unquoted) + header `ETag: "<etag>"`; `412` precondition failed |
+| `PUT /api/storage/object/<key>` | bytes; `If-Match: "<etag>"` (bare accepted) or `If-None-Match: *` | `200 {etag}` (JSON, unquoted) + header `ETag: "<etag>"`; `412` precondition failed; `507` quotaExceeded |
 | `DELETE /api/storage/object/<key>` | optional `If-Match` | `204`; `404`; `412` |
 
 Keys must match `^inkwell/(v1/(manifest\.json|notebooks/[0-9A-F-]{36}\.json|notes/[0-9A-F-]{36}\.(meta|body)|tombstones/[0-9A-F-]{36}\.json|devices/[0-9A-Za-z-]{1,64}\.json)|\.canary/[0-9A-F-]{36})$`
-(case-insensitive hex accepted for reads, writes uppercase-only). Body limit `INKWELL_MAX_OBJECT_MB` (default 50).
+(case-insensitive hex accepted for reads, writes uppercase-only). Body limit `NOTEIT_MAX_OBJECT_MB` (default 50).
 Errors are JSON `{error: code, message}`; `401` → client shows login.
 
 **(b) S3-compatible subset — `/s3`** for native apps and backup tools (rclone), so **no new Swift sync code** is
-needed: native adds an "Inkwell Server" provider preset (endpoint = server URL + `/s3`, path-style, bucket
-`inkwell`, region `us-east-1`, credentials generated in the web Settings).
+needed: native adds a "NoteIt Server" provider preset (endpoint = server URL + `/s3`, path-style, bucket
+`noteit`, region `us-east-1`). Each person enters **their own** access key from the web app's Settings →
+Account and their own sync passphrase, so every Mac in a family syncs with its owner's store only.
 
 - Operations: `ListObjectsV2` (`list-type=2`, `prefix`, `continuation-token`, `max-keys`; XML
   `ListBucketResult` with `Contents/Key/ETag/Size`, `IsTruncated`, `NextContinuationToken`), `GetObject`,
@@ -641,73 +767,352 @@ needed: native adds an "Inkwell Server" provider preset (endpoint = server URL +
   `NotImplemented`), `if-match`/`if-none-match` (`SigV4Signer.swift:31-39`). Clock skew > 15 min →
   `RequestTimeTooSkewed`; bad key → `InvalidAccessKeyId`; bad signature → `SignatureDoesNotMatch` (these map
   to the native fatal errors, `S3Backend.swift:293-295`).
+- **Key → user mapping.** The access key id in the `Credential` scope selects exactly one key record, and so
+  exactly one user. The signature is verified with that key's secret before anything else happens.
+  - Unknown or revoked key, or a key of a deleted user: `403 InvalidAccessKeyId`.
+  - Key of a disabled user: `403 AccessDenied`. Both are `unauthorized` (fatal) in native, which shows its
+    existing credentials error.
+  - The only bucket is `noteit` (path-style `/s3/noteit/<key>`); any other bucket name gets
+    `404 NoSuchBucket`. The bucket is virtual and always maps to the caller's own namespace, so two users
+    who both use bucket `noteit` see disjoint stores. No request parameter can name another namespace.
+  - Over quota: `400 QuotaExceeded` (§6.2).
 - Must accept the canary (`inkwell/.canary/<UUID>` PUT/DELETE).
-- Credentials: `/api/credentials` creates/revokes access key pairs; secrets stored in `/data/config.json`
-  (mode 0600) because SigV4 verification needs the plaintext secret. They grant storage access only (still
-  ciphertext).
+- **Per-user keys.** Each user manages their own keys in Settings → Account → S3 Access Keys (up to 10):
+  - Create: `POST /api/account/s3-keys {label}` returns `{accessKeyId, secretAccessKey}` once. The id is
+    `NIK` plus 17 random base32 characters; the secret is 40 base64url characters (30 random bytes).
+  - List: `GET /api/account/s3-keys` shows label, id, created and last used, never the secret.
+  - Revoke: `DELETE /api/account/s3-keys/<id>`.
+  - Rotate: "Replace" creates a new key and revokes the old one in one step,
+    `POST /api/account/s3-keys/<id>/rotate`.
+  - Secrets are stored in `/data/accounts.json` (mode 0600), because SigV4 verification needs the
+    plaintext secret. A key grants access to its owner's ciphertext only.
 
-**Other endpoints**: `GET /api/health` → `{ok: true, needsSetup}` (always 200, unauthenticated), `GET /api/server-info` → `{version, commit, sourceUrl, authMode, storage:
-"disk"|"s3", needsSetup}` (self-reported; carries no integrity claims, see §11.1), `POST /api/setup`,
-`POST /api/login`, `POST /api/logout`, `GET /api/session`, `GET|POST|DELETE /api/credentials`.
+**Other endpoints** (all non-GET routes also need `X-NoteIt: 1` and a matching `Origin`):
 
-### 6.4 Future: direct mode
+| Route | Auth | Purpose |
+|---|---|---|
+| `GET /api/health` | none | always 200 `{ok: true, mode: "server"\|"static", needsSetup}` |
+| `GET /api/server-info` | none | `ServerInfo` (below) |
+| `POST /api/setup` | setup token | create the first admin (§7.1) |
+| `POST /api/login`, `POST /api/logout` | — / session | password login; logout |
+| `GET /api/session` | session | `{user: {id, username, displayName, role, mustChangePassword, oidcLinked}, quota: {usedBytes, limitBytes?}}` |
+| `PATCH /api/account`, `POST /api/account/password`, `POST /api/account/logout-everywhere` | session | display name; change password; end all sessions |
+| `GET\|POST\|DELETE /api/account/s3-keys…` | session | per-user `/s3` keys (above) |
+| `POST /api/oidc/start`, `GET /api/oidc/callback`, `POST /api/account/oidc/unlink` | varies | OIDC (§7.2) |
+| `POST /api/invites/redeem` | invite token | redeem an invite with a password (§7.4) |
+| `GET\|POST /api/admin/users`, `PATCH\|DELETE /api/admin/users/<id>`, `POST /api/admin/users/<id>/reset-password` | admin | user management (§7.4) |
+| `GET\|POST /api/admin/invites`, `DELETE /api/admin/invites/<id>` | admin | invites (§7.4) |
 
-Because `@inkwell/core` contains an isomorphic `S3Backend` (fetch + WebCrypto HMAC), a later "static web app,
-bring your own CORS bucket" mode is a configuration change, not a rewrite.
+`ServerInfo` = `{version, commit, sourceUrl, needsSetup, storage: "disk"|"s3", auth: {password: boolean,
+oidc: {label: string} | null}}`. It is self-reported, carries no integrity claims (§11.1), and lists no
+users.
 
-## 7. Auth
+### 6.4 Direct mode (browser → S3, no server)
 
-`INKWELL_AUTH` selects one mode:
+**How it ships.** Every release builds the client once (`nuxi generate`) and ships the same files two ways:
+1. `noteit-web-static-<version>.tar.gz`, a release asset for any static host (Caddy, nginx, Cloudflare
+   Pages, an S3 static website). It contains `noteit-client.json` = `{"mode": "direct"}`.
+2. Inside the Docker image. With `NOTEIT_MODE=static` the image serves only those files plus
+   `GET /api/health`: no other `/api` routes, no `/s3`, nothing written to `/data`. The server generates
+   `noteit-client.json` from `NOTEIT_MODE` (`direct` in static mode, `server` otherwise).
 
-- `password` (default): single user with an argon2id password hash. There are two ways to set it:
-  - **`INKWELL_PASSWORD_HASH`** (or `INKWELL_PASSWORD_HASH_FILE` for Docker secrets). Setup is skipped
-    entirely: `needsSetup` is false and `/api/setup` returns 404.
-  - **First-run setup, guarded by a one-time bootstrap token.** The server must not be claimable by
-    whoever reaches it first.
-    - At startup, when no hash is configured and `/data/config.json` holds none, the server takes its
-      token from `INKWELL_SETUP_TOKEN` or `INKWELL_SETUP_TOKEN_FILE`.
-    - If neither is set, it generates 32 random bytes (base64url), writes them to `/data/setup-token`
-      (mode 0600), and prints them once to the container log:
-      `Inkwell setup token: … (docker logs <container>)`.
-    - `POST /api/setup {token, password}` compares the token in constant time and is rate-limited like
-      login. It runs under a process-wide mutex, so two concurrent requests cannot both succeed.
-    - On success it writes the hash to `/data/config.json` with temp + rename and mode 0600, deletes
-      `/data/setup-token`, and clears the in-memory token. The token is **single-use**: any later setup
-      call returns 404.
-    - While setup is pending, every `/api/*` and `/s3` route returns 503 `setupRequired`, **except**
-      `GET /api/health`, `GET /api/server-info` and `POST /api/setup`. Health must stay green so the
-      Docker `HEALTHCHECK` doesn't mark a fresh container unhealthy. It returns 200
-      `{ok: true, needsSetup}`.
+`noteit-client.json` is the only runtime configuration: `{mode: "server" | "direct", sourceUrl?: string}`,
+validated strictly (unknown keys or values make the client refuse to start). It is excluded from the signed
+file hashes of §11.1 because operators edit it; the verifier checks it against the schema instead. A
+direct-mode client has no accounts, no quota and no `/s3`: it is one person's client for one bucket (or one
+prefix of a bucket). Families use one bucket or prefix per person, with separate keys.
 
-  Session = signed, `HttpOnly; Secure; SameSite=Strict` cookie
-  (`INKWELL_SESSION_SECRET` or generated), 30-day sliding; login rate limiting with exponential backoff per IP.
-- `forward-auth`: trust `Remote-User` (configurable header) **only** from `INKWELL_TRUSTED_PROXIES` CIDRs —
-  Authelia/Authentik/Traefik forward-auth friendly.
-- `oidc`: generic OIDC authorization code + PKCE (`openid-client`), optional `INKWELL_OIDC_ALLOWED_SUBS`.
+**Connect wizard.** The user enters endpoint, region, bucket, path-style on/off, an optional key prefix (as
+in native), the access key id and secret, then the sync passphrase. The wizard runs a **CORS check** before
+saving anything:
+1. `ListObjectsV2` on the prefix: proves the origin is allowed and the credentials work.
+2. `PUT inkwell/.canary/<UUID>` with `If-None-Match: *`, then read the `ETag` response header: proves PUT,
+   the allowed request headers and the exposed `ETag`.
+3. The rest of the canary sequence (below), ending with its DELETE.
 
-The server login is **separate from the encryption passphrase** and never derives keys. The `/s3` front door
-uses its own SigV4 credentials regardless of mode.
+A CORS rejection reaches script as a `TypeError` with no status. Each step maps it to a specific hint
+("origin not allowed", "PUT or If-None-Match not allowed", "ETag not exposed"). After the check, `connect`
+runs as in server mode: an empty bucket gets a new v2 store; a v1 store shows the §3.4 item 8 notice.
+
+**Conditional writes in the browser.** Direct mode uses the same `S3Backend` as the server's upstream
+driver, which ports the native one:
+- Before the first conditional request of a session it runs the native canary once
+  (`S3Backend.swift:160-190`) on `inkwell/.canary/<UUID>`: a `PUT If-None-Match: *`; a second one, which must
+  get 412; a `PUT` with the bogus `If-Match: "inkwell-canary-mismatch"`, which must get 412; and a `DELETE`
+  with the same bogus `If-Match`, which must get 412. Then it deletes the canary. A provider that ignores
+  the write preconditions (or answers `501`/`400 NotImplemented`) is marked "conditional writes
+  unsupported"; one that ignores the delete precondition is marked "conditional deletes unsupported".
+  Whether a provider supports them is decided by this probe at runtime, never assumed per provider. If the
+  canary itself fails (network, credentials), nothing is marked and it runs again next time.
+- When unsupported, writes use the native fallback (`S3Backend.swift:104-121`): a `HEAD` precondition check,
+  an unconditional `PUT`, and a `HEAD` that verifies the stored ETag (a mismatch is `preconditionFailed`).
+  Deletes check the precondition with `HEAD` and then delete unconditionally. As in native, this narrows the
+  race window but can't close it; Settings shows "Conditional Writes: Not Supported".
+- Error classification is the native `classify` (`S3Backend.swift:285-305`): `501` or `400 NotImplemented`
+  on a conditional request → unsupported (fallback); `RequestTimeTooSkewed` → `clockSkew` (the browser signs
+  with the device clock); `InvalidAccessKeyId`/`SignatureDoesNotMatch`/401/403 → `unauthorized`; 404 →
+  `notFound`; 412 and conditional 409 → `preconditionFailed`; 5xx → `network`; anything else →
+  `invalidResponse`. A CORS rejection (`TypeError`, no status) → `network`.
+- Every request uses `fetch` with `cache: "no-store"`, `credentials: "omit"` and `redirect: "error"`, so no
+  HTTP cache can serve a stale manifest or object.
+- A 2xx response without a readable `ETag` falls back to a `HEAD`, as native `upload` does. If that is also
+  empty, the record fails with `invalidResponse("ETag not exposed")` and the hint to add `ETag` to the
+  bucket's CORS expose headers.
+
+**Required CORS configuration.** Allowed origin: exactly the web app's origin (avoid `*`). Methods: `GET`,
+`PUT`, `HEAD`, `DELETE`. Request headers: `authorization`, `content-type`, `if-match`, `if-none-match`,
+`x-amz-content-sha256`, `x-amz-date`. **Expose header: `ETag`.** Max age 3600.
+
+- **AWS S3**: `aws s3api put-bucket-cors --bucket my-notes --cors-configuration file://cors.json` with
+
+  ```json
+  {"CORSRules": [{
+    "AllowedOrigins": ["https://notes.example.com"],
+    "AllowedMethods": ["GET", "PUT", "HEAD", "DELETE"],
+    "AllowedHeaders": ["authorization", "content-type", "if-match", "if-none-match",
+                       "x-amz-content-sha256", "x-amz-date"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }]}
+  ```
+- **Cloudflare R2**: bucket → Settings → CORS Policy in the dashboard, which takes the rule list without the
+  wrapper:
+
+  ```json
+  [{"AllowedOrigins": ["https://notes.example.com"], "AllowedMethods": ["GET", "PUT", "HEAD", "DELETE"],
+    "AllowedHeaders": ["authorization", "content-type", "if-match", "if-none-match",
+                       "x-amz-content-sha256", "x-amz-date"],
+    "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3600}]
+  ```
+  or the AWS command above with `--endpoint-url https://<account-id>.r2.cloudflarestorage.com`.
+- **MinIO** (community edition): per-bucket CORS (`PutBucketCors`) is not implemented. CORS is server-wide:
+  set `MINIO_API_CORS_ALLOW_ORIGIN=https://notes.example.com` (the default is `*`) and restart. MinIO's
+  built-in CORS handler already allows the S3 methods and exposes `ETag`; the wizard's check confirms it.
+- **Backblaze B2**: B2 CORS rules, for example with the `b2` CLI (v4):
+
+  ```sh
+  b2 bucket update --cors-rules '[{"corsRuleName": "noteit",
+    "allowedOrigins": ["https://notes.example.com"],
+    "allowedOperations": ["s3_get", "s3_head", "s3_put", "s3_delete"],
+    "allowedHeaders": ["authorization", "content-type", "if-match", "if-none-match",
+                       "x-amz-content-sha256", "x-amz-date"],
+    "exposeHeaders": ["ETag"], "maxAgeSeconds": 3600}]' my-notes allPrivate
+  ```
+- **Garage**: `PutBucketCors` through the S3 API with a key that has the owner flag on the bucket
+  (`garage bucket allow --owner my-notes --key <admin-key>`), then the AWS command with
+  `--endpoint-url http://garage.lan:3900`. Use a separate, non-owner key in the browser.
+
+**Credential storage in the browser.**
+- The vault record in IDB is `{v: 1, salt, iv, ciphertext}`. The plaintext is
+  `{endpoint, region, bucket, prefix, pathStyle, accessKeyId, secretAccessKey}`.
+- `credKey = PBKDF2-SHA256(passphrase, salt, 210 000)` as a non-extractable AES-GCM-256 key. `salt` is 16
+  random bytes created on this device, so the vault opens without network access. AAD is
+  `local/credentials/v1`.
+- Unlock runs two derivations in the worker: `credKey` to open the vault, then the store key from the
+  manifest's salt, as in server mode. A wrong passphrase fails the GCM tag and shows "Wrong passphrase".
+  For a plaintext store (a native option), the user picks a device passphrase that protects only the vault.
+- The S3 secret is never written to `localStorage`, `sessionStorage`, cookies or URLs, and never leaves
+  the device; requests carry only SigV4 signatures.
+- "Remember on this device" stores the non-extractable `credKey` and store key in IDB, as in §4.2. Lock
+  deletes them. "Sign out & forget this device" deletes the vault and the cache.
+
+**Threat model differences** (also in §11.1). The S3 key lives in the browser. Script running on the app's
+origin, a malicious static host, or someone with the unlocked device can use it, and with it delete or roll
+back objects (as the storage actor can), but can't read notes without the passphrase. Users should create a
+**bucket-scoped key** with object read, write, delete and list rights on that one bucket only: an AWS IAM
+policy on `arn:aws:s3:::my-notes` and `arn:aws:s3:::my-notes/*`; an R2 API token with Object Read & Write
+for one bucket; a B2 application key restricted to the bucket (optionally `--name-prefix`); a MinIO user with
+a bucket policy; a Garage key with `garage bucket allow --read --write`. Trust in the code moves from the
+NoteIt server to whoever serves the static files.
+
+## 7. Accounts and auth
+
+One server instance serves several people (a family or small group). Every person has their own account,
+their own isolated store (§6.2) and their own sync passphrase.
+
+**Login and the sync passphrase are separate.** Your NoteIt account — a password or a sign-in through your
+identity provider — only lets you into the server. Your notes are encrypted with a separate sync passphrase
+that never leaves your devices. The server, its admin and the identity provider never see it, resetting a
+login password doesn't change or reveal it, and nobody can recover notes if it's forgotten. The server
+never derives keys from login credentials.
+
+### 7.1 Accounts, first admin and sessions
+
+- **Account store.** `/data/accounts.json` (mode 0600; written temp + `fsync` + rename under a process-wide
+  mutex; has a `schemaVersion`). A user record holds:
+  - `id`: an uppercase UUID, immutable, used for the namespace;
+  - `username`: `^[a-z0-9][a-z0-9._-]{1,31}$`, unique;
+  - `displayName` (≤ 64 characters, always rendered as text);
+  - `role`: `admin` or `user`; `status`: `active` or `disabled`;
+  - `passwordHash` (argon2id) or none; `oidc: {issuer, sub}` or none;
+  - `sessionEpoch`, `mustChangePassword`, `quotaBytes?`, `s3Keys[]`, `createdAt`, `lastSeenAt`.
+
+  Invites live in the same file (§7.4).
+- **Passwords.** argon2id (`@node-rs/argon2`) with the OWASP parameters m = 19 MiB, t = 2, p = 1; 10 to 256
+  characters, no composition rules. `POST /api/login {username, password}` gives the same 401
+  `invalidCredentials` for an unknown user, a wrong password and a disabled account, and hashes a dummy
+  password for unknown users so timing doesn't reveal which. Login is rate-limited per IP and per username
+  with exponential backoff. `NOTEIT_PASSWORD_LOGIN=false` turns password login off (OIDC only), which
+  requires OIDC to be configured.
+- **First account = first admin, through the bootstrap token.** The server must not be claimable by
+  whoever reaches it first. `needsSetup` is true while no account exists.
+  - At startup, when there are no accounts, the server takes its token from `NOTEIT_SETUP_TOKEN` or
+    `NOTEIT_SETUP_TOKEN_FILE`. If neither is set, it generates 32 random bytes (base64url), writes them to
+    `/data/setup-token` (mode 0600), and prints them once to the container log:
+    `NoteIt setup token: … (docker logs <container>)`.
+  - `POST /api/setup {token, username, password}` compares the token in constant time and is rate-limited
+    like login. It runs under the accounts mutex, so two concurrent requests cannot both succeed. On
+    success it creates the user with role `admin`, deletes `/data/setup-token`, clears the in-memory token
+    and signs the admin in. The token is **single-use**: any later setup call returns 404.
+  - With OIDC configured, the setup page also offers "Set Up With <label>": `POST /api/oidc/start
+    {intent: "setup", token}` checks the token, and the callback creates the admin bound to the OIDC
+    identity and consumes the token under the same mutex. The allowed-groups rule doesn't apply here,
+    because the token already proves control of the server.
+  - While setup is pending, every `/api/*` and `/s3` route returns 503 `setupRequired`, **except**
+    `GET /api/health`, `GET /api/server-info`, `POST /api/setup`, `POST /api/oidc/start` (setup intent
+    only) and `GET /api/oidc/callback`. Health stays green so the Docker `HEALTHCHECK` doesn't mark a fresh
+    container unhealthy.
+  - **Pre-seeding.** If `NOTEIT_PASSWORD_HASH` (or `NOTEIT_PASSWORD_HASH_FILE` for Docker secrets) is set
+    and no account exists at startup, the server creates the admin `NOTEIT_ADMIN_USERNAME` (default
+    `admin`) with that hash and skips setup: `needsSetup` is false and `/api/setup` returns 404. Once
+    accounts exist the variable is ignored, with a log line.
+- **Sessions.** A signed cookie `noteit_session` = HMAC (key `NOTEIT_SESSION_SECRET`, or one generated into
+  `/data/session-secret`) over `{uid, epoch, iat, exp}`; `HttpOnly; Secure; SameSite=Strict; Path=/`;
+  30-day sliding, re-issued when older than a day.
+  - Every authenticated request loads the user and rejects the session with 401 `unauthorized` if the
+    user no longer exists, isn't `active`, or `epoch ≠ user.sessionEpoch`.
+  - The epoch is bumped by disable, delete, password change, admin password reset and
+    "Sign Out Everywhere", so those end every existing session on its next request.
+  - While `mustChangePassword` is set, every route except `GET /api/session`,
+    `POST /api/account/password` and `POST /api/logout` returns 403 `passwordChangeRequired`.
+
+### 7.2 OIDC sign-in (optional)
+
+Generic OpenID Connect for homelab identity providers (Authentik, Authelia, Pocket ID, Keycloak), using
+`openid-client`. It is enabled when `NOTEIT_OIDC_ISSUER` is set; the configuration is validated at startup
+through the issuer's discovery document, and the issuer must be HTTPS (except `localhost`).
+
+- **Flow: authorization code + PKCE (S256).** `POST /api/oidc/start {intent, token?}` with
+  `intent ∈ {login, link, invite, setup}` creates `state`, `nonce` and the PKCE verifier. It stores them,
+  with the intent (and for `link` the current user id, for `invite` the invite id and chosen username), in
+  an encrypted, signed `noteit_oidc` cookie (`HttpOnly; Secure; SameSite=Lax; Path=/api/oidc`, 10 minutes),
+  and returns the authorization URL; the client navigates to it.
+- `GET /api/oidc/callback` checks `state`, redeems the code with the verifier, validates the ID token
+  (signature via JWKS, `iss`, `aud`, `exp`, `nonce`) and clears the cookie. Groups are read from the ID
+  token, or from userinfo when the claim is missing there.
+- The session cookie is `SameSite=Strict`, so the browser won't send it on the cross-site redirect into the
+  callback. The callback therefore sets the session cookie and returns a small same-origin page that
+  navigates to the app (`<meta http-equiv="refresh">`, no script); the next request is same-site and
+  carries the cookie.
+- **Users are mapped by `(issuer, sub)`**, never by email or `preferred_username`, which can change or be
+  reused. Those only seed the display name and a suggested username.
+- **Unknown identity.**
+  - `invite` or `setup` intent: the account is created as described for invites (§7.4) or setup (§7.1).
+  - `login` intent with `NOTEIT_OIDC_AUTO_PROVISION=true`: an account is created only if the groups claim
+    contains one of `NOTEIT_OIDC_ALLOWED_GROUPS`. Auto-provisioning without allowed groups is a startup
+    error, so NoteIt never provisions "anyone the IdP knows".
+  - Otherwise: "No NoteIt account is linked to this sign-in. Ask your admin for an invite."
+- **Admin role from a group claim.** `NOTEIT_OIDC_GROUPS_CLAIM` is a dot path (default `groups`).
+  When `NOTEIT_OIDC_ADMIN_GROUPS` is set, the role of an OIDC-linked user is re-evaluated at each OIDC
+  login: admin if the claim contains one of those groups, user otherwise. A demotion that would leave no
+  active admin is skipped and logged. When it is unset, roles are managed only in NoteIt.
+- Disabled users can't sign in through OIDC either.
+- **Linking.** A signed-in user links one OIDC identity in Settings → Account → Sign-In Methods (`link`
+  intent). Unlinking requires a password on the account, so nobody locks themselves out.
+- Scopes: `NOTEIT_OIDC_SCOPES` (default `openid profile`); add the scope your IdP uses to release groups
+  (for example `groups` for Authelia and Pocket ID). Keycloak needs a Group Membership mapper on the client.
+  The login button reads "Sign In With <NOTEIT_OIDC_LABEL>" (default "Single Sign-On").
+- Logout is local; RP-initiated logout is future work (§16).
+
+### 7.3 Forward-auth: dropped
+
+Trusting a `Remote-User` header from a reverse proxy was considered and **dropped** for v1:
+- OIDC covers the same identity providers (Authentik and Authelia both act as OIDC providers).
+- Doing it safely needs every request to reach the server only through the proxy, plus a trusted-proxy CIDR
+  list. A single mistake, such as a published container port or Docker's userland proxy rewriting source
+  addresses, lets anyone send the header and sign in as any account, including an admin.
+- It would also need a separate answer for `/s3` and for invites.
+
+### 7.4 Multi-user administration and isolation
+
+- **Roles.** `admin` and `user`. Admins have everything a user has, plus Settings → Users.
+- **Creating users.** An admin either:
+  - creates a user directly (username, display name, role, optional quota); a temporary password is shown
+    once and the user must change it at first sign-in; or
+  - creates an **invite**.
+- **Invites.** `POST /api/admin/invites {role, quotaBytes?, ttlHours?}` returns `{id, token, expiresAt}`.
+  - The token is 32 random bytes (base64url). Only its SHA-256 is stored.
+  - The link is `<origin>/invite#<token>`, built by the client. The token sits in the URL fragment, so it
+    never reaches server logs or `Referer` headers.
+  - Expiry: `ttlHours`, default `NOTEIT_INVITE_TTL_HOURS` (72), at most 720.
+  - **Single-use.** `POST /api/invites/redeem {token, username, password}`, or the OIDC `invite` intent,
+    marks the invite used under the accounts mutex *before* the account is created. An unknown, used,
+    expired or revoked token always gets the same 410 `inviteInvalid`. Redemption is rate-limited like
+    login.
+  - Admins list invites (pending, used, expired) and revoke pending ones.
+- **Disable / enable.** Disabling bumps the epoch: sessions get 401 on their next request, the user's `/s3`
+  keys get `403 AccessDenied`, and OIDC sign-in is refused. Data is kept. Enabling restores the keys, but
+  the user has to sign in again.
+- **Delete.** The admin types the username to confirm. The account is marked deleted (all auth fails), its
+  keys are removed, the namespace is purged (disk `rm -r`; upstream S3 list + delete), and the record is
+  removed. An interrupted purge resumes at startup.
+- **Last admin.** Any change that would leave no active admin — disabling, demoting or deleting the last
+  one, including yourself — returns 409 `lastAdmin`, checked under the accounts mutex.
+- **Password reset.** An admin sets a temporary password; the epoch is bumped and the user must change it.
+  The dialog says: "This doesn't give you access to their notes. Notes stay encrypted with their own sync
+  passphrase."
+- **Quotas.** Per user, set at creation, in an invite or later (§6.2).
+- **What admins see**: username, display name, role, status, sign-in methods, quota, used bytes, object
+  count and last seen. Never note content, titles or notebook names, which are encrypted with keys the
+  server never has.
+- **Isolation.** The namespace is derived from the session or the `/s3` key alone (§6.2), keys are validated
+  before they're namespaced, and nothing in a request can select another user's namespace. §12 lists the
+  tests that guard this.
 
 ## 8. Deployment & licensing
 
-- One image `ghcr.io/<owner>/inkwell-web` built from `web/Dockerfile`: multi-stage, `node:24-alpine`,
+- One image `ghcr.io/rutbergphilip/noteit` built from `web/Dockerfile`: multi-stage, `node:24-alpine`,
   `pnpm build` → `.output/`, runs `node .output/server/index.mjs` as uid 1000, `PORT=3000`, `VOLUME /data`,
-  `HEALTHCHECK` → `/api/health`.
-- `docker-compose.yml`: one service, named volume `inkwell-data:/data`, env file; documented reverse-proxy
+  `HEALTHCHECK` → `/api/health`. The same image serves the static direct-mode client with
+  `NOTEIT_MODE=static` (§6.4). The static tarball `noteit-web-static-<version>.tar.gz` is a release asset
+  built from the same commit.
+- `docker-compose.yml`: one service, named volume `noteit-data:/data`, env file; documented reverse-proxy
   examples (Caddy/Traefik) because WebCrypto requires a secure context (HTTPS or `localhost`).
-- **AGPL-3.0 §13**: every page footer links "Source" to `INKWELL_SOURCE_URL` (default: the canonical repo) plus
-  version/commit; `/api/server-info` exposes the same. Operators who modify the code must point it at their fork
-  — stated in the deployment docs.
+- **Environment** (every `…_SECRET`, `…_HASH` and `…_TOKEN` variable also has a `…_FILE` form for Docker
+  secrets):
+
+  | Variable | Default | Purpose |
+  |---|---|---|
+  | `NOTEIT_MODE` | `server` | `server`, or `static` (direct-mode client only; every other variable is ignored except `PORT` and `NOTEIT_SOURCE_URL`) |
+  | `NOTEIT_PUBLIC_URL` | — (required in server mode) | external origin; used for the `Origin` check and the default OIDC redirect |
+  | `NOTEIT_SOURCE_URL` | `https://github.com/rutbergphilip/noteit` | AGPL source link |
+  | `NOTEIT_DATA_DIR` | `/data` | accounts, setup token, session secret and the disk store |
+  | `NOTEIT_STORE` | `disk` | `disk` or `s3` |
+  | `NOTEIT_S3_ENDPOINT`, `_REGION`, `_BUCKET`, `_PREFIX`, `_PATH_STYLE`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` | — | upstream S3 driver |
+  | `NOTEIT_SETUP_TOKEN` | generated | bootstrap token for the first admin |
+  | `NOTEIT_ADMIN_USERNAME`, `NOTEIT_PASSWORD_HASH` | `admin`, — | pre-seed the first admin |
+  | `NOTEIT_PASSWORD_LOGIN` | `true` | allow password login |
+  | `NOTEIT_SESSION_SECRET` | generated | session cookie key |
+  | `NOTEIT_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_REDIRECT_URL`, `_SCOPES`, `_LABEL` | —, —, —, `<PUBLIC_URL>/api/oidc/callback`, `openid profile`, `Single Sign-On` | OIDC (§7.2) |
+  | `NOTEIT_OIDC_GROUPS_CLAIM`, `_AUTO_PROVISION`, `_ALLOWED_GROUPS`, `_ADMIN_GROUPS` | `groups`, `false`, —, — | provisioning and roles (§7.2) |
+  | `NOTEIT_INVITE_TTL_HOURS` | `72` | invite lifetime (max 720) |
+  | `NOTEIT_DEFAULT_QUOTA_MB` | unlimited | quota for new users |
+  | `NOTEIT_MAX_OBJECT_MB` | `50` | body limit per object |
+
+- **AGPL-3.0 §13**: every page footer links "Source" to `NOTEIT_SOURCE_URL` (default: the canonical repo
+  `https://github.com/rutbergphilip/noteit`) plus version/commit; `/api/server-info` exposes the same, and in
+  direct mode `noteit-client.json`'s `sourceUrl` overrides the built-in default. Operators who modify the
+  code must point it at their fork — stated in the deployment docs.
 
 ## 9. Editor (TipTap) — native feature mapping
 
-| Native feature (HANDOFF §5.3, `FormatCommand.swift`) | Native representation | inkwell-doc | TipTap |
+| Native feature (HANDOFF §5.3, `FormatCommand.swift`) | Native representation | noteit-doc | TipTap |
 |---|---|---|---|
 | Title / Heading / Subheading / Body | sentinel 37/39/41/29 | `heading 1/2/3`, `paragraph` | `Heading` (levels 1-3), `Paragraph` + align/indent attrs |
-| Code block | sentinel 31 per paragraph, mono base font, all marks allowed | `codeBlock{align?}` with inline content | custom `InkwellCodeBlock` node (`marks: '_'`, `whitespace: 'pre'`, inline images); not the stock `CodeBlock`, which forbids marks |
+| Code block | sentinel 31 per paragraph, mono base font, all marks allowed | `codeBlock{align?}` with inline content | custom `NoteItCodeBlock` node (`marks: '_'`, `whitespace: 'pre'`, inline images); not the stock `CodeBlock`, which forbids marks |
 | Quote | sentinel 33 | `blockquote` | `Blockquote` |
 | Divider | sentinel 35 + NBSP | `horizontalRule` | `HorizontalRule` |
-| Bulleted / numbered / checklist, nesting | text marker + indent | `listItem{kind,level,number,checked}` | custom flat `InkwellListItem` node, Tab/Shift-Tab change `level`, Enter continues, empty Enter exits |
+| Bulleted / numbered / checklist, nesting | text marker + indent | `listItem{kind,level,number,checked}` | custom flat `NoteItListItem` node, Tab/Shift-Tab change `level`, Enter continues, empty Enter exits |
 | Toggle checkbox / strike-through checked | ☐/☑, derived style | `checked` | click on marker toggles; CSS derives style |
 | Bold/italic/underline/strike | font traits / attrs | marks | starter-kit marks + `Underline` |
 | Inline code | mono + background | `code` | `Code` |
@@ -724,8 +1129,8 @@ uses its own SigV4 credentials regardless of mode.
 
 ### 9.1 Shortcuts (browser-safe)
 
-Native bindings verified in `Sources/Inkwell/Editor/FormatCommand.swift:125-152` (editor) and
-`Sources/Inkwell/App/InkwellApp.swift:36-70` (menus). "Mod" = ⌘ on macOS, Ctrl elsewhere; "Alt" = ⌥.
+Native bindings verified in `Sources/NoteIt/Editor/FormatCommand.swift:125-152` (editor) and
+`Sources/NoteIt/App/NoteItApp.swift:36-70` (menus). "Mod" = ⌘ on macOS, Ctrl elsewhere; "Alt" = ⌥.
 
 | Action | Native | Web | Reason for change |
 |---|---|---|---|
@@ -753,16 +1158,18 @@ Native bindings verified in `Sources/Inkwell/Editor/FormatCommand.swift:125-152`
 A Playwright test (plan task 3.8) asserts every web binding fires in Chromium, WebKit and Firefox and that no
 binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+Shift+[ ], Mod+L, Mod+±).
 
-## 10. UX parity (HANDOFF §5-6)
+## 10. UX parity (HANDOFF §5-6, NoteIt design system)
 
-- **Three panes**: sidebar 190/220/320 (min/ideal/max px), note list 240/300/440, editor content max-width
-  760, resizable splitters persisted; below 900 px collapses to two panes, below 600 px one pane with back
+- **Three panes**: sidebar and note list sized by the layout tokens `sidebar-w` and `note-list-w` (ideal width
+  and min–max range as documented in `design/tokens.md`), editor content max-width 760 (HANDOFF), resizable
+  splitters persisted; below 900 px collapses to two panes, below 600 px one pane with back
   navigation (PWA on phones).
 - **Sidebar**: Library rows All Notes / Pinned / Recent (7 days) / Conflicts (only when any exist); Notebooks
-  with color dot + icon (SF Symbol → Lucide-style inline SVG mapping table for the 32 curated symbols, fallback
-  `book`), drag-to-reorder (`sortIndex`), rename, recolor; Tags section from derived tags.
+  shown as `NotebookGlyph` (`design/components/NotebookGlyph.md`; SF Symbol → open-licensed inline SVG mapping
+  table for the 32 curated symbols, fallback `book`), drag-to-reorder (`sortIndex`), rename, recolor; Tags
+  section from derived tags.
 - **Note list**: cards with title, preview, date, pin, conflict badge; sort by `updatedAt` desc with pinned first;
-  empty states copied from HANDOFF.
+  empty states copied from HANDOFF, laid out as `design/components/EmptyState.md`.
 - **Search**: fold rules of §2.8, in the worker.
 - **Conflicts**: badge "Conflict" + source device on copies; "Mark Resolved" clears fields with a new revision;
   Conflicts library filter.
@@ -771,9 +1178,14 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
   (`SyncController.swift:509-515`) and click → details popover (last sync, error, "Sync now").
 - **Dark mode**: `prefers-color-scheme` plus manual override; stored light text colors are adapted at render
   time by the same luminance inversion native uses (`usesAdaptiveColorMappingForDarkAppearance`,
-  `InkwellTextView.swift:54`) approximated by an OKLCH lightness flip, tested with snapshots.
-- **Typography**: system font stack (`-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui`), body
-  size setting default 15 (HANDOFF; native code default is 14 — open question).
+  `NoteItTextView.swift:54`) approximated by an OKLCH lightness flip, tested with snapshots.
+- **Look and copy**: the NoteIt design system (§4.1). Colors, type, spacing, radii, shadows and motion come
+  from `design/tokens.css` and its light/dark themes; components follow `design/components/`; labels and
+  messages follow `design/BRAND.md` (Title Case, "NoteIt"). Where HANDOFF and the design system differ on
+  appearance, the design system wins; HANDOFF still defines behaviour.
+- **Typography**: the type tokens in `design/tokens.css`. The editor body size setting defaults to **15**,
+  adjustable from 11 to 24, and every editor style scales from it (`design/tokens.md`, Editor `body`;
+  native `PrefDefault.editorFontSize = 15`, `Settings/Preferences.swift:13`).
 
 ## 11. Security
 
@@ -782,8 +1194,13 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
 | Actor | Can | Cannot |
 |---|---|---|
 | Storage (bucket/disk, backups) — **untrusted** | see sizes, counts, timing, UUIDs, device IDs in key names, the plaintext manifest; delete or roll back objects | read or undetectably modify content (AES-GCM + key-bound AAD) |
-| Inkwell server, honest operator — **semi-trusted** | all of the above; see login identity, IPs and access patterns | read content |
-| Inkwell server, **compromised** (or a malicious operator) | everything above, plus serve modified HTML/JS/service worker, and capture the passphrase and every note the next time a user unlocks in the browser | read content of users who only use the native app, or who don't unlock in the browser while it is compromised |
+| NoteIt server, honest operator — **semi-trusted** | all of the above for every user; see login identities, IPs and access patterns; read `/data/accounts.json` (password hashes, `/s3` secrets), so reach any user's ciphertext | read content |
+| Another user on the same instance | use their own store and `/s3` keys | list, read, write or delete another user's objects through REST or `/s3`; see the user list (admins only); decrypt anything |
+| Instance admin (app role) | create, disable and delete users (deleting destroys that user's data); set quotas; reset a login password and so sign in as that user and fetch their ciphertext | decrypt it: the sync passphrase is separate from login (§7) and never reaches the server |
+| Identity provider admin (OIDC) | sign in as any OIDC-linked user, like an instance admin; with an admin group claim, become an instance admin | decrypt content |
+| NoteIt server, **compromised** (or a malicious operator) | everything above, plus serve modified HTML/JS/service worker, and capture the passphrase and every note the next time a user unlocks in the browser | read content of users who only use the native app, or who don't unlock in the browser while it is compromised |
+| Static host of a direct-mode client (§6.4) — trusted like the server above | serve modified code that captures the passphrase and the S3 key the next time a user unlocks | read anything for users who don't unlock in the browser while it is compromised |
+| Holder of a direct-mode S3 key (script on the app origin, an unlocked device with "Remember" on) | list, delete or roll back objects in the buckets that key reaches, like the storage actor | read content without the passphrase; reach other buckets if the key is bucket-scoped (recommended, §6.4) |
 | Network attacker | nothing with valid HTTPS | — |
 | Malicious note content (from a peer device or a tampered-but-validly-encrypted store) | — | run script: rendering goes through the schema, plus CSP (§11.2) |
 
@@ -802,7 +1219,7 @@ unlock in the browser.
 What v1 does provide (plan task 4.6), as **detection** only:
 1. **Signed release manifest.** CI builds the client reproducibly. It publishes `web-client-<version>.json`,
    listing the SHA-256 of every file in `.output/public`, as a GitHub release asset signed with the
-   project's minisign key. The public key is committed in the repo (`scripts/inkwell-release.pub`) and
+   project's minisign key. The public key is committed in the repo (`scripts/noteit-release.pub`) and
    printed in each release's notes.
 2. **Out-of-band verifier.** `node scripts/verify-web-client.mjs https://notes.example.com --expect <version>`
    (or `--latest`) runs from any machine.
@@ -824,43 +1241,59 @@ What v1 does provide (plan task 4.6), as **detection** only:
    The verifier can only detect *untargeted* tampering. A server that fingerprints clients could serve
    honest files to the verifier and malicious ones to the victim. The docs say so.
 
-A separately hosted, version-pinned static client is the real fix. It would be loaded from a different
-origin than the storage server, with the server acting only as a ciphertext store, which is the §6.4
-direct/proxy mode. It is recorded as future work and as an open question (§15), not as a v1 guarantee.
+A version-pinned static client on an origin the user trusts is the real fix. Direct mode (§6.4) makes this
+possible in v1 for bucket users: anyone can verify the signed `noteit-web-static-<version>.tar.gz` and host it
+on an origin they control. The same files are covered by the signed release manifest and the verifier. An
+official, project-hosted pinned client, and a pinned client that talks to a NoteIt server on another origin,
+remain open (§15) and are not v1 guarantees.
 
 ### 11.2 Controls
 
-- CSP via `nuxt-security`: `default-src 'none'; script-src 'self' 'strict-dynamic' 'nonce-…'; style-src 'self'
+- CSP via `nuxt-security` (server mode, sent as a header): `default-src 'none'; script-src 'self' 'strict-dynamic' 'nonce-…'; style-src 'self'
   'unsafe-inline'` (ProseMirror writes `style` attributes for alignment/colors; inline *scripts* remain
   forbidden); `img-src 'self' blob: data:; connect-src 'self'; worker-src 'self' blob:; manifest-src 'self';
   font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'; object-src 'none'`. Plus HSTS,
   `X-Content-Type-Options`, `Referrer-Policy: no-referrer`, COOP/CORP. Trusted Types is a stretch goal.
+- **Direct mode.** A static host can't add per-request nonces, so the generated HTML carries a `<meta>` CSP
+  with **hash-based** `script-src` and `connect-src 'self' https: http://localhost:* http://127.0.0.1:*`
+  (the bucket endpoint is user-chosen); the rest matches the server policy. `frame-ancestors` can't be set
+  from `<meta>`: `NOTEIT_MODE=static` sends the full policy as a header, and the deployment docs give the
+  header for Caddy and nginx. In server mode the header policy also applies, and browsers enforce both, so
+  `connect-src` stays `'self'`.
 - No third-party scripts, fonts, analytics or CDNs; all assets self-hosted.
 - Note content never goes through `innerHTML`: documents are parsed with `Node.fromJSON`, `doc.check()`; invalid
   docs fall back to read-only plain text. Link `href` allowlist `http:`, `https:`, `mailto:`, `tel:`; colors must
   match `^#[0-9A-Fa-f]{6}$`; images render only from `blob:` URLs created from attachment bytes with an
   allowlisted image MIME; SVG is never rendered inline (download chip).
 - Paste: HTML clipboard data goes through DOMPurify (strict profile) *before* ProseMirror's DOM parser.
-- Server: CSRF via `SameSite=Strict` + `X-Inkwell` header + `Origin` check; key regex; size limits; rate limits;
-  no directory traversal (keys never become paths without validation).
+- Server: CSRF via `SameSite=Strict` + `X-NoteIt` header + `Origin` check against `NOTEIT_PUBLIC_URL`;
+  OIDC `state`, `nonce` and PKCE; key regex; size limits; rate limits on login, setup and invite
+  redemption; no directory traversal (keys never become paths without validation, and only through
+  `namespacedKey`, §6.2).
 - Playwright asserts no request body/URL/header contains the passphrase or raw key bytes, and that CSP reports
   zero violations.
 
 ## 12. Testing
 
-1. **Golden vectors** (`fixtures/golden/*.json`), written by Swift tests when `INKWELL_WRITE_VECTORS=1`, verified
+1. **Golden vectors** (`fixtures/golden/*.json`), written by Swift tests when `NOTEIT_WRITE_VECTORS=1`, verified
    otherwise: `pbkdf2.json` (incl. 210 000 iterations), `aesgcm.json` (fixed nonces via CryptoKit directly),
    `manifest.json` (key check), `envelopes.json` (envelope/tombstone/device/inner metas, ISO + Double2001),
    `planner.json` (exhaustive cartesian product of planner inputs → action), `store-snapshot.json` (a small sealed
    store + passphrase), `engine-scenarios.json` (scripted multi-device traces), `derive.json` (title/preview/tags/
-   search fold), `doc-convert.json` (inkwell-doc fixtures + expected derived text).
+   search fold), `doc-convert.json` (noteit-doc fixtures + expected derived text).
 2. **Reverse vectors** `fixtures/golden/from-web/*.json` written by Vitest, decoded by a Swift test (catches date/UUID
    case/base64 drift).
 3. **Swift**:
-   - `InkwellSyncTests` (existing 149).
+   - `NoteItSyncTests` (existing 149).
    - New format-v2 tests:
      - session refresh when the manifest ETag changes;
-     - `upgradeToV2` 412 handling;
+     - **automatic upgrade on connect**: a v2 client's first clean pass on a v1 store upgrades it with no
+       user action, swaps the session before the sweep, and the first note it then exports is noteit-doc;
+     - a pass with errors leaves the store at v1, and the next clean pass upgrades it;
+     - a plaintext v1 store upgrades without gaining `encryption`;
+     - two v2 clients upgrading at once: one PUT wins, the other gets 412 and adopts the v2 manifest;
+       412 with different encryption gives `encryptionMismatch`; 412 on a still-v1 manifest retries later;
+     - new stores are created at v2; a v1-only build refuses a v2 store with `unsupportedFormat`;
      - conversion as a revision-preserving meta+body rewrite, which peers see as `.pull` and never as a
        conflict;
      - a conversion 412 leaves the record in `legacyBodies` and it converts on a later pass;
@@ -869,21 +1302,56 @@ direct/proxy mode. It is recorded as future work and as an open question (§15),
        after that converts it. No revision is lost and no conflict copy is created. The reverse order is
        also tested: an old client editing *after* conversion gets 412 and then a non-fatal per-record
        `importConflictCopy` error. Its local edit survives.
-   - `InkwellDocTests` fidelity suite, including the §3.3 code-block command table, a link and an image.
+   - `NoteItDocTests` fidelity suite, including the §3.3 code-block command table, a link and an image.
 4. **TS unit** (Vitest): core against all vectors; engine scenarios ported from the 53 `SyncEngineTests` using an
    `InMemoryBackend`; fast-check property tests for derivations and doc validation; server routes with
-   `@nuxt/test-utils`.
+   `@nuxt/test-utils`. Also:
+   - `connect` on a v1 store returns the "Open NoteIt on your Mac…" state and never writes;
+   - `S3Backend` with a mocked `fetch`: the canary (supported, ignored `If-None-Match`, ignored `If-Match`,
+     `501`/`NotImplemented`), the HEAD-verify fallback, `cache: "no-store"` on every request, the
+     missing-`ETag` HEAD fallback and `invalidResponse("ETag not exposed")`, and CORS `TypeError` → `network`;
+   - the credential vault: round trip, wrong passphrase, nothing in `localStorage`/`sessionStorage`;
+   - **isolation**: user A can't read, write, delete or list user B's keys through REST or `/s3`,
+     including `..`, percent-encoded, mixed-case and other-bucket attempts; fast-check over random keys
+     asserts every driver path stays under the caller's namespace;
+   - a disabled user's sessions get 401 and `/s3` keys get `AccessDenied`; a deleted user's keys get
+     `InvalidAccessKeyId`; revoked and rotated keys stop working; password change and "Sign Out
+     Everywhere" end other sessions;
+   - invites: single use (two concurrent redemptions, one wins), expiry, revoke, one error for every
+     invalid token;
+   - quota: REST 507 and `/s3` `QuotaExceeded` at the limit, DELETE always allowed, exempt control objects,
+     concurrent uploads can't overshoot;
+   - last admin: disabling, demoting or deleting the last active admin (including yourself) returns 409,
+     and an OIDC admin-group demotion of the last admin is skipped;
+   - OIDC against a mock provider: PKCE S256, `state`/`nonce` mismatch rejected, mapping by `(iss, sub)`
+     even when the email changes, auto-provisioning only for allowed groups, admin from the group claim,
+     startup error for auto-provisioning without allowed groups;
+   - setup: token required and single-use (also via OIDC), pre-seeded admin, `needsSetup` gating.
 5. **Playwright E2E**: first-run setup (rejected without the bootstrap token; the token can't be reused), login, create store, unlock/lock, CRUD notes/notebooks, formatting
    round-trip, offline edit → reconnect, two browser contexts producing a conflict copy, shortcuts, CSP, no
-   passphrase on the wire.
+   passphrase on the wire. Also:
+   - `multiuser.spec.ts`: an admin invites a second user, who redeems the link, creates a store with a
+     different passphrase and syncs; neither sees the other's notes; the admin disables the user, whose open
+     tab drops to the login screen; the admin can't delete themselves as last admin; a quota-limited user
+     sees "Storage full";
+   - `oidc.spec.ts` against a mock provider: sign in, link from Settings, invite through OIDC;
+   - the v1-store notice: a store written by a v1 engine shows "Open NoteIt on your Mac once to finish
+     setting up web access", and the app continues by itself after the store is upgraded;
+   - **`direct-s3.spec.ts`** (`scripts/direct_s3_e2e.sh`, opt-in, Floci on :4566): the static build with
+     `{"mode": "direct"}` connects to a Floci bucket with CORS configured, passes the wizard's CORS check,
+     creates a store, syncs between two browser contexts and survives a reload (vault unlock). Negative
+     cases: missing `ETag` exposure, wrong origin, and a bucket without CORS each show the matching hint.
+     The script first checks that Floci enforces bucket CORS; if it doesn't, the negative cases run against
+     MinIO with `MINIO_API_CORS_ALLOW_ORIGIN` instead.
 6. **Interop** (`scripts/interop_tests.sh`, opt-in, mirrors `scripts/live_s3_tests.sh` with Floci on :4566):
-   config A — server `disk` store, native `SyncEngine` via `/s3`, web via `/api/storage`; config B — server upstream
-   Floci S3, native direct to Floci, web via the proxy. Two native drivers run in both configs:
-   - **Engine level:** opt-in `LiveInteropTests`, using `SyncEngine`, `FakeLocalStore` and InkwellDoc
+   config A — server `disk` store, two users, each with their own native client via `/s3` (own key) and web via
+   `/api/storage`; config B — server upstream Floci S3, native direct to Floci, web via the proxy; config C —
+   direct mode: native and the static web client both direct to a CORS-enabled Floci bucket. Two native drivers run in both configs:
+   - **Engine level:** opt-in `LiveInteropTests`, using `SyncEngine`, `FakeLocalStore` and NoteItDoc
      bodies. It is fast and covers protocol edge cases.
    - **Real app (release gate):** the app binary in the existing debug self-test mode, extended as
-     `INKWELL_SYNC_SELFTEST=interop`, with `INKWELL_DATA_DIR=<repo>/.selftest/interop-<config>` and
-     `INKWELL_SYNC_CONFIG` pointing at the store.
+     `NOTEIT_SYNC_SELFTEST=interop`, with `NOTEIT_DATA_DIR=<repo>/.selftest/interop-<config>` and
+     `NOTEIT_SYNC_CONFIG` pointing at the store.
      - It drives a real `NoteStore` through `NoteStoreSyncAdapter` and `SyncController`'s session code.
      - It authors notes through the real editor formatting path (`TextFormatter` applying every
        `FormatCommand` through `perform(_:)`, a table, every list kind, the full §3.3 code-block command
@@ -899,7 +1367,9 @@ direct/proxy mode. It is recorded as future work and as an open question (§15),
    - concurrent edit → one conflict copy on each side;
    - delete → tombstone;
    - a legacy RTFD note is read-only on the web until a native v2 pass converts it;
-   - v1→v2 upgrade, including peers pulling converted notes without conflicts.
+   - automatic v1→v2 upgrade: the web shows the notice on a v1 store, the native app upgrades on connect
+     with no user action, the web then reads every note, and peers pull converted notes without conflicts;
+   - config A only: user B's native client, with B's key, never sees user A's objects.
 
 ## 13. Risks
 
@@ -912,33 +1382,50 @@ direct/proxy mode. It is recorded as future work and as an open question (§15),
 | Browser storage eviction | `navigator.storage.persist()`; remote is source of truth |
 | Safari ITP clears IDB after 7 days without interaction | documented; installed PWA exempt; re-sync is lossless |
 | Compromised server serves malicious JS | cannot be prevented in-browser; honest threat model, signed release manifest + out-of-band verifier (detection only), native app as anchor, pinned static client as future work |
-| S3-subset incompatibilities with other clients | only Inkwell + rclone are supported; conformance tests reuse Swift `S3Backend` |
+| S3-subset incompatibilities with other clients | only NoteIt + rclone are supported; conformance tests reuse Swift `S3Backend` |
 | Shortcut collisions per browser/OS | Playwright matrix (Chromium/WebKit/Firefox) |
+| A namespace bug leaks one user's ciphertext to another | one `namespacedKey` choke point fed only by the session or `/s3` key; key validation first; property tests and cross-user E2E (§12); content stays encrypted per user |
+| Admin or IdP misconfiguration grants access | auto-provisioning requires allowed groups; last-admin guard; invites single-use and expiring; forward-auth dropped (§7.3) |
+| Direct mode: CORS misconfigured or `ETag` not exposed | connect wizard CORS check with specific hints; provider examples (§6.4) |
+| Direct mode: S3 key stolen from the browser | sealed vault, never plaintext storage; bucket-scoped keys recommended; data stays encrypted |
+| Upstream-S3 usage drifts if something else writes the prefix | server documented as the only writer; usage recomputed at startup |
 
 ## 14. Assumptions
 
-- A1: Native users will accept an explicit one-time upgrade to format v2 to enable web access.
+- A1: Upgrading a store automatically when an up-to-date NoteIt for Mac connects is acceptable. Pre-release
+  builds without v2 support stop syncing with that store until updated (§3.4); this is fine because NoteIt
+  has not been released.
 - A2: Homelab users terminate TLS at a reverse proxy (WebCrypto needs a secure context).
-- A3: Single user per instance covers the target audience for v1.
+- A3: An instance serves a family or small group (up to about 20 users), so a JSON account file and in-memory
+  usage counters are enough.
 - A4: Notes rarely exceed tens of MB including images (inline attachments).
-- A5: The curated SF Symbol list (32) can be mapped to open-licensed SVG icons compatible with AGPL.
+- A5: The curated SF Symbol list (32) can be mapped to open-licensed SVG icons compatible with AGPL; web
+  chrome uses the NoteIt icon set (`design/assets/icons`).
+- A6: Direct-mode users can set CORS rules on their bucket, or on their MinIO server.
 
 ## 15. Open questions for the owner
 
-1. Canonical public repo URL for `INKWELL_SOURCE_URL` and the image registry name.
-2. Multi-user per instance (families) — v1 non-goal OK?
-3. Upgrade to format v2: explicit button (proposed) or automatic once all known devices run v2?
-4. Normalize passphrases to NFC? Requires a KDF version field in the manifest; affects existing stores.
-5. Minimum native version that understands v2 — and should v2 native auto-reconnect when it sees `unsupportedFormat`?
-6. Should a direct browser→S3 (CORS) mode ship in v1 for users without a server?
-7. Attachment size cap per note (proposed 25 MB) and whether to build content-addressed attachments in v1.
-8. HEIC→JPEG and TIFF→PNG conversion on export — acceptable quality/size trade-off?
-9. Should the web create sample notes for brand-new stores?
-10. OIDC in v1 or post-v1 (password + forward-auth may suffice)?
-11. Priority of Safari/iOS PWA support.
-12. Web trash UI (restore deleted notes from the local trash) in v1?
-13. Default body font size: 15 (HANDOFF) or 14 (code)?
-14. Should the project host a version-pinned static web client on a separate origin, for users who don't
-    fully trust their server host (§11.1)? Who holds the release-signing (minisign) key?
-15. Is a one-time full re-download of every note by every peer acceptable during the v2 conversion
-    (§3.4.7)? For large libraries with images, this can be hundreds of MB.
+1. Attachment size cap per note (proposed 25 MB), and whether to build content-addressed attachments in v1.
+2. HEIC→JPEG and TIFF→PNG conversion on export — acceptable quality/size trade-off?
+3. Should the web create sample notes for brand-new stores?
+4. Priority of Safari/iOS PWA support.
+5. Web trash UI (restore deleted notes from the local trash) in v1?
+6. Should the project host an official version-pinned static web client on a separate origin, and should a
+   pinned client be able to use a NoteIt server on another origin (§11.1)? Who holds the release-signing
+   (minisign) key?
+7. Normalize passphrases to NFC? Requires a KDF version field in the manifest; affects existing stores.
+
+Resolved since the previous revision: repository and image names (§8), multi-user (§7), the format upgrade
+(automatic, §3.4), direct mode (§6.4), OIDC (§7.2), the default body size (15, §10), the minimum native
+version (any v2 build; pre-release builds without v2 get `unsupportedFormat`), and the one-time re-download
+during conversion (accepted, explained to users in §3.4 item 6).
+
+## 16. Future work
+
+- **Shared notebooks between users.** Each store is encrypted with its owner's key, so sharing needs key
+  sharing: a per-notebook key wrapped for each member (which needs per-user public keys), a store layout for
+  shared notebooks, and a new conflict and revocation story. Out of scope for v1.
+- OIDC RP-initiated logout and back-channel logout.
+- An official pinned static client (§15 question 6).
+- Content-addressed attachments (§15 question 1).
+- A PWA share target.
