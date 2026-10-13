@@ -282,7 +282,7 @@ Nodes (block):
 | `doc` | — | `block+` | whole attributed string |
 | `paragraph` | `align?: "left"\|"center"\|"right"\|"justify"`, `indent?: 0-8` | inline* | body paragraph (sentinel 29) |
 | `heading` | `level: 1\|2\|3`, `align?`, `indent?` | inline* | 1 = Title (37), 2 = Heading (39), 3 = Subheading (41) |
-| `codeBlock` | `align?`, `indent?` | inline* (all marks, `hardBreak`, `image`, `attachment`) | **one** code paragraph (31), monospaced base font; consecutive `codeBlock` nodes render as one visual block |
+| `codeBlock` | `align?` | inline* (all marks, `hardBreak`, `image`, `attachment`) | **one** code paragraph (31), monospaced base font; consecutive `codeBlock` nodes render as one visual block |
 | `blockquote` | `indent?` | `paragraph+` | quote (33) |
 | `horizontalRule` | — | — | divider (35, NBSP text) |
 | `listItem` | `kind: "bullet"\|"ordered"\|"task"`, `level: 0-8`, `number?: int` (ordered), `checked?: bool` (task), `align?` | inline* | paragraph with marker `•/◦/▪\t`, `N.\t`, `☐/☑\t`; level = (firstLineHeadIndent − 4)/24 |
@@ -333,15 +333,22 @@ Decisions:
   | `highlight(c)`, `highlight(nil)`, `toggleHighlight` | `.backgroundColor` set or removed | `highlight` mark |
   | `fontBigger`, `fontSmaller` | size ±1 clamped to 8–96 (`:169-182`) | `fontSize{delta}` relative to the code base size |
   | `align(.left/.center/.right/.justified)` | paragraph alignment (`:472-486`) | `codeBlock.align` `left/center/right/justify` |
-  | `indent`, `outdent` | **no-op**: code paragraphs get an identity edit (`:423-433`) | unchanged. `codeBlock.indent` exists only because `block(.code)` keeps the level of an indented paragraph it converts (`:290-294`, `EditorStyles.swift:282-285`). |
+  | `indent`, `outdent` | **no-op**: code paragraphs get an identity edit (`:423-433`) | unchanged. Code paragraphs have no indent levels at all: `paragraphStyle(for: .code)` skips the level (`EditorStyles.swift:194`), so `block(.code)` on an indented paragraph drops its level. `codeBlock` therefore has no `indent` attr. |
   | `list(_)`, `toggleCheckbox` | **no-op**: code paragraphs are filtered out (`:305-309`), and there is no checkbox marker | unchanged |
-  | `block(.code)` again | toggles the paragraphs back to body (`:273`); the font goes to body and keeps italic only (`:234-240`) | `paragraph`, keeps marks except bold-from-font |
-  | `block(.title/.heading/.subheading/.body/.quote)` | converts the paragraph out of code | that block |
+  | `block(.code)` again | toggles the paragraphs back to body (`:273`). `convertFonts` resets the font to body and re-applies italic only (`:234-240`). Other character attributes and the alignment are kept (`EditorStyles.swift:198-199`). | `paragraph{align}`, keeping `italic`, `underline`, `strike`, `textColor`, `highlight`, `link`, `image`; **dropping** `bold` and `fontSize` |
+  | `block(.title/.heading/.subheading)` | converts out of code; heading font with italic re-applied (`:228-233`), alignment kept | `heading{level, align}` with the same kept/dropped marks as the row above |
+  | `block(.quote)` | converts out of code; same font rule as body | `blockquote > paragraph`, same kept/dropped marks |
   | `link` | `.link` on the range (`:666-731`) | `link` mark |
   | `image` | inline attachment at the caret (`:754-776`) | inline `image` / `attachment` inside `codeBlock` |
   | `divider`, `block(.divider)`, `table(r,c)` | inserted *after* the paragraph (`blockInsertionPoint`, `:506-530`) | sibling block; the code block is unchanged |
-  | `clearFormatting` | removes colors/lines, sets the body font, resets the paragraph style to body with natural alignment (`:778-806`) | the paragraph **leaves** the code block: a plain `paragraph` without marks |
+  | `clearFormatting` | On the selection (or the whole paragraphs if empty), it removes foreground/background color, underline, strikethrough and other visual attributes, and sets the body font (`:784-790`). It does **not** remove `.link` or `.attachment`. Every touched paragraph is then rewritten with a body paragraph style, natural alignment and no list marker (`:792-798`), and `makeEdit` keeps the remaining character attributes (`:196-214`). | The paragraph **leaves** the code block and becomes `paragraph` with no `align`. Cleared text keeps `link` marks and inline `image`/`attachment` nodes, and loses every other mark. With a partial selection, unselected characters keep their marks *and the monospaced code font*, so they export as the `code` mark in the new paragraph. Native behavior is matched, not changed. |
   | `addRowAbove`, `addRowBelow`, `deleteRow` | table-only; no effect outside a table | unchanged |
+
+  Entering a code block works differently. `block(.code)` on other text sets the code font on the whole
+  paragraph and removes `.backgroundColor` (`:225-227`), so bold, italic, `fontSize` and `highlight` are
+  dropped, while underline, strikethrough, color, link and images are kept. Formatting applied
+  *after* entering is preserved as in the table. The web editor's "Code Block" command performs the same
+  normalization.
 - Absent attrs mean defaults (`align` natural/left, `indent` 0).
 
 ### 3.4 Versioning and migration
@@ -441,7 +448,7 @@ Decisions:
    **Wire rule (both implementations):** the envelope's `bodyFormat` key is either `"inkwell-doc/1"` or
    **omitted**. It is never `null`, `""` or any legacy marker such as `"rtfd"`. Local stores keep exactly
    the wire value: `undefined`/`nil` means legacy, and there is no internal `'rtfd'` tag that could leak.
-   The envelope builder (`encodeEnvelope` in TS; in Swift, the engine's envelope construction, which only assigns `bodyFormat` from the adapter's `RecordPayload`) rejects any other value
+   The envelope builder (`encodeEnvelope` in TS; in Swift, `BodyFormat.validateForPublish`, called in `SyncEngine.push` before the envelope is built or any backend call is made) rejects any other value
    with an internal error and never publishes it.
 
 ### 3.5 Native converter
@@ -466,7 +473,7 @@ Fidelity tests (`Tests/InkwellDocTests`):
 - Corpus: the app's seed notes, every `FormatCommand` applied to sample text, tables, mixed lists, images,
   and a code-block set that covers **every row of the §3.3 code-block table**, including the no-ops
   (`inlineCode`, `indent`/`outdent`, lists, `toggleCheckbox`, table row commands), justify, `block(.code)`
-  toggling back to body, `clearFormatting` leaving the block, and a link and an inline image inside it.
+  toggling back to body, `clearFormatting` leaving the block (including a cleared link that survives), and a link and an inline image inside it.
   The unit fixtures reproduce the attribute edits (tests can't import the app target). The real
   `TextFormatter.perform(_:)` runs the same list in the §12.6 real-app gate.
 - Derivations: title/preview/tags computed from the NSAS equal those computed from the doc (feeds TS vectors).
@@ -683,7 +690,7 @@ uses its own SigV4 credentials regardless of mode.
 | Native feature (HANDOFF §5.3, `FormatCommand.swift`) | Native representation | inkwell-doc | TipTap |
 |---|---|---|---|
 | Title / Heading / Subheading / Body | sentinel 37/39/41/29 | `heading 1/2/3`, `paragraph` | `Heading` (levels 1-3), `Paragraph` + align/indent attrs |
-| Code block | sentinel 31 per paragraph, mono base font, all marks allowed | `codeBlock{align?,indent?}` with inline content | custom `InkwellCodeBlock` node (`marks: '_'`, `whitespace: 'pre'`, inline images); not the stock `CodeBlock`, which forbids marks |
+| Code block | sentinel 31 per paragraph, mono base font, all marks allowed | `codeBlock{align?}` with inline content | custom `InkwellCodeBlock` node (`marks: '_'`, `whitespace: 'pre'`, inline images); not the stock `CodeBlock`, which forbids marks |
 | Quote | sentinel 33 | `blockquote` | `Blockquote` |
 | Divider | sentinel 35 + NBSP | `horizontalRule` | `HorizontalRule` |
 | Bulleted / numbered / checklist, nesting | text marker + indent | `listItem{kind,level,number,checked}` | custom flat `InkwellListItem` node, Tab/Shift-Tab change `level`, Enter continues, empty Enter exits |
