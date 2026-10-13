@@ -28,7 +28,7 @@ NOTEIT_DATA_DIR=~/scratch/noteit swift run NoteIt
 
 The older `INKWELL_*` names still work as a fallback. To try the Inkwell → NoteIt library migration without touching your real notes, debug builds accept `NOTEIT_APP_SUPPORT_DIR=<folder>` as a stand-in for `~/Library/Application Support`, and `NOTEIT_DEBUG_LEGACY_BUNDLE_ID=<bundle id>` to treat another running app as Inkwell (to exercise the "Quit Inkwell" prompt, both at launch and when that app opens while NoteIt runs). After a move, the legacy folder becomes a relative link to `NoteIt`.
 
-Debug builds also accept launch arguments for screenshots, such as `--debug-open-settings --debug-settings-tab sync` and `--debug-dark`, plus self-test environment variables. They're all listed in the [engineer section of the design handoff](docs/design/HANDOFF.md#11-for-engineers), which is also the best map of the architecture.
+Debug builds also accept launch arguments for screenshots, such as `--debug-open-settings --debug-settings-tab sync` and `--debug-dark`, plus self-test environment variables. They're all listed in [docs/development.md](docs/development.md), and [docs/architecture.md](docs/architecture.md) is the best map of the code.
 
 ## Tests
 
@@ -64,7 +64,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter Liv
 - **Sync, crypto or storage changes need tests.** Add or update cases in `Tests/NoteItSyncTests/`. Planner changes need a row in the decision-table tests. Changes to the on-disk or remote format must stay readable by existing libraries, or bump the format version deliberately and explain why. The `inkwell` in remote names (`inkwell/v1/`, `inkwell/.canary/`, `.inkwell-lock`, the key-check plaintext) is the protocol name from before the rename to NoteIt; don't change it.
 - **UI changes need screenshots.** Include light and dark mode where relevant, and before and after shots if it's a change.
 - **Check the build and tests:** `swift build` and `swift test` must pass.
-- **Update the docs** when you change behavior. That means the README, the design handoff, or the sync spec.
+- **Update the docs** when you change behavior. That means the README, the pages in [`docs/`](docs/) (such as the [keyboard shortcuts](docs/keyboard-shortcuts.md) and [known limitations](docs/known-limitations.md)), or the sync spec.
 - **Don't include secrets.** Never commit or paste real access keys, secrets or passphrases, including in test fixtures, logs or screenshots.
 
 ## Sign-off (DCO)

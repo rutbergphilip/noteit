@@ -1,15 +1,14 @@
-# NoteIt design system (handoff)
+# NoteIt design system
 
-This folder is the design source of truth for the NoteIt macOS app (formerly developed as "Inkwell"). It was exported from the NoteIt design system and is meant to be read by people and coding agents.
+This folder holds NoteIt's design system: the brand guidelines, design tokens, component specs and icon assets. The macOS app follows it, and the planned web app and website will too.
 
-> **Owner decision:** the app icon and menu bar glyph use the squiggle + pencil mark; the Swift Page artwork is kept as an alternative. The shipped icon (white squiggle + pencil on the violet → indigo gradient) is rendered by `scripts/make_icon.swift` into `Resources/AppIcon.iconset`; an earlier paper-sheet + yellow pencil artwork is kept as an alternative in `assets/app-icon/alt-paper/`; the menu bar glyph by `scripts/make_menubar_glyph.swift` (PNGs in `Sources/NoteIt/Resources`, SVGs in `Resources/MenuBarGlyph`). Re-render both with `scripts/render_icon.sh`.
+The app icon and menu bar glyph use the squiggle + pencil mark. The icon (a white squiggle and pencil on a violet → indigo gradient) is drawn by `scripts/make_icon.swift` and pre-rendered into `Resources/AppIcon.iconset`. The menu bar glyph is drawn by `scripts/make_menubar_glyph.swift`, with PNGs in `Sources/NoteIt/Resources` and SVGs in `Resources/MenuBarGlyph`. Re-render both with `scripts/render_icon.sh`. The Swift Page artwork in `assets/logo/`, `assets/app-icon/` and `assets/menu-bar/` is kept as an alternative, as is an earlier paper sheet + yellow pencil icon in `assets/app-icon/alt-paper/`.
 
-## Read in this order
+## Where to start
 
-1. `IMPLEMENTATION.md` — the work to do, in order, with acceptance criteria. Start here if you are implementing.
-2. `BRAND.md` — the brand book: naming, voice and copy, colour, type, spacing, shape, motion, iconography, logo rules, accessibility.
-3. `tokens.md` — every token with its light and dark value **and the Swift API to use for it**. `tokens.json` is the machine-readable source.
-4. `components/*.md` — one spec per UI element. Each links a reference rendering in `components/previews/` (open in a browser).
+1. `BRAND.md`: naming, voice and copy, colour, type, spacing, shape, motion, iconography, logo rules and accessibility.
+2. `tokens.md`: every token with its light and dark value **and the Swift API to use for it**. `tokens.json` is the machine-readable source.
+3. `components/*.md`: one spec per UI element. Each links a reference rendering in `components/previews/` (open it in a browser).
 
 ## Folder map
 
@@ -19,7 +18,6 @@ This folder is the design source of truth for the NoteIt macOS app (formerly dev
 | `tokens.css` | Generated CSS custom properties, used by the previews and the future website |
 | `tokens.md` | Readable token table with Swift mapping |
 | `BRAND.md` | Brand book |
-| `IMPLEMENTATION.md` | Task plan for the app |
 | `components/` | Component specs and HTML reference renderings |
 | `assets/logo/` | Swift Page mark: `noteit-mark.svg` (brand-deep), `-white`, `-small` (≤ 32 px), plus 512 px PNGs |
 | `assets/app-icon/` | Icon SVG masters (light, dark, tinted, small) and a ready `AppIcon.iconset/` for `iconutil` |

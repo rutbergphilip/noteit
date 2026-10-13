@@ -169,7 +169,7 @@ Sealed at the meta key (`notes/<UUID>.meta` or `notebooks/<UUID>.json`).
 
 `Notebook` (`Models.swift:4-12`): `colorHex: "#RRGGBB"`, `id`, `modifiedAt?: ISO`, `name`,
 `revision?: UUID`, `sortIndex: Int`, `symbol: string` (an SF Symbol name from the curated picker; the palette
-has 10 colors — see HANDOFF §6).
+has 10 colors — see `design/tokens.md`).
 
 ### 2.7 Bodies today
 
@@ -1128,9 +1128,9 @@ Browser (desktop)                               Nuxt/Nitro server (Docker, NOTEI
   `ServerBackend` (`/api/storage`, server mode) or an `S3Backend` (direct mode). Everything above the
   `StorageBackend` interface is identical in both modes.
 - **Design system.** The web UI follows the NoteIt design system, kept in the repository as `design/`
-  (copied unchanged from the design handoff: `README.md`, `BRAND.md`, `tokens.md`, `tokens.css`,
+  (kept unchanged: `README.md`, `BRAND.md`, `tokens.md`, `tokens.css`,
   `components/`, `assets/icons/`).
-  - `design/tokens.css` is the handoff's CSS export, which it designates for the website. The web app
+  - `design/tokens.css` is the design system's CSS export, which it designates for the website. The web app
     imports it **unchanged** as the only source of color, type, spacing, radius, shadow and motion values,
     including its light/dark theme switch. Web components reference token names only. This spec and the
     plan never restate token values.
@@ -1142,7 +1142,8 @@ Browser (desktop)                               Nuxt/Nitro server (Docker, NOTEI
     visual specs, not code to port.
   - Chrome icons use the NoteIt icon set (`design/assets/icons`, `components/IconSet.md`), which exists
     for places where SF Symbols can't be used, such as the web.
-  - No UI component framework. `docs/design/HANDOFF.md` remains the reference for native *behaviour* the
+  - No UI component framework. The native app's source, [`docs/architecture.md`](../architecture.md) and
+    [`docs/keyboard-shortcuts.md`](../keyboard-shortcuts.md) remain the reference for native *behaviour* the
     web mirrors (§10).
 
 ### 4.2 Browser as the sync client
@@ -2092,7 +2093,7 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 
 ## 9. Editor (TipTap) — native feature mapping
 
-| Native feature (HANDOFF §5.3, `FormatCommand.swift`) | Native representation | noteit-doc | TipTap |
+| Native feature (`docs/keyboard-shortcuts.md`, `FormatCommand.swift`) | Native representation | noteit-doc | TipTap |
 |---|---|---|---|
 | Title / Heading / Subheading / Body | sentinel 37/39/41/29 | `heading 1/2/3`, `paragraph` | `Heading` (levels 1-3), `Paragraph` + align/indent attrs |
 | Code block | sentinel 31 per paragraph, mono base font, all marks allowed | `codeBlock{align?}` with inline content | custom `NoteItCodeBlock` node (`marks: '_'`, `whitespace: 'pre'`, inline images); not the stock `CodeBlock`, which forbids marks |
@@ -2144,10 +2145,10 @@ Native bindings verified in `Sources/NoteIt/Editor/FormatCommand.swift:125-152` 
 A Playwright test (plan task 3.8) asserts every web binding fires in Chromium, WebKit and Firefox and that no
 binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+Shift+[ ], Mod+L, Mod+±).
 
-## 10. UX parity (HANDOFF §5-6, NoteIt design system)
+## 10. UX parity (native app, NoteIt design system)
 
 - **Three panes**: sidebar and note list sized by the layout tokens `sidebar-w` and `note-list-w` (ideal width
-  and min–max range as documented in `design/tokens.md`), editor content max-width 760 (HANDOFF), resizable
+  and min–max range as documented in `design/tokens.md`), editor content max-width 760 (`reading-max`), resizable
   splitters persisted; below 900 px collapses to two panes, below 600 px one pane with back
   navigation (narrow desktop windows; phones are not supported in v1, §4.4).
 - **Sidebar**: Library rows All Notes / Pinned / Recent (7 days) / Conflicts (only when any exist); Notebooks
@@ -2155,7 +2156,8 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
   table for the 32 curated symbols, fallback `book`), drag-to-reorder (`sortIndex`), rename, recolor; Tags
   section from derived tags.
 - **Note list**: cards with title, preview, date, pin, conflict badge; sort by `updatedAt` desc with pinned first;
-  empty states copied from HANDOFF, laid out as `design/components/EmptyState.md`.
+  empty states copied from the native app (`Views/NoteListView.swift`, `Views/EditorContainerView.swift`), laid out as
+  `design/components/EmptyState.md`.
 - **Brand-new store**: opens to the designed empty state, with no sample notes or notebooks (§4.2).
 - **Deleting** works as in the native app (`Views/NoteListView.swift`, `Views/SidebarView.swift`):
   - Delete… in a note's context menu, or the Delete key with a note selected, asks first: "Delete
@@ -2170,7 +2172,7 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
 - **Search**: fold rules of §2.8, in the worker.
 - **Conflicts**: badge "Conflict" + source device on copies; "Mark Resolved" clears fields with a new revision;
   Conflicts library filter.
-- **Sync pill** (HANDOFF §5.10; labels from `Views/SyncStatusView.swift:19-28`): Synced / Syncing / Offline /
+- **Sync pill** ([`docs/architecture.md`](../architecture.md#sync-status); labels from `Views/SyncStatusView.swift:19-28`): Synced / Syncing / Offline /
   Sync Issue / Locked / Sync Off, with the same 700 ms delay before showing "Syncing" for background passes
   (`SyncController.swift:509-515`) and click → details popover (last sync, error, "Sync now").
 - **Dark mode**: `prefers-color-scheme` plus manual override; stored light text colors are adapted at render
@@ -2178,8 +2180,8 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
   `NoteItTextView.swift:54`) approximated by an OKLCH lightness flip, tested with snapshots.
 - **Look and copy**: the NoteIt design system (§4.1). Colors, type, spacing, radii, shadows and motion come
   from `design/tokens.css` and its light/dark themes; components follow `design/components/`; labels and
-  messages follow `design/BRAND.md` (Title Case, "NoteIt"). Where HANDOFF and the design system differ on
-  appearance, the design system wins; HANDOFF still defines behaviour.
+  messages follow `design/BRAND.md` (Title Case, "NoteIt"). Where the native app and the design system differ on
+  appearance, the design system wins; the native app still defines behaviour.
 - **Typography**: the type tokens in `design/tokens.css`. The editor body size setting defaults to **15**,
   adjustable from 11 to 24, and every editor style scales from it (`design/tokens.md`, Editor `body`;
   native `PrefDefault.editorFontSize = 15`, `Settings/Preferences.swift:13`).

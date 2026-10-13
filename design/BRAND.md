@@ -70,7 +70,7 @@ Motion today is minimal and fast. Keep it "calm but quick" and honour Reduce Mot
 | Menu bar selection | 0.12 s scroll to highlight |
 | Everything else | System default or none |
 
-The design team owns the next motion language: Quick Capture entrance and save, note creation, checkbox fill and strikethrough sweep, pin, drag and drop.
+A fuller motion language is planned for later: Quick Capture entrance and save, note creation, checkbox fill and strikethrough sweep, pin, and drag and drop.
 
 ## Iconography
 

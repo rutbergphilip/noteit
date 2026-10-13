@@ -17,7 +17,7 @@ NoteIt is a SwiftUI and AppKit app with no third-party dependencies. Your notes 
 
 > NoteIt was formerly called Inkwell. Existing notes, settings and sync setup migrate automatically the first time NoteIt launches; if Inkwell is still open, NoteIt asks to quit it first. Afterwards `~/Library/Application Support/Inkwell` is a link to the NoteIt folder, so an old copy of Inkwell opens the same notes, and NoteIt asks you to quit Inkwell if both are open.
 
-> **Status:** working app, single user, macOS 14 Sonoma or later. The visuals are engineering defaults and the app icon is a code-drawn placeholder. There are no signed or notarized release builds yet, so build it from source.
+> **Status:** working app, single user, macOS 14 Sonoma or later. There are no signed or notarized release builds yet, so build it from source. See [Known limitations](docs/known-limitations.md) for what's missing.
 
 ## Features
 
@@ -35,7 +35,7 @@ NoteIt is a SwiftUI and AppKit app with no third-party dependencies. Your notes 
   - Bulleted, numbered and checklist lists, tables, code blocks, quotes, dividers, links and images.
   - Text colors and highlights.
   - Markdown as you type: `#`, `-`, `1.`, `[ ]`, `>`, ```` ``` ````, `---`, `**bold**`, `*italic*`, `` `code` `` and `~~strike~~`.
-  - About 30 keyboard shortcuts. See the [shortcut reference](docs/design/HANDOFF.md#10-keyboard-shortcut-reference).
+  - About 30 keyboard shortcuts. See the [shortcut reference](docs/keyboard-shortcuts.md).
 - **Native and local-first**
   - Light and dark mode, system accent color, and standard menus and Settings.
   - Notes are stored as RTFD in `~/Library/Application Support/NoteIt/`, with autosave and atomic writes.
@@ -60,7 +60,7 @@ Sync is off until you connect it in **Settings › Sync**. Until then NoteIt mak
 - **Conflicts never lose data.** If a note changes on two Macs before they sync, the remote version is kept as a badged conflict copy and listed under a *Conflicts* filter.
 - **It's lightweight.** It runs a single listing per check, once a minute while you use NoteIt and every 10 minutes in the background, on a low-priority thread.
 
-The full sync and encryption design is documented in [`docs/specs/2026-10-12-sync-design.md`](docs/specs/2026-10-12-sync-design.md). Its known limitations are listed in [the handoff's known gaps](docs/design/HANDOFF.md#9-known-gaps--opportunities). Folders synced by tools like Dropbox and S3 providers without conditional writes get best-effort race protection only.
+The full sync and encryption design is documented in [`docs/specs/2026-10-12-sync-design.md`](docs/specs/2026-10-12-sync-design.md). Its limitations are listed in [Known limitations](docs/known-limitations.md#sync). Folders synced by tools like Dropbox and S3 providers without conditional writes get best-effort race protection only.
 
 ## Install / build from source
 
@@ -77,7 +77,7 @@ cd noteit
 open ~/Applications/NoteIt.app
 ```
 
-`build_app.sh` builds in release mode, writes `Info.plist`, renders the placeholder icon, ad-hoc signs the bundle and installs it atomically. You can set `NOTEIT_INSTALL_DIR`, `NOTEIT_VERSION` and `NOTEIT_BUILD` to override the install location and version numbers.
+`build_app.sh` builds in release mode, writes `Info.plist`, builds the app icon, ad-hoc signs the bundle and installs it atomically. You can set `NOTEIT_INSTALL_DIR`, `NOTEIT_VERSION` and `NOTEIT_BUILD` to override the install location and version numbers.
 
 For development:
 
@@ -87,7 +87,7 @@ swift run NoteIt            # run unbundled; launch at login is unavailable this
 NOTEIT_DATA_DIR=~/scratch/noteit swift run NoteIt   # use a scratch library instead of your real notes
 ```
 
-Debug builds accept extra launch arguments and environment variables for screenshots and self-tests. They're listed in the [engineer section of the handoff](docs/design/HANDOFF.md#debug--test-launch-arguments).
+Debug builds accept extra launch arguments and environment variables for screenshots and self-tests. They're listed in [docs/development.md](docs/development.md#debug-launch-arguments), and [docs/architecture.md](docs/architecture.md) explains how the app is put together.
 
 ## Testing
 
@@ -126,7 +126,7 @@ These items aren't built yet. Contributions and design discussion are welcome.
 - **Search:** ranking and highlighting of matches.
 - **Onboarding:** a first-run flow for hotkeys, the menu bar and the second-Mac sync setup.
 - **Polish:**
-  - a real app icon, menu bar glyph and motion language (see the [design brief](docs/design/HANDOFF.md#7-design-brief--deliverables))
+  - a motion language for Quick Capture, checklists, pinning and sync status (see [`design/BRAND.md`](design/BRAND.md#motion))
   - an accessibility audit
   - notarized builds and auto-update
 
@@ -151,8 +151,8 @@ Sources/NoteItSync/           sync engine with no AppKit dependency
 └── Migration/                app identity, env vars, Inkwell → NoteIt migration
 Tests/NoteItSyncTests/        XCTest suite (+ opt-in live S3 tests)
 scripts/                      build_app.sh, live_s3_tests.sh, make_icon.swift, render_icon.sh
-design/                       design system: brand, tokens, components (source of truth)
-docs/design/HANDOFF.md        original product and design handoff (also the deep engineering reference)
+design/                       design system: brand, tokens, components, icon assets
+docs/                         architecture, development, keyboard shortcuts, known limitations
 docs/specs/, docs/plans/      design specs and implementation plans
 ```
 
@@ -174,6 +174,4 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## Design
 
-[`design/`](design/) is the design source of truth: the brand book, tokens, component specs, icons and the implementation plan. Start with [`design/README.md`](design/README.md).
-
-The original product and design handoff, the brief the design team worked from, is kept at [docs/design/HANDOFF.md](docs/design/HANDOFF.md). It covers personas, the product tour, the visual language, the design brief, naming, known gaps, the full keyboard shortcut reference and the engineering internals.
+[`design/`](design/) contains NoteIt's brand guidelines, design tokens, component specs and icon assets. Start with [`design/README.md`](design/README.md).
