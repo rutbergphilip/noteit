@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds NoteIt.app (release), generates its icon, ad-hoc signs it and installs it atomically to
+# Builds NoteIt.app (release), adds its icon, ad-hoc signs it and installs it atomically to
 # ~/Applications (override with NOTEIT_INSTALL_DIR=/some/dir).
 set -euo pipefail
 
@@ -49,13 +49,15 @@ plist_str NSHumanReadableCopyright "© $(date +%Y) NoteIt"
 plutil -replace NSAppTransportSecurity -json '{"NSAllowsLocalNetworking":true}' "$PLIST"
 plutil -lint "$PLIST"
 
-echo "==> Generating AppIcon.icns"
-ICON_WORK="$BUILD_DIR/icon"
-rm -rf "$ICON_WORK"
-mkdir -p "$ICON_WORK"
-swiftc -O "$ROOT/scripts/make_icon.swift" -o "$ICON_WORK/make_icon"
-"$ICON_WORK/make_icon" "$ICON_WORK/AppIcon.iconset"
-iconutil -c icns "$ICON_WORK/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
+echo "==> Building AppIcon.icns"
+# Resources/AppIcon.iconset is pre-rendered from scripts/make_icon.swift (scripts/render_icon.sh).
+iconutil -c icns "$ROOT/Resources/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
+
+echo "==> Copying SwiftPM resources"
+# Images loaded at runtime (AppResources) live in the target's resource bundle.
+RESOURCE_BUNDLE="$(dirname "$BIN")/${APP_NAME}_${APP_NAME}.bundle"
+[[ -d "$RESOURCE_BUNDLE" ]] || { echo "error: missing $RESOURCE_BUNDLE" >&2; exit 1; }
+ditto "$RESOURCE_BUNDLE" "$APP/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
 
 echo "==> Codesigning (ad-hoc)"
 codesign --force --deep -s - "$APP"

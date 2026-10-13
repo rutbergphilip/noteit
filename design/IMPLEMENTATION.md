@@ -1,5 +1,7 @@
 # Implementation plan: Inkwell → NoteIt
 
+> **Owner decision:** the app icon and menu bar glyph use the squiggle + pencil mark; the Swift Page artwork is kept as an alternative. This overrides the Swift Page parts of tasks 3–5 below: keep `scripts/make_icon.swift`, pre-render it into `Resources/AppIcon.iconset`, and draw the menu bar glyph from the same motif.
+
 Work through the tasks in order. Each task should land as its own commit and must leave `swift build` green. The app is SwiftPM-only (no Xcode project), macOS 14+, SwiftUI + AppKit, no third-party dependencies; keep it that way.
 
 Current layout for reference (before the rename): `Sources/Inkwell/{App,Model,Views,Editor,MenuBar,Hotkeys,Settings}`, `scripts/build_app.sh`, `scripts/make_icon.swift`, data in `~/Library/Application Support/Inkwell/`, bundle id `com.inkwell.app`.

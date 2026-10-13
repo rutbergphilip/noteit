@@ -150,7 +150,7 @@ Sources/NoteItSync/           sync engine with no AppKit dependency
 ├── Model/                    manifest, sync state, records
 └── Migration/                app identity, env vars, Inkwell → NoteIt migration
 Tests/NoteItSyncTests/        XCTest suite (+ opt-in live S3 tests)
-scripts/                      build_app.sh, live_s3_tests.sh, make_icon.swift
+scripts/                      build_app.sh, live_s3_tests.sh, make_icon.swift, render_icon.sh
 design/                       design system: brand, tokens, components (source of truth)
 docs/design/HANDOFF.md        original product and design handoff (also the deep engineering reference)
 docs/specs/, docs/plans/      design specs and implementation plans

@@ -32,6 +32,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if Bundle.main.bundleURL.pathExtension != "app", let artwork = AppResources.appIcon {
+            // Unbundled runs (`swift run`) have no .icns; show the same artwork in the Dock.
+            NSApp.applicationIconImage = artwork
+        }
         _ = NoteStore.shared
         let center = NotificationCenter.default
 

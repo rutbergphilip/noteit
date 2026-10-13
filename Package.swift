@@ -15,7 +15,8 @@ let package = Package(
         .executableTarget(
             name: "NoteIt",
             dependencies: ["NoteItSync"],
-            path: "Sources/NoteIt"
+            path: "Sources/NoteIt",
+            resources: [.process("Resources")]
         ),
         .testTarget(
             name: "NoteItSyncTests",

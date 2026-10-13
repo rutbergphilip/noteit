@@ -1,4 +1,5 @@
-// Renders the NoteIt app icon into an .iconset directory.
+// Renders the NoteIt app icon into an .iconset directory. Run scripts/render_icon.sh to refresh
+// Resources/AppIcon.iconset and the runtime copy; build_app.sh packs the committed iconset.
 // Usage: make_icon <output.iconset>
 import AppKit
 

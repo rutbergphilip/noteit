@@ -86,28 +86,22 @@ struct NotebookMenuPicker: View {
     }
 }
 
-/// NoteIt app icon: the bundle icon when available, otherwise a drawn stand-in (unbundled debug runs).
+/// NoteIt app icon: the bundle icon, or the same artwork from the SwiftPM resources (unbundled runs).
 struct AppIconView: View {
     var size: CGFloat = 64
 
     var body: some View {
-        if Bundle.main.bundleIdentifier != nil, Bundle.main.bundleURL.pathExtension == "app" {
-            Image(nsImage: NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: size, height: size)
-        } else {
-            RoundedRectangle(cornerRadius: size * 0.225, style: .continuous)
-                .fill(LinearGradient(colors: [Tokens.Color.brandViolet, Color(hex: Tokens.Hex.legacyIconIndigo), Tokens.Color.brandDeep],
-                                     startPoint: .topLeading, endPoint: .bottomTrailing))
-                .overlay(
-                    Image(systemName: "pencil.and.scribble")
-                        .font(.system(size: size * 0.46, weight: .semibold))
-                        .foregroundStyle(.white)
-                )
-                .shadow(color: .black.opacity(0.25), radius: size * 0.04, y: size * 0.02)
-                .padding(size * 0.08)
-                .frame(width: size, height: size)
-        }
+        Image(nsImage: Self.image)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: size, height: size)
+            .accessibilityHidden(true)
+    }
+
+    @MainActor static var image: NSImage {
+        let isBundled = Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
+        if !isBundled, let artwork = AppResources.appIcon { return artwork }
+        return NSApp.applicationIconImage
     }
 }
 
