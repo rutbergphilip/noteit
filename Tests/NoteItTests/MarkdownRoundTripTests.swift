@@ -1,0 +1,312 @@
+import AppKit
+import XCTest
+@testable import NoteIt
+
+/// Notes built with the editor's own commands are written as Markdown and read back, and must come back
+/// with the same blocks: kind, list marker and level, checked state, text and inline styles.
+@MainActor
+final class MarkdownRoundTripTests: XCTestCase {
+    private var folder: URL!
+
+    override func setUpWithError() throws {
+        folder = FileManager.default.temporaryDirectory.appendingPathComponent("NoteItRoundTripTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    // MARK: Building notes
+
+    private func editor(_ paragraphs: [String]) -> NoteItTextView {
+        let (_, textView) = NoteItTextView.make()
+        let text = paragraphs.joined(separator: "\n") + "\n"
+        textView.storage.setAttributedString(NSAttributedString(string: text, attributes: EditorStyle.bodyAttributes))
+        return textView
+    }
+
+    private func range(of text: String, in textView: NoteItTextView) -> NSRange {
+        let r = (textView.string as NSString).range(of: text)
+        XCTAssertNotEqual(r.location, NSNotFound, "missing \(text)")
+        return r
+    }
+
+    private func range(from first: String, to last: String, in textView: NoteItTextView) -> NSRange {
+        let start = range(of: first, in: textView).location
+        return NSRange(location: start, length: range(of: last, in: textView).upperBound - start)
+    }
+
+    private func apply(_ command: FormatCommand, to text: String, in textView: NoteItTextView) {
+        textView.setSelectedRange(range(of: text, in: textView))
+        textView.perform(command)
+    }
+
+    private func apply(_ command: FormatCommand, from first: String, to last: String, in textView: NoteItTextView) {
+        textView.setSelectedRange(range(from: first, to: last, in: textView))
+        textView.perform(command)
+    }
+
+    private func appendImage(to textView: NoteItTextView) throws {
+        let image = NSImage(size: NSSize(width: 4, height: 3))
+        image.lockFocus()
+        NSColor.systemBlue.setFill()
+        NSRect(x: 0, y: 0, width: 4, height: 3).fill()
+        image.unlockFocus()
+        let url = folder.appendingPathComponent("photo.png")
+        try NSBitmapImageRep(data: image.tiffRepresentation!)!.representation(using: .png, properties: [:])!.write(to: url)
+        textView.replace(NSRange(location: textView.storage.length, length: 0), with: EditorStyle.paragraph("", kind: .body))
+        textView.setSelectedRange(NSRange(location: textView.storage.length - 1, length: 0))
+        textView.insertImages([url])
+    }
+
+    // MARK: Comparing
+
+    /// One line per paragraph (per row for tables): block, marker and level, then the runs with their styles.
+    private func structure(_ text: NSAttributedString) -> [String] {
+        NoteBlocks.parse(text).flatMap { block -> [String] in
+            switch block {
+            case .paragraph(let kind, _, let runs):
+                return ["\(kind.rawValue): \(describe(runs))"]
+            case .listItem(let marker, let level, _, let runs):
+                let name: String
+                switch marker {
+                case .bullet: name = "bullet"
+                case .numbered(let n): name = "numbered \(n)"
+                case .checkbox(let checked): name = checked ? "checked" : "unchecked"
+                }
+                return ["\(name) level \(level): \(describe(runs))"]
+            case .code(let code):
+                return code.components(separatedBy: "\n").map { "code: \($0)" }
+            case .divider:
+                return ["divider"]
+            case .table(let rows):
+                return rows.map { "row: " + $0.map(describe).joined(separator: " | ") }
+            }
+        }
+    }
+
+    private func describe(_ runs: [InlineRun]) -> String {
+        var parts: [(style: String, text: String)] = []
+        for run in runs {
+            var style: [String] = []
+            if run.bold { style.append("b") }
+            if run.italic { style.append("i") }
+            if run.strikethrough { style.append("s") }
+            if run.code { style.append("code") }
+            if let link = run.link { style.append("link=\(link.absoluteString)") }
+            if let contents = run.attachment?.exportContents {
+                parts.append(("image", "\(contents.isImage) \(contents.data.count) bytes"))
+                continue
+            }
+            // Markdown keeps spaces outside emphasis delimiters, so their style isn't compared.
+            let key = style.joined(separator: ",")
+            let keepsSpaces = run.code || run.link != nil
+            let lead = keepsSpaces ? "" : String(run.text.prefix { $0 == " " })
+            let rest = run.text.dropFirst(lead.count)
+            let trail = keepsSpaces ? "" : String(rest.reversed().prefix { $0 == " " })
+            for (partKey, text) in [("", lead), (key, String(rest.dropLast(trail.count))), ("", trail)] where !text.isEmpty {
+                if let last = parts.last, last.style == partKey, partKey != "image" {
+                    parts[parts.count - 1].text += text
+                } else {
+                    parts.append((partKey, text))
+                }
+            }
+        }
+        let text = parts.map { $0.style.isEmpty ? $0.text : "[\($0.style)]\($0.text)" }.joined()
+        return text.replacingOccurrences(of: NoteBlocks.lineBreak, with: "⏎")
+    }
+
+    /// Writes `text` as Markdown with its assets in a folder, then reads it back resolving images there.
+    private func roundTrip(_ text: NSAttributedString, title: String = "Note") throws -> (markdown: String, body: NSAttributedString) {
+        let export = MarkdownWriter.write(text, title: title)
+        let assets = folder.appendingPathComponent(MarkdownWriter.assetsFolderName(for: title), isDirectory: true)
+        try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+        for asset in export.assets {
+            try asset.data.write(to: assets.appendingPathComponent(asset.filename))
+        }
+        let folder = self.folder!
+        let body = MarkdownReader.attributedString(from: export.markdown) { ref in
+            let url = folder.appendingPathComponent(ref)
+            return FileManager.default.fileExists(atPath: url.path) ? url : nil
+        }
+        return (export.markdown, body)
+    }
+
+    private func assertRoundTrip(_ textView: NoteItTextView, file: StaticString = #filePath, line: UInt = #line) throws {
+        let original = textView.attributedString()
+        let (markdown, body) = try roundTrip(original)
+        XCTAssertEqual(structure(body), structure(original), markdown, file: file, line: line)
+        XCTAssertEqual(MarkdownWriter.write(body, title: "Note").markdown, markdown, "second write", file: file, line: line)
+    }
+
+    // MARK: Tests
+
+    func testHeadingsAndInlineStyles() throws {
+        let tv = editor([
+            "Groceries", "Plan", "Details",
+            "Buy bold and italic and gone and code here, see the site now.",
+            "Mixed bold italic words and a bold link.",
+        ])
+        apply(.block(.title), to: "Groceries", in: tv)
+        apply(.block(.heading), to: "Plan", in: tv)
+        apply(.block(.subheading), to: "Details", in: tv)
+        apply(.bold, to: "bold", in: tv)
+        apply(.italic, to: "italic", in: tv)
+        apply(.strikethrough, to: "gone", in: tv)
+        apply(.inlineCode, to: "code", in: tv)
+        let site = range(of: "the site", in: tv)
+        tv.editAttributes(in: site) { $0.addAttribute(.link, value: URL(string: "https://example.com/a?b=1")!, range: site) }
+        apply(.bold, to: "bold italic", in: tv)
+        apply(.italic, to: "italic words", in: tv)
+        let link = range(of: "bold link", in: tv)
+        tv.editAttributes(in: link) { $0.addAttribute(.link, value: URL(string: "https://example.com/b")!, range: link) }
+        apply(.bold, to: "bold link", in: tv)
+
+        XCTAssertEqual(structure(tv.attributedString()).first, "title: Groceries")
+        try assertRoundTrip(tv)
+    }
+
+    func testNestedListsWithMixedMarkersAndCheckedItems() throws {
+        let tv = editor([
+            "Fruit", "Apples", "Green", "Pears",
+            "First", "Sub task", "Done sub task", "Sub bullet", "Second", "Inner number", "Inner two",
+            "Open task", "Done task", "Nested bullet", "Nested done",
+        ])
+        apply(.list(.bullet), from: "Fruit", to: "Pears", in: tv)
+        apply(.indent, from: "Apples", to: "Pears", in: tv)
+        apply(.indent, to: "Green", in: tv)
+
+        apply(.list(.numbered), from: "First", to: "Inner two", in: tv)
+        apply(.indent, from: "Sub task", to: "Sub bullet", in: tv)
+        apply(.list(.checklist), from: "Sub task", to: "Done sub task", in: tv)
+        apply(.toggleCheckbox, to: "Done sub task", in: tv)
+        apply(.list(.bullet), to: "Sub bullet", in: tv)
+        apply(.indent, from: "Inner number", to: "Inner two", in: tv)
+
+        apply(.list(.checklist), from: "Open task", to: "Nested done", in: tv)
+        apply(.toggleCheckbox, to: "Done task", in: tv)
+        apply(.indent, from: "Nested bullet", to: "Nested done", in: tv)
+        apply(.list(.bullet), to: "Nested bullet", in: tv)
+        apply(.toggleCheckbox, to: "Nested done", in: tv)
+
+        XCTAssertEqual(structure(tv.attributedString()), [
+            "bullet level 0: Fruit",
+            "bullet level 1: Apples",
+            "bullet level 2: Green",
+            "bullet level 1: Pears",
+            "numbered 1 level 0: First",
+            "unchecked level 1: Sub task",
+            "checked level 1: Done sub task",
+            "bullet level 1: Sub bullet",
+            "numbered 2 level 0: Second",
+            "numbered 1 level 1: Inner number",
+            "numbered 2 level 1: Inner two",
+            "unchecked level 0: Open task",
+            "checked level 0: Done task",
+            "bullet level 1: Nested bullet",
+            "checked level 1: Nested done",
+        ])
+        try assertRoundTrip(tv)
+    }
+
+    func testQuoteCodeDividerTableAndImage() throws {
+        let tv = editor([
+            "Quoted words", "Second quote",
+            "# not a heading", "- not a list", "```", "let x = **1**",
+            "After the code",
+        ])
+        apply(.block(.quote), from: "Quoted words", to: "Second quote", in: tv)
+        apply(.block(.code), from: "# not a heading", to: "let x = **1**", in: tv)
+        tv.setSelectedRange(NSRange(location: range(of: "After the code", in: tv).upperBound, length: 0))
+        tv.perform(.divider)
+        let table = EditorStyle.table(header: ["Name", "Qty"], rows: [["Apples", "3"], ["Pears | ripe", "5"]])
+        tv.replace(NSRange(location: tv.storage.length, length: 0), with: table)
+        try appendImage(to: tv)
+
+        let blocks = structure(tv.attributedString())
+        XCTAssertEqual(Array(blocks.dropLast()), [
+            "quote: Quoted words",
+            "quote: Second quote",
+            "code: # not a heading",
+            "code: - not a list",
+            "code: ```",
+            "code: let x = **1**",
+            "body: After the code",
+            "divider",
+            "row: Name | Qty",
+            "row: Apples | 3",
+            "row: Pears | ripe | 5",
+        ])
+        XCTAssertTrue(blocks.last?.hasPrefix("body: [image]true ") ?? false, blocks.last ?? "")
+        try assertRoundTrip(tv)
+    }
+
+    func testParagraphsAndLineBreaks() throws {
+        let tv = editor([
+            "First paragraph.",
+            "Second paragraph with a\u{2028}line break and **stars**.",
+            "Item with a\u{2028}second line",
+            "Quote with a\u{2028}second line",
+            "Ends with a break\u{2028}- not a list\u{2028}# not a heading\u{2028}---\u{2028}=",
+        ])
+        apply(.list(.bullet), to: "Item with a", in: tv)
+        apply(.block(.quote), to: "Quote with a", in: tv)
+
+        XCTAssertEqual(structure(tv.attributedString()), [
+            "body: First paragraph.",
+            "body: Second paragraph with a⏎line break and **stars**.",
+            "bullet level 0: Item with a⏎second line",
+            "quote: Quote with a⏎second line",
+            "body: Ends with a break⏎- not a list⏎# not a heading⏎---⏎=",
+        ])
+        try assertRoundTrip(tv)
+    }
+
+    func testMarkdownFromOtherAppsIsStableAfterOneRead() {
+        let markdown = """
+        # Trip
+
+        A paragraph written
+        over two lines.
+
+
+        Another paragraph after extra blank lines.
+        Line with a hard break\\
+        and the next line.
+
+        * Star bullet
+        * __Bold__ and _italic_
+            * Nested with four spaces
+
+        1) Paren numbered
+        2) Second
+
+        - [ ] Task
+        - [X] Done
+
+        > Quote line one
+        > quote line two
+        >
+        > Second quote paragraph
+
+        ~~~
+        code with ``` inside
+        ~~~
+
+        ***
+
+        | A | B |
+        |:--|--:|
+        | 1 | `x \\| y` |
+
+        Text then a [[Wiki link]] and https://example.com.
+        """
+        let first = MarkdownWriter.write(MarkdownReader.attributedString(from: markdown), title: "Trip").markdown
+        let second = MarkdownWriter.write(MarkdownReader.attributedString(from: first), title: "Trip").markdown
+        XCTAssertEqual(second, first)
+        XCTAssertFalse(first.contains("\n\n\n"), first)
+        XCTAssertTrue(first.contains("A paragraph written\\\nover two lines.\n\nAnother paragraph after extra blank lines."), first)
+        XCTAssertTrue(first.contains("> Quote line one\\\n> quote line two\n>\n> Second quote paragraph"), first)
+    }
+}
