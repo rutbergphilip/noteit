@@ -331,6 +331,25 @@ final class RecentlyDeletedTests: XCTestCase {
         XCTAssertEqual(ids(b.notes(for: .allNotes, search: "")), [id])
     }
 
+    func testRemoteNotebookRemovalKeepsDeletedNotesNotebook() {
+        let store = makeStore()
+        let work = store.createNotebook(name: "Work", symbol: "briefcase", colorHex: Tokens.Hex.notebookRed)
+        let active = addNote(store, "Active", in: work.id)
+        let deleted = addNote(store, "Deleted", in: work.id)
+        store.moveToRecentlyDeleted([deleted])
+        let revision = store.note(with: deleted)?.revision
+
+        store.applyRemoteDeletion(work.id, kind: .notebook)
+
+        XCTAssertNil(store.note(with: active)?.notebookID)
+        XCTAssertEqual(store.note(with: deleted)?.notebookID, work.id, "deleted notes keep their notebook ID")
+        XCTAssertEqual(store.note(with: deleted)?.revision, revision)
+
+        let inbox = store.createNotebook(name: "Inbox", symbol: "tray", colorHex: Tokens.Hex.notebookBlue)
+        store.recover([deleted])
+        XCTAssertEqual(store.note(with: deleted)?.notebookID, inbox.id)
+    }
+
     func testDerivedRevisionIncludesDeletedAt() {
         let store = makeStore()
         let id = addNote(store, "Same")

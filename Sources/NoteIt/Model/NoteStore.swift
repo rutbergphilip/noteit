@@ -1410,12 +1410,13 @@ final class NoteStore: ObservableObject {
         persistRemoteApply()
     }
 
-    /// Removes a notebook deleted on another device. Its notes move to "no notebook" without new revisions.
+    /// Removes a notebook deleted on another device. Its notes move to "no notebook" without new revisions;
+    /// deleted ones keep the notebook ID, so recovering them falls back to Inbox.
     func removeNotebookForRemote(_ id: UUID) {
         clearSyncDeletion(id)
         guard notebook(with: id) != nil else { return }
         notebooks.removeAll { $0.id == id }
-        for index in notes.indices where notes[index].notebookID == id {
+        for index in notes.indices where notes[index].notebookID == id && notes[index].deletedAt == nil {
             notes[index].notebookID = nil
         }
         libraryDirty = true
