@@ -7,6 +7,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Export a note as Markdown, HTML, PDF, RTFD or plain text with File › Export Note As… (⇧⌘S). Images in Markdown exports are saved next to the file.
+- Export a whole notebook, or all notes with one folder per notebook.
+- Print a note with ⌘P.
+- Share a note from the toolbar or File › Share.
+- Edit › Copy as Markdown (⌥⇧⌘C) copies the selection, or the whole note.
+
 ## [0.1.0] - 2026-10-14
 
 ### Added

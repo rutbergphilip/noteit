@@ -12,6 +12,9 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⌥⌘F | Find in the current note |
 | ⌘G / ⇧⌘G | Find next / previous |
 | ⌘E | Use selection for find |
+| ⇧⌘S | Export note as… |
+| ⌘P | Print the note |
+| ⌥⇧⌘C | Copy as Markdown (the selection, or the whole note) |
 | ⌘0 | Show the main window (*NoteIt Notes* in the Window menu) |
 | ⌘, | Settings |
 | ⌫ (in the note list) | Delete the selected note, after confirming |
