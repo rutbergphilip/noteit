@@ -145,6 +145,11 @@ final class AppleNotesHTMLTests: XCTestCase {
             "a": "Notes", "b": "Work", "c": "Work / Meetings", "d": "Work / Meetings / 2024",
         ])
         XCTAssertTrue(AppleNotesImporter.isRecentlyDeleted(AppleNotesFolder(id: "x", name: "Recently Deleted", parentID: "")))
+        for name in ["Nyligen raderade", "Senast raderade", "Zuletzt gelöscht", "Suppressions récentes", "Eliminado recientemente"] {
+            XCTAssertTrue(AppleNotesImporter.isRecentlyDeleted(AppleNotesFolder(id: "x", name: name, parentID: "")), name)
+        }
+        XCTAssertFalse(AppleNotesImporter.isRecentlyDeleted(AppleNotesFolder(id: "x", name: "Recently Deleted", parentID: "b")))
+        XCTAssertFalse(AppleNotesImporter.isRecentlyDeleted(AppleNotesFolder(id: "x", name: "Work", parentID: "")))
     }
 
     func testScriptsEscapeIDs() {
@@ -218,6 +223,23 @@ final class AppleNotesHTMLTests: XCTestCase {
         XCTAssertTrue(report.permissionDenied)
         XCTAssertTrue(report.summary.hasPrefix("Imported 1 note into 1 notebook. NoteIt isn't allowed"), report.summary)
         XCTAssertEqual(makeStore(base).notes.map(\.title), ["Note n1"], "imported notes are saved")
+    }
+
+    func testLocalizedRecentlyDeletedFoldersAreSkipped() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("noteit-notes-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let store = makeStore(base)
+        let trash = ["Nyligen raderade", "Senast raderade", "Zuletzt gelöscht", "Suppressions récentes", "Eliminado recientemente"]
+        let fake = FakeNotes(
+            folders: [("w", "Work", "")] + trash.enumerated().map { ("t\($0.offset)", $0.element, "") },
+            notes: Dictionary(uniqueKeysWithValues: [("w", [("keep", false)])] + trash.indices.map { ("t\($0)", [("gone\($0)", false)]) }),
+            bodies: Dictionary(uniqueKeysWithValues: [("keep", ("Keep", "<div>Keep</div>", 0))] + trash.indices.map { ("gone\($0)", ("Gone", "<div>Gone</div>", 0)) }),
+            created: Date(), modified: Date()
+        )
+        let report = try await AppleNotesImporter(store: store, scripting: fake).run { _ in }
+        XCTAssertEqual(report.notesImported, 1)
+        XCTAssertEqual(store.notebooks.map(\.name), ["Work"])
+        XCTAssertEqual(store.notes.map(\.title), ["Keep"])
     }
 
     func testPermissionDenialIsFriendly() async {

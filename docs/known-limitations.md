@@ -33,6 +33,7 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 - **Markdown that NoteIt has no style for is simplified.** Underline, colors and alignment don't exist in Markdown, HTML inside Markdown is kept as text (except `<br>`), footnotes and math aren't rendered, and other front matter fields are dropped.
 - **Subfolders become flat notebooks** named `Folder / Subfolder`, since notebooks can't be nested.
 - **Markdown images must be image files inside what you import.** Images outside the chosen folder (or the TextBundle), including ones reached through symlinks, and images over 25 MB are skipped and counted in the summary. For files picked one by one, images are only looked for next to the file. Links other than web, email, phone and FTP links become plain text.
+- **Apple Notes' Recently Deleted folder is recognized by name.** It's matched in every language Notes ships, so a top-level folder of your own with that exact name is skipped too.
 
 ## Setup and distribution
 

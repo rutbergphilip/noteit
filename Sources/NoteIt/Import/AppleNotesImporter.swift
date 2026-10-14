@@ -334,8 +334,26 @@ final class AppleNotesImporter {
                               attachmentCount: Int(row[4].int32Value))
     }
 
-    static func isRecentlyDeleted(_ folder: AppleNotesFolder) -> Bool {
-        folder.parentID.isEmpty && folder.name == "Recently Deleted"
+    /// Notes names its deleted-items folder in the user's language, so it's matched against every
+    /// translation Notes ships, plus a few known ones in case that table moves.
+    nonisolated static let recentlyDeletedNames: Set<String> = {
+        var names: Set<String> = [
+            "Recently Deleted", "Nyligen raderade", "Senast raderade", "Zuletzt gelöscht", "Suppressions récentes",
+            "Suppr. récentes", "Eliminado recientemente", "Eliminados recientemente", "Recién eliminado",
+        ]
+        let table = URL(fileURLWithPath: "/System/Library/PrivateFrameworks/NotesShared.framework/Resources/Localizable.loctable")
+        if let data = try? Data(contentsOf: table),
+           let locales = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+            for case let strings as [String: Any] in locales.values {
+                if let name = strings["Recently Deleted"] as? String { names.insert(name) }
+            }
+        }
+        return Set(names.map { $0.lowercased() })
+    }()
+
+    nonisolated static func isRecentlyDeleted(_ folder: AppleNotesFolder) -> Bool {
+        folder.parentID.isEmpty
+            && recentlyDeletedNames.contains(folder.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     /// Folder id → notebook name, with nested folders joined by " / " and accounts left out.
