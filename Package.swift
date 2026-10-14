@@ -7,6 +7,9 @@ let package = Package(
     products: [
         .executable(name: "NoteIt", targets: ["NoteIt"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0")
+    ],
     targets: [
         .target(
             name: "NoteItSync",
@@ -14,7 +17,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "NoteIt",
-            dependencies: ["NoteItSync"],
+            dependencies: [
+                "NoteItSync",
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             path: "Sources/NoteIt",
             resources: [.process("Resources")]
         ),

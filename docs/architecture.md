@@ -4,7 +4,7 @@ This page explains how NoteIt is put together: where notes are stored, how the e
 
 ## Overview
 
-NoteIt is a Swift package with two main targets and no third-party dependencies:
+NoteIt is a Swift package with two main targets. Its only third-party dependency is Sparkle, used for in-app updates:
 
 | Target | What it is |
 |---|---|
@@ -17,7 +17,7 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 
 | Folder | What's in it |
 |---|---|
-| `App/` | `NoteItApp` (main window, Settings, menu bar extra and menu commands), `AppDelegate` (activation policy, hotkey wiring, debug arguments), `WindowRouter` (show, hide and focus), and the launch-time migration from Inkwell (`LaunchMigration`, `LibraryLauncher`, `LegacyAppQuitter`, `LegacyAppMonitor`) |
+| `App/` | `NoteItApp` (main window, Settings, menu bar extra and menu commands), `AppDelegate` (activation policy, hotkey wiring, debug arguments), `WindowRouter` (show, hide and focus), `AppUpdater` (in-app updates), and the launch-time migration from Inkwell (`LaunchMigration`, `LibraryLauncher`, `LegacyAppQuitter`, `LegacyAppMonitor`) |
 | `Design/` | `Tokens` (colors, spacing, radii and chrome type styles) and `AppResources` (app icon and menu bar glyph images) |
 | `Model/` | `Models` (notebooks, note metadata, sidebar selection, palette), `NoteStore` (the single observable store: queries, editing, tags and persistence), seed content |
 | `Views/` | The main window: three-column split, sidebar, note list, editor container with the note header and conflict badge, empty states, notebook sheet and the sync status pill |
@@ -81,6 +81,10 @@ Global hotkeys use Carbon's `RegisterEventHotKey`, so they work from any app wit
 - The menu bar item is a SwiftUI `MenuBarExtra` with a window-style panel (`MenuBarView`). Its icon is a template image from `Sources/NoteIt/Resources/`, which switches to a "capturing" variant while Quick Capture is open.
 - Quick Capture (`QuickCapturePanel.swift`) is a non-activating floating panel, so the app you were using stays in front. It appears on every Space, including over full-screen apps. Its draft (title, body and notebook) is kept until you save or discard it.
 - In *Menu bar only* mode the app switches to the accessory activation policy and hides its Dock icon. The menu bar icon can't be turned off in that mode, so NoteIt stays reachable.
+
+## Updates
+
+`AppUpdater` wraps Sparkle's `SPUStandardUpdaterController`. It only starts when NoteIt runs from an app bundle whose `Info.plist` has `SUFeedURL` and `SUPublicEDKey` (`build_app.sh` adds both). Under `swift run`, in tests, or without those keys, it stays off and the update controls are hidden. When it's on, *Check for Updates…* appears in the app menu and the menu bar panel, and Settings › General has an *Updates* section. Sparkle asks on the second launch whether to check automatically, and does all checking on its own schedule. Each update archive is signed with an EdDSA key, and Sparkle checks it against `SUPublicEDKey` before installing.
 
 ## Sync
 

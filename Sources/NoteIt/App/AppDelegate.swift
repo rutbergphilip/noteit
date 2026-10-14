@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = artwork
         }
         _ = NoteStore.shared
+        _ = AppUpdater.shared
         let center = NotificationCenter.default
 
         // Notification callbacks never assume main-actor isolation: they hop with a Task instead, because

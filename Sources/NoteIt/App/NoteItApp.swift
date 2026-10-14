@@ -37,6 +37,10 @@ struct NoteItApp: App {
 
 struct NoteItCommands: Commands {
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            CheckForUpdatesButton()
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("New Note") {
                 NotificationCenter.default.post(name: .noteItNewNote, object: nil)
@@ -71,6 +75,18 @@ struct NoteItCommands: Commands {
         CommandGroup(after: .windowArrangement) {
             Button("NoteIt Notes") { WindowRouter.showMainWindow() }
                 .keyboardShortcut("0", modifiers: .command)
+        }
+    }
+}
+
+/// "Check for Updates…" for the app menu; nothing when updates are off.
+struct CheckForUpdatesButton: View {
+    @ObservedObject private var updater = AppUpdater.shared
+
+    var body: some View {
+        if updater.isEnabled {
+            Button("Check for Updates…") { updater.checkForUpdates() }
+                .disabled(!updater.canCheckForUpdates)
         }
     }
 }

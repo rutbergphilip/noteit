@@ -5,6 +5,8 @@ struct GeneralSettingsView: View {
     @AppStorage(PrefKey.hideDockIcon) private var hideDockIcon = false
     @AppStorage(PrefKey.showMenuBarIcon) private var showMenuBarIcon = true
 
+    @ObservedObject private var updater = AppUpdater.shared
+
     @State private var launchAtLogin = false
     @State private var loginStatus: SMAppService.Status = .notRegistered
     @State private var loginError: String?
@@ -48,9 +50,22 @@ struct GeneralSettingsView: View {
             } header: {
                 Text("Startup")
             }
+
+            if updater.isEnabled {
+                Section {
+                    HStack {
+                        Toggle("Check for Updates Automatically", isOn: $updater.automaticallyChecksForUpdates)
+                        Spacer()
+                        Button("Check Now") { updater.checkForUpdates() }
+                            .disabled(!updater.canCheckForUpdates)
+                    }
+                } header: {
+                    Text("Updates")
+                }
+            }
         }
         .formStyle(.grouped)
-        .frame(height: 300)
+        .frame(height: updater.isEnabled ? 380 : 300)
         .onAppear(perform: refreshLoginStatus)
     }
 

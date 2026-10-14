@@ -7,28 +7,32 @@ This page covers building NoteIt, running it against a scratch library, and the 
 - macOS 14 Sonoma or later.
 - Xcode 16 or later, or the matching Command Line Tools. The manifest declares `swift-tools-version:5.10`.
 - Running the unit tests needs Xcode, because the Command Line Tools don't include XCTest.
-- There are no third-party dependencies.
+- The only third-party dependency is [Sparkle](https://sparkle-project.org) for in-app updates. SwiftPM fetches it on the first build.
 
 ## Build and run
 
 ```sh
 swift build                 # debug build
-swift run NoteIt            # run unbundled; launch at login is unavailable this way
+swift run NoteIt            # run unbundled; launch at login and updates are unavailable this way
 ./scripts/build_app.sh      # release build: build/NoteIt.app → ~/Applications/NoteIt.app
 ```
 
 `build_app.sh`:
 
-- builds in release mode;
-- writes `Info.plist` with the bundle ID from `AppIdentity.swift`, a minimum macOS version of 14.0, and App Transport Security's `NSAllowsLocalNetworking`, so plain `http://` MinIO or NAS servers on your local network work;
+- builds in release mode, for the host architecture or as a universal (Apple silicon and Intel) binary;
+- embeds `Sparkle.framework` in `Contents/Frameworks`;
+- writes `Info.plist` with the bundle ID from `AppIdentity.swift`, a minimum macOS version of 14.0, App Transport Security's `NSAllowsLocalNetworking` (so plain `http://` MinIO or NAS servers on your local network work), and Sparkle's feed URL and public key;
 - builds `AppIcon.icns` from `Resources/AppIcon.iconset` with `iconutil`;
-- ad-hoc signs the app and installs it atomically: it stages a copy, verifies it, swaps it in, and restores the previous version if anything fails.
+- signs the app (ad-hoc by default, or with a Developer ID and the hardened runtime for releases) and installs it atomically: it stages a copy, verifies it, swaps it in, and restores the previous version if anything fails.
 
 | Variable | Default | Effect |
 |---|---|---|
 | `NOTEIT_INSTALL_DIR` | `$HOME/Applications` | Where the app is installed |
-| `NOTEIT_VERSION` | `1.0` | `CFBundleShortVersionString` |
+| `NOTEIT_VERSION` | `0.1.0` | `CFBundleShortVersionString` |
 | `NOTEIT_BUILD` | a `YYYYMMDDHHMM` timestamp | `CFBundleVersion` |
+| `NOTEIT_SIGN_IDENTITY` | `-` (ad-hoc) | Signing identity. Any other value signs for distribution: hardened runtime, secure timestamp, and Sparkle's nested parts signed before the app |
+| `NOTEIT_UNIVERSAL` | unset | `1` builds for both `arm64` and `x86_64` (slower) |
+| `NOTEIT_HARDENED_RUNTIME` | unset | `1` uses the distribution signing steps with an ad-hoc identity, to check them without a certificate. The result won't launch, because ad-hoc code has no Team ID for library validation |
 
 The app icon and menu bar glyph are pre-rendered. To regenerate them after changing `scripts/make_icon.swift` or `scripts/make_menubar_glyph.swift`, run `scripts/render_icon.sh`.
 

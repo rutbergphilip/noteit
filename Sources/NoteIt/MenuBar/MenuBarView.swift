@@ -15,6 +15,7 @@ struct MenuBarView: View {
     @State private var hovered: UUID?
     @StateObject private var windowBox = WindowBox()
     @ObservedObject private var sync = SyncController.shared
+    @ObservedObject private var updater = AppUpdater.shared
 
     private static let recentLimit = 12
 
@@ -77,6 +78,13 @@ struct MenuBarView: View {
             .help("Open the main window (⌘O)")
             .keyboardShortcut("o", modifiers: .command)
 
+            if updater.isEnabled {
+                IconButton(symbol: "arrow.down.circle", help: "Check for Updates…") {
+                    closePanel()
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
+            }
             IconButton(symbol: "gearshape", help: "Settings… (⌘,)") { showSettings() }
         }
         .padding(.horizontal, 12)
