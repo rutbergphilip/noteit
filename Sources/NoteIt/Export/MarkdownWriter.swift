@@ -67,9 +67,9 @@ enum MarkdownWriter {
                     let text = inline(runs, continuation: "").replacingOccurrences(of: "\\\n", with: " ")
                     return hashes + " " + text
                 case .quote:
-                    return "> " + escapeLineStart(inline(runs, continuation: "> "))
+                    return "> " + escapeLines(inline(runs, continuation: "> "), continuation: "> ")
                 default:
-                    return escapeLineStart(inline(runs, continuation: ""))
+                    return escapeLines(inline(runs, continuation: ""), continuation: "")
                 }
             case .listItem(let marker, let level, _, let runs):
                 if level == 0 { topListKind = ListMarker(kind: marker, length: 0).listKind }
@@ -87,7 +87,7 @@ enum MarkdownWriter {
                 listColumns.append(column + (marker.isNumbered ? prefix.count : 2))
                 let indent = String(repeating: " ", count: column)
                 let continuation = indent + String(repeating: " ", count: prefix.count)
-                return indent + prefix + escapeLineStart(inline(runs, continuation: continuation))
+                return indent + prefix + escapeLines(inline(runs, continuation: continuation), continuation: continuation)
             case .code(let code):
                 var fence = "```"
                 while code.contains(fence) { fence += "`" }
@@ -210,9 +210,18 @@ enum MarkdownWriter {
             return out
         }
 
-        /// Keeps a paragraph that starts like a block marker (`# `, `- `, `1. `, `>`) as text.
+        /// Escapes the start of each line of a paragraph, including lines after a line break.
+        private func escapeLines(_ s: String, continuation: String) -> String {
+            let separator = "\\\n" + continuation
+            return s.components(separatedBy: separator).enumerated().map { index, line in
+                // Leading spaces after a line break are dropped by Markdown readers anyway.
+                escapeLineStart(index == 0 ? line : String(line.drop { $0 == " " || $0 == "\t" }))
+            }.joined(separator: separator)
+        }
+
+        /// Keeps a line that starts like a block marker (`# `, `- `, `1. `, `>`, a setext underline) as text.
         private func escapeLineStart(_ s: String) -> String {
-            let pattern = #"^(#{1,6}(\s|$)|[-+](\s|$)|>|\d{1,9}[.)](\s|$)|={3,}\s*$|-{3,}\s*$)"#
+            let pattern = #"^(#{1,6}(\s|$)|[-+](\s|$)|>|\d{1,9}[.)](\s|$)|=+\s*$|-{2,}\s*$)"#
             guard s.range(of: pattern, options: .regularExpression) != nil else { return s }
             if let first = s.first, first.isNumber, let dot = s.firstIndex(where: { $0 == "." || $0 == ")" }) {
                 return String(s[..<dot]) + "\\" + String(s[dot...])

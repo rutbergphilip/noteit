@@ -232,6 +232,12 @@ final class ExportTests: XCTestCase {
         """)
     }
 
+    func testMarkdownEscapesMarkupAfterLineBreaks() {
+        let tv = editor(["Intro\u{2028}- not a list\u{2028} # not a heading\u{2028}--\u{2028}2. not numbered"])
+        XCTAssertEqual(MarkdownWriter.write(tv.attributedString(), title: "x").markdown,
+                       "Intro\\\n\\- not a list\\\n\\# not a heading\\\n\\--\\\n2\\. not numbered\n")
+    }
+
     func testMarkdownOfSelectionAndEmptyNote() {
         let tv = editor(["Alpha beta", "Gamma"])
         apply(.bold, to: "beta", in: tv)
