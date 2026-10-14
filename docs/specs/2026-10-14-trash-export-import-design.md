@@ -56,7 +56,7 @@ Close the gaps that keep people from moving their notes into NoteIt, or trusting
 
 | Format | Output |
 |---|---|
-| Markdown | `.md`. Images go in an `<note title> assets/` folder next to it, with relative links. |
+| Markdown | `.md`. Images go in an `<note title> assets/` folder next to it, with relative links. If that name is taken, the folder is `<note title> assets 2/` and so on; an existing folder is never replaced. |
 | HTML | One self-contained `.html` file with images embedded as data URLs. Colors and highlights are kept. |
 | PDF | Uses the same layout as printing. |
 | Rich Text (RTFD) | The note's own body, unchanged. |

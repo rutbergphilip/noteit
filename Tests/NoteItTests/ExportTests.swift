@@ -376,6 +376,50 @@ final class ExportTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("Groceries assets/image-1.png").path))
     }
 
+    private func imageNote(_ title: String) throws -> NSAttributedString {
+        let tv = editor([title])
+        apply(.block(.title), to: title, in: tv)
+        try appendImage(to: tv)
+        return tv.attributedString()
+    }
+
+    func testMarkdownNeverReplacesAnExistingAssetsFolder() throws {
+        let body = try imageNote("Trip")
+        let existing = folder.appendingPathComponent("Trip assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: existing, withIntermediateDirectories: true)
+        try Data("mine".utf8).write(to: existing.appendingPathComponent("image-1.png"))
+        let url = folder.appendingPathComponent("Trip.md")
+
+        try NoteExporter.write(body, title: "Trip", format: .markdown, to: url)
+        XCTAssertEqual(try Data(contentsOf: existing.appendingPathComponent("image-1.png")), Data("mine".utf8))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent("Trip assets 2/image-1.png").path))
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# Trip\n\n![](<Trip assets 2/image-1.png>)\n")
+
+        // Exporting over the same file again still leaves both folders alone.
+        try NoteExporter.write(body, title: "Trip", format: .markdown, to: url)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "# Trip\n\n![](<Trip assets 3/image-1.png>)\n")
+        XCTAssertEqual(files(in: folder).filter { $0.hasPrefix("Trip") }, [
+            "Trip assets", "Trip assets 2", "Trip assets 2/image-1.png", "Trip assets 3", "Trip assets 3/image-1.png",
+            "Trip assets/image-1.png", "Trip.md",
+        ])
+    }
+
+    func testMarkdownSkipsAnAssetsNameTakenByAFile() throws {
+        try Data("note".utf8).write(to: folder.appendingPathComponent("Trip assets"))
+        let url = folder.appendingPathComponent("Trip.md")
+        try NoteExporter.write(try imageNote("Trip"), title: "Trip", format: .markdown, to: url)
+        XCTAssertEqual(try String(contentsOf: folder.appendingPathComponent("Trip assets"), encoding: .utf8), "note")
+        XCTAssertTrue(try String(contentsOf: url, encoding: .utf8).contains("<Trip assets 2/image-1.png>"))
+    }
+
+    func testMarkdownWithoutAssetsLeavesAnExistingFolderAlone() throws {
+        let existing = folder.appendingPathComponent("Plain assets", isDirectory: true)
+        try FileManager.default.createDirectory(at: existing, withIntermediateDirectories: true)
+        try NoteExporter.write(EditorStyle.paragraph("Plain", kind: .body), title: "Plain", format: .markdown,
+                               to: folder.appendingPathComponent("Plain.md"))
+        XCTAssertEqual(files(in: folder).filter { $0.hasPrefix("Plain") }, ["Plain assets", "Plain.md"])
+    }
+
     func testExportableNotesIsTheSingleFilter() {
         var deleted = meta("C", in: nil, created: 3)
         deleted.deletedAt = Date()

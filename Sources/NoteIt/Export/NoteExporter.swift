@@ -116,19 +116,6 @@ enum NoteExporter {
         }
     }
 
-    /// An existing assets folder belongs to the file being replaced; it goes to the Trash.
-    private static func replaceFolder(_ folder: URL) throws {
-        let fm = FileManager.default
-        if fm.fileExists(atPath: folder.path) {
-            do {
-                try fm.trashItem(at: folder, resultingItemURL: nil)
-            } catch {
-                try fm.removeItem(at: folder)
-            }
-        }
-        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-    }
-
     /// Plain text with list markers as `- `, `1. `, `☐ ` and `☑ `, and tables as tab-separated rows.
     static func plainText(_ body: NSAttributedString) -> String {
         var lines: [String] = []

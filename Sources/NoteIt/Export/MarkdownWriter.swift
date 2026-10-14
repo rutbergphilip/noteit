@@ -19,7 +19,12 @@ enum MarkdownWriter {
 
     /// `title` names the assets folder that image links point into; pass the exported file's base name.
     static func write(_ text: NSAttributedString, title: String) -> MarkdownExport {
-        var writer = Writer(assetsFolder: assetsFolderName(for: title))
+        write(text, assetsFolder: assetsFolderName(for: title))
+    }
+
+    /// Like `write(_:title:)`, with image links pointing into the folder named `assetsFolder`.
+    static func write(_ text: NSAttributedString, assetsFolder: String) -> MarkdownExport {
+        var writer = Writer(assetsFolder: assetsFolder)
         return writer.write(NoteBlocks.parse(text))
     }
 
