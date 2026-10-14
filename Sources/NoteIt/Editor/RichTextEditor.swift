@@ -198,6 +198,7 @@ struct RichTextEditor: NSViewRepresentable {
             nc.addObserver(self, selector: #selector(forceCommit), name: NSWindow.willCloseNotification, object: nil)
             nc.addObserver(self, selector: #selector(willTerminate), name: NSApplication.willTerminateNotification, object: nil)
             nc.addObserver(self, selector: #selector(syncWillApplyRemote), name: .noteItSyncWillApplyRemote, object: nil)
+            nc.addObserver(self, selector: #selector(willExportNote), name: .noteItWillExportNote, object: nil)
             // Synchronous (no main-queue hop), so no keystroke can land between the store update and the reload.
             remoteUpdates = NoteStore.shared.$externallyUpdatedNoteID
                 .dropFirst()
@@ -211,6 +212,12 @@ struct RichTextEditor: NSViewRepresentable {
 
         /// Sync is about to replace or delete a note: hand it our pending edits first so it can see them.
         @objc private func syncWillApplyRemote(_ notification: Notification) {
+            guard let id = notification.object as? UUID, id == noteID else { return }
+            commit()
+        }
+
+        /// Export, print, Share and Copy as Markdown read the note from the store, so it must have our edits.
+        @objc private func willExportNote(_ notification: Notification) {
             guard let id = notification.object as? UUID, id == noteID else { return }
             commit()
         }

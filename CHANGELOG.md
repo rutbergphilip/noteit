@@ -11,6 +11,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Recently Deleted. Deleted notes, including the notes of a deleted notebook, stay there for 30 days and can be recovered. Deleting can be undone from the toast or with ⌘Z.
 - Version history. File › Version History… (⌥⌘Y) lists earlier versions of a note and can restore one. Versions are kept on each Mac and aren't synced.
+- Export a note as Markdown, HTML, PDF, RTFD or plain text with File › Export Note As… (⇧⌘S). Images in Markdown exports are saved next to the file.
+- Export a whole notebook, or all notes with one folder per notebook.
+- Print a note with ⌘P.
+- Share a note from the toolbar or File › Share.
+- Edit › Copy as Markdown (⌥⇧⌘C) copies the selection, or the whole note.
 
 ## [0.1.0] - 2026-10-14
 

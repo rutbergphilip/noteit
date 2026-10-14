@@ -75,6 +75,15 @@ The editor is an `NSTextView` that stores each note as RTFD.
 - **Tags.** `#hashtags` are collected from note text, lowercased. A `#` counts only at the start of the text or after whitespace, an opening bracket or quote, `,` or `;`. Hashtags inside inline code, code blocks and links are ignored.
 - **Search** matches every word of the query against the title and full text. Matching ignores case, accents and character width, using the folded text in `search-index.json`.
 
+## Export
+
+Export code lives in `Export/`.
+
+- **`NoteBlocks`** turns a note body into blocks (paragraphs of each `BlockKind`, list items with their level, code blocks, dividers, tables) and inline runs. It reuses the editor's own helpers (`EditorStyle.blockKind`, `listMarker`, `listLevel`), so it reads notes exactly the way the editor does.
+- **`MarkdownWriter`** and **`HTMLWriter`** render those blocks. Markdown returns the text plus image and file assets, which are written to a `<name> assets` folder next to the file. HTML is a single file with images embedded as data URLs.
+- **`NoteExporter`** writes each format, picks safe, unique file names, and lays out notebook and Export All folders. PDF and print share one print view, so they look the same. `exportableNotes(in:)` is the one place that decides which notes get exported.
+- **`ExportActions`** holds the panels, sharing and Copy as Markdown, used by `ExportCommands` and the toolbar Share button. Before reading a note it asks an open editor to save pending edits.
+
 ## Global hotkeys
 
 Global hotkeys use Carbon's `RegisterEventHotKey`, so they work from any app without Accessibility permission. `HotkeyManager` registers the bindings saved in `UserDefaults` and reports combinations that another app already owns. None are bound by default. `ShortcutRecorder` is the Settings control that records them.

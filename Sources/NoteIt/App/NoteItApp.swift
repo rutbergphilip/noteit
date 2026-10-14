@@ -20,6 +20,7 @@ struct NoteItApp: App {
         .windowToolbarStyle(.unified(showsTitle: true))
         .commands { NoteItCommands() }
         .commands { RecentlyDeletedCommands() }
+        .commands { ExportCommands() }
 
         Settings {
             SettingsView()

@@ -15,7 +15,7 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 
 ## Notes and editing
 
-- **No export, print or Share menu.** Notes can't be exported to Markdown, PDF or HTML yet.
+- **Markdown export is lossy.** Underline, text colors, highlights, alignment and paragraph indents are dropped, because Markdown has no syntax for them. Export as HTML, PDF or RTFD to keep them.
 - **Quick Capture is plain text.** The title becomes a bold first line; format the note afterwards in the editor. There's one draft at a time, and nothing outside the panel shows that a draft is waiting.
 - **Tags are plain text.** `#hashtags` aren't styled in the editor, can't be renamed or merged, and are only added by typing them.
 - **Simple organization.** Notebooks can't be nested, a note belongs to one notebook, and notes are always sorted pinned first, then by last edit.

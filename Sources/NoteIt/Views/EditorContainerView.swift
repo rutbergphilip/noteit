@@ -23,6 +23,11 @@ struct EditorContainerView: View {
                     .id(id)
             }
             .background(Tokens.Color.surfaceEditor)
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    ShareToolbarButton(note: note)
+                }
+            }
         } else {
             EmptyStateView(
                 symbol: "square.and.pencil",
