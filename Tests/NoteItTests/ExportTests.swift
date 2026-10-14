@@ -182,7 +182,7 @@ final class ExportTests: XCTestCase {
         tv.perform(.block(.quote))
         XCTAssertEqual(MarkdownWriter.write(tv.attributedString(), title: "x").markdown, """
         1. One
-          - [ ] Sub
+           - [ ] Sub
         2. Two
 
         > Line one
@@ -190,6 +190,32 @@ final class ExportTests: XCTestCase {
         > Line two
 
         """)
+    }
+
+    func testMarkdownNestsUnderNumberedItemsAtTheirTextColumn() {
+        let items = (1...10).map { "Item \($0)" } + ["Bullet child", "Number child", "Deep", "Task", "Task child"]
+        let tv = editor(items)
+        tv.setSelectedRange(NSRange(location: 0, length: range(of: "Item 10", in: tv).upperBound))
+        tv.perform(.list(.numbered))
+        tv.setSelectedRange(NSRange(location: range(of: "Bullet child", in: tv).location, length: range(of: "Deep", in: tv).upperBound - range(of: "Bullet child", in: tv).location))
+        tv.perform(.list(.numbered))
+        tv.perform(.indent)
+        apply(.list(.bullet), to: "Bullet child", in: tv)
+        apply(.indent, to: "Deep", in: tv)
+        tv.setSelectedRange(NSRange(location: range(of: "Task", in: tv).location, length: range(of: "Task child", in: tv).upperBound - range(of: "Task", in: tv).location))
+        tv.perform(.list(.checklist))
+        apply(.indent, to: "Task child", in: tv)
+
+        let markdown = MarkdownWriter.write(tv.attributedString(), title: "x").markdown
+        let lines = markdown.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // Bullet and numbered children under "10. " are indented 4 spaces; a numbered grandchild
+        // under "1. " (at column 4) is indented 4 + 3.
+        XCTAssertTrue(lines.contains("10. Item 10"), markdown)
+        XCTAssertTrue(lines.contains("    - Bullet child"), markdown)
+        XCTAssertTrue(lines.contains("    1. Number child"), markdown)
+        XCTAssertTrue(lines.contains("       1. Deep"), markdown)
+        XCTAssertTrue(lines.contains("- [ ] Task"), markdown)
+        XCTAssertTrue(lines.contains("  - [ ] Task child"), markdown)
     }
 
     func testMarkdownEscapesTextThatLooksLikeMarkup() {

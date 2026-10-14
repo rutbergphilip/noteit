@@ -29,11 +29,15 @@ enum MarkdownWriter {
         var takenAssetNames = Set<String>()
         var imageCount = 0
         var topListKind: ListKind?
+        /// Column where the text of the current list item at each level starts. A child item must be
+        /// indented to its parent's text column to nest in CommonMark (2 under `- `, 3 under `1. `).
+        var listColumns: [Int] = []
 
         mutating func write(_ blocks: [NoteBlock]) -> MarkdownExport {
             var out = ""
             var previous: NoteBlock?
             for block in blocks {
+                if case .listItem = block {} else { listColumns.removeAll() }
                 if let previous { out += separator(between: previous, and: block) }
                 out += render(block)
                 previous = block
@@ -69,13 +73,19 @@ enum MarkdownWriter {
                 }
             case .listItem(let marker, let level, _, let runs):
                 if level == 0 { topListKind = ListMarker(kind: marker, length: 0).listKind }
-                let indent = String(repeating: "  ", count: level)
                 let prefix: String
                 switch marker {
                 case .bullet: prefix = "- "
                 case .numbered(let n): prefix = "\(n). "
                 case .checkbox(let checked): prefix = checked ? "- [x] " : "- [ ] "
                 }
+                // A level with no parent item above it nests under the deepest item there is.
+                let depth = min(level, listColumns.count)
+                let column = depth == 0 ? 0 : listColumns[depth - 1]
+                listColumns.removeSubrange(depth...)
+                // The task box is part of the item's text; CommonMark nests on the `- `.
+                listColumns.append(column + (marker.isNumbered ? prefix.count : 2))
+                let indent = String(repeating: " ", count: column)
                 let continuation = indent + String(repeating: " ", count: prefix.count)
                 return indent + prefix + escapeLineStart(inline(runs, continuation: continuation))
             case .code(let code):
@@ -233,5 +243,12 @@ enum MarkdownWriter {
             if contents.isImage { return "![](" + path + ")" }
             return "[" + escape(filename, inTable: false) + "](" + path + ")"
         }
+    }
+}
+
+private extension ListMarker.Kind {
+    var isNumbered: Bool {
+        if case .numbered = self { return true }
+        return false
     }
 }

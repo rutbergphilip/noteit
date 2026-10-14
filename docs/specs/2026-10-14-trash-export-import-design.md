@@ -69,7 +69,7 @@ Close the gaps that keep people from moving their notes into NoteIt, or trusting
 | Title / heading / subheading | `#` / `##` / `###` |
 | Bold, italic, strikethrough, inline code | `**`, `*`, `~~`, `` ` `` |
 | Link | `[text](url)` |
-| Bulleted, numbered, checklist (with nesting) | `- `, `1. `, `- [ ] ` / `- [x] `, indented two spaces per level |
+| Bulleted, numbered, checklist (with nesting) | `- `, `1. `, `- [ ] ` / `- [x] `, indented to line up with the parent item's text |
 | Quote | `> ` |
 | Code block | fenced ```` ``` ```` |
 | Divider | `---` |
