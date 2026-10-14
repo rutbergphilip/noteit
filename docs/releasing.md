@@ -4,36 +4,69 @@ Releases are built by [`.github/workflows/release.yml`](../.github/workflows/rel
 
 ## One-time setup
 
-The workflow reads these repository secrets. A tag build stops before building anything if a secret it needs is missing, so an unsigned build is never published and a release never stops halfway. Every secret is required for full releases; pre-releases don't need `HOMEBREW_TAP_DEPLOY_KEY`.
+The workflow reads these repository secrets. A tag build stops before building anything if a secret it needs is missing, so an unsigned build is never published and a release never stops halfway.
 
-| Secret | What it is |
-|---|---|
-| `DEVELOPER_ID_CERT_P12_BASE64` | Developer ID Application certificate and private key, as a base64 `.p12` |
-| `DEVELOPER_ID_CERT_PASSWORD` | The password you gave the `.p12` export |
-| `APPLE_TEAM_ID` | Your 10-character Apple Developer team ID |
-| `NOTARY_KEY_ID` | App Store Connect API key ID |
-| `NOTARY_ISSUER_ID` | App Store Connect API issuer ID |
-| `NOTARY_KEY_P8_BASE64` | The API key's `.p8` file, base64 |
-| `SPARKLE_PRIVATE_KEY` | Sparkle EdDSA private key that signs updates |
-| `HOMEBREW_TAP_DEPLOY_KEY` | SSH private key of a deploy key with write access to the tap |
+| Secret | What it is | Needed |
+|---|---|---|
+| `DEVELOPER_ID_CERT_P12_BASE64` | Developer ID Application certificate and private key, as a base64 `.p12` | always |
+| `DEVELOPER_ID_CERT_PASSWORD` | The `.p12` password | always |
+| `APPLE_TEAM_ID` | Your 10-character Apple Developer team ID | always |
+| `SPARKLE_PRIVATE_KEY` | Sparkle Ed25519 private key that signs updates | always |
+| `HOMEBREW_TAP_DEPLOY_KEY` | SSH private key of a deploy key with write access to the tap | full releases |
+| `APPLE_ID`, `APPLE_APP_PASSWORD` | Apple ID and an app-specific password, for notarization | one notarization method |
+| `NOTARY_KEY_ID`, `NOTARY_ISSUER_ID`, `NOTARY_KEY_P8_BASE64` | App Store Connect API key, for notarization | one notarization method |
+
+Notarization uses the API key when all three of its secrets are set, and the Apple ID otherwise. The log says which one, and if neither set is complete the error lists what each one is missing.
 
 ### Developer ID certificate
 
-1. In [Certificates, Identifiers & Profiles](https://developer.apple.com/account/resources/certificates/list), create a **Developer ID Application** certificate (or use the one you have) and install it in your login keychain.
-2. In Keychain Access, open *My Certificates*, select the *Developer ID Application: …* certificate together with its private key, choose **File › Export Items…**, save it as `DeveloperID.p12` and set a strong password.
-3. Store it:
+You can create the certificate without Xcode. This needs OpenSSL 3 (`brew install openssl@3`) for `-legacy`, which makes a `.p12` the macOS keychain can import:
+
+```sh
+OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+(umask 077 && "$OPENSSL" genrsa -out developer-id.key 2048)
+"$OPENSSL" req -new -key developer-id.key -out developer-id.csr -subj "/emailAddress=you@example.com/CN=Your Name/C=SE"
+```
+
+1. In [Certificates, Identifiers & Profiles › Certificates](https://developer.apple.com/account/resources/certificates/list), click **+**, choose **Developer ID Application**, upload `developer-id.csr` and download the `.cer`.
+2. Build the `.p12` with Apple's Developer ID intermediate certificate included, and set a strong password when asked:
+
+   ```sh
+   curl -fsSLO https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer
+   "$OPENSSL" x509 -inform DER -in developerID_application.cer -out developer-id.pem
+   "$OPENSSL" x509 -inform DER -in DeveloperIDG2CA.cer -out developer-id-ca.pem
+   "$OPENSSL" pkcs12 -export -legacy -inkey developer-id.key -in developer-id.pem \
+     -certfile developer-id-ca.pem -name "Developer ID Application" -out DeveloperID.p12
+   ```
+
+3. Store it, then keep `DeveloperID.p12` and its password in a password manager and delete the other files:
 
    ```sh
    base64 -i DeveloperID.p12 | gh secret set DEVELOPER_ID_CERT_P12_BASE64
-   gh secret set DEVELOPER_ID_CERT_PASSWORD     # paste the export password
+   gh secret set DEVELOPER_ID_CERT_PASSWORD     # paste the .p12 password
    gh secret set APPLE_TEAM_ID --body ABCDE12345
-   rm DeveloperID.p12
    ```
 
-### Notarization API key
+If the certificate is already in your login keychain, you can instead export it from Keychain Access (*My Certificates*, select it with its private key, **File › Export Items…**).
 
-1. In [App Store Connect › Users and Access › Integrations › Team Keys](https://appstoreconnect.apple.com/access/integrations/api), create a key with the **Developer** role.
-2. Note the **Key ID** and the **Issuer ID** shown above the key list, and download `AuthKey_<KEYID>.p8`. It can only be downloaded once.
+### Notarization: Apple ID (simplest)
+
+1. At [appleid.apple.com](https://appleid.apple.com), go to **Sign-In and Security › App-Specific Passwords**, and create one named "NoteIt notarization".
+2. Store it with the Apple ID of your developer account:
+
+   ```sh
+   gh secret set APPLE_ID --body you@example.com
+   gh secret set APPLE_APP_PASSWORD     # paste the app-specific password
+   ```
+
+Revoke the password at the same place if it leaks; changing your Apple ID password also revokes it.
+
+### Notarization: App Store Connect API key (alternative)
+
+An API key isn't tied to your Apple ID password. The first time, an Account Holder has to click **Request Access** in App Store Connect › Users and Access › Integrations.
+
+1. Under [Integrations › Team Keys](https://appstoreconnect.apple.com/access/integrations/api), create a key with the **Developer** role.
+2. Note the **Key ID** and the **Issuer ID**, and download `AuthKey_<KEYID>.p8`. It can only be downloaded once.
 3. Store it:
 
    ```sh
@@ -41,8 +74,6 @@ The workflow reads these repository secrets. A tag build stops before building a
    gh secret set NOTARY_ISSUER_ID --body <ISSUER-UUID>
    base64 -i AuthKey_<KEYID>.p8 | gh secret set NOTARY_KEY_P8_BASE64
    ```
-
-   Keep the `.p8` somewhere safe, such as a password manager, or revoke the key and create a new one if it's lost.
 
 ### Sparkle signing key
 
@@ -103,11 +134,11 @@ A dry run runs the tests and builds the same universal app, ad-hoc signed and no
 
 ## What the workflow does
 
-1. Checks the tag is `vMAJOR.MINOR.PATCH[-prerelease]`, that `CHANGELOG.md` has a non-empty section for it, and that all secrets are set.
+1. Checks the tag is `vMAJOR.MINOR.PATCH[-prerelease]`, that `CHANGELOG.md` has a non-empty section for it, and that all secrets are set, and picks the notarization method.
 2. Runs `swift test`.
 3. Imports the `.p12` into a temporary keychain, which is deleted at the end of the job even if it fails.
 4. Builds with `NOTEIT_UNIVERSAL=1 NOTEIT_SIGN_IDENTITY="Developer ID Application: …" ./scripts/build_app.sh`. The build number (`CFBundleVersion` and `sparkle:version`) is the time of the run in UTC to the second, `YYYYMMDDHHMMSS`. Sparkle uses it to decide what's newer: each run gets its own number, later runs get higher ones as long as the runner's clock is right, and its 14 digits are always higher than the 12-digit `YYYYMMDDHHMM` that local `build_app.sh` builds use by default, so a source build never looks newer than a release. Rebuilding the same tag gives a new build number. Release runs are serialized (one at a time across all tags and branches) so the numbers follow run order; while one runs, GitHub keeps only the newest waiting run and cancels older waiting ones, so push release tags one at a time.
-5. Notarizes the app (zipped with `ditto`) with `scripts/notarize.sh`, which runs `xcrun notarytool submit --wait` and prints the notary log if it's rejected, then staples the app and checks it with `spctl -t exec` and `xcrun stapler validate`.
+5. Notarizes the app (zipped with `ditto`) with `scripts/notarize.sh`, which runs `xcrun notarytool submit --wait` (credentials come from the environment, never the log) and prints the notary log if it's rejected, then staples the app and checks it with `spctl -t exec` and `xcrun stapler validate`.
 6. Makes `NoteIt-X.Y.Z.dmg` from the stapled app (`scripts/make_dmg.sh`), signs it, notarizes and staples it the same way, and checks it with `spctl -t open` and `xcrun stapler validate`.
 7. Signs the final DMG for Sparkle (after checking the key matches the app's `SUPublicEDKey`) with `sign_update` from a checksum-pinned Sparkle download, and writes `appcast.xml` (`scripts/make_appcast.py`).
 8. Creates the GitHub Release `NoteIt X.Y.Z` with the changelog section as its notes (`scripts/release_notes.sh`) and the DMG and appcast as assets.
@@ -121,9 +152,11 @@ To bump Sparkle's tools, change `SPARKLE_VERSION` and `SPARKLE_SHA256` at the to
 - **Notarization rejected:** the step prints the notary log, which lists each problem with its file path, such as a binary without the hardened runtime or a secure timestamp. To see the log of an earlier submission:
 
   ```sh
-  xcrun notarytool history --key AuthKey_<KEYID>.p8 --key-id <KEYID> --issuer <ISSUER-UUID>
-  xcrun notarytool log <submission-id> --key AuthKey_<KEYID>.p8 --key-id <KEYID> --issuer <ISSUER-UUID>
+  xcrun notarytool history --apple-id you@example.com --team-id ABCDE12345     # asks for the app-specific password
+  xcrun notarytool log <submission-id> --apple-id you@example.com --team-id ABCDE12345
   ```
+
+  With an API key, use `--key AuthKey_<KEYID>.p8 --key-id <KEYID> --issuer <ISSUER-UUID>` instead.
 
 - **No Developer ID identity found:** the `.p12` must contain the private key, and the certificate's team must match `APPLE_TEAM_ID`. Export it again from *My Certificates*, not *Certificates*.
 - **A step failed for an outside reason** (a notary service outage, a network error): `gh run rerun <run-id> --failed` reruns only the failed jobs, so a release that was already created isn't created twice. `gh workflow run release.yml --ref vX.Y.Z -f dry_run=false` starts a fresh release run for an existing tag.

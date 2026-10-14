@@ -80,6 +80,7 @@ jobs:
           echo "NoteIt $version (build $build), notes from [$section], publish=$publish, prerelease=$prerelease"
 
       - name: Check release secrets
+        id: secrets
         if: steps.meta.outputs.publish == 'true'
         env:
           PRERELEASE: ${{ steps.meta.outputs.prerelease }}
@@ -89,20 +90,42 @@ jobs:
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
           NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
           HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
-          required=(DEVELOPER_ID_CERT_P12_BASE64 DEVELOPER_ID_CERT_PASSWORD APPLE_TEAM_ID
-                    NOTARY_KEY_ID NOTARY_ISSUER_ID NOTARY_KEY_P8_BASE64 SPARKLE_PRIVATE_KEY)
+          # Lists the names of unset variables.
+          unset_of() {
+            local name
+            for name in "$@"; do
+              [[ -n "$(printenv "$name")" ]] || printf '%s ' "$name"
+            done
+          }
+          required=(DEVELOPER_ID_CERT_P12_BASE64 DEVELOPER_ID_CERT_PASSWORD APPLE_TEAM_ID SPARKLE_PRIVATE_KEY)
           [[ "$PRERELEASE" == "true" ]] || required+=(HOMEBREW_TAP_DEPLOY_KEY)
-          missing=()
-          for name in "${required[@]}"; do
-            [[ -n "$(printenv "$name")" ]] || missing+=("$name")
-          done
-          if (( ${#missing[@]} )); then
-            echo "::error::Missing repository secrets: ${missing[*]}. Nothing was built or published; see docs/releasing.md."
+          missing="$(unset_of "${required[@]}")"
+          missing_api_key="$(unset_of NOTARY_KEY_ID NOTARY_ISSUER_ID NOTARY_KEY_P8_BASE64)"
+          missing_apple_id="$(unset_of APPLE_ID APPLE_APP_PASSWORD)"
+          failed=false
+          if [[ -n "$missing" ]]; then
+            echo "::error::Missing repository secrets: ${missing% }."
+            failed=true
+          fi
+          if [[ -z "$missing_api_key" ]]; then
+            method=api_key
+          elif [[ -z "$missing_apple_id" ]]; then
+            method=apple_id
+          else
+            echo "::error::No complete notarization credentials. App Store Connect API key is missing: ${missing_api_key% }. Apple ID is missing: ${missing_apple_id% }. Set either group."
+            failed=true
+          fi
+          if [[ "$failed" == "true" ]]; then
+            echo "Nothing was built or published; see docs/releasing.md."
             exit 1
           fi
+          echo "Notarization auth: $method"
+          echo "notary_method=$method" >> "$GITHUB_OUTPUT"
 
       - name: Select Xcode
         uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
@@ -185,12 +208,18 @@ jobs:
       - name: Notarize and staple app
         if: steps.meta.outputs.publish == 'true'
         env:
+          NOTARY_METHOD: ${{ steps.secrets.outputs.notary_method }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
           NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
           NOTARY_KEY_FILE: ${{ runner.temp }}/notary-key.p8
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          printf '%s' "$NOTARY_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY_FILE"
+          if [[ "$NOTARY_METHOD" == "api_key" ]]; then
+            (umask 077 && printf '%s' "$NOTARY_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY_FILE")
+          fi
           zip="$RUNNER_TEMP/NoteIt-notarize.zip"
           ditto -c -k --keepParent dist/NoteIt.app "$zip"
           ./scripts/notarize.sh "$zip"
@@ -212,9 +241,13 @@ jobs:
         env:
           IDENTITY: ${{ steps.cert.outputs.identity }}
           VERSION: ${{ steps.meta.outputs.version }}
+          NOTARY_METHOD: ${{ steps.secrets.outputs.notary_method }}
           NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
           NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
           NOTARY_KEY_FILE: ${{ runner.temp }}/notary-key.p8
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           dmg="out/NoteIt-$VERSION.dmg"
           codesign --force --sign "$IDENTITY" --timestamp "$dmg"
