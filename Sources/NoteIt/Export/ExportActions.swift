@@ -15,11 +15,15 @@ enum ExportActions {
 
     static var currentNote: NoteMeta? { store.note(with: store.selectedNoteID) }
 
-    /// The notebook selected in the sidebar, or else the current note's notebook.
+    /// The notebook selected in the sidebar, or else the current note's notebook. A note in Recently
+    /// Deleted has none.
     static var currentNotebook: Notebook? {
         if case .notebook(let id) = store.selection, let nb = store.notebook(with: id) { return nb }
-        return store.notebook(with: currentNote?.notebookID)
+        guard let note = currentNote, note.deletedAt == nil else { return nil }
+        return store.notebook(with: note.notebookID)
     }
+
+    static var hasExportableNotes: Bool { !NoteExporter.exportableNotes(in: store.notes).isEmpty }
 
     private static var lastFormat: ExportFormat {
         get { UserDefaults.standard.string(forKey: formatKey).flatMap(ExportFormat.init(rawValue:)) ?? .markdown }

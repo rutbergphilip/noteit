@@ -30,7 +30,7 @@ private struct ExportMenuItems: View {
         Button("Export Notebook…") { ExportActions.exportCurrentNotebook() }
             .disabled(ExportActions.currentNotebook == nil)
         Button("Export All Notes…") { ExportActions.exportAllNotes() }
-            .disabled(store.notes.isEmpty)
+            .disabled(!ExportActions.hasExportableNotes)
 
         Divider()
 

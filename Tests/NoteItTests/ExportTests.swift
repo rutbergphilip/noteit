@@ -371,7 +371,27 @@ final class ExportTests: XCTestCase {
     }
 
     func testExportableNotesIsTheSingleFilter() {
-        let notes = [meta("A", in: nil, created: 1), meta("B", in: nil, created: 2)]
-        XCTAssertEqual(NoteExporter.exportableNotes(in: notes), notes)
+        var deleted = meta("C", in: nil, created: 3)
+        deleted.deletedAt = Date()
+        let notes = [meta("A", in: nil, created: 1), meta("B", in: nil, created: 2), deleted]
+        XCTAssertEqual(NoteExporter.exportableNotes(in: notes), Array(notes.prefix(2)))
+    }
+
+    func testExportsSkipNotesInRecentlyDeleted() throws {
+        let work = notebook("Work", 0)
+        var gone = meta("Gone", in: work, created: 2)
+        gone.deletedAt = Date()
+        var looseGone = meta("Loose", in: nil, created: 3)
+        looseGone.deletedAt = Date()
+        let notes = [meta("Kept", in: work, created: 1), gone, looseGone]
+        let body = { (_: UUID) in EditorStyle.paragraph("Body", kind: .body) }
+
+        let notebookResult = try NoteExporter.exportNotebook(work, notes: notes, format: .markdown, to: folder, body: body)
+        XCTAssertEqual(notebookResult.noteCount, 1)
+        XCTAssertEqual(files(in: notebookResult.folder), ["Kept.md"])
+
+        let all = try NoteExporter.exportAll(notebooks: [work], notes: notes, format: .markdown, to: folder, body: body)
+        XCTAssertEqual(all.noteCount, 1)
+        XCTAssertEqual(files(in: all.folder), ["Work", "Work/Kept.md"])
     }
 }

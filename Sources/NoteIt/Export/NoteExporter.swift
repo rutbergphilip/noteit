@@ -83,7 +83,7 @@ enum NoteExporter {
 
     /// The notes that get exported: everything except notes in Recently Deleted.
     static func exportableNotes(in notes: [NoteMeta]) -> [NoteMeta] {
-        notes
+        notes.filter { $0.deletedAt == nil }
     }
 
     // MARK: One note
