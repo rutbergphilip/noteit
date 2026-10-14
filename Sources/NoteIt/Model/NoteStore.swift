@@ -508,45 +508,60 @@ final class NoteStore: ObservableObject {
 
     /// Persists the metadata removal first, then moves the body into `.trash` (never deleted outright).
     func deleteNote(_ id: UUID) {
-        guard note(with: id) != nil else { return }
-        journalSyncDeletion(id, kind: .note)
+        deleteNotes([id])
+    }
+
+    /// Removes notes for good like `deleteNote`, journaling and saving once for all of them.
+    func deleteNotes(_ ids: [UUID]) {
+        var seen = Set<UUID>()
+        let existing = ids.filter { note(with: $0) != nil && seen.insert($0).inserted }
+        guard !existing.isEmpty else { return }
+        journalSyncDeletions(existing, kind: .note)
         hasUnannouncedLocalChange = true
-        removeNote(id)
+        removeNotes(existing)
     }
 
     /// Shared by local and remote deletions (only local ones are journaled). Remote removals skip the
     /// search-index save (see `persistRemoteApply`).
     func removeNote(_ id: UUID, remote: Bool = false) {
-        guard let index = noteIndex(id) else { return }
-        stagedEditorBodies[id] = nil
-        if selectedNoteID == id { selectNeighbor(of: id) }
-        notes.remove(at: index)
-        bodyCache[id] = nil
-        bodyAccessOrder.removeAll { $0 == id }
-        dirtyBodies.remove(id)
-        searchIndex[id] = nil
+        removeNotes([id], remote: remote)
+    }
+
+    private func removeNotes(_ ids: [UUID], remote: Bool = false) {
+        let removed = Set(ids.filter { noteIndex($0) != nil })
+        guard !removed.isEmpty else { return }
+        if let selected = selectedNoteID, removed.contains(selected) { selectNeighbor(of: selected, skipping: removed) }
+        notes.removeAll { removed.contains($0.id) }
+        for id in removed {
+            stagedEditorBodies[id] = nil
+            bodyCache[id] = nil
+            dirtyBodies.remove(id)
+            searchIndex[id] = nil
+            loadErrors[id] = nil
+            loadErrorFiles[id] = nil
+            failedBodies.remove(id)
+            history.removeHistory(of: id)
+            pendingTrash.insert(id)
+        }
+        bodyAccessOrder.removeAll { removed.contains($0) }
         searchIndexDirty = true
-        loadErrors[id] = nil
-        loadErrorFiles[id] = nil
-        failedBodies.remove(id)
-        history.removeHistory(of: id)
-        pendingTrash.insert(id)
         saveTombstones()
-        resolveConflictCopies(of: id, remote: remote)
+        resolveConflictCopies(of: removed, remote: remote)
         libraryDirty = true
         if remote { persistRemoteApply() } else { flush() }
         reconcileSelection()
     }
 
     /// Moves the selection to the next (or else previous) note in the visible list.
-    func selectNeighbor(of id: UUID) {
+    func selectNeighbor(of id: UUID, skipping skipped: Set<UUID> = []) {
         let visible = notes(for: selection, search: searchText)
-        if let pos = visible.firstIndex(where: { $0.id == id }) {
-            let next = visible.indices.contains(pos + 1) ? visible[pos + 1] : (pos > 0 ? visible[pos - 1] : nil)
-            selectedNoteID = next?.id
-        } else {
+        guard let pos = visible.firstIndex(where: { $0.id == id }) else {
             selectedNoteID = nil
+            return
         }
+        let after = visible[(pos + 1)...].first { !skipped.contains($0.id) }
+        let before = visible[..<pos].last { !skipped.contains($0.id) }
+        selectedNoteID = (after ?? before)?.id
     }
 
     /// An open editor and any staged snapshot commit their edits now, before the note becomes read-only.
@@ -565,8 +580,9 @@ final class NoteStore: ObservableObject {
 
     /// Conflict copies of a deleted note no longer conflict with anything. A local deletion is a user change;
     /// a remote one only updates this Mac (the deleting Mac pushes the cleared copies).
-    private func resolveConflictCopies(of id: UUID, remote: Bool) {
-        for i in notes.indices where notes[i].conflictOriginalID == id && notes[i].conflictSource != nil {
+    private func resolveConflictCopies(of ids: Set<UUID>, remote: Bool) {
+        for i in notes.indices where notes[i].conflictSource != nil {
+            guard let original = notes[i].conflictOriginalID, ids.contains(original) else { continue }
             notes[i].conflictSource = nil
             notes[i].conflictOriginalID = nil
             if !remote {
@@ -1444,8 +1460,13 @@ final class NoteStore: ObservableObject {
     }
 
     private func journalSyncDeletion(_ id: UUID, kind: RecordKind) {
-        guard Self.syncJournalEnabled else { return }
-        syncDeletionJournal[id] = LocalDeletion(kind: kind, deletedAt: Date())
+        journalSyncDeletions([id], kind: kind)
+    }
+
+    private func journalSyncDeletions(_ ids: [UUID], kind: RecordKind) {
+        guard Self.syncJournalEnabled, !ids.isEmpty else { return }
+        let date = Date()
+        for id in ids { syncDeletionJournal[id] = LocalDeletion(kind: kind, deletedAt: date) }
         saveSyncDeletionJournal()
     }
 

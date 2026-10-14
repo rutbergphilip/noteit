@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 /// Recently Deleted: deleting a note sets `deletedAt` (a normal, synced metadata change). Notes are removed
-/// for good, through the tombstone path in `deleteNote`, 30 days later or when the user asks.
+/// for good, through the tombstone path in `deleteNotes`, 30 days later or when the user asks.
 extension NoteStore {
     nonisolated static let recentlyDeletedRetention: TimeInterval = 30 * 24 * 60 * 60
     static let purgeCheckInterval: TimeInterval = 24 * 60 * 60
@@ -75,9 +75,7 @@ extension NoteStore {
 
     /// Removes notes in Recently Deleted for good. Notes not in Recently Deleted are left alone.
     func deleteNow(_ ids: [UUID]) {
-        for id in ids where note(with: id)?.deletedAt != nil {
-            deleteNote(id)
-        }
+        deleteNotes(ids.filter { note(with: $0)?.deletedAt != nil })
     }
 
     func emptyRecentlyDeleted() {
@@ -91,7 +89,7 @@ extension NoteStore {
             guard let deletedAt = meta.deletedAt else { return false }
             return now.timeIntervalSince(deletedAt) >= Self.recentlyDeletedRetention
         }.map(\.id)
-        deleteNow(expired)
+        if !expired.isEmpty { deleteNotes(expired) }
         history.pruneAll(keeping: Set(notes.map(\.id)))
         return expired.count
     }

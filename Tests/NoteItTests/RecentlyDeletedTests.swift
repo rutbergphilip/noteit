@@ -203,6 +203,48 @@ final class RecentlyDeletedTests: XCTestCase {
         XCTAssertEqual(ids(reopened.notes), [kept])
     }
 
+    func testDeleteNowRemovesManyNotesInOneBatch() throws {
+        NoteStore.syncJournalEnabled = true
+        let store = makeStore()
+        let gone = (0..<5).map { addNote(store, "Note \($0)") }
+        let kept = addNote(store, "Kept")
+        for id in gone {
+            store.updateBody(id, NSAttributedString(string: "Edited \(id)"))
+        }
+        store.flush()
+        XCTAssertTrue(gone.allSatisfy { fm.fileExists(atPath: store.history.directory(for: $0).path) })
+        store.moveToRecentlyDeleted(gone)
+        store.selection = .recentlyDeleted
+        store.selectedNoteID = gone[2]
+
+        store.deleteNow(gone + [kept])
+
+        XCTAssertEqual(ids(store.notes), [kept], "notes not in Recently Deleted are left alone")
+        XCTAssertNil(store.selectedNoteID, "the selection doesn't land on another removed note")
+        for id in gone {
+            XCTAssertEqual(store.syncDeletionJournal[id]?.kind, .note)
+            XCTAssertFalse(fm.fileExists(atPath: store.history.directory(for: id).path))
+            XCTAssertFalse(fm.fileExists(atPath: store.bodyURL(for: id).path))
+        }
+        let trashed = (try? fm.contentsOfDirectory(atPath: store.trashURL.path)) ?? []
+        XCTAssertEqual(trashed.count, gone.count)
+        XCTAssertFalse(fm.fileExists(atPath: store.tombstonesURL.path), "tombstones clear once the removal is saved")
+        let journal = try String(contentsOf: store.syncDeletionsURL, encoding: .utf8)
+        XCTAssertTrue(gone.allSatisfy { journal.contains($0.uuidString) })
+        XCTAssertEqual(ids(makeStore().notes), [kept])
+    }
+
+    func testPurgeWithNothingExpiredLeavesTheLibraryAlone() throws {
+        let store = makeStore()
+        let id = addNote(store, "Recent")
+        store.moveToRecentlyDeleted([id])
+        store.flush()
+        let saved = try fm.attributesOfItem(atPath: store.libraryURL.path)[.modificationDate] as? Date
+        XCTAssertEqual(store.purgeExpiredDeletedNotes(), 0)
+        XCTAssertEqual(try fm.attributesOfItem(atPath: store.libraryURL.path)[.modificationDate] as? Date, saved)
+        XCTAssertNotNil(store.note(with: id))
+    }
+
     func testPurgeRemovesNotesDeletedMoreThan30DaysAgo() {
         let store = makeStore()
         let old = addNote(store, "Old")

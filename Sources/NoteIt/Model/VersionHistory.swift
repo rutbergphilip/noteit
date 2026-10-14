@@ -90,10 +90,13 @@ final class VersionHistory {
     func prune(_ id: UUID) {
         let cutoff = now().addingTimeInterval(-Self.maxAge)
         let fm = FileManager.default
-        for (offset, version) in versions(of: id).enumerated() where offset >= Self.maxVersions || version.date < cutoff {
+        let all = versions(of: id)
+        var kept = all.count
+        for (offset, version) in all.enumerated() where offset >= Self.maxVersions || version.date < cutoff {
             try? fm.removeItem(at: version.url)
+            kept -= 1
         }
-        if versions(of: id).isEmpty { removeHistory(of: id) }
+        if kept == 0 { removeHistory(of: id) }
     }
 
     /// Prunes every note's history and removes the history of notes not in `existing`.
