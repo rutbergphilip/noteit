@@ -266,13 +266,28 @@ final class ExportTests: XCTestCase {
         XCTAssertTrue(html.contains("<h1>Groceries</h1>"))
         XCTAssertTrue(html.contains("<strong>bold</strong>"))
         XCTAssertTrue(html.contains("<a href=\"https://example.com/a\">site</a>"))
-        XCTAssertTrue(html.contains("<li class=\"checked\"><input type=\"checkbox\" disabled checked> Done task"))
+        XCTAssertTrue(html.contains("<li class=\"checked\"><input type=\"checkbox\" disabled checked> <span class=\"done\">Done task</span>"))
         XCTAssertTrue(html.contains("<pre><code>let x = 1\nlet y = 2</code></pre>"))
         XCTAssertTrue(html.contains("<th>Name</th>"))
         XCTAssertTrue(html.contains("prefers-color-scheme: dark"))
         XCTAssertFalse(html.contains("src=\"http"), "no external resources")
         // Nested bullets: Apples and Pears sit inside the item above them.
         XCTAssertTrue(html.contains("<ul>\n<li>Fruit<ul>\n<li>Apples<ul>\n<li>Pears</li></ul>\n</li></ul>\n</li></ul>"), html)
+    }
+
+    func testHTMLStrikesThroughOnlyTheCheckedItemItself() {
+        let tv = editor(["Parent", "Child", "Sibling"])
+        tv.setSelectedRange(NSRange(location: range(of: "Parent", in: tv).location, length: range(of: "Sibling", in: tv).upperBound - range(of: "Parent", in: tv).location))
+        tv.perform(.list(.checklist))
+        apply(.indent, to: "Child", in: tv)
+        apply(.toggleCheckbox, to: "Parent", in: tv)
+        let html = HTMLWriter.write(tv.attributedString(), title: "Tasks")
+
+        XCTAssertTrue(html.contains("<span class=\"done\">Parent</span><ul class=\"checklist\">"), html)
+        XCTAssertTrue(html.contains("<li class=\"unchecked\"><input type=\"checkbox\" disabled> Child"), html)
+        XCTAssertFalse(html.contains("<span class=\"done\">Child"), html)
+        XCTAssertFalse(html.contains("li.checked"), "the strike-through is on the item's own text, not its children")
+        XCTAssertTrue(html.contains(".done { color: var(--muted); text-decoration: line-through; }"))
     }
 
     func testHTMLEscapesTextSoNotesCantInjectTags() {

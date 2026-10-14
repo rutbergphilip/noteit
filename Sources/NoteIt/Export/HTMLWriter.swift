@@ -49,7 +49,11 @@ enum HTMLWriter {
                 body += opening + "\n"
                 lists.append((key, tag, level))
             }
-            body += item + inline(runs)
+            if case .checkbox(true) = marker {
+                body += item + "<span class=\"done\">" + inline(runs) + "</span>"
+            } else {
+                body += item + inline(runs)
+            }
         }
         closeLists(above: -1)
 
@@ -203,8 +207,7 @@ enum HTMLWriter {
     ul.checklist { list-style: none; padding-left: 0.3em; }
     ul.checklist ul.checklist { padding-left: 1.6em; }
     ul.checklist input { margin: 0 0.4em 0 0; vertical-align: -1px; }
-    li.checked { color: var(--muted); text-decoration: line-through; }
-    li.checked li { text-decoration: none; }
+    .done { color: var(--muted); text-decoration: line-through; }
     mark { color: #1d1d1f; border-radius: 3px; padding: 0 0.1em; }
     img { max-width: 100%; height: auto; border-radius: 4px; }
     table { border-collapse: collapse; width: 100%; margin: 0 0 1em; }
