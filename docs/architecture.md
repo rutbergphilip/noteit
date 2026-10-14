@@ -21,6 +21,7 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 | `Design/` | `Tokens` (colors, spacing, radii and chrome type styles) and `AppResources` (app icon and menu bar glyph images) |
 | `Model/` | `Models` (notebooks, note metadata, sidebar selection, palette), `NoteStore` (the single observable store: queries, editing, tags and persistence), seed content |
 | `Views/` | The main window: three-column split, sidebar, note list, editor container with the note header and conflict badge, empty states, notebook sheet and the sync status pill |
+| `Import/` | `MarkdownReader` (Markdown → editor rich text), `MarkdownImporter` (folders, Obsidian vaults, Bear TextBundles), `AppleNotesImporter` (Notes app over Apple Events, HTML → editor styles) and `ImportSheet` (File › Import…) |
 | `Editor/` | `RichTextEditor` (the SwiftUI wrapper), `NoteItTextView` (an `NSTextView` subclass whose layout manager draws code blocks, quotes, dividers and checkboxes), `TextFormatter`, `MarkdownShortcuts`, `FormatCommand` (every formatting command and its shortcut), `FormattingToolbar`, `EditorStyles` (type scale, colors and block kinds) |
 | `MenuBar/` | The menu bar panel, the Quick Capture panel, the panel search field and shared views |
 | `Hotkeys/` | `HotkeyAction`, `HotkeyManager` (Carbon `RegisterEventHotKey`), `KeyCombo` and the `ShortcutRecorder` view |
@@ -71,6 +72,14 @@ The editor is an `NSTextView` that stores each note as RTFD.
 - **Markdown shortcuts** are handled in `MarkdownShortcuts.swift`, and every formatting command, with its menu title, toolbar icon and shortcut, is defined in `FormatCommand.swift`. The full list is in [keyboard-shortcuts.md](keyboard-shortcuts.md).
 - **Tags.** `#hashtags` are collected from note text, lowercased. A `#` counts only at the start of the text or after whitespace, an opening bracket or quote, `,` or `;`. Hashtags inside inline code, code blocks and links are ignored.
 - **Search** matches every word of the query against the title and full text. Matching ignores case, accents and character width, using the folded text in `search-index.json`.
+
+## Import
+
+File › Import… (`ImportCommands`) opens `ImportSheet` on the main window. Imports run on the main actor in small steps, so the progress bar and Cancel stay responsive; notes already imported are kept when you cancel.
+
+- **Building notes.** `MarkdownReader` and `AppleNotesImporter.convert(html:title:)` build bodies with the editor's own helpers (`EditorStyle.paragraph`, `markerText`, `listParagraphStyle`, `table`, `NoteItTextView.applyCheckedStyle` and `normalize`), so imported notes carry the same block sentinels as typed ones. `MarkdownReader` is the inverse of the Markdown export mapping. Every line becomes a paragraph, and image paths go through a resolver closure.
+- **Saving.** `NoteStore+Import.swift` adds `createImportedNote(body:title:notebookID:createdAt:updatedAt:)`, which goes through `createNote` (search index, tags, revision, sync) and then sets the source's dates, and `notebookForImport(named:)`, which reuses a notebook with the same name.
+- **Sources.** `MarkdownImporter` walks folders (skipping hidden ones such as `.obsidian` and `.trash`), opens `.textbundle` folders, and unzips `.textpack` files with `ditto` into a temporary folder. `AppleNotesImporter` asks for Automation permission with `AEDeterminePermissionToAutomateTarget`, then reads folders and notes with `NSAppleScript`. The scripting is behind a protocol so tests use canned data. The app is signed with `Resources/NoteIt.entitlements` (Apple Events) for this.
 
 ## Global hotkeys
 

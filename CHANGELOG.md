@@ -7,6 +7,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- File › Import… brings in notes from Markdown folders, Obsidian vaults, Bear and Apple Notes.
+- Folders and subfolders become notebooks, and an existing notebook with the same name is reused.
+- Markdown front matter titles, tags and dates are kept, and images next to the notes come along.
+- Bear TextBundle and TextPack exports are imported with their images and dates.
+- Apple Notes are read straight from the Notes app, keeping folders, formatting, embedded images and dates. Locked notes are skipped and counted.
+
 ## [0.1.0] - 2026-10-14
 
 ### Added
