@@ -9,18 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
-- Recently Deleted. Deleted notes, including the notes of a deleted notebook, stay there for 30 days and can be recovered. Deleting can be undone from the toast or with ⌘Z.
-- Version history. File › Version History… (⌥⌘Y) lists earlier versions of a note and can restore one. Versions are kept on each Mac and aren't synced.
-- Export a note as Markdown, HTML, PDF, RTFD or plain text with File › Export Note As… (⇧⌘S). Images in Markdown exports are saved next to the file.
-- Export a whole notebook, or all notes with one folder per notebook.
-- Print a note with ⌘P.
-- Share a note from the toolbar or File › Share.
-- Edit › Copy as Markdown (⌥⇧⌘C) copies the selection, or the whole note.
-- File › Import… brings in notes from Markdown folders, Obsidian vaults, Bear and Apple Notes.
-- Folders and subfolders become notebooks, and an existing notebook with the same name is reused.
-- Markdown front matter titles, tags and dates are kept, and images next to the notes come along.
-- Bear TextBundle and TextPack exports are imported with their images and dates.
-- Apple Notes are read straight from the Notes app, keeping folders, formatting, embedded images and dates. Locked notes are skipped and counted.
+- Recently Deleted. Deleted notes stay there for 30 days and can be recovered. ⌘Z undoes a delete.
+- Version history. File › Version History… (⌥⌘Y) shows earlier versions of a note and can restore one. Versions stay on the Mac that recorded them.
+- Export a note, a notebook or all notes as Markdown, HTML, PDF, RTFD or plain text. Notes in Recently Deleted are left out.
+- Print a note (⌘P), share it from the toolbar or File › Share, or copy it as Markdown (⌥⇧⌘C).
+- Import from Apple Notes, Bear, Obsidian and Markdown folders with File › Import…, keeping folders, images and dates.
 
 ## [0.1.0] - 2026-10-14
 
