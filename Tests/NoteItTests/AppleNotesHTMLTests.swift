@@ -183,6 +183,43 @@ final class AppleNotesHTMLTests: XCTestCase {
         XCTAssertEqual(report.summary, "Imported 2 notes into 2 notebooks. Skipped 1 locked note and 2 attachments.")
     }
 
+    private func makeStore(_ base: URL) -> NoteStore {
+        NoteStore(location: LibraryLocation(url: base, seedsFreshLibrary: false))
+    }
+
+    private func fake(notes: [String], failures: [String: Int] = [:]) -> FakeNotes {
+        FakeNotes(
+            folders: [("f1", "Notes", "")],
+            notes: ["f1": notes.map { ($0, false) }],
+            bodies: Dictionary(uniqueKeysWithValues: notes.map { ($0, ("Note \($0)", "<div>Note \($0)</div><div>Text</div>", 0)) }),
+            created: Date(timeIntervalSince1970: 1_600_000_000), modified: Date(timeIntervalSince1970: 1_650_000_000),
+            failures: failures
+        )
+    }
+
+    func testOneUnreadableNoteDoesNotStopTheImport() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("noteit-notes-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let store = makeStore(base)
+        let report = try await AppleNotesImporter(store: store, scripting: fake(notes: ["n1", "n2", "n3"], failures: ["n2": -1728])).run { _ in }
+        XCTAssertEqual(report.notesImported, 2)
+        XCTAssertEqual(report.notesSkipped, 1)
+        XCTAssertFalse(report.permissionDenied)
+        XCTAssertEqual(report.summary, "Imported 2 notes into 1 notebook. Skipped 1 unreadable note.")
+        XCTAssertEqual(Set(store.notes.map(\.title)), ["Note n1", "Note n3"])
+    }
+
+    func testLosingPermissionMidwayKeepsImportedNotes() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("noteit-notes-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let store = makeStore(base)
+        let report = try await AppleNotesImporter(store: store, scripting: fake(notes: ["n1", "n2", "n3"], failures: ["n2": -1743])).run { _ in }
+        XCTAssertEqual(report.notesImported, 1)
+        XCTAssertTrue(report.permissionDenied)
+        XCTAssertTrue(report.summary.hasPrefix("Imported 1 note into 1 notebook. NoteIt isn't allowed"), report.summary)
+        XCTAssertEqual(makeStore(base).notes.map(\.title), ["Note n1"], "imported notes are saved")
+    }
+
     func testPermissionDenialIsFriendly() async {
         let store = NoteStore(location: LibraryLocation(url: FileManager.default.temporaryDirectory.appendingPathComponent("noteit-notes-\(UUID().uuidString)"), seedsFreshLibrary: false))
         let denied = DeniedNotes()
@@ -210,13 +247,19 @@ private struct FakeNotes: AppleNotesScripting {
     var bodies: [String: (String, String, Int)]
     var created: Date
     var modified: Date
+    /// Note id → the Apple Event error reading it throws.
+    var failures: [String: Int] = [:]
 
     func run(_ source: String) throws -> NSAppleEventDescriptor {
+        XCTAssertFalse(Thread.isMainThread, "scripts run off the main thread")
         if source == AppleNotesImporter.foldersScript {
             return list(folders.map { list([text($0.0), text($0.1), text($0.2)]) })
         }
         for (folder, entries) in notes where source == AppleNotesImporter.noteListScript(folderID: folder) {
-            return list(entries.map { list([text($0.0), NSAppleEventDescriptor(boolean: $0.1)]) })
+            return list([list(entries.map { text($0.0) }), list(entries.map { NSAppleEventDescriptor(boolean: $0.1) })])
+        }
+        for (id, code) in failures where source == AppleNotesImporter.noteScript(noteID: id) {
+            throw AppleScriptError(code: code, message: "Failed")
         }
         for (id, body) in bodies where source == AppleNotesImporter.noteScript(noteID: id) {
             return list([text(body.0), text(body.1), NSAppleEventDescriptor(date: created), NSAppleEventDescriptor(date: modified),

@@ -99,7 +99,8 @@ final class ImportModel: ObservableObject {
         task = Task { [weak self] in
             guard let self else { return }
             if let report = await work(self) {
-                self.phase = report.notesImported == 0 && report.lockedSkipped == 0 && !report.cancelled
+                self.phase = report.notesImported == 0 && report.lockedSkipped == 0 && report.notesSkipped == 0
+                    && !report.cancelled && !report.permissionDenied
                     ? .failed(.nothingToImport)
                     : .finished(report)
             }
@@ -216,7 +217,11 @@ struct ImportSheet: View {
                 .foregroundStyle(.secondary)
             } else {
                 ProgressView().progressViewStyle(.linear)
-                Text(source == .appleNotes ? "Reading folders from Notes…" : "Looking for notes…")
+                Text(source != .appleNotes ? "Looking for notes…"
+                     : model.progress.currentName.isEmpty ? "Reading folders from Notes…"
+                     : "Reading “\(model.progress.currentName)” from Notes…")
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -234,17 +239,20 @@ struct ImportSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Label {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(report.cancelled ? "Import stopped" : "Import complete").font(.headline)
+                    Text(report.cancelled || report.permissionDenied ? "Import stopped" : "Import complete").font(.headline)
                     Text(report.summary)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             } icon: {
-                Image(systemName: report.cancelled ? "stop.circle.fill" : "checkmark.circle.fill")
+                Image(systemName: report.cancelled || report.permissionDenied ? "stop.circle.fill" : "checkmark.circle.fill")
                     .font(.system(size: 22))
-                    .foregroundStyle(report.cancelled ? Tokens.Color.inkSecondary : Tokens.Color.success)
+                    .foregroundStyle(report.cancelled || report.permissionDenied ? Tokens.Color.inkSecondary : Tokens.Color.success)
             }
             HStack {
+                if report.permissionDenied {
+                    Button("Open System Settings") { AppleNotesImporter.openAutomationSettings() }
+                }
                 Spacer()
                 Button("Done", action: close)
                     .keyboardShortcut(.defaultAction)

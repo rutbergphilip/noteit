@@ -7,7 +7,10 @@ struct ImportReport: Equatable {
     var lockedSkipped = 0
     var attachmentsSkipped = 0
     var filesSkipped = 0
+    var notesSkipped = 0
     var cancelled = false
+    /// Notes stopped answering because NoteIt's permission was turned off during the import.
+    var permissionDenied = false
 
     var notebooksUsed: Int { notebookIDs.count }
 
@@ -24,7 +27,9 @@ struct ImportReport: Equatable {
         if lockedSkipped > 0 { skipped.append(Self.count(lockedSkipped, "locked note", "locked notes")) }
         if attachmentsSkipped > 0 { skipped.append(Self.count(attachmentsSkipped, "attachment", "attachments")) }
         if filesSkipped > 0 { skipped.append(Self.count(filesSkipped, "unreadable file", "unreadable files")) }
+        if notesSkipped > 0 { skipped.append(Self.count(notesSkipped, "unreadable note", "unreadable notes")) }
         if !skipped.isEmpty { parts.append("Skipped \(Self.list(skipped)).") }
+        if permissionDenied, let message = ImportError.notesPermissionDenied.errorDescription { parts.append(message) }
         return parts.joined(separator: " ")
     }
 

@@ -16,8 +16,13 @@ struct AppleNotesNote {
     var attachmentCount: Int
 }
 
-/// Runs AppleScript against the Notes app; replaced in tests.
-protocol AppleNotesScripting {
+struct AppleNotesEntry: Equatable {
+    var id: String
+    var locked: Bool
+}
+
+/// Runs AppleScript against the Notes app; replaced in tests. Called on `AppleScriptThread`, one script at a time.
+protocol AppleNotesScripting: Sendable {
     func run(_ source: String) throws -> NSAppleEventDescriptor
 }
 
@@ -39,6 +44,45 @@ struct SystemAppleNotesScripting: AppleNotesScripting {
             throw AppleScriptError(code: code, message: message)
         }
         return result
+    }
+}
+
+/// Runs every AppleScript on one background thread, because NSAppleScript isn't thread-safe
+/// and blocks while Notes answers.
+final class AppleScriptThread: @unchecked Sendable {
+    static let shared = AppleScriptThread()
+
+    private let condition = NSCondition()
+    private var jobs: [() -> Void] = []
+
+    private init() {
+        let thread = Thread { [self] in loop() }
+        thread.name = "NoteIt AppleScript"
+        thread.qualityOfService = .userInitiated
+        thread.start()
+    }
+
+    func run<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            enqueue { continuation.resume(with: Result { try work() }) }
+        }
+    }
+
+    private func enqueue(_ job: @escaping () -> Void) {
+        condition.lock()
+        jobs.append(job)
+        condition.signal()
+        condition.unlock()
+    }
+
+    private func loop() {
+        while true {
+            condition.lock()
+            while jobs.isEmpty { condition.wait() }
+            let job = jobs.removeFirst()
+            condition.unlock()
+            autoreleasepool { job() }
+        }
     }
 }
 
@@ -98,47 +142,71 @@ final class AppleNotesImporter {
 
     // MARK: Import
 
+    /// Lists and reads notes on `AppleScriptThread`, converting and saving them here on the main actor.
+    /// A note that can't be read is skipped; losing permission stops the run but keeps what was imported.
     func run(progress: (ImportProgress) -> Void) async throws -> ImportReport {
         var report = ImportReport()
-        let folders = try script(Self.foldersScript).map(Self.folders(from:)) ?? []
+        let scripting = scripting
+        let folders: [AppleNotesFolder]
+        do {
+            folders = try await AppleScriptThread.shared.run { Self.folders(from: try scripting.run(Self.foldersScript)) }
+        } catch {
+            throw Self.importError(error)
+        }
         let paths = Self.folderPaths(folders)
         let wanted = folders.filter { !Self.isRecentlyDeleted($0) }
 
-        var plan: [(folder: String, noteID: String, locked: Bool)] = []
+        var plan: [(folder: String, entry: AppleNotesEntry)] = []
         var seen = Set<String>()
         for folder in wanted {
             if Task.isCancelled { report.cancelled = true; return finish(report) }
-            let rows = try script(Self.noteListScript(folderID: folder.id)).map(Self.rows(from:)) ?? []
-            for row in rows where row.count >= 2 {
-                let id = row[0].stringValue ?? ""
-                guard !id.isEmpty, seen.insert(id).inserted else { continue }
-                plan.append((paths[folder.id] ?? folder.name, id, row[1].booleanValue))
+            let path = paths[folder.id] ?? folder.name
+            progress(ImportProgress(currentName: path))
+            let entries: [AppleNotesEntry]
+            do {
+                entries = try await AppleScriptThread.shared.run {
+                    Self.entries(from: try scripting.run(Self.noteListScript(folderID: folder.id)))
+                }
+            } catch let error where Self.isPermissionError(error) {
+                return try finishDenied(report)
+            } catch {
+                continue
             }
-            await Task.yield()
+            for entry in entries where !entry.id.isEmpty && seen.insert(entry.id).inserted {
+                plan.append((path, entry))
+            }
         }
 
         progress(ImportProgress(completed: 0, total: plan.count))
-        for (index, entry) in plan.enumerated() {
+        for (index, item) in plan.enumerated() {
             if Task.isCancelled { report.cancelled = true; break }
             defer { progress(ImportProgress(completed: index + 1, total: plan.count)) }
-            if entry.locked {
+            if item.entry.locked {
                 report.lockedSkipped += 1
                 continue
             }
-            guard let row = try script(Self.noteScript(noteID: entry.noteID)).map(Self.list(from:)),
-                  let note = Self.note(from: row) else {
-                report.filesSkipped += 1
+            let id = item.entry.id
+            let fetched: AppleNotesNote?
+            do {
+                fetched = try await AppleScriptThread.shared.run { Self.note(from: Self.list(from: try scripting.run(Self.noteScript(noteID: id)))) }
+            } catch let error where Self.isPermissionError(error) {
+                return try finishDenied(report)
+            } catch {
+                fetched = nil
+            }
+            if Task.isCancelled { report.cancelled = true; break }
+            guard let note = fetched else {
+                report.notesSkipped += 1
                 continue
             }
             progress(ImportProgress(completed: index, total: plan.count, currentName: note.name))
             let converted = Self.convert(html: note.html, title: note.name)
             report.attachmentsSkipped += max(0, note.attachmentCount - converted.images)
-            let notebook = store.notebookForImport(named: entry.folder)
+            let notebook = store.notebookForImport(named: item.folder)
             store.createImportedNote(body: converted.body, title: note.name, notebookID: notebook.id,
                                      createdAt: note.created, updatedAt: note.modified)
             report.notesImported += 1
             report.notebookIDs.insert(notebook.id)
-            await Task.yield()
         }
         return finish(report)
     }
@@ -148,15 +216,25 @@ final class AppleNotesImporter {
         return report
     }
 
-    private func script(_ source: String) throws -> NSAppleEventDescriptor? {
-        do {
-            return try scripting.run(source)
-        } catch let error as AppleScriptError {
-            if error.code == Self.notPermitted || error.code == Int(errAEEventWouldRequireUserConsent) {
-                throw ImportError.notesPermissionDenied
-            }
-            throw ImportError.notesUnavailable(error.message)
+    /// Ends a run that lost permission: with the summary if anything was done, else with the permission error.
+    private func finishDenied(_ report: ImportReport) throws -> ImportReport {
+        var report = finish(report)
+        guard report.notesImported > 0 || report.lockedSkipped > 0 || report.notesSkipped > 0 else {
+            throw ImportError.notesPermissionDenied
         }
+        report.permissionDenied = true
+        return report
+    }
+
+    nonisolated static func isPermissionError(_ error: Error) -> Bool {
+        guard let error = error as? AppleScriptError else { return false }
+        return error.code == notPermitted || error.code == Int(errAEEventWouldRequireUserConsent)
+    }
+
+    nonisolated private static func importError(_ error: Error) -> Error {
+        if isPermissionError(error) { return ImportError.notesPermissionDenied }
+        if let error = error as? AppleScriptError { return ImportError.notesUnavailable(error.message) }
+        return error
     }
 
     // MARK: Scripts
@@ -186,16 +264,13 @@ final class AppleNotesImporter {
     return out
     """
 
+    /// Two Apple Events per folder, whatever its size: every id, then every locked flag.
     nonisolated static func noteListScript(folderID: String) -> String {
         """
         with timeout of 600 seconds
             tell application "Notes"
                 set f to folder id "\(escape(folderID))"
-                set out to {}
-                repeat with n in (notes of f)
-                    set end of out to {id of n, password protected of n}
-                end repeat
-                return out
+                return {id of every note of f, password protected of every note of f}
             end tell
         end timeout
         """
@@ -218,16 +293,16 @@ final class AppleNotesImporter {
 
     // MARK: Descriptors
 
-    private static func list(from descriptor: NSAppleEventDescriptor) -> [NSAppleEventDescriptor] {
+    nonisolated private static func list(from descriptor: NSAppleEventDescriptor) -> [NSAppleEventDescriptor] {
         guard descriptor.numberOfItems > 0 else { return [] }
         return (1...descriptor.numberOfItems).compactMap { descriptor.atIndex($0) }
     }
 
-    private static func rows(from descriptor: NSAppleEventDescriptor) -> [[NSAppleEventDescriptor]] {
+    nonisolated private static func rows(from descriptor: NSAppleEventDescriptor) -> [[NSAppleEventDescriptor]] {
         list(from: descriptor).map(list(from:))
     }
 
-    private static func folders(from descriptor: NSAppleEventDescriptor) -> [AppleNotesFolder] {
+    nonisolated private static func folders(from descriptor: NSAppleEventDescriptor) -> [AppleNotesFolder] {
         var byID: [String: AppleNotesFolder] = [:]
         var order: [String] = []
         for row in rows(from: descriptor) where row.count >= 3 {
@@ -243,7 +318,16 @@ final class AppleNotesImporter {
         return order.compactMap { byID[$0] }
     }
 
-    private static func note(from row: [NSAppleEventDescriptor]) -> AppleNotesNote? {
+    /// Pairs the id and locked lists that `noteListScript` returns.
+    nonisolated private static func entries(from descriptor: NSAppleEventDescriptor) -> [AppleNotesEntry] {
+        let columns = list(from: descriptor)
+        guard columns.count >= 2 else { return [] }
+        let ids = list(from: columns[0])
+        let locked = list(from: columns[1])
+        return ids.indices.map { AppleNotesEntry(id: ids[$0].stringValue ?? "", locked: locked.indices.contains($0) && locked[$0].booleanValue) }
+    }
+
+    nonisolated private static func note(from row: [NSAppleEventDescriptor]) -> AppleNotesNote? {
         guard row.count >= 5 else { return nil }
         return AppleNotesNote(name: row[0].stringValue ?? "", html: row[1].stringValue ?? "",
                               created: row[2].dateValue, modified: row[3].dateValue,
@@ -255,7 +339,7 @@ final class AppleNotesImporter {
     }
 
     /// Folder id → notebook name, with nested folders joined by " / " and accounts left out.
-    static func folderPaths(_ folders: [AppleNotesFolder]) -> [String: String] {
+    nonisolated static func folderPaths(_ folders: [AppleNotesFolder]) -> [String: String] {
         let byID = Dictionary(folders.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var result: [String: String] = [:]
         for folder in folders {
