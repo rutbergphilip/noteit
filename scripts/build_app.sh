@@ -16,6 +16,8 @@ BUNDLE_ID="$(sed -nE 's/^ *public static let bundleID = "([^"]+)".*/\1/p' Source
 [[ -n "$BUNDLE_ID" ]] || { echo "error: couldn't read AppIdentity.bundleID" >&2; exit 1; }
 BUILD_DIR="$ROOT/build"
 APP="$BUILD_DIR/$APP_NAME.app"
+# The main app's entitlements: Apple Events, for importing from the Notes app.
+ENTITLEMENTS="$ROOT/Resources/NoteIt.entitlements"
 # NOTEIT_* first, then the legacy INKWELL_* names (pre-rename), then the default.
 INSTALL_DIR="${NOTEIT_INSTALL_DIR:-${INKWELL_INSTALL_DIR:-$HOME/Applications}}"
 SIGN_IDENTITY="${NOTEIT_SIGN_IDENTITY:--}"
@@ -80,6 +82,8 @@ plutil -replace NSAppTransportSecurity -json '{"NSAllowsLocalNetworking":true}' 
 # Sparkle: the appcast is attached to each GitHub release; updates are verified with this EdDSA key.
 plist_str SUFeedURL "https://github.com/rutbergphilip/noteit/releases/latest/download/appcast.xml"
 plist_str SUPublicEDKey "xK/MPK9UYC+zcyvc1/b1PUdPShY7k4F3+NGyaFF1B4o="
+# Shown when macOS asks for permission to control Notes (File › Import… › Apple Notes).
+plist_str NSAppleEventsUsageDescription "NoteIt reads your notes from the Notes app when you choose to import them."
 plutil -lint "$PLIST"
 
 echo "==> Building AppIcon.icns"
@@ -109,10 +113,12 @@ if [[ "$DISTRIBUTION_SIGNING" == "1" ]]; then
     codesign "${SIGN_FLAGS[@]}" "$SPARKLE_B/Autoupdate"
     codesign "${SIGN_FLAGS[@]}" "$SPARKLE_B/Updater.app"
     codesign "${SIGN_FLAGS[@]}" "$SPARKLE"
-    codesign "${SIGN_FLAGS[@]}" "$APP"
+    codesign "${SIGN_FLAGS[@]}" --entitlements "$ENTITLEMENTS" "$APP"
 else
     echo "==> Codesigning (ad-hoc)"
     codesign --force --deep -s - "$APP"
+    # --deep would hand the app's entitlements to Sparkle's helpers too, so the app is re-signed on its own.
+    codesign --force -s - --entitlements "$ENTITLEMENTS" "$APP"
 fi
 codesign --verify --deep --strict "$APP"
 

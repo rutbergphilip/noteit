@@ -21,6 +21,7 @@ struct NoteItApp: App {
         .commands { NoteItCommands() }
         .commands { RecentlyDeletedCommands() }
         .commands { ExportCommands() }
+        .commands { ImportCommands() }
 
         Settings {
             SettingsView()
