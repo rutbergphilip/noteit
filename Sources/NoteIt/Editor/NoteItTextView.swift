@@ -75,7 +75,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     // MARK: Layout
 
     override func setFrameSize(_ newSize: NSSize) {
-        let inset = max(EditorStyle.minHorizontalInset, floor((newSize.width - EditorStyle.maxTextWidth) / 2))
+        let inset = EditorColumnLayout.fitting(width: newSize.width).inset
         if abs(textContainerInset.width - inset) > 0.5 {
             textContainerInset = NSSize(width: inset, height: EditorStyle.verticalInset)
         }
