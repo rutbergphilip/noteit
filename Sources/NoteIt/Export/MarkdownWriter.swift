@@ -239,8 +239,9 @@ enum MarkdownWriter {
             return "\\" + s
         }
 
-        private func destination(_ s: String) -> String {
-            s.contains(where: { $0 == " " || $0 == "(" || $0 == ")" || $0 == "<" || $0 == ">" }) ? "<" + s + ">" : s
+        private func destination(_ raw: String) -> String {
+            let s = raw.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "&", with: "\\&")
+            return s.contains(where: { $0 == " " || $0 == "(" || $0 == ")" || $0 == "<" || $0 == ">" }) ? "<" + s + ">" : s
         }
 
         private mutating func attachmentMarkdown(_ attachment: NSTextAttachment) -> String {

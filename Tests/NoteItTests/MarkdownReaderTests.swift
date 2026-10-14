@@ -104,6 +104,14 @@ final class MarkdownReaderTests: XCTestCase {
         XCTAssertEqual(attrs(s, of: "h")[.link] as? URL, URL(string: "ftp://example.com"))
     }
 
+    func testEncodedSchemesAreDecodedBeforeTheAllowList() {
+        let s = read("[a](javascript&colon;alert(1)) [b](javascript&#58;x) [c](javascript&#x3A;x) [d](java&Tab;script&colon;x) [e](https&colon;//example.com/?a=1&amp;b=2) [f](https://example.com/?a=1\\&amp;b)")
+        XCTAssertEqual(s.string, "a b c d e f\n")
+        for text in ["a", "b", "c", "d"] { XCTAssertNil(attrs(s, of: text)[.link], text) }
+        XCTAssertEqual(attrs(s, of: "e")[.link] as? URL, URL(string: "https://example.com/?a=1&b=2"))
+        XCTAssertEqual(attrs(s, of: "f")[.link] as? URL, URL(string: "https://example.com/?a=1&amp;b"))
+    }
+
     func testImageSyntaxOnlyAsksForImages() {
         var asked: [String] = []
         let s = read("![key](secret.txt) ![pic](photo.jpg)") { ref in

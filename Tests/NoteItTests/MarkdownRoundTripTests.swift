@@ -156,7 +156,7 @@ final class MarkdownRoundTripTests: XCTestCase {
         apply(.strikethrough, to: "gone", in: tv)
         apply(.inlineCode, to: "code", in: tv)
         let site = range(of: "the site", in: tv)
-        tv.editAttributes(in: site) { $0.addAttribute(.link, value: URL(string: "https://example.com/a?b=1")!, range: site) }
+        tv.editAttributes(in: site) { $0.addAttribute(.link, value: URL(string: "https://example.com/a?b=1&c=2&amp;d")!, range: site) }
         apply(.bold, to: "bold italic", in: tv)
         apply(.italic, to: "italic words", in: tv)
         let link = range(of: "bold link", in: tv)

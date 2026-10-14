@@ -303,7 +303,7 @@ final class ExportTests: XCTestCase {
         let tv = editor([links.map(\.text).joined(separator: " ")])
         for link in links {
             let r = range(of: link.text, in: tv)
-            tv.editAttributes(in: r) { $0.addAttribute(.link, value: URL(string: link.url)!, range: r) }
+            tv.editAttributes(in: r) { $0.addAttribute(.link, value: Self.url(link.url), range: r) }
         }
         return tv
     }
@@ -338,6 +338,38 @@ final class ExportTests: XCTestCase {
         let tv = linkedNote([("evil", "javascript:alert(1)"), ("web", "https://example.com")])
         let markdown = MarkdownWriter.write(tv.attributedString(), title: "x").markdown
         XCTAssertEqual(markdown, "evil [web](https://example.com)\n")
+    }
+
+    /// Also builds URLs that `URL(string:)` rejects but other sources, such as pasted rich text, can store.
+    private static func url(_ s: String) -> URL {
+        URL(string: s) ?? URL(dataRepresentation: Data(s.utf8), relativeTo: nil)!
+    }
+
+    private static let encodedSchemes = [
+        "javascript&colon;alert(1)", "javascript&#58;alert(1)", "javascript&#x3A;alert(1)", "JavaScript&COLON;alert(1)",
+        "javascript&#0000058alert(1)", "java%73cript:alert(1)", "java%73cript%3Aalert(1)", "java\tscript:alert(1)",
+        "java&Tab;script&colon;alert(1)",
+    ]
+
+    func testLinkSafetyDecodesReferencesAndPercentEscapes() {
+        for raw in Self.encodedSchemes { XCTAssertFalse(ExportLinks.isSafe(Self.url(raw)), raw) }
+        XCTAssertTrue(ExportLinks.isSafe(URL(string: "https://example.com/?a=1&colon=2")!))
+        XCTAssertTrue(ExportLinks.isSafe(URL(string: "notes/a&amp;b.html")!))
+    }
+
+    func testMarkdownDropsEncodedUnsafeLinks() {
+        for raw in Self.encodedSchemes {
+            let tv = linkedNote([("evil", raw)])
+            XCTAssertEqual(MarkdownWriter.write(tv.attributedString(), title: "x").markdown, "evil\n", raw)
+        }
+    }
+
+    func testMarkdownEscapesAmpersandsInLinks() {
+        let tv = linkedNote([("web", "https://example.com/?a=1&b=2&colon=3")])
+        let markdown = MarkdownWriter.write(tv.attributedString(), title: "x").markdown
+        XCTAssertEqual(markdown, "[web](https://example.com/?a=1\\&b=2\\&colon=3)\n")
+        let read = MarkdownReader.attributedString(from: markdown, resolveImage: { _ in nil })
+        XCTAssertEqual(read.attribute(.link, at: 0, effectiveRange: nil) as? URL, URL(string: "https://example.com/?a=1&b=2&colon=3"))
     }
 
     // MARK: File names

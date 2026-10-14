@@ -880,6 +880,28 @@ private struct InlineParser {
         return target.split(separator: "#").joined(separator: " › ")
     }
 
+    /// Applies backslash escapes and character references in one pass, as CommonMark does for destinations.
+    private static func unescaped(_ s: String) -> String {
+        guard s.contains("\\") || s.contains("&") else { return s }
+        let chars = Array(s)
+        var out = ""
+        var i = 0
+        while i < chars.count {
+            let ch = chars[i]
+            if ch == "\\", i + 1 < chars.count, chars[i + 1].isASCII, chars[i + 1].isPunctuation || chars[i + 1].isSymbol {
+                out.append(chars[i + 1])
+                i += 2
+            } else if ch == "&", let (text, end) = CharacterReferences.reference(chars, at: i + 1, requireSemicolon: true) {
+                out += text
+                i = end
+            } else {
+                out.append(ch)
+                i += 1
+            }
+        }
+        return out
+    }
+
     /// `[text](destination "title")`; `<…>` destinations and unescaped spaces are accepted.
     private static func parseLink(_ chars: [Character], at start: Int) -> (text: Range<Int>, destination: String, end: Int)? {
         guard start < chars.count, chars[start] == "[" else { return nil }
@@ -929,6 +951,6 @@ private struct InlineParser {
                 destination = String(destination[..<quote.lowerBound]).trimmingCharacters(in: .whitespaces)
             }
         }
-        return (start + 1..<textEnd, destination, k + 1)
+        return (start + 1..<textEnd, unescaped(destination), k + 1)
     }
 }

@@ -233,11 +233,64 @@ enum ExportLinks {
 
     /// True for links with a safe scheme, and for relative and fragment links.
     static func isSafe(_ url: URL) -> Bool {
-        // Browsers ignore control characters and whitespace in a scheme, so `java\tscript:` is still script.
-        let s = String(String.UnicodeScalarView(url.absoluteString.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }))
+        // Renderers decode references and percent escapes and drop hidden characters, so `java&Tab;script&colon;` is still script.
+        var s = url.absoluteString
+        for _ in 0..<4 {
+            var next = CharacterReferences.decode(s, requireSemicolon: false)
+            next = next.removingPercentEncoding ?? next
+            next = String(String.UnicodeScalarView(next.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }))
+            if next == s { break }
+            s = next
+        }
         guard let colon = s.firstIndex(of: ":") else { return true }
         let scheme = s[..<colon]
         if scheme.contains(where: { $0 == "/" || $0 == "?" || $0 == "#" }) { return true }
         return safeSchemes.contains(scheme.lowercased())
+    }
+}
+
+/// Decodes HTML character references such as `&colon;`, `&#58;` and `&#x3A;`.
+enum CharacterReferences {
+    static let named: [String: String] = [
+        "colon": ":", "tab": "\t", "newline": "\n", "amp": "&", "lt": "<", "gt": ">", "quot": "\"", "apos": "'",
+        "sol": "/", "quest": "?", "num": "#", "period": ".", "lpar": "(", "rpar": ")", "nbsp": "\u{00A0}",
+    ]
+
+    static func decode(_ s: String, requireSemicolon: Bool) -> String {
+        guard s.contains("&") else { return s }
+        let chars = Array(s)
+        var out = ""
+        var i = 0
+        while i < chars.count {
+            if chars[i] == "&", let (text, end) = reference(chars, at: i + 1, requireSemicolon: requireSemicolon) {
+                out += text
+                i = end
+            } else {
+                out.append(chars[i])
+                i += 1
+            }
+        }
+        return out
+    }
+
+    static func reference(_ chars: [Character], at start: Int, requireSemicolon: Bool) -> (String, Int)? {
+        var j = start
+        var value: String?
+        if j < chars.count, chars[j] == "#" {
+            j += 1
+            var radix = 10
+            if j < chars.count, chars[j] == "x" || chars[j] == "X" { radix = 16; j += 1 }
+            let digitsStart = j
+            while j < chars.count, chars[j].isASCII, chars[j].isHexDigit, radix == 16 || chars[j].isNumber { j += 1 }
+            guard j > digitsStart, j - digitsStart <= 8, let code = UInt32(String(chars[digitsStart..<j]), radix: radix) else { return nil }
+            value = String(Unicode.Scalar(code).map(Character.init) ?? "\u{FFFD}")
+        } else {
+            let nameStart = j
+            while j < chars.count, chars[j].isASCII, chars[j].isLetter || chars[j].isNumber { j += 1 }
+            guard j > nameStart, let text = named[String(chars[nameStart..<j]).lowercased()] else { return nil }
+            value = text
+        }
+        if j < chars.count, chars[j] == ";" { j += 1 } else if requireSemicolon { return nil }
+        return value.map { ($0, j) }
     }
 }
