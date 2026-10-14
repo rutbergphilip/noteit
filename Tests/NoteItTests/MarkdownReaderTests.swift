@@ -132,9 +132,9 @@ final class MarkdownReaderTests: XCTestCase {
     }
 
     func testQuote() {
-        let p = paragraphs(read("> First line\n> Second **line**\n\nAfter"))
+        let p = paragraphs(read("> First line\n> Second **line**\n>\n> Next paragraph\n\nAfter"))
         XCTAssertEqual(p.map(\.kind), [.quote, .quote, .body])
-        XCTAssertEqual(p.map(\.text), ["First line", "Second line", "After"])
+        XCTAssertEqual(p.map(\.text), ["First line\u{2028}Second line", "Next paragraph", "After"])
     }
 
     func testFencedCodeBlockKeepsContentVerbatim() {
@@ -207,10 +207,40 @@ final class MarkdownReaderTests: XCTestCase {
         XCTAssertTrue(s.string.contains("missing and "))
     }
 
-    func testBlankLines() {
+    func testBlankLinesAndLineBreaks() {
         XCTAssertEqual(read("One\n\nTwo").string, "One\nTwo\n")
-        XCTAssertEqual(read("One\nTwo").string, "One\nTwo\n")
-        XCTAssertEqual(read("One\n\n\n\nTwo").string, "One\n\n\nTwo\n")
+        XCTAssertEqual(read("One\n\n\n\nTwo").string, "One\nTwo\n")
+        XCTAssertEqual(read("One\nTwo").string, "One\u{2028}Two\n")
+        XCTAssertEqual(read("One\\\nTwo  \nThree").string, "One\u{2028}Two\u{2028}Three\n")
+        XCTAssertEqual(read("- Item\n  more\n- Next").string,
+                       EditorStyle.markerText(.bullet, level: 0) + "Item\u{2028}more\n" + EditorStyle.markerText(.bullet, level: 0) + "Next\n")
+        XCTAssertEqual(read("Cell<br>break").string, "Cell\u{2028}break\n")
+    }
+
+    func testWhatInterruptsAParagraph() {
+        let p = paragraphs(read("Text\n# Heading\nText\n2024. was good\n1. item\n> quote"))
+        XCTAssertEqual(p.map(\.kind), [.body, .title, .body, .body, .quote])
+        XCTAssertEqual(p.map(\.text), ["Text", "Heading", "Text\u{2028}2024. was good", "1.\titem", "quote"])
+    }
+
+    func testSetextHeadings() {
+        let p = paragraphs(read("Title\n===\n\nSection\n---\n\nText\n\n---"))
+        XCTAssertEqual(p.map(\.kind), [.title, .heading, .body, .divider])
+        XCTAssertEqual(p.map(\.text).prefix(3), ["Title", "Section", "Text"])
+    }
+
+    func testNestedEmphasis() {
+        let s = read("**bold *both*** *italic* ***all** italic* x*y*z 2 * 3 snake_case_name")
+        XCTAssertEqual(s.string, "bold both italic all italic xyz 2 * 3 snake_case_name\n")
+        func style(_ substring: String) -> NSFontDescriptor.SymbolicTraits { traits(s, substring).intersection([.bold, .italic]) }
+        XCTAssertEqual(style("bold"), .bold)
+        XCTAssertEqual(style("both"), [.bold, .italic])
+        XCTAssertEqual(style(" italic all"), [])
+        XCTAssertEqual(style("italic all"), .italic)
+        XCTAssertEqual(style("all"), [.bold, .italic])
+        XCTAssertEqual(style(" italic x"), .italic)
+        XCTAssertEqual(style("y"), .italic)
+        XCTAssertEqual(style("case"), [])
     }
 
     // MARK: Obsidian

@@ -22,8 +22,8 @@ struct MarkdownNote {
 /// - `> ` quote, fenced code, `---` divider, GFM tables, `![](path)` and `![[image.png]]`
 /// - Obsidian `[[Note]]` and `[[Note|alias]]` become plain text.
 ///
-/// Every line is its own paragraph. A blank line only separates blocks; each extra blank line in a
-/// run becomes an empty paragraph.
+/// Lines without a blank line between them are one paragraph, with a line break between the lines, as
+/// Obsidian shows them. Blank lines only separate blocks, however many there are.
 enum MarkdownReader {
     /// Returns the file for an image reference (a relative path or an Obsidian file name), or nil.
     typealias ImageResolver = (String) -> URL?
@@ -202,8 +202,6 @@ private struct BlockBuilder {
 
     private var listIndents: [Int] = []
     private var listCounters: [Int: Int] = [:]
-    private var blankRun = 0
-    private var quoteBlankRun = 0
     private var lastWasTable = false
 
     init(resolveImage: @escaping MarkdownReader.ImageResolver) {
@@ -216,6 +214,7 @@ private struct BlockBuilder {
     private static let listItem = try! NSRegularExpression(pattern: "^([ \\t]*)([-*+]|\\d{1,9}[.)])(?:[ \\t]+(.*))?$")
     private static let task = try! NSRegularExpression(pattern: "^\\[([ xX])\\](?:[ \\t]+(.*))?$")
     private static let tableSeparator = try! NSRegularExpression(pattern: "^[ \\t]*\\|?[ \\t]*:?-+:?[ \\t]*(\\|[ \\t]*:?-+:?[ \\t]*)*\\|?[ \\t]*$")
+    private static let setextUnderline = try! NSRegularExpression(pattern: "^ {0,3}(=+|-+)[ \\t]*$")
 
     mutating func parse(_ lines: [String]) {
         var i = 0
@@ -224,7 +223,6 @@ private struct BlockBuilder {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
             if trimmed.isEmpty {
-                blankRun += 1
                 i += 1
                 continue
             }
@@ -266,39 +264,40 @@ private struct BlockBuilder {
                 continue
             }
 
-            if trimmed.hasPrefix(">"), Self.width(Self.leadingWhitespace(line)) < 4 {
-                var content = Substring(trimmed)
-                while content.first == ">" {
-                    content = content.dropFirst()
-                    if content.first == " " { content = content.dropFirst() }
-                }
-                let text = content.trimmingCharacters(in: .whitespaces)
-                if text.isEmpty {
-                    quoteBlankRun += 1
-                } else {
-                    beginBlock(list: false, quote: true)
-                    appendParagraph(text, kind: .quote)
-                }
+            if let text = Self.quoteContent(line) {
                 i += 1
+                // A `>` line with nothing after it separates quote paragraphs.
+                guard !text.isEmpty else { continue }
+                var texts = [text]
+                while i < lines.count {
+                    if let next = Self.quoteContent(lines[i]) {
+                        guard !next.isEmpty else { break }
+                        texts.append(next)
+                    } else if Self.startsBlock(lines, at: i) {
+                        break
+                    } else {
+                        texts.append(lines[i].trimmingCharacters(in: .whitespaces))
+                    }
+                    i += 1
+                }
+                beginBlock(list: false)
+                appendParagraph(Self.joinLines(texts), kind: .quote)
                 continue
             }
 
-            if i + 1 < lines.count, trimmed.contains("|"), lines[i + 1].contains("|"),
-               Self.match(Self.tableSeparator, lines[i + 1]) != nil {
+            if Self.startsTable(lines, at: i) {
                 let header = Self.cells(of: line)
                 let alignments = Self.cells(of: lines[i + 1]).map(Self.alignment)
-                if header.count == alignments.count {
-                    var rows: [[String]] = []
-                    i += 2
-                    while i < lines.count, lines[i].contains("|"), !lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
-                        rows.append(Self.cells(of: lines[i]))
-                        i += 1
-                    }
-                    beginBlock(list: false)
-                    appendTable(header: header, rows: rows, alignments: alignments)
-                    lastWasTable = true
-                    continue
+                var rows: [[String]] = []
+                i += 2
+                while i < lines.count, lines[i].contains("|"), !lines[i].trimmingCharacters(in: .whitespaces).isEmpty {
+                    rows.append(Self.cells(of: lines[i]))
+                    i += 1
                 }
+                beginBlock(list: false)
+                appendTable(header: header, rows: rows, alignments: alignments)
+                lastWasTable = true
+                continue
             }
 
             if let m = Self.match(Self.listItem, line) {
@@ -324,8 +323,9 @@ private struct BlockBuilder {
                     listCounters[level] = n
                     kind = .numbered(n)
                 }
-                appendListItem(text, kind: kind, level: level, checked: checked)
                 i += 1
+                let texts = [text] + continuationLines(lines, from: &i)
+                appendListItem(Self.joinLines(texts), kind: kind, level: level, checked: checked)
                 continue
             }
 
@@ -333,12 +333,25 @@ private struct BlockBuilder {
             if !listIndents.isEmpty, indent > 0 {
                 let level = listLevel(forIndent: indent, push: false) + 1
                 beginBlock(list: true)
-                appendParagraph(trimmed, kind: .body, indentLevel: level)
+                i += 1
+                appendParagraph(Self.joinLines([trimmed] + continuationLines(lines, from: &i)), kind: .body, indentLevel: level)
             } else {
                 beginBlock(list: false)
-                appendParagraph(trimmed, kind: .body)
+                i += 1
+                var texts = [trimmed]
+                var kind = BlockKind.body
+                while i < lines.count {
+                    if let m = Self.match(Self.setextUnderline, lines[i]) {
+                        kind = Self.group(m, 1, lines[i]).hasPrefix("=") ? .title : .heading
+                        i += 1
+                        break
+                    }
+                    guard !Self.startsBlock(lines, at: i, interruptingParagraph: true) else { break }
+                    texts.append(lines[i].trimmingCharacters(in: .whitespaces))
+                    i += 1
+                }
+                appendParagraph(Self.joinLines(texts, keepBreaks: kind == .body), kind: kind)
             }
-            i += 1
         }
         // Like Insert Table: a table at the end gets a line after it.
         if lastWasTable {
@@ -346,25 +359,23 @@ private struct BlockBuilder {
         }
     }
 
-    /// Emits empty paragraphs for extra blank lines and ends a list unless `list`.
-    private mutating func beginBlock(list: Bool, quote: Bool = false) {
-        if output.length > 0 {
-            for _ in 0..<max(0, blankRun - 1) {
-                output.append(NSAttributedString(string: "\n", attributes: EditorStyle.bodyAttributes))
-            }
-            if quote {
-                for _ in 0..<max(0, quoteBlankRun - 1) {
-                    output.append(NSAttributedString(string: "\n", attributes: EditorStyle.attributes(for: .quote)))
-                }
-            }
-        }
-        blankRun = 0
-        quoteBlankRun = 0
+    /// Ends a list unless `list`.
+    private mutating func beginBlock(list: Bool) {
         lastWasTable = false
         if !list {
             listIndents = []
             listCounters = [:]
         }
+    }
+
+    /// The lines after `i` that continue the current paragraph, trimmed; `i` moves past them.
+    private func continuationLines(_ lines: [String], from i: inout Int) -> [String] {
+        var texts: [String] = []
+        while i < lines.count, !Self.startsBlock(lines, at: i) {
+            texts.append(lines[i].trimmingCharacters(in: .whitespaces))
+            i += 1
+        }
+        return texts
     }
 
     private mutating func listLevel(forIndent indent: Int, push: Bool = true) -> Int {
@@ -451,6 +462,43 @@ private struct BlockBuilder {
         return String(line[index...])
     }
 
+    /// Whether line `i` is blank or starts a block, which ends the paragraph above it. A paragraph can
+    /// only be interrupted by a numbered item that starts at 1 and a list item with text, as in CommonMark.
+    private static func startsBlock(_ lines: [String], at i: Int, interruptingParagraph: Bool = false) -> Bool {
+        let line = lines[i]
+        if line.trimmingCharacters(in: .whitespaces).isEmpty { return true }
+        if match(fence, line) != nil || match(divider, line) != nil || match(heading, line) != nil { return true }
+        if quoteContent(line) != nil || startsTable(lines, at: i) { return true }
+        guard let m = match(listItem, line) else { return false }
+        guard interruptingParagraph else { return true }
+        let marker = group(m, 2, line)
+        return !group(m, 3, line).trimmingCharacters(in: .whitespaces).isEmpty
+            && (marker.first.map { "-*+".contains($0) } ?? false || marker.dropLast() == "1")
+    }
+
+    private static func startsTable(_ lines: [String], at i: Int) -> Bool {
+        guard i + 1 < lines.count, lines[i].contains("|"), lines[i + 1].contains("|"),
+              match(tableSeparator, lines[i + 1]) != nil else { return false }
+        return cells(of: lines[i]).count == cells(of: lines[i + 1]).count
+    }
+
+    /// The text of a `>` line without its markers, or nil if it isn't one.
+    private static func quoteContent(_ line: String) -> String? {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix(">"), width(leadingWhitespace(line)) < 4 else { return nil }
+        var content = Substring(trimmed)
+        while content.first == ">" {
+            content = content.dropFirst()
+            if content.first == " " { content = content.dropFirst() }
+        }
+        return content.trimmingCharacters(in: .whitespaces)
+    }
+
+    /// The lines of one paragraph, with a line break between them (or a space in a heading).
+    private static func joinLines(_ lines: [String], keepBreaks: Bool = true) -> String {
+        lines.map(stripHardBreak).joined(separator: keepBreaks ? NoteBlocks.lineBreak : " ")
+    }
+
     private static func stripHardBreak(_ text: String) -> String {
         var t = text
         while t.hasSuffix(" ") { t.removeLast() }
@@ -535,18 +583,47 @@ private struct InlineParser {
         return url
     }
 
+    /// Text parsed before emphasis is matched, drawn with the style it ends up with.
+    private enum Item {
+        case piece((Style) -> NSAttributedString)
+        case delimiter(Delimiter)
+    }
+
+    /// A run of `*`, `_`, `~~` or `==` that may open or close emphasis.
+    private struct Delimiter {
+        let char: Character
+        let length: Int
+        var count: Int
+        var canOpen: Bool
+        var canClose: Bool
+    }
+
     private func append(_ chars: [Character], style: Style, to out: NSMutableAttributedString) {
+        var items: [Item] = []
         var buffer = ""
         func flush() {
             guard !buffer.isEmpty else { return }
-            out.append(NSAttributedString(string: buffer, attributes: attributes(style)))
+            let text = buffer
+            items.append(.piece { NSAttributedString(string: text, attributes: attributes($0)) })
             buffer = ""
         }
         func appendLink(_ text: String, _ url: URL) {
             flush()
-            var linkStyle = style
-            linkStyle.link = url
-            out.append(NSAttributedString(string: text, attributes: attributes(linkStyle)))
+            items.append(.piece { style in
+                var linkStyle = style
+                linkStyle.link = url
+                return NSAttributedString(string: text, attributes: attributes(linkStyle))
+            })
+        }
+        func appendAttachment(_ attachment: NSTextAttachment) {
+            flush()
+            items.append(.piece { style in
+                let piece = NSMutableAttributedString(attachment: attachment)
+                var attrs = attributes(style)
+                attrs[.link] = nil
+                piece.addAttributes(attrs, range: NSRange(location: 0, length: piece.length))
+                return piece
+            })
         }
 
         var i = 0
@@ -567,9 +644,11 @@ private struct InlineParser {
                     if code.count >= 2, code.hasPrefix(" "), code.hasSuffix(" "), code.contains(where: { $0 != " " }) {
                         code = String(code.dropFirst().dropLast())
                     }
-                    var attrs = attributes(style)
-                    attrs.merge(EditorStyle.inlineCodeAttributes) { $1 }
-                    out.append(NSAttributedString(string: code, attributes: attrs))
+                    items.append(.piece { style in
+                        var attrs = attributes(style)
+                        attrs.merge(EditorStyle.inlineCodeAttributes) { $1 }
+                        return NSAttributedString(string: code, attributes: attrs)
+                    })
                     i = close + run
                 } else {
                     buffer.append(String(repeating: "`", count: run))
@@ -579,13 +658,12 @@ private struct InlineParser {
             }
 
             if c == "!", Self.hasPrefix(chars, i + 1, "[["), let close = Self.find(chars, "]]", from: i + 3) {
-                flush()
                 let inner = String(chars[(i + 3)..<close])
                 let target = inner.split(separator: "|", maxSplits: 1).first.map(String.init) ?? inner
                 if MarkdownReader.isImagePath(target), let url = resolveImage(target), let attachment = MarkdownReader.attachment(for: url) {
-                    appendAttachment(attachment, style: style, to: out)
+                    appendAttachment(attachment)
                 } else {
-                    out.append(NSAttributedString(string: Self.wikiText(inner), attributes: attributes(style)))
+                    buffer += Self.wikiText(inner)
                 }
                 i = close + 2
                 continue
@@ -598,14 +676,13 @@ private struct InlineParser {
             }
 
             if c == "!", i + 1 < chars.count, chars[i + 1] == "[", let link = Self.parseLink(chars, at: i + 1) {
-                flush()
                 let alt = String(chars[link.text])
                 if let url = Self.webURL(link.destination) {
                     appendLink(alt.isEmpty ? link.destination : alt, url)
                 } else if let url = resolveImage(link.destination), let attachment = MarkdownReader.attachment(for: url) {
-                    appendAttachment(attachment, style: style, to: out)
-                } else if !alt.isEmpty {
-                    out.append(NSAttributedString(string: alt, attributes: attributes(style)))
+                    appendAttachment(attachment)
+                } else {
+                    buffer += alt
                 }
                 i = link.end
                 continue
@@ -613,15 +690,26 @@ private struct InlineParser {
 
             if c == "[", let link = Self.parseLink(chars, at: i) {
                 flush()
-                var inner = style
-                if let url = Self.webURL(link.destination) { inner.link = url }
-                append(Array(chars[link.text]), style: inner, to: out)
+                let text = Array(chars[link.text])
+                let url = Self.webURL(link.destination)
+                items.append(.piece { style in
+                    var inner = style
+                    if let url { inner.link = url }
+                    let piece = NSMutableAttributedString()
+                    append(text, style: inner, to: piece)
+                    return piece
+                })
                 i = link.end
                 continue
             }
 
             if c == "<", let close = chars[(i + 1)...].firstIndex(of: ">") {
                 let candidate = String(chars[(i + 1)..<close])
+                if ["br", "br/", "br /"].contains(candidate.lowercased()) {
+                    buffer += NoteBlocks.lineBreak
+                    i = close + 1
+                    continue
+                }
                 if !candidate.contains(" "), candidate.contains(":"), let url = Self.webURL(candidate) {
                     appendLink(candidate, url)
                     i = close + 1
@@ -644,13 +732,12 @@ private struct InlineParser {
 
             if c == "*" || c == "_" || c == "~" || c == "=" {
                 let run = Self.runLength(chars, i)
-                if let span = emphasis(chars, at: i, run: run) {
+                if let delimiter = Self.delimiter(chars, at: i, run: run) {
                     flush()
-                    append(Array(chars[span.inner]), style: span.style(style), to: out)
-                    i = span.end
-                    continue
+                    items.append(.delimiter(delimiter))
+                } else {
+                    buffer.append(String(repeating: String(c), count: run))
                 }
-                buffer.append(String(repeating: String(c), count: run))
                 i += run
                 continue
             }
@@ -659,59 +746,90 @@ private struct InlineParser {
             i += 1
         }
         flush()
-    }
 
-    private func appendAttachment(_ attachment: NSTextAttachment, style: Style, to out: NSMutableAttributedString) {
-        let piece = NSMutableAttributedString(attachment: attachment)
-        var attrs = attributes(style)
-        attrs[.link] = nil
-        piece.addAttributes(attrs, range: NSRange(location: 0, length: piece.length))
-        out.append(piece)
+        let emphasis = Self.matchEmphasis(&items)
+        for (k, item) in items.enumerated() {
+            var itemStyle = style
+            itemStyle.bold = itemStyle.bold || emphasis[k].bold
+            itemStyle.italic = itemStyle.italic || emphasis[k].italic
+            itemStyle.strike = itemStyle.strike || emphasis[k].strike
+            itemStyle.highlight = itemStyle.highlight || emphasis[k].highlight
+            switch item {
+            case .piece(let make):
+                out.append(make(itemStyle))
+            case .delimiter(let d) where d.count > 0:
+                out.append(NSAttributedString(string: String(repeating: d.char, count: d.count), attributes: attributes(itemStyle)))
+            case .delimiter:
+                break
+            }
+        }
     }
 
     // MARK: Emphasis
 
-    private struct Span {
-        var inner: Range<Int>
-        var end: Int
-        var style: (Style) -> Style
+    /// `*`/`_` (italic), `**`/`__` (bold), `~~` (strikethrough) and `==` (highlight), with CommonMark's
+    /// flanking rules, so `snake_case` and `2 * 3` stay literal.
+    private static func delimiter(_ chars: [Character], at i: Int, run: Int) -> Delimiter? {
+        let c = chars[i]
+        if c == "~" || c == "=", run != 2 { return nil }
+        let before: Character = i > 0 ? chars[i - 1] : " "
+        let after: Character = i + run < chars.count ? chars[i + run] : " "
+        func isPunctuation(_ ch: Character) -> Bool { ch.isPunctuation || ch.isSymbol }
+        let left = !after.isWhitespace && (!isPunctuation(after) || before.isWhitespace || isPunctuation(before))
+        let right = !before.isWhitespace && (!isPunctuation(before) || after.isWhitespace || isPunctuation(after))
+        var canOpen = left, canClose = right
+        if c == "_" {
+            canOpen = left && (!right || isPunctuation(before))
+            canClose = right && (!left || isPunctuation(after))
+        }
+        guard canOpen || canClose else { return nil }
+        return Delimiter(char: c, length: run, count: run, canOpen: canOpen, canClose: canClose)
     }
 
-    /// `*`/`_` (italic), `**`/`__` (bold), `***` (both), `~~` (strikethrough), `==` (highlight).
-    private func emphasis(_ chars: [Character], at i: Int, run: Int) -> Span? {
-        let c = chars[i]
-        let open = i + run
-        guard open < chars.count, !chars[open].isWhitespace else { return nil }
-        if c == "_", i > 0, chars[i - 1].isLetter || chars[i - 1].isNumber { return nil }
-        if c == "~" || c == "=" { guard run == 2 else { return nil } } else { guard run <= 3 else { return nil } }
-        var j = open
-        while j < chars.count {
-            if chars[j] == "`" {
-                let r = Self.runLength(chars, j)
-                j = Self.findCodeClose(chars, from: j + r, run: r).map { $0 + r } ?? j + r
+    /// CommonMark's emphasis matching: each closer pairs with the nearest opener of the same kind, so
+    /// `**bold *both***` and `***both** italic*` nest correctly. Returns the styles added to each item.
+    private static func matchEmphasis(_ items: inout [Item]) -> [Style] {
+        var added = Array(repeating: Style(), count: items.count)
+        var k = 0
+        while k < items.count {
+            guard case .delimiter(var closer) = items[k], closer.canClose, closer.count > 0 else {
+                k += 1
                 continue
             }
-            if chars[j] == "\\" { j += 2; continue }
-            guard chars[j] == c else { j += 1; continue }
-            let r = Self.runLength(chars, j)
-            let after = j + r
-            if r == run, !chars[j - 1].isWhitespace,
-               !(c == "_" && after < chars.count && (chars[after].isLetter || chars[after].isNumber)) {
-                return Span(inner: open..<j, end: after) { style in
-                    var s = style
-                    switch (c, run) {
-                    case ("~", _): s.strike = true
-                    case ("=", _): s.highlight = true
-                    case (_, 1): s.italic = true
-                    case (_, 2): s.bold = true
-                    default: s.bold = true; s.italic = true
-                    }
-                    return s
+            var o = k - 1
+            while o >= 0 {
+                if case .delimiter(let opener) = items[o], opener.char == closer.char, opener.canOpen, opener.count > 0 {
+                    let oddMatch = (opener.canClose || closer.canOpen) && (opener.length + closer.length) % 3 == 0
+                        && !(opener.length % 3 == 0 && closer.length % 3 == 0)
+                    if !oddMatch { break }
+                }
+                o -= 1
+            }
+            guard o >= 0, case .delimiter(var opener) = items[o] else {
+                k += 1
+                continue
+            }
+            let use = opener.count >= 2 && closer.count >= 2 ? 2 : 1
+            for m in (o + 1)..<k {
+                switch (closer.char, use) {
+                case ("~", _): added[m].strike = true
+                case ("=", _): added[m].highlight = true
+                case (_, 1): added[m].italic = true
+                default: added[m].bold = true
+                }
+                if case .delimiter(var inner) = items[m] {
+                    inner.canOpen = false
+                    inner.canClose = false
+                    items[m] = .delimiter(inner)
                 }
             }
-            j = after
+            opener.count -= use
+            closer.count -= use
+            items[o] = .delimiter(opener)
+            items[k] = .delimiter(closer)
+            if closer.count == 0 { k += 1 }
         }
-        return nil
+        return added
     }
 
     // MARK: Scanning
