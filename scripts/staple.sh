@@ -5,12 +5,11 @@ set -euo pipefail
 
 target=${1:?usage: staple.sh <app-or-dmg>}
 for attempt in 1 2 3 4 5 6; do
-    if xcrun stapler staple "$target"; then
-        xcrun stapler validate "$target"
+    if xcrun stapler staple "$target" && xcrun stapler validate "$target"; then
         exit 0
     fi
     if [[ $attempt -lt 6 ]]; then
-        echo "Stapling failed (attempt $attempt), retrying in $((attempt * 20)) s"
+        echo "Stapling or validation failed (attempt $attempt), retrying in $((attempt * 20)) s"
         sleep $((attempt * 20))
     fi
 done
