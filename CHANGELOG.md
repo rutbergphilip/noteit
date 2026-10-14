@@ -7,6 +7,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Recently Deleted. Deleted notes, including the notes of a deleted notebook, stay there for 30 days and can be recovered. Deleting can be undone from the toast or with ⌘Z.
+- Version history. File › Version History… (⌥⌘Y) lists earlier versions of a note and can restore one. Versions are kept on each Mac and aren't synced.
+
 ## [0.1.0] - 2026-10-14
 
 ### Added

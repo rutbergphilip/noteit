@@ -19,8 +19,8 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 |---|---|
 | `App/` | `NoteItApp` (main window, Settings, menu bar extra and menu commands), `AppDelegate` (activation policy, hotkey wiring, debug arguments), `WindowRouter` (show, hide and focus), `AppUpdater` (in-app updates), and the launch-time migration from Inkwell (`LaunchMigration`, `LibraryLauncher`, `LegacyAppQuitter`, `LegacyAppMonitor`) |
 | `Design/` | `Tokens` (colors, spacing, radii and chrome type styles) and `AppResources` (app icon and menu bar glyph images) |
-| `Model/` | `Models` (notebooks, note metadata, sidebar selection, palette), `NoteStore` (the single observable store: queries, editing, tags and persistence), seed content |
-| `Views/` | The main window: three-column split, sidebar, note list, editor container with the note header and conflict badge, empty states, notebook sheet and the sync status pill |
+| `Model/` | `Models` (notebooks, note metadata, sidebar selection, palette), `NoteStore` (the single observable store: queries, editing, tags and persistence), `NoteStore+Trash` (Recently Deleted), `VersionHistory`, seed content |
+| `Views/` | The main window: three-column split, sidebar, note list, editor container with the note header and conflict badge, empty states, notebook sheet, the sync status pill, the Recently Deleted banner, undo toast and confirmations, and the Version History sheet |
 | `Editor/` | `RichTextEditor` (the SwiftUI wrapper), `NoteItTextView` (an `NSTextView` subclass whose layout manager draws code blocks, quotes, dividers and checkboxes), `TextFormatter`, `MarkdownShortcuts`, `FormatCommand` (every formatting command and its shortcut), `FormattingToolbar`, `EditorStyles` (type scale, colors and block kinds) |
 | `MenuBar/` | The menu bar panel, the Quick Capture panel, the panel search field and shared views |
 | `Hotkeys/` | `HotkeyAction`, `HotkeyManager` (Carbon `RegisterEventHotKey`), `KeyCombo` and the `ShortcutRecorder` view |
@@ -34,17 +34,18 @@ Your library lives in `~/Library/Application Support/NoteIt/`. Set `NOTEIT_DATA_
 ```text
 ~/Library/Application Support/NoteIt/
 ├── .initialized                     marker: first launch (seeding) has happened
-├── library.json                     notebooks and note metadata (pretty-printed, ISO-8601 dates)
+├── library.json                     notebooks and note metadata (pretty-printed, ISO-8601 dates); notes in Recently Deleted have a `deletedAt` date
 ├── library.corrupt-<ts>.json        backup of an unreadable library.json, if that ever happens
 ├── search-index.json                folded plain text of each note, for search
 ├── seed-manifest.json               IDs and revisions of the sample content, until sync is connected
-├── tombstones.json                  deleted notes whose bodies haven't been moved to .trash yet
+├── tombstones.json                  removed notes whose bodies haven't been moved to .trash yet
 ├── sync-state-<hash>.json           last-synced state per remote store (only while sync is set up)
 ├── sync-deletions.json              local deletions not yet pushed (only while sync is set up)
 ├── notes/<uuid>.rtfd                each note body as RTFD (rich text plus image attachments)
 ├── notes/<uuid>.rtfd.corrupt-<ts>   backup of an unreadable note body
 ├── recovery/<uuid>-<ts>.rtfd        last-resort copies of bodies that couldn't be saved at quit
-└── .trash/<uuid>-<ts>.rtfd          bodies of deleted notes (never deleted outright)
+├── history/<uuid>/<yyyyMMdd'T'HHmmss'Z'>.rtfd   earlier versions of each note (this Mac only)
+└── .trash/<uuid>-<ts>.rtfd          bodies of removed notes (never deleted outright)
 ```
 
 - **Saving.** The editor hands edits to `NoteStore` after 0.3 s of idle time, and right away when you switch notes, close the window, switch apps or quit. The store writes to disk about 0.5 s later. Writes are atomic: an RTFD body is written next to the old one and swapped in. A failed write is retried after 5 s, and at quit any body that still can't be saved is copied into `recovery/`.
@@ -53,8 +54,10 @@ Your library lives in `~/Library/Application Support/NoteIt/`. Set `NOTEIT_DATA_
   - If `library.json` is missing but note bodies exist, the library is rebuilt from `notes/*.rtfd`.
   - If `library.json` can't be read, it's copied to `library.corrupt-<ts>.json`, whatever can be salvaged is kept, and the rest is rebuilt from the bodies. If that backup fails, the original is never overwritten.
   - If a note body can't be read, it's copied to `<uuid>.rtfd.corrupt-<ts>` and the note opens empty with an error. If that backup fails, writes to the note are blocked.
-- **Deleting.** The metadata removal is saved first, then the body moves to `.trash/`. There's no way to restore it from the app yet (see [known limitations](known-limitations.md)).
-- **Starting over.** Quit NoteIt and delete the whole folder, including the hidden `.initialized` marker and `.trash/`.
+- **Recently Deleted.** Deleting a note only sets its `deletedAt` date and gives it a new revision, so it syncs like any other edit. Deleted notes are left out of every list, search, tag and count except *Recently Deleted*, and open read-only. Deleting a notebook moves its notes there too; they keep the notebook ID, and recovery falls back to the notebook named Inbox (or no notebook) when it's gone. `NoteStore+Trash.swift` has this logic. Notes deleted more than 30 days ago are removed at launch and once a day.
+- **Removing for good** (*Delete Now*, *Empty Recently Deleted* or the 30-day purge). The metadata removal is saved first, then the body moves to `.trash/` and the note's history is removed. While sync is set up, the removal is also recorded in `sync-deletions.json` and pushed as a tombstone.
+- **Version history** (`VersionHistory.swift`). Before a save replaces a note's body on disk, the old body is copied to `history/` if the newest version is more than 10 minutes old (or there's none). A version is always kept before restoring a version and before sync replaces a body with a different one. Each note keeps up to 50 versions, none older than 30 days. Versions are written to a temp package and renamed into place. They aren't synced, indexed or listed in `library.json`.
+- **Starting over.** Quit NoteIt and delete the whole folder, including the hidden `.initialized` marker, `.trash/` and `history/`.
 - **Preferences** live in `UserDefaults`: `hideDockIcon`, `showMenuBarIcon`, `launchAtLogin`, `editorFontSize`, `defaultNotebookID` and the hotkey bindings. Sync adds `syncConfiguration` (non-secret settings as JSON), `syncDeviceID` and `syncLastSync`. Secrets are kept only in the Keychain.
 
 ### Migration from Inkwell

@@ -25,6 +25,7 @@ struct MainView: View {
             guard controlActiveState == .key || NSApp.keyWindow == nil else { return }
             notebookDraft = NotebookDraft()
         }
+        .recentlyDeletedSupport()
         .capturesOpenWindow()
     }
 }

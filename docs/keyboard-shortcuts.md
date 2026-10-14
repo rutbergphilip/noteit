@@ -14,7 +14,9 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⌘E | Use selection for find |
 | ⌘0 | Show the main window (*NoteIt Notes* in the Window menu) |
 | ⌘, | Settings |
-| ⌫ (in the note list) | Delete the selected note, after confirming |
+| ⌘⌫, or ⌫ in the note list | Move the selected note to Recently Deleted (in Recently Deleted: delete it now, after confirming) |
+| ⌘Z (after deleting) | Undo the deletion |
+| ⌥⌘Y | Version History… |
 
 ## Text formatting
 

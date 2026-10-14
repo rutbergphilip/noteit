@@ -7,15 +7,19 @@ struct EditorContainerView: View {
     var body: some View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
             let writeBlocked = store.isBodyWriteBlocked(id)
+            let readOnly = writeBlocked || note.deletedAt != nil
             VStack(spacing: 0) {
                 EditorHeader(note: note)
+                if let deletedAt = note.deletedAt {
+                    DeletedNoteBanner(note: note, deletedAt: deletedAt)
+                }
                 if let message = store.loadError(for: id) {
                     LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked)
                 }
                 FormattingToolbar(controller: editor)
-                    .disabled(writeBlocked)
+                    .disabled(readOnly)
                 Divider().opacity(0.5)
-                RichTextEditor(noteID: id, controller: editor, isEditable: !writeBlocked)
+                RichTextEditor(noteID: id, controller: editor, isEditable: !readOnly)
                     .id(id)
             }
             .background(Tokens.Color.surfaceEditor)
@@ -56,6 +60,7 @@ struct EditorHeader: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Move to Notebook")
+            .disabled(note.deletedAt != nil)
 
             Text("Edited \(note.updatedAt.formatted(date: .abbreviated, time: .shortened))")
                 .font(.system(size: 11))
@@ -77,6 +82,7 @@ struct EditorHeader: View {
             }
             .buttonStyle(.borderless)
             .help(note.isPinned ? "Unpin" : "Pin")
+            .disabled(note.deletedAt != nil)
         }
         .padding(.horizontal, 16)
         .padding(.top, 8)

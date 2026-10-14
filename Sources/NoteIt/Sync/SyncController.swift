@@ -435,7 +435,7 @@ final class SyncController: ObservableObject {
             Task { @MainActor [weak self] in self?.requestSync(after: 5) }
         })
         notesSubscription = store.$notes
-            .map { notes in notes.reduce(0) { $0 + ($1.conflictSource == nil ? 0 : 1) } }
+            .map { notes in notes.reduce(0) { $0 + ($1.conflictSource == nil || $1.deletedAt != nil ? 0 : 1) } }
             .removeDuplicates()
             .sink { [weak self] count in self?.conflictCount = count }
     }

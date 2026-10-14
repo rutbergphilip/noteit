@@ -4,8 +4,8 @@ NoteIt aims to be the fastest notes app on the Mac, and one where you own every 
 
 ## Now: trust and switching
 
-- [ ] **Recently Deleted.** Deleted notes stay recoverable for 30 days.
-- [ ] **Version history.** Restore any earlier version of a note.
+- [x] **Recently Deleted.** Deleted notes stay recoverable for 30 days.
+- [x] **Version history.** Restore any earlier version of a note.
 - [ ] **Export, print and Share.** Markdown, HTML, PDF, RTFD and plain text, per note, per notebook or everything.
 - [ ] **Import.** Apple Notes, Bear, Obsidian and Markdown folders.
 

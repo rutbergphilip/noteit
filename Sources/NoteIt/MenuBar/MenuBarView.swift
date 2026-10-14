@@ -159,11 +159,11 @@ struct MenuBarView: View {
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespaces).isEmpty }
 
     private var pinnedNotes: [NoteMeta] {
-        store.notes.filter(\.isPinned).sorted { $0.updatedAt > $1.updatedAt }
+        store.activeNotes.filter(\.isPinned).sorted { $0.updatedAt > $1.updatedAt }
     }
 
     private var recentNotes: [NoteMeta] {
-        Array(store.notes.filter { !$0.isPinned }.sorted { $0.updatedAt > $1.updatedAt }.prefix(Self.recentLimit))
+        Array(store.activeNotes.filter { !$0.isPinned }.sorted { $0.updatedAt > $1.updatedAt }.prefix(Self.recentLimit))
     }
 
     private var searchResults: [NoteMeta] {
@@ -186,7 +186,7 @@ struct MenuBarView: View {
                             sectionHeader("\(searchResults.count) Result\(searchResults.count == 1 ? "" : "s")")
                             rows(searchResults)
                         }
-                    } else if store.notes.isEmpty {
+                    } else if store.activeNotes.isEmpty {
                         emptyState(symbol: "note.text", text: "No notes yet — jot one down above.")
                     } else {
                         if !pinnedNotes.isEmpty {
