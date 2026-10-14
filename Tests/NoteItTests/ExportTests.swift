@@ -485,6 +485,41 @@ final class ExportTests: XCTestCase {
         XCTAssertEqual(files(in: folder).filter { $0.hasPrefix("Plain") }, ["Plain assets", "Plain.md"])
     }
 
+    // MARK: Large exports
+
+    func testLargeExportsWriteInSlicesAndCanStop() async throws {
+        let work = notebook("Work", 0)
+        let notes = (1...5).map { meta("Note \($0)", in: work, created: TimeInterval($0)) }
+        let body = { (_: UUID) in EditorStyle.paragraph("Body", kind: .body) }
+        let export = try NoteExporter.prepareAll(notebooks: [work], notes: notes, format: .plainText, to: folder, body: body)
+        XCTAssertEqual(export.total, 5)
+        XCTAssertEqual(export.written, 0)
+        XCTAssertEqual(files(in: export.folder), ["Work"], "folders are made up front, notes as they're written")
+
+        var reports: [Int] = []
+        let result = try await export.write(slice: .zero) { export in
+            reports.append(export.written)
+            return export.written < 2
+        }
+        XCTAssertEqual(reports, [1, 2])
+        XCTAssertEqual(result.noteCount, 2)
+        XCTAssertEqual(result.totalCount, 5)
+        XCTAssertFalse(export.isFinished)
+        XCTAssertEqual(files(in: result.folder), ["Work", "Work/Note 1.txt", "Work/Note 2.txt"])
+
+        let rest = try await export.write { _ in true }
+        XCTAssertEqual(rest.noteCount, 5)
+        XCTAssertEqual(files(in: result.folder).count, 6)
+    }
+
+    func testSynchronousExportsReportEveryNote() throws {
+        let work = notebook("Work", 0)
+        let notes = [meta("A", in: work, created: 1), meta("B", in: work, created: 2)]
+        let result = try NoteExporter.exportNotebook(work, notes: notes, format: .plainText, to: folder) { _ in NSAttributedString() }
+        XCTAssertEqual(result.noteCount, 2)
+        XCTAssertEqual(result.totalCount, 2)
+    }
+
     func testExportableNotesIsTheSingleFilter() {
         var deleted = meta("C", in: nil, created: 3)
         deleted.deletedAt = Date()

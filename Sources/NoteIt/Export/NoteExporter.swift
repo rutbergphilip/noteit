@@ -89,15 +89,21 @@ enum NoteExporter {
     // MARK: One note
 
     /// Writes `body` to `url` (which includes the extension). Markdown images and files go in a
-    /// `<file name> assets` folder next to it.
+    /// `<file name> assets` folder next to it, or `<file name> assets 2`… if that name is taken, so
+    /// nothing already on disk is replaced.
     static func write(_ body: NSAttributedString, title: String, format: ExportFormat, to url: URL) throws {
         switch format {
         case .markdown:
+            let parent = url.deletingLastPathComponent()
             let base = url.deletingPathExtension().lastPathComponent
-            let export = MarkdownWriter.write(body, title: base)
+            var assetsName = MarkdownWriter.assetsFolderName(for: base)
+            if FileManager.default.fileExists(atPath: parent.appendingPathComponent(assetsName).path) {
+                assetsName = ExportNaming.uniqueOnDisk(assetsName, extension: "", in: parent)
+            }
+            let export = MarkdownWriter.write(body, assetsFolder: assetsName)
             if !export.assets.isEmpty {
-                let folder = url.deletingLastPathComponent().appendingPathComponent(MarkdownWriter.assetsFolderName(for: base), isDirectory: true)
-                try replaceFolder(folder)
+                let folder = parent.appendingPathComponent(assetsName, isDirectory: true)
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 for asset in export.assets {
                     try asset.data.write(to: folder.appendingPathComponent(asset.filename), options: .atomic)
                 }
@@ -152,23 +158,38 @@ enum NoteExporter {
     struct Result {
         /// The folder that was created.
         var folder: URL
+        /// Notes written. Less than `totalCount` when the export was stopped.
         var noteCount: Int
+        var totalCount: Int
     }
 
     /// Writes one notebook as a folder named after it, inside `destination`.
     static func exportNotebook(_ notebook: Notebook, notes: [NoteMeta], format: ExportFormat, to destination: URL,
-                               body: (UUID) -> NSAttributedString) throws -> Result {
-        let name = ExportNaming.uniqueOnDisk(ExportNaming.sanitized(notebook.name, fallback: "Notebook"), extension: "", in: destination)
-        let folder = destination.appendingPathComponent(name, isDirectory: true)
-        let notebookNotes = exportableNotes(in: notes).filter { $0.notebookID == notebook.id }
-        try writeFolder(folder, notes: notebookNotes, format: format, body: body)
-        return Result(folder: folder, noteCount: notebookNotes.count)
+                               body: @escaping (UUID) -> NSAttributedString) throws -> Result {
+        try prepareNotebook(notebook, notes: notes, format: format, to: destination, body: body).writeAll()
     }
 
     /// Writes every notebook as a folder inside a new `NoteIt Export` folder in `destination`.
     /// Notes without a notebook go in `No Notebook`.
     static func exportAll(notebooks: [Notebook], notes: [NoteMeta], format: ExportFormat, to destination: URL,
-                          body: (UUID) -> NSAttributedString) throws -> Result {
+                          body: @escaping (UUID) -> NSAttributedString) throws -> Result {
+        try prepareAll(notebooks: notebooks, notes: notes, format: format, to: destination, body: body).writeAll()
+    }
+
+    /// Creates the notebook's folder and returns the export, ready to write its notes.
+    static func prepareNotebook(_ notebook: Notebook, notes: [NoteMeta], format: ExportFormat, to destination: URL,
+                                body: @escaping (UUID) -> NSAttributedString) throws -> NotesExport {
+        let name = ExportNaming.uniqueOnDisk(ExportNaming.sanitized(notebook.name, fallback: "Notebook"), extension: "", in: destination)
+        let folder = destination.appendingPathComponent(name, isDirectory: true)
+        let notebookNotes = exportableNotes(in: notes).filter { $0.notebookID == notebook.id }
+        let files = try prepareFolder(folder, notes: notebookNotes, format: format)
+        return NotesExport(folder: folder, format: format, files: files, body: body)
+    }
+
+    /// Creates the `NoteIt Export` folder and a folder per notebook, and returns the export, ready to
+    /// write the notes.
+    static func prepareAll(notebooks: [Notebook], notes: [NoteMeta], format: ExportFormat, to destination: URL,
+                           body: @escaping (UUID) -> NSAttributedString) throws -> NotesExport {
         let root = destination.appendingPathComponent(
             ExportNaming.uniqueOnDisk(allNotesFolderName, extension: "", in: destination), isDirectory: true)
         let notes = exportableNotes(in: notes)
@@ -181,24 +202,26 @@ enum NoteExporter {
 
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var taken = Set<String>()
+        var files: [NotesExport.File] = []
         for group in groups {
             let folder = root.appendingPathComponent(ExportNaming.unique(group.name, extension: "", taken: &taken), isDirectory: true)
-            try writeFolder(folder, notes: group.notes, format: format, body: body)
+            files += try prepareFolder(folder, notes: group.notes, format: format)
         }
-        return Result(folder: root, noteCount: groups.reduce(0) { $0 + $1.notes.count })
+        return NotesExport(folder: root, format: format, files: files, body: body)
     }
 
-    /// One file per note, oldest first, so the first of several same-named notes keeps the plain name.
-    private static func writeFolder(_ folder: URL, notes: [NoteMeta], format: ExportFormat, body: (UUID) -> NSAttributedString) throws {
+    /// Creates `folder` and names one file per note, oldest first, so the first of several same-named
+    /// notes keeps the plain name.
+    private static func prepareFolder(_ folder: URL, notes: [NoteMeta], format: ExportFormat) throws -> [NotesExport.File] {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var taken = Set<String>()
         let ordered = notes.sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
-        for note in ordered {
+        return ordered.map { note in
             let name = ExportNaming.unique(ExportNaming.sanitized(note.displayTitle), extension: format.fileExtension, taken: &taken)
             if format == .markdown {
                 taken.insert(MarkdownWriter.assetsFolderName(for: (name as NSString).deletingPathExtension).lowercased())
             }
-            try write(body(note.id), title: note.displayTitle, format: format, to: folder.appendingPathComponent(name))
+            return NotesExport.File(note: note, url: folder.appendingPathComponent(name))
         }
     }
 
@@ -278,5 +301,57 @@ enum NoteExporter {
         operation.showsPrintPanel = true
         operation.showsProgressPanel = true
         return operation
+    }
+}
+
+/// An export of many notes whose folders are already created. Notes are written one at a time, so
+/// a large export can run in slices on the main thread and be stopped part way.
+@MainActor
+final class NotesExport {
+    struct File {
+        var note: NoteMeta
+        var url: URL
+    }
+
+    let folder: URL
+    let format: ExportFormat
+    private let files: [File]
+    private let body: (UUID) -> NSAttributedString
+    private(set) var written = 0
+
+    init(folder: URL, format: ExportFormat, files: [File], body: @escaping (UUID) -> NSAttributedString) {
+        self.folder = folder
+        self.format = format
+        self.files = files
+        self.body = body
+    }
+
+    var total: Int { files.count }
+    var isFinished: Bool { written == files.count }
+    var result: NoteExporter.Result { .init(folder: folder, noteCount: written, totalCount: total) }
+
+    func writeNext() throws {
+        guard !isFinished else { return }
+        let file = files[written]
+        try NoteExporter.write(body(file.note.id), title: file.note.displayTitle, format: format, to: file.url)
+        written += 1
+    }
+
+    func writeAll() throws -> NoteExporter.Result {
+        while !isFinished { try writeNext() }
+        return result
+    }
+
+    /// Writes the remaining notes in slices of about `slice`, letting the app handle events in between.
+    /// `progress` is called after each slice; returning false stops the export, keeping what's written.
+    func write(slice: Duration = .milliseconds(50), progress: (NotesExport) -> Bool) async throws -> NoteExporter.Result {
+        let clock = ContinuousClock()
+        while !isFinished {
+            let start = clock.now
+            repeat { try writeNext() } while !isFinished && clock.now - start < slice
+            guard progress(self), !isFinished else { break }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return result
     }
 }

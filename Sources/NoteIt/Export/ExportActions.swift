@@ -129,14 +129,14 @@ enum ExportActions {
     static func exportCurrentNotebook() {
         guard let notebook = currentNotebook else { return }
         chooseFolder(title: "Export “\(notebook.name)”") { folder, format in
-            try NoteExporter.exportNotebook(notebook, notes: store.notes, format: format, to: folder, body: body(ofNoteWith:))
+            try NoteExporter.prepareNotebook(notebook, notes: store.notes, format: format, to: folder, body: body(ofNoteWith:))
         }
     }
 
     static func exportAllNotes() {
         chooseFolder(title: "Export All Notes") { folder, format in
-            try NoteExporter.exportAll(notebooks: store.sortedNotebooks, notes: store.notes, format: format, to: folder,
-                                       body: body(ofNoteWith:))
+            try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: format, to: folder,
+                                        body: body(ofNoteWith:))
         }
     }
 
@@ -145,7 +145,8 @@ enum ExportActions {
         return store.body(for: id)
     }
 
-    private static func chooseFolder(title: String, export: @escaping (URL, ExportFormat) throws -> NoteExporter.Result) {
+    private static func chooseFolder(title: String, export: @escaping (URL, ExportFormat) throws -> NotesExport) {
+        guard !isExporting else { return }
         let panel = NSOpenPanel()
         panel.title = title
         panel.message = "Choose a folder. A folder for each notebook is created inside it."
@@ -162,10 +163,39 @@ enum ExportActions {
             let format = picker.format
             lastFormat = format
             do {
-                let result = try export(folder, format)
-                showCompletion(result)
+                run(try export(folder, format), title: title)
             } catch {
                 showError(error, message: "Couldn’t export the notes")
+            }
+        }
+    }
+
+    private static var isExporting = false
+
+    /// Writes the notes a slice at a time, with a progress sheet once it takes longer than one slice.
+    private static func run(_ export: NotesExport, title: String) {
+        let parent = window
+        let progress = ExportProgress(total: export.total)
+        var sheet: NSWindow?
+        isExporting = true
+        Task { @MainActor in
+            defer { isExporting = false }
+            do {
+                let result = try await export.write { export in
+                    progress.completed = export.written
+                    if sheet == nil, !export.isFinished, let parent {
+                        sheet = ExportProgressPresenter.show(progress, title: title, on: parent)
+                    }
+                    return !progress.isCancelled
+                }
+                sheet.map(ExportProgressPresenter.dismiss)
+                showCompletion(result, in: parent)
+            } catch {
+                sheet.map(ExportProgressPresenter.dismiss)
+                let written = export.written
+                showError(error, message: "Couldn’t export the notes",
+                          detail: written > 0 ? "\(written) of \(export.total) notes were exported to “\(export.folder.lastPathComponent)”." : nil,
+                          in: parent)
             }
         }
     }
@@ -183,9 +213,14 @@ enum ExportActions {
         }
     }
 
-    private static func showCompletion(_ result: NoteExporter.Result) {
+    private static func showCompletion(_ result: NoteExporter.Result, in parent: NSWindow?) {
+        let window = parent ?? Self.window
         let alert = NSAlert()
-        alert.messageText = result.noteCount == 1 ? "Exported 1 note" : "Exported \(result.noteCount) notes"
+        if result.noteCount < result.totalCount {
+            alert.messageText = "Exported \(result.noteCount) of \(result.totalCount) notes"
+        } else {
+            alert.messageText = result.noteCount == 1 ? "Exported 1 note" : "Exported \(result.noteCount) notes"
+        }
         alert.informativeText = "They’re in “\(result.folder.lastPathComponent)”."
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Show in Finder")
@@ -202,11 +237,12 @@ enum ExportActions {
         }
     }
 
-    private static func showError(_ error: Error, message: String) {
+    private static func showError(_ error: Error, message: String, detail: String? = nil, in parent: NSWindow? = nil) {
+        let window = parent ?? Self.window
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = message
-        alert.informativeText = error.localizedDescription
+        alert.informativeText = [error.localizedDescription, detail].compactMap { $0 }.joined(separator: " ")
         if let window {
             alert.beginSheetModal(for: window)
         } else {

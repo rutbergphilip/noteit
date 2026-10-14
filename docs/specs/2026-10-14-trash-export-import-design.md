@@ -80,7 +80,7 @@ Close the gaps that keep people from moving their notes into NoteIt, or trusting
 ### Commands
 
 - **File › Export Note As…** (⇧⌘S) opens a save panel with a format picker.
-- **File › Export Notebook…** and **File › Export All Notes…** ask for a format and a folder. They write one folder per notebook and one file per note. File names are the note title with characters unsafe for file names removed; duplicates get " 2", " 3" and so on. Notes in Recently Deleted are not exported.
+- **File › Export Notebook…** and **File › Export All Notes…** ask for a format and a folder. They write one folder per notebook and one file per note. File names are the note title with characters unsafe for file names removed; duplicates get " 2", " 3" and so on. Notes in Recently Deleted are not exported. Large exports show a progress sheet with Cancel; cancelling keeps the notes already written and reports "Exported N of M notes".
 - **File › Print…** (⌘P) prints the note with its title and standard margins.
 - **Share**: a toolbar button and a **File › Share** submenu use the system share picker. They share the note as Markdown text, with the title as the subject.
 - **Edit › Copy as Markdown** (⌥⇧⌘C) copies the note, or the selection, as Markdown.
