@@ -78,6 +78,9 @@ final class NoteStore: ObservableObject {
     private var persistedMeta: [UUID: NoteMeta] = [:]
     /// Bodies whose last write attempt failed.
     private var failedBodies: Set<UUID> = []
+    /// Notes whose body on disk may hold local edits not kept as a version yet. Unknown at launch, so
+    /// every note starts here.
+    private var unversionedLocalBodies: Set<UUID> = []
     /// Set once the app is terminating: failed bodies are then written to `recovery/` as a last resort.
     private var isTerminating = false
     /// Snapshots already written to `recovery/` (avoids duplicate copies across terminate-time flushes).
@@ -540,6 +543,7 @@ final class NoteStore: ObservableObject {
             loadErrors[id] = nil
             loadErrorFiles[id] = nil
             failedBodies.remove(id)
+            unversionedLocalBodies.remove(id)
             history.removeHistory(of: id)
             pendingTrash.insert(id)
         }
@@ -965,6 +969,7 @@ final class NoteStore: ObservableObject {
 
     private func finishLoad() {
         for meta in notes { persistedMeta[meta.id] = meta }
+        unversionedLocalBodies = Set(notes.map(\.id))
         loadSearchIndex()
         selectedNoteID = notes(for: selection, search: "").first?.id
         scheduleIndexRebuild()
@@ -1054,6 +1059,7 @@ final class NoteStore: ObservableObject {
                 history.recordSavedBody(at: bodyURL(for: id), of: id)
                 try writeBody(text, to: bodyURL(for: id))
                 written.insert(id)
+                unversionedLocalBodies.insert(id)
                 if failedBodies.remove(id) != nil {
                     // The library and index held back this note's new metadata/text; persist them now.
                     libraryDirty = true
@@ -1327,7 +1333,7 @@ final class NoteStore: ObservableObject {
         var body: NSAttributedString
         var folded: String
         var tempBody: URL
-        /// The body on disk differs from the incoming one, so it's kept as a version before being replaced.
+        /// The body on disk differs from the incoming one, so it may be kept as a version before being replaced.
         var replacesDifferentBody = false
 
         func discard() {
@@ -1361,9 +1367,10 @@ final class NoteStore: ObservableObject {
             throw SyncApplyError.bodyWriteBlocked(id)
         }
         if prepared.replacesDifferentBody {
-            history.recordSavedBody(at: bodyURL(for: id), of: id, force: true)
+            history.recordSavedBody(at: bodyURL(for: id), of: id, force: unversionedLocalBodies.contains(id))
         }
         try Self.installBody(prepared.tempBody, at: bodyURL(for: id))
+        if prepared.replacesDifferentBody { unversionedLocalBodies.remove(id) }
         let wasTombstoned = pendingTrash.remove(id) != nil
 
         stagedEditorBodies[id] = nil

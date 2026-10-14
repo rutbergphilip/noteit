@@ -189,6 +189,46 @@ final class VersionHistoryTests: XCTestCase {
         XCTAssertEqual(try texts(b, id), ["Shared\nlocal", "Shared\nbefore"])
     }
 
+    func testRemoteAppliesWithinTenMinutesKeepAtMostOneVersion() throws {
+        let a = makeStore("a")
+        let b = makeStore("b")
+        let id = a.createNote(in: nil, initial: NSAttributedString(string: "Shared\n0")).id
+        a.flush()
+        try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
+
+        for i in 1...12 {
+            advance(minutes: 0.5)
+            a.updateBody(id, NSAttributedString(string: "Shared\n\(i)"))
+            a.flush()
+            try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
+        }
+
+        XCTAssertEqual(b.plainText(for: id), "Shared\n12")
+        XCTAssertEqual(try texts(b, id), ["Shared\n0"])
+
+        advance(minutes: 11)
+        a.updateBody(id, NSAttributedString(string: "Shared\nlater"))
+        a.flush()
+        try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
+        XCTAssertEqual(try texts(b, id), ["Shared\n12", "Shared\n0"])
+    }
+
+    func testSyncKeepsUnversionedBodyAfterRelaunch() throws {
+        let a = makeStore("a")
+        let id = a.createNote(in: nil, initial: NSAttributedString(string: "Shared\nbefore")).id
+        a.flush()
+        var b = makeStore("b")
+        try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
+        b.updateBody(id, NSAttributedString(string: "Shared\nlocal"))
+        b.flush()
+        b = makeStore("b")
+
+        a.updateBody(id, NSAttributedString(string: "Shared\nafter"))
+        a.flush()
+        try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
+        XCTAssertEqual(try texts(b, id), ["Shared\nlocal", "Shared\nbefore"])
+    }
+
     func testVersionLabels() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!

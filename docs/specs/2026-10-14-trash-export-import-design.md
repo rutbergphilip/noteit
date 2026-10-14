@@ -43,7 +43,7 @@ Close the gaps that keep people from moving their notes into NoteIt, or trusting
 ### Rules
 
 - Before a body write replaces the saved body, NoteIt keeps the old body as a version if the newest version of that note is more than 10 minutes old, or if none exists.
-- A version is also kept before restoring a version, and before sync replaces the body with a remote change.
+- A version is also kept before restoring a version. Before sync replaces the body with a remote change, the same 10-minute rule applies, unless the body holds local edits not kept as a version yet; then it's always kept.
 - Each note keeps up to 50 versions, and none older than 30 days. A permanently removed note loses its versions too.
 
 ### Data
