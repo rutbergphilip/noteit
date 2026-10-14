@@ -2,7 +2,8 @@ import SwiftUI
 
 struct NoteListView: View {
     @EnvironmentObject private var store: NoteStore
-    @State private var notePendingDelete: NoteMeta?
+    @Environment(\.undoManager) private var undoManager
+    @ObservedObject private var trash = RecentlyDeletedCoordinator.shared
 
     private var selection: SidebarSelection { store.selection ?? .allNotes }
     private var visibleNotes: [NoteMeta] { store.notes(for: selection, search: store.searchText) }
@@ -19,6 +20,7 @@ struct NoteListView: View {
         case .pinned: return "Pinned"
         case .recent: return "Recent"
         case .conflicts: return "Conflicts"
+        case .recentlyDeleted: return "Recently Deleted"
         case .notebook(let id): return store.notebook(with: id)?.name ?? "Notebook"
         case .tag(let tag): return "#\(tag)"
         }
@@ -45,7 +47,7 @@ struct NoteListView: View {
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
                 .onDeleteCommand {
-                    if let note = store.note(with: store.selectedNoteID) { notePendingDelete = note }
+                    if let note = store.note(with: store.selectedNoteID) { delete(note) }
                 }
             }
         }
@@ -61,19 +63,17 @@ struct NoteListView: View {
                 }
                 .help("New Note (⌘N)")
             }
-        }
-        .confirmationDialog(
-            "Delete “\(notePendingDelete?.displayTitle ?? "")”?",
-            isPresented: Binding(
-                get: { notePendingDelete != nil },
-                set: { if !$0 { notePendingDelete = nil } }
-            ),
-            presenting: notePendingDelete
-        ) { note in
-            Button("Delete Note", role: .destructive) { store.deleteNote(note.id) }
-            Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("This note will be deleted.")
+            if selection == .recentlyDeleted {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        trash.confirmingEmpty = true
+                    } label: {
+                        Label("Empty Recently Deleted", systemImage: "trash.slash")
+                    }
+                    .disabled(notes.isEmpty)
+                    .help("Empty Recently Deleted…")
+                }
+            }
         }
         .onChange(of: store.selection) { _, _ in store.reconcileSelection() }
         .onChange(of: store.searchText) { _, _ in store.reconcileSelection() }
@@ -90,6 +90,12 @@ struct NoteListView: View {
             )
         } else {
             switch selection {
+            case .recentlyDeleted:
+                EmptyStateView(
+                    symbol: "trash",
+                    title: "No Recently Deleted Notes",
+                    message: "Deleted notes stay here for 30 days before they’re removed."
+                )
             case .pinned:
                 EmptyStateView(
                     symbol: "pin",
@@ -117,8 +123,28 @@ struct NoteListView: View {
         }
     }
 
+    /// Notes go to Recently Deleted right away (with Undo); from there, removing them for good is confirmed.
+    private func delete(_ note: NoteMeta) {
+        if note.deletedAt != nil {
+            trash.pendingDeleteNow = [note.id]
+        } else {
+            trash.delete([note.id], store: store, undoManager: undoManager)
+        }
+    }
+
     @ViewBuilder
     private func contextMenu(for note: NoteMeta) -> some View {
+        if note.deletedAt != nil {
+            Button("Recover") { store.recover([note.id], undoManager: undoManager) }
+            Divider()
+            Button("Delete Now…", role: .destructive) { trash.pendingDeleteNow = [note.id] }
+        } else {
+            activeContextMenu(for: note)
+        }
+    }
+
+    @ViewBuilder
+    private func activeContextMenu(for note: NoteMeta) -> some View {
         Button(note.isPinned ? "Unpin" : "Pin") { store.togglePin(note.id) }
         Menu("Move to") {
             ForEach(store.sortedNotebooks) { notebook in
@@ -136,8 +162,9 @@ struct NoteListView: View {
         if note.conflictSource != nil {
             Button("Mark Conflict Resolved") { store.markConflictResolved(note.id) }
         }
+        Button("Version History…") { trash.historyNoteID = note.id }
         Divider()
-        Button("Delete…", role: .destructive) { notePendingDelete = note }
+        Button("Delete", role: .destructive) { delete(note) }
     }
 }
 
@@ -175,7 +202,7 @@ struct NoteRow: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 6) {
-                Text(note.updatedAt, format: .relative(presentation: .named))
+                Text(note.deletedAt ?? note.updatedAt, format: .relative(presentation: .named))
                     .font(Tokens.Font.cardMeta)
                     .foregroundStyle(Tokens.Color.inkSecondary)
                 if let notebook {

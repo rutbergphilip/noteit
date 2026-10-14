@@ -10,10 +10,11 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 - **No side-by-side view for conflicts.** You compare the conflict copy with the original yourself.
 - **Encryption is chosen when you connect.** You can't change the passphrase or turn encryption on later without starting a new synced library.
 - **Macs only.** There's no iPhone or iPad app.
+- **Version history isn't synced.** Each Mac keeps the versions it recorded itself.
+- **NoteIt 0.1.0 doesn't know about Recently Deleted.** A Mac still on 0.1.0 shows deleted notes as normal notes until it's updated, and editing one there brings it back.
 
 ## Notes and editing
 
-- **No Trash.** Deleting a note can't be undone, and there's no *Recently Deleted* view. Deleted note bodies are kept in a hidden `.trash/` folder in the library, but getting one back means digging in Finder, and its title and notebook are gone.
 - **No export, print or Share menu.** Notes can't be exported to Markdown, PDF or HTML yet.
 - **Quick Capture is plain text.** The title becomes a bold first line; format the note afterwards in the editor. There's one draft at a time, and nothing outside the panel shows that a draft is waiting.
 - **Tags are plain text.** `#hashtags` aren't styled in the editor, can't be renamed or merged, and are only added by typing them.

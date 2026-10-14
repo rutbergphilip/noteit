@@ -42,6 +42,9 @@ final class NoteStore: ObservableObject {
     var tombstonesURL: URL { rootURL.appendingPathComponent("tombstones.json") }
     var recoveryURL: URL { rootURL.appendingPathComponent("recovery", isDirectory: true) }
     var syncDeletionsURL: URL { rootURL.appendingPathComponent("sync-deletions.json") }
+    nonisolated var historyURL: URL { rootURL.appendingPathComponent("history", isDirectory: true) }
+    /// Earlier bodies of each note, kept on this Mac only.
+    let history: VersionHistory
     private var firstLaunchMarkerURL: URL { rootURL.appendingPathComponent(".initialized") }
     /// False when migration didn't report a fresh install (see `LibraryMigration.Outcome.allowsSeeding`).
     private let seedsFreshLibrary: Bool
@@ -49,7 +52,7 @@ final class NoteStore: ObservableObject {
     private var bodyCache: [UUID: NSAttributedString] = [:]
     private var bodyAccessOrder: [UUID] = []
     private var dirtyBodies: Set<UUID> = []
-    private var libraryDirty = false
+    private(set) var libraryDirty = false
     private var saveWorkItem: DispatchWorkItem?
     private var isLoading = false
 
@@ -104,6 +107,7 @@ final class NoteStore: ObservableObject {
     init(location: LibraryLocation) {
         rootURL = location.url
         seedsFreshLibrary = location.seedsFreshLibrary
+        history = VersionHistory(rootURL: location.url.appendingPathComponent("history", isDirectory: true))
         load()
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: nil
@@ -161,20 +165,23 @@ final class NoteStore: ObservableObject {
     /// Pinned first, then most recently updated.
     func notes(for selection: SidebarSelection?, search: String) -> [NoteMeta] {
         let filtered: [NoteMeta]
+        let active = activeNotes
         switch selection ?? .allNotes {
         case .allNotes:
-            filtered = notes
+            filtered = active
         case .pinned:
-            filtered = notes.filter(\.isPinned)
+            filtered = active.filter(\.isPinned)
         case .recent:
             let cutoff = Date().addingTimeInterval(-Self.recentInterval)
-            filtered = notes.filter { $0.updatedAt >= cutoff }
+            filtered = active.filter { $0.updatedAt >= cutoff }
         case .conflicts:
-            filtered = notes.filter { $0.conflictSource != nil }
+            filtered = active.filter { $0.conflictSource != nil }
+        case .recentlyDeleted:
+            filtered = deletedNotes
         case .notebook(let id):
-            filtered = notes.filter { $0.notebookID == id }
+            filtered = active.filter { $0.notebookID == id }
         case .tag(let tag):
-            filtered = notes.filter { $0.tags.contains(tag) }
+            filtered = active.filter { $0.tags.contains(tag) }
         }
 
         let terms = Self.fold(search).split(whereSeparator: \.isWhitespace)
@@ -188,6 +195,9 @@ final class NoteStore: ObservableObject {
             }
         }
 
+        if selection == .recentlyDeleted {
+            return searched.sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
+        }
         return searched.sorted { a, b in
             if a.isPinned != b.isPinned { return a.isPinned }
             return a.updatedAt > b.updatedAt
@@ -198,9 +208,9 @@ final class NoteStore: ObservableObject {
         notes(for: selection, search: "").count
     }
 
-    /// Unique tags (lowercased, without `#`) across all notes, sorted.
+    /// Unique tags (lowercased, without `#`) across notes not in Recently Deleted, sorted.
     var allTags: [String] {
-        Array(Set(notes.flatMap(\.tags))).sorted()
+        Array(Set(activeNotes.flatMap(\.tags))).sorted()
     }
 
     // MARK: - Selection
@@ -268,7 +278,8 @@ final class NoteStore: ObservableObject {
     func updateBody(_ id: UUID, _ text: NSAttributedString) {
         // A direct commit is newer than any snapshot still waiting for its turn.
         stagedEditorBodies[id] = nil
-        guard let index = noteIndex(id) else { return }
+        // Notes in Recently Deleted are read-only.
+        guard let index = noteIndex(id), notes[index].deletedAt == nil else { return }
         if body(for: id).isEqual(to: text) { return }
 
         let snapshot = text.copy() as? NSAttributedString ?? NSAttributedString(attributedString: text)
@@ -484,7 +495,7 @@ final class NoteStore: ObservableObject {
         switch selection {
         case .notebook(let id):
             notebookID = id
-        case .pinned, .conflicts, .tag, .none:
+        case .pinned, .conflicts, .recentlyDeleted, .tag, .none:
             selection = .allNotes
         case .allNotes, .recent:
             break
@@ -508,15 +519,7 @@ final class NoteStore: ObservableObject {
     func removeNote(_ id: UUID, remote: Bool = false) {
         guard let index = noteIndex(id) else { return }
         stagedEditorBodies[id] = nil
-        if selectedNoteID == id {
-            let visible = notes(for: selection, search: searchText)
-            if let pos = visible.firstIndex(where: { $0.id == id }) {
-                let next = visible.indices.contains(pos + 1) ? visible[pos + 1] : (pos > 0 ? visible[pos - 1] : nil)
-                selectedNoteID = next?.id
-            } else {
-                selectedNoteID = nil
-            }
-        }
+        if selectedNoteID == id { selectNeighbor(of: id) }
         notes.remove(at: index)
         bodyCache[id] = nil
         bodyAccessOrder.removeAll { $0 == id }
@@ -526,12 +529,38 @@ final class NoteStore: ObservableObject {
         loadErrors[id] = nil
         loadErrorFiles[id] = nil
         failedBodies.remove(id)
+        history.removeHistory(of: id)
         pendingTrash.insert(id)
         saveTombstones()
         resolveConflictCopies(of: id, remote: remote)
         libraryDirty = true
         if remote { persistRemoteApply() } else { flush() }
         reconcileSelection()
+    }
+
+    /// Moves the selection to the next (or else previous) note in the visible list.
+    func selectNeighbor(of id: UUID) {
+        let visible = notes(for: selection, search: searchText)
+        if let pos = visible.firstIndex(where: { $0.id == id }) {
+            let next = visible.indices.contains(pos + 1) ? visible[pos + 1] : (pos > 0 ? visible[pos - 1] : nil)
+            selectedNoteID = next?.id
+        } else {
+            selectedNoteID = nil
+        }
+    }
+
+    /// An open editor and any staged snapshot commit their edits now, before the note becomes read-only.
+    func handOverPendingEdits(_ id: UUID) {
+        NotificationCenter.default.post(name: .noteItSyncWillApplyRemote, object: id)
+        commitStagedEditorBody(id)
+    }
+
+    /// Saves a user change to note metadata; syncs like any edit.
+    func commitUserMetadataChange() {
+        libraryDirty = true
+        hasUnannouncedLocalChange = true
+        scheduleSave()
+        reconcileSelectionAfterUserAction()
     }
 
     /// Conflict copies of a deleted note no longer conflict with anything. A local deletion is a user change;
@@ -560,7 +589,7 @@ final class NoteStore: ObservableObject {
     }
 
     func togglePin(_ id: UUID) {
-        guard let index = notes.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = notes.firstIndex(where: { $0.id == id }), notes[index].deletedAt == nil else { return }
         notes[index].isPinned.toggle()
         notes[index].revision = UUID()
         libraryDirty = true
@@ -570,7 +599,7 @@ final class NoteStore: ObservableObject {
     }
 
     func moveNote(_ id: UUID, to notebookID: UUID?) {
-        guard let index = notes.firstIndex(where: { $0.id == id }),
+        guard let index = notes.firstIndex(where: { $0.id == id }), notes[index].deletedAt == nil,
               notes[index].notebookID != notebookID else { return }
         notes[index].notebookID = notebookID
         notes[index].revision = UUID()
@@ -580,7 +609,7 @@ final class NoteStore: ObservableObject {
         reconcileSelectionAfterUserAction()
     }
 
-    private func reconcileSelectionAfterUserAction() {
+    func reconcileSelectionAfterUserAction() {
         guard !isLoading else { return }
         editingNoteID = nil
         reconcileSelection()
@@ -614,12 +643,15 @@ final class NoteStore: ObservableObject {
         scheduleSave()
     }
 
-    /// Deletes the notebook; its notes are kept and move to "no notebook".
-    func deleteNotebook(_ id: UUID) {
+    /// Deletes the notebook and moves its notes to Recently Deleted. They keep the notebook ID, so
+    /// recovering them falls back to Inbox.
+    func deleteNotebook(_ id: UUID, at date: Date = Date()) {
+        let affected = notes.filter { $0.notebookID == id && $0.deletedAt == nil }.map(\.id)
+        for noteID in affected { handOverPendingEdits(noteID) }
         if notebook(with: id) != nil { journalSyncDeletion(id, kind: .notebook) }
         notebooks.removeAll { $0.id == id }
-        for index in notes.indices where notes[index].notebookID == id {
-            notes[index].notebookID = nil
+        for index in notes.indices where notes[index].notebookID == id && notes[index].deletedAt == nil {
+            notes[index].deletedAt = date
             notes[index].revision = UUID()
         }
         if selection == .notebook(id) { selection = .allNotes }
@@ -976,7 +1008,7 @@ final class NoteStore: ObservableObject {
         NSLog("NoteIt: rebuilt library with \(rebuilt.count) note(s) from bodies")
     }
 
-    private func scheduleSave(after delay: TimeInterval = 0.5) {
+    func scheduleSave(after delay: TimeInterval = 0.5) {
         saveWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated { self?.flush() }
@@ -1003,6 +1035,7 @@ final class NoteStore: ObservableObject {
                 continue
             }
             do {
+                history.recordSavedBody(at: bodyURL(for: id), of: id)
                 try writeBody(text, to: bodyURL(for: id))
                 written.insert(id)
                 if failedBodies.remove(id) != nil {
@@ -1218,7 +1251,10 @@ final class NoteStore: ObservableObject {
     }
 
     nonisolated private static func revisionFields(_ meta: NoteMeta) -> [String] {
-        ["note", meta.title, meta.notebookID?.uuidString ?? "", meta.isPinned ? "pinned" : ""]
+        var fields = ["note", meta.title, meta.notebookID?.uuidString ?? "", meta.isPinned ? "pinned" : ""]
+        // Appended only when set, so revisions derived before Recently Deleted existed stay the same.
+        if let deletedAt = meta.deletedAt { fields.append("deleted \(deletedAt.timeIntervalSince1970)") }
+        return fields
     }
 
     nonisolated private static func revisionFields(_ nb: Notebook) -> [String] {
@@ -1275,6 +1311,8 @@ final class NoteStore: ObservableObject {
         var body: NSAttributedString
         var folded: String
         var tempBody: URL
+        /// The body on disk differs from the incoming one, so it's kept as a version before being replaced.
+        var replacesDifferentBody = false
 
         func discard() {
             try? FileManager.default.removeItem(at: tempBody)
@@ -1288,7 +1326,13 @@ final class NoteStore: ObservableObject {
         let body = try deserializeBody(data)
         applyDerivedFields(to: &meta, from: body)
         let temp = try writeTempBody(body, in: notesURL)
-        return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp)
+        let current = notesURL.appendingPathComponent("\(payload.id.uuidString).rtfd", isDirectory: true)
+        var replaces = false
+        if FileManager.default.fileExists(atPath: current.path) {
+            replaces = (try? readBody(at: current)).map { !$0.isEqual(to: body) } ?? true
+        }
+        return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp,
+                                  replacesDifferentBody: replaces)
     }
 
     /// Inserts or replaces a note from sync, keeping its revision. The prepared body package is swapped in
@@ -1299,6 +1343,9 @@ final class NoteStore: ObservableObject {
         if bodyWriteBlocked.contains(id) {
             prepared.discard()
             throw SyncApplyError.bodyWriteBlocked(id)
+        }
+        if prepared.replacesDifferentBody {
+            history.recordSavedBody(at: bodyURL(for: id), of: id, force: true)
         }
         try Self.installBody(prepared.tempBody, at: bodyURL(for: id))
         let wasTombstoned = pendingTrash.remove(id) != nil

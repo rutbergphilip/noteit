@@ -40,6 +40,16 @@ struct SidebarView: View {
                     }
                 }
             }
+
+            if store.hasRecentlyDeleted || store.selection == .recentlyDeleted {
+                Section {
+                    libraryRow("Recently Deleted", symbol: "trash", tint: .secondary, selection: .recentlyDeleted)
+                        .contextMenu {
+                            Button("Empty Recently Deleted…") { RecentlyDeletedCoordinator.shared.confirmingEmpty = true }
+                                .disabled(!store.hasRecentlyDeleted)
+                        }
+                }
+            }
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -70,7 +80,7 @@ struct SidebarView: View {
             Button("Delete Notebook", role: .destructive) { store.deleteNotebook(notebook.id) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("Notes in this notebook will be kept in All Notes.")
+            Text("Its notes will be moved to Recently Deleted.")
         }
     }
 

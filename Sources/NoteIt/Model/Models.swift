@@ -25,10 +25,12 @@ struct NoteMeta: Identifiable, Codable, Hashable {
     var conflictSource: String? = nil
     /// The note this conflict copy was made from.
     var conflictOriginalID: UUID? = nil
+    /// Set while the note is in Recently Deleted.
+    var deletedAt: Date? = nil
 }
 
 enum SidebarSelection: Hashable {
-    case allNotes, pinned, recent, conflicts, notebook(UUID), tag(String)
+    case allNotes, pinned, recent, conflicts, recentlyDeleted, notebook(UUID), tag(String)
 }
 
 extension Notebook {
