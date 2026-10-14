@@ -578,8 +578,11 @@ private struct InlineParser {
         return attrs
     }
 
+    /// Link schemes that become links; anything else, such as `javascript:` or `file:`, stays plain text.
+    static let linkSchemes: Set<String> = ["http", "https", "mailto", "tel", "ftp"]
+
     private static func webURL(_ raw: String) -> URL? {
-        guard let url = URL(string: raw), let scheme = url.scheme, scheme.count > 1 else { return nil }
+        guard let url = URL(string: raw), let scheme = url.scheme?.lowercased(), linkSchemes.contains(scheme) else { return nil }
         return url
     }
 

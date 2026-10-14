@@ -95,6 +95,15 @@ final class MarkdownReaderTests: XCTestCase {
         XCTAssertNil(attrs(s, of: "Other note")[.link])
     }
 
+    func testOnlySafeLinkSchemesBecomeLinks() {
+        let s = read("[a](javascript:alert(1)) [b](data:text/html,x) [c](file:///etc/passwd) [d](vbscript:x) [e](x-foo:bar) <javascript:alert(2)> [f](mailto:a@b.se) [g](tel:+4612) [h](ftp://example.com) [z](#top)")
+        XCTAssertEqual(s.string, "a b c d e <javascript:alert(2)> f g h z\n")
+        for text in ["a", "b", "c", "d", "e", "z"] { XCTAssertNil(attrs(s, of: text)[.link], text) }
+        XCTAssertEqual(attrs(s, of: "f")[.link] as? URL, URL(string: "mailto:a@b.se"))
+        XCTAssertEqual(attrs(s, of: "g")[.link] as? URL, URL(string: "tel:+4612"))
+        XCTAssertEqual(attrs(s, of: "h")[.link] as? URL, URL(string: "ftp://example.com"))
+    }
+
     func testBulletedAndNumberedListsWithNesting() {
         let md = """
         - Fruit
