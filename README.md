@@ -121,24 +121,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 
 ## Roadmap
 
-These items aren't built yet. Contributions and design discussion are welcome.
-
-- **A self-hosted web app.** A Nuxt app you can run in Docker next to your storage. It will read and write the same encrypted sync format, so a browser becomes another device. The spec is [`docs/specs/2026-10-13-web-app-design.md`](docs/specs/2026-10-13-web-app-design.md).
-- **Sync:**
-  - a WebDAV backend
-  - a side-by-side conflict compare view
-  - changing the passphrase, or turning encryption on for an existing library
-- **iOS / iPadOS:** capture first. The `NoteItSync` library has no AppKit dependency, so an iOS app could reuse it.
-- **Export and import:** export to Markdown, PDF and HTML, plus print and a Share menu. Import from Apple Notes, Bear and Obsidian.
-- **Trash:**
-  - a *Recently Deleted* view and undo for deletes (deleted bodies already go to a hidden `.trash/` folder)
-  - version history
-- **Organization:** nested notebooks, tag rename and merge, styled tag chips, saved searches, `[[wiki links]]` and backlinks.
-- **Search:** ranking and highlighting of matches.
-- **Onboarding:** a first-run flow for hotkeys, the menu bar and the second-Mac sync setup.
-- **Polish:**
-  - a motion language for Quick Capture, checklists, pinning and sync status
-  - an accessibility audit
+See [docs/roadmap.md](docs/roadmap.md) for what's planned and in which order. Contributions and design discussion are welcome.
 
 ## Project layout
 
