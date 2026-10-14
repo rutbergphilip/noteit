@@ -14,6 +14,7 @@ extension NoteStore {
     var hasRecentlyDeleted: Bool { notes.contains { $0.deletedAt != nil } }
 
     /// Where a recovered note goes when its notebook no longer exists: the notebook named Inbox, if any.
+    /// Without one the note has no notebook and shows under All Notes.
     var inboxNotebookID: UUID? {
         sortedNotebooks.first { $0.name.caseInsensitiveCompare("Inbox") == .orderedSame }?.id
     }

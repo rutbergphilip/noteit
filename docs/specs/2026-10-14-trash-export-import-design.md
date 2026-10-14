@@ -22,7 +22,7 @@ Close the gaps that keep people from moving their notes into NoteIt, or trusting
 - *Recently Deleted* is a smart view at the bottom of the sidebar. It shows a count and only appears when it isn't empty.
 - Notes in *Recently Deleted* don't appear anywhere else: not in notebooks, smart views, tags, search, the menu bar panel or the Recent list.
 - Opening a deleted note shows it read-only, under a banner: "Deleted 3 days ago. It will be removed in 27 days." The banner has **Recover** and **Delete Now** buttons.
-- Recovering puts the note back in its notebook, or in Inbox if that notebook no longer exists.
+- Recovering puts the note back in its notebook, or in Inbox if that notebook no longer exists. Without an Inbox the note has no notebook and shows under All Notes.
 - Notes are removed for good 30 days after deletion. This is checked at launch and once a day. **Empty Recently Deleted…** asks for confirmation and removes them all now.
 - Deleting a notebook moves its notes to Recently Deleted. The notes keep the notebook ID, so recovery falls back to Inbox.
 
