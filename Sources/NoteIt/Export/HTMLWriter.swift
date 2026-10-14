@@ -131,7 +131,7 @@ enum HTMLWriter {
                 s = "<mark style=\"background-color: \(highlight)\">\(s)</mark>"
             }
             if !styles.isEmpty { s = "<span style=\"\(styles.joined(separator: "; "))\">\(s)</span>" }
-            if let link = run.link { s = "<a href=\"\(escape(link.absoluteString))\">\(s)</a>" }
+            if let link = run.link, ExportLinks.isSafe(link) { s = "<a href=\"\(escape(link.absoluteString))\">\(s)</a>" }
             out += s
         }
         return out
@@ -143,10 +143,10 @@ enum HTMLWriter {
         let mime = ExportFileType.mimeType(extension: ext.isEmpty ? "png" : ext)
         let url = "data:\(mime);base64,\(contents.data.base64EncodedString())"
         if contents.isImage {
-            return "<img src=\"\(url)\" alt=\"\(escape(contents.filename ?? ""))\">"
+            return "<img src=\"\(escape(url))\" alt=\"\(escape(contents.filename ?? ""))\">"
         }
         let name = escape(contents.filename ?? "file")
-        return "<a href=\"\(url)\" download=\"\(name)\">\(name)</a>"
+        return "<a href=\"\(escape(url))\" download=\"\(name)\">\(name)</a>"
     }
 
     /// Black and near-black text is the default ink; leaving it out keeps it readable in dark mode.
@@ -170,6 +170,7 @@ enum HTMLWriter {
             case "<": out += "&lt;"
             case ">": out += "&gt;"
             case "\"": out += "&quot;"
+            case "'": out += "&#39;"
             default: out.append(c)
             }
         }

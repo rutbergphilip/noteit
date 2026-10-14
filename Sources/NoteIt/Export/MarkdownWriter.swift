@@ -117,6 +117,11 @@ enum MarkdownWriter {
         private enum Delimiter: String { case strike = "~~", bold = "**", italic = "*" }
 
         private mutating func inline(_ runs: [InlineRun], continuation: String, inTable: Bool = false) -> String {
+            let runs = runs.map { run in
+                var run = run
+                if let link = run.link, !ExportLinks.isSafe(link) { run.link = nil }
+                return run
+            }
             var out = ""
             var index = 0
             while index < runs.count {

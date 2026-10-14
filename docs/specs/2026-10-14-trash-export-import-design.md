@@ -68,7 +68,7 @@ Close the gaps that keep people from moving their notes into NoteIt, or trusting
 |---|---|
 | Title / heading / subheading | `#` / `##` / `###` |
 | Bold, italic, strikethrough, inline code | `**`, `*`, `~~`, `` ` `` |
-| Link | `[text](url)` |
+| Link | `[text](url)` for http, https, mailto, tel, ftp and relative links. Other links (such as `javascript:`) become plain text, in HTML too. |
 | Bulleted, numbered, checklist (with nesting) | `- `, `1. `, `- [ ] ` / `- [x] `, indented to line up with the parent item's text |
 | Quote | `> ` |
 | Code block | fenced ```` ``` ```` |

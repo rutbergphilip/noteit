@@ -226,3 +226,18 @@ enum ExportFileType {
         UTType(filenameExtension: ext)?.preferredMIMEType ?? "application/octet-stream"
     }
 }
+
+/// Links that are kept in exported files. Others, such as `javascript:`, are written as plain text.
+enum ExportLinks {
+    static let safeSchemes: Set<String> = ["http", "https", "mailto", "tel", "ftp"]
+
+    /// True for links with a safe scheme, and for relative and fragment links.
+    static func isSafe(_ url: URL) -> Bool {
+        // Browsers ignore control characters and whitespace in a scheme, so `java\tscript:` is still script.
+        let s = String(String.UnicodeScalarView(url.absoluteString.unicodeScalars.filter { $0.value > 0x20 && $0.value != 0x7F }))
+        guard let colon = s.firstIndex(of: ":") else { return true }
+        let scheme = s[..<colon]
+        if scheme.contains(where: { $0 == "/" || $0 == "?" || $0 == "#" }) { return true }
+        return safeSchemes.contains(scheme.lowercased())
+    }
+}

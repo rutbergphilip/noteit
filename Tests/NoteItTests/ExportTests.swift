@@ -275,6 +275,56 @@ final class ExportTests: XCTestCase {
         XCTAssertTrue(html.contains("<ul>\n<li>Fruit<ul>\n<li>Apples<ul>\n<li>Pears</li></ul>\n</li></ul>\n</li></ul>"), html)
     }
 
+    func testHTMLEscapesTextSoNotesCantInjectTags() {
+        let tv = editor(["<script>alert('x')</script> & \"quoted\""])
+        let html = HTMLWriter.write(tv.attributedString(), title: "<b>'Title'</b>")
+        XCTAssertFalse(html.contains("<script>"))
+        XCTAssertTrue(html.contains("<p>&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt; &amp; &quot;quoted&quot;</p>"), html)
+        XCTAssertTrue(html.contains("<title>&lt;b&gt;&#39;Title&#39;&lt;/b&gt;</title>"))
+        XCTAssertEqual(HTMLWriter.escape("a'b\"c<d>&"), "a&#39;b&quot;c&lt;d&gt;&amp;")
+    }
+
+    private func linkedNote(_ links: [(text: String, url: String)]) -> NoteItTextView {
+        let tv = editor([links.map(\.text).joined(separator: " ")])
+        for link in links {
+            let r = range(of: link.text, in: tv)
+            tv.editAttributes(in: r) { $0.addAttribute(.link, value: URL(string: link.url)!, range: r) }
+        }
+        return tv
+    }
+
+    func testHTMLKeepsOnlySafeLinks() {
+        let tv = linkedNote([
+            ("evil", "javascript:alert(1)"), ("data", "data:text/html,<b>x</b>"), ("web", "https://example.com/?a=1&b='2'"),
+            ("mail", "mailto:a@example.com"), ("phone", "tel:+4612345"), ("files", "ftp://example.com/f"),
+            ("rel", "notes/other.html"), ("frag", "#top"),
+        ])
+        let html = HTMLWriter.write(tv.attributedString(), title: "Links")
+        XCTAssertFalse(html.lowercased().contains("javascript:"), html)
+        XCTAssertFalse(html.contains("href=\"data:text"), html)
+        XCTAssertTrue(html.contains("<p>evil data <a href="), html)
+        XCTAssertTrue(html.contains("<a href=\"https://example.com/?a=1&amp;b=&#39;2&#39;\">web</a>"), html)
+        XCTAssertTrue(html.contains("<a href=\"mailto:a@example.com\">mail</a>"))
+        XCTAssertTrue(html.contains("<a href=\"tel:+4612345\">phone</a>"))
+        XCTAssertTrue(html.contains("<a href=\"ftp://example.com/f\">files</a>"))
+        XCTAssertTrue(html.contains("<a href=\"notes/other.html\">rel</a>"))
+        XCTAssertTrue(html.contains("<a href=\"#top\">frag</a>"))
+    }
+
+    func testLinkSafetyIgnoresCaseAndHiddenCharacters() {
+        XCTAssertFalse(ExportLinks.isSafe(URL(string: "JavaScript:alert(1)")!))
+        XCTAssertFalse(ExportLinks.isSafe(URL(string: "vbscript:x")!))
+        XCTAssertTrue(ExportLinks.isSafe(URL(string: "HTTPS://example.com")!))
+        XCTAssertTrue(ExportLinks.isSafe(URL(string: "page.html#a:b")!))
+        XCTAssertTrue(ExportLinks.isSafe(URL(string: "/a:b")!))
+    }
+
+    func testMarkdownDropsUnsafeLinks() {
+        let tv = linkedNote([("evil", "javascript:alert(1)"), ("web", "https://example.com")])
+        let markdown = MarkdownWriter.write(tv.attributedString(), title: "x").markdown
+        XCTAssertEqual(markdown, "evil [web](https://example.com)\n")
+    }
+
     // MARK: File names
 
     func testFileNamesAreSanitized() {
