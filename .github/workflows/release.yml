@@ -224,8 +224,7 @@ jobs:
           ditto -c -k --keepParent dist/NoteIt.app "$zip"
           ./scripts/notarize.sh "$zip"
           rm -f "$zip"
-          xcrun stapler staple dist/NoteIt.app
-          xcrun stapler validate dist/NoteIt.app
+          ./scripts/staple.sh dist/NoteIt.app
           spctl -a -t exec -vv dist/NoteIt.app
 
       - name: Make DMG
@@ -253,8 +252,7 @@ jobs:
           codesign --force --sign "$IDENTITY" --timestamp "$dmg"
           codesign --verify --strict --verbose=2 "$dmg"
           ./scripts/notarize.sh "$dmg"
-          xcrun stapler staple "$dmg"
-          xcrun stapler validate "$dmg"
+          ./scripts/staple.sh "$dmg"
           spctl -a -t open --context context:primary-signature -v "$dmg"
 
       - name: Checksum
