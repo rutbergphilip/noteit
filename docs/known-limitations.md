@@ -26,4 +26,3 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 
 - **No first-run guide.** New users get sample notes only. Global hotkeys are unbound by default and are set up in Settings › Shortcuts.
 - **Accessibility hasn't been audited** yet. Only some controls have VoiceOver labels.
-- **No release builds.** Builds are ad-hoc signed, not notarized, and there's no auto-update. Build from source for now.

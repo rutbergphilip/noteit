@@ -1,0 +1,340 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build an ad-hoc signed DMG and appcast as a workflow artifact, without publishing"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One release run at a time, across all refs, so build numbers (UTC timestamps) follow run order.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  SPARKLE_VERSION: "2.10.0"
+  SPARKLE_SHA256: c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 60
+    outputs:
+      publish: ${{ steps.meta.outputs.publish }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      sha256: ${{ steps.dmg.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Release metadata
+        id: meta
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ "$EVENT" == "push" || "$DRY_RUN" == "false" ]]; then
+            if [[ "$REF_TYPE" != "tag" ]]; then
+              echo "::error::Real releases run from a vX.Y.Z tag. Push a tag, or run with dry_run=true."
+              exit 1
+            fi
+            if [[ ! "$REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Tag '$REF_NAME' doesn't match vMAJOR.MINOR.PATCH[-prerelease]."
+              exit 1
+            fi
+            publish=true
+            version="${REF_NAME#v}"
+            section="$version"
+            # Pre-releases use Unreleased unless the changelog has a section for them.
+            if [[ "$version" == *-* ]] && ! grep -qF "## [$version]" CHANGELOG.md; then
+              section=Unreleased
+            fi
+          else
+            publish=false
+            # Rehearse with the newest released section, or Unreleased before the first release.
+            section="$(sed -nE 's/^## \[([0-9][^]]*)\].*/\1/p' CHANGELOG.md | head -n 1)"
+            version="${section:-0.0.0}"
+            section="${section:-Unreleased}"
+          fi
+          prerelease=false
+          [[ "$version" == *-* ]] && prerelease=true
+          ./scripts/release_notes.sh "$section" > "$RUNNER_TEMP/notes.md"
+          # Build time in UTC to the second: unique per run, increasing, and longer than the
+          # 12-digit default of local builds, so Sparkle never sees a release as older.
+          build="$(date -u +%Y%m%d%H%M%S)"
+          {
+            echo "publish=$publish"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+          echo "NoteIt $version (build $build), notes from [$section], publish=$publish, prerelease=$prerelease"
+
+      - name: Check release secrets
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+          DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          required=(DEVELOPER_ID_CERT_P12_BASE64 DEVELOPER_ID_CERT_PASSWORD APPLE_TEAM_ID
+                    NOTARY_KEY_ID NOTARY_ISSUER_ID NOTARY_KEY_P8_BASE64 SPARKLE_PRIVATE_KEY)
+          [[ "$PRERELEASE" == "true" ]] || required+=(HOMEBREW_TAP_DEPLOY_KEY)
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "$(printenv "$name")" ]] || missing+=("$name")
+          done
+          if (( ${#missing[@]} )); then
+            echo "::error::Missing repository secrets: ${missing[*]}. Nothing was built or published; see docs/releasing.md."
+            exit 1
+          fi
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: latest-stable
+
+      - name: Toolchain
+        run: swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Import Developer ID certificate
+        id: cert
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERT_P12_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          keychain="$RUNNER_TEMP/release.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          cert="$RUNNER_TEMP/developer-id.p12"
+          printf '%s' "$DEVELOPER_ID_CERT_P12_BASE64" | base64 --decode > "$cert"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$cert" -k "$keychain" -P "$DEVELOPER_ID_CERT_PASSWORD" -f pkcs12 \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$cert"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          existing=()
+          while IFS= read -r line; do existing+=("$line"); done < <(security list-keychains -d user | sed -E 's/^[[:space:]]*"(.*)"$/\1/')
+          security list-keychains -d user -s "$keychain" "${existing[@]}"
+          identity="$(security find-identity -v -p codesigning "$keychain" \
+            | sed -nE "s/^ *[0-9]+\) [0-9A-F]{40} \"(Developer ID Application: .* \($APPLE_TEAM_ID\))\"$/\1/p" | head -n 1)"
+          if [[ -z "$identity" ]]; then
+            echo "::error::No 'Developer ID Application' identity for team $APPLE_TEAM_ID in the certificate."
+            security find-identity -v -p codesigning "$keychain"
+            exit 1
+          fi
+          echo "Signing as: $identity"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+
+      - name: Build NoteIt.app
+        env:
+          NOTEIT_INSTALL_DIR: ${{ github.workspace }}/dist
+          NOTEIT_VERSION: ${{ steps.meta.outputs.version }}
+          NOTEIT_BUILD: ${{ steps.meta.outputs.build }}
+          NOTEIT_SIGN_IDENTITY: ${{ steps.meta.outputs.publish == 'true' && steps.cert.outputs.identity || '-' }}
+          NOTEIT_UNIVERSAL: "1"
+        run: |
+          ./scripts/build_app.sh
+          app=dist/NoteIt.app
+          codesign --verify --deep --strict --verbose=2 "$app"
+          archs="$(lipo -archs "$app/Contents/MacOS/NoteIt")"
+          echo "Architectures: $archs"
+          [[ "$archs" == *arm64* && "$archs" == *x86_64* ]] || { echo "::error::NoteIt.app isn't universal"; exit 1; }
+          [[ -d "$app/Contents/Frameworks/Sparkle.framework" ]] || { echo "::error::Sparkle.framework isn't embedded"; exit 1; }
+          [[ "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" == "$NOTEIT_VERSION" ]]
+          [[ "$(plutil -extract CFBundleVersion raw "$app/Contents/Info.plist")" == "$NOTEIT_BUILD" ]]
+          plutil -extract SUFeedURL raw "$app/Contents/Info.plist"
+          plutil -extract SUPublicEDKey raw "$app/Contents/Info.plist" > /dev/null
+
+      - name: Check Sparkle key
+        id: sparkle_key
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$SPARKLE_PRIVATE_KEY" ]]; then
+            echo "::warning::SPARKLE_PRIVATE_KEY isn't set; the appcast will be unsigned."
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          key="$RUNNER_TEMP/sparkle-key"
+          (umask 077 && printf '%s' "$SPARKLE_PRIVATE_KEY" > "$key")
+          ./scripts/check_sparkle_key.sh "$key" dist/NoteIt.app
+          echo "available=true" >> "$GITHUB_OUTPUT"
+
+      - name: Notarize and staple app
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          NOTARY_KEY_P8_BASE64: ${{ secrets.NOTARY_KEY_P8_BASE64 }}
+          NOTARY_KEY_FILE: ${{ runner.temp }}/notary-key.p8
+        run: |
+          printf '%s' "$NOTARY_KEY_P8_BASE64" | base64 --decode > "$NOTARY_KEY_FILE"
+          zip="$RUNNER_TEMP/NoteIt-notarize.zip"
+          ditto -c -k --keepParent dist/NoteIt.app "$zip"
+          ./scripts/notarize.sh "$zip"
+          rm -f "$zip"
+          xcrun stapler staple dist/NoteIt.app
+          xcrun stapler validate dist/NoteIt.app
+          spctl -a -t exec -vv dist/NoteIt.app
+
+      - name: Make DMG
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          mkdir -p out
+          ./scripts/make_dmg.sh dist/NoteIt.app "$VERSION" out
+          mv "$RUNNER_TEMP/notes.md" out/notes.md
+
+      - name: Sign, notarize and staple DMG
+        if: steps.meta.outputs.publish == 'true'
+        env:
+          IDENTITY: ${{ steps.cert.outputs.identity }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          NOTARY_KEY_ID: ${{ secrets.NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.NOTARY_ISSUER_ID }}
+          NOTARY_KEY_FILE: ${{ runner.temp }}/notary-key.p8
+        run: |
+          dmg="out/NoteIt-$VERSION.dmg"
+          codesign --force --sign "$IDENTITY" --timestamp "$dmg"
+          codesign --verify --strict --verbose=2 "$dmg"
+          ./scripts/notarize.sh "$dmg"
+          xcrun stapler staple "$dmg"
+          xcrun stapler validate "$dmg"
+          spctl -a -t open --context context:primary-signature -v "$dmg"
+
+      - name: Checksum
+        id: dmg
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          sha="$(shasum -a 256 "out/NoteIt-$VERSION.dmg" | cut -d' ' -f1)"
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          echo "SHA-256: $sha"
+
+      - name: Download Sparkle tools
+        run: |
+          archive="$RUNNER_TEMP/Sparkle-$SPARKLE_VERSION.tar.xz"
+          curl -fsSL --retry 3 -o "$archive" \
+            "https://github.com/sparkle-project/Sparkle/releases/download/$SPARKLE_VERSION/Sparkle-$SPARKLE_VERSION.tar.xz"
+          echo "$SPARKLE_SHA256  $archive" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sparkle"
+          tar -xJf "$archive" -C "$RUNNER_TEMP/sparkle" ./bin
+          "$RUNNER_TEMP/sparkle/bin/sign_update" --help > /dev/null
+
+      - name: Make appcast
+        env:
+          SPARKLE_KEY_AVAILABLE: ${{ steps.sparkle_key.outputs.available }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          BUILD: ${{ steps.meta.outputs.build }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          dmg="out/NoteIt-$VERSION.dmg"
+          signature=""
+          if [[ "$SPARKLE_KEY_AVAILABLE" == "true" ]]; then
+            key="$RUNNER_TEMP/sparkle-key"
+            sign_update="$RUNNER_TEMP/sparkle/bin/sign_update"
+            signature="$("$sign_update" -p --ed-key-file "$key" "$dmg")"
+            "$sign_update" --verify --ed-key-file "$key" "$dmg" "$signature"
+          fi
+          rm -f "$RUNNER_TEMP/sparkle-key"
+          python3 scripts/make_appcast.py --version "$VERSION" --build "$BUILD" --dmg "$dmg" \
+            --url "https://github.com/$REPOSITORY/releases/download/v$VERSION/NoteIt-$VERSION.dmg" \
+            --notes out/notes.md --ed-signature "$signature" --output out/appcast.xml
+          cat out/appcast.xml
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: noteit-${{ steps.meta.outputs.version }}
+          path: out/
+          if-no-files-found: error
+
+      - name: Clean up signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/notary-key.p8" "$RUNNER_TEMP/sparkle-key"
+
+  publish:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: noteit-${{ needs.build.outputs.version }}
+          path: out
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          flags=()
+          [[ "$PRERELEASE" == "true" ]] && flags+=(--prerelease)
+          gh release create "v$VERSION" --repo "$REPOSITORY" --verify-tag \
+            --title "NoteIt $VERSION" --notes-file out/notes.md "${flags[@]}" \
+            "out/NoteIt-$VERSION.dmg" out/appcast.xml
+
+  homebrew:
+    needs: [build, publish]
+    if: needs.build.outputs.publish == 'true' && needs.build.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Update Homebrew cask
+        env:
+          HOMEBREW_TAP_DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          VERSION: ${{ needs.build.outputs.version }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
+        run: |
+          [[ -n "$HOMEBREW_TAP_DEPLOY_KEY" ]] || { echo "::error::HOMEBREW_TAP_DEPLOY_KEY isn't set."; exit 1; }
+          ssh_dir="$RUNNER_TEMP/ssh"
+          mkdir -m 700 "$ssh_dir"
+          printf '%s\n' "$HOMEBREW_TAP_DEPLOY_KEY" > "$ssh_dir/key"
+          chmod 600 "$ssh_dir/key"
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" > "$ssh_dir/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $ssh_dir/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes"
+          tap="$RUNNER_TEMP/homebrew-tap"
+          git clone --depth 1 --branch main git@github.com:rutbergphilip/homebrew-tap.git "$tap"
+          ./scripts/update_cask.sh "$VERSION" "$SHA256" "$tap"
+          cd "$tap"
+          git add Casks/noteit.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date."
+          else
+            git -c user.name="github-actions[bot]" \
+                -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+                commit -m "noteit $VERSION"
+            git push origin HEAD:main
+          fi
+          rm -rf "$ssh_dir"

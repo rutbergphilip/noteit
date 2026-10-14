@@ -12,7 +12,7 @@ You need:
 - Xcode 16 or later. The Command Line Tools can build the app, but they don't ship XCTest, so the tests need Xcode.
 - Docker, but only for the optional live S3 tests.
 
-There are no third-party dependencies, so there's nothing to install.
+The only third-party dependency is Sparkle, which SwiftPM fetches on the first build, so there's nothing to install.
 
 ```sh
 swift build                                   # debug build
@@ -53,7 +53,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter Liv
 
 ## Code style
 
-- **Match the existing code.** Use the same structure, naming and SwiftUI/AppKit patterns as the surrounding files. Keep the package free of third-party dependencies.
+- **Match the existing code.** Use the same structure, naming and SwiftUI/AppKit patterns as the surrounding files. Sparkle is the only third-party dependency; don't add others without discussing it in an issue first.
 - **Keep comments minimal.** Comment only where the reason isn't obvious from the code, such as a workaround or a platform quirk.
 - **Keep the sync library platform-neutral.** `NoteItSync` uses Foundation, CryptoKit, CommonCrypto and Security only. Don't import AppKit or app types into it.
 - **Keep changes focused.** Put one logical change in each PR, and leave unrelated refactors for a separate PR.
@@ -64,6 +64,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter Liv
 - **Sync, crypto or storage changes need tests.** Add or update cases in `Tests/NoteItSyncTests/`. Planner changes need a row in the decision-table tests. Changes to the on-disk or remote format must stay readable by existing libraries, or bump the format version deliberately and explain why. The `inkwell` in remote names (`inkwell/v1/`, `inkwell/.canary/`, `.inkwell-lock`, the key-check plaintext) is the protocol name from before the rename to NoteIt; don't change it.
 - **UI changes need screenshots.** Include light and dark mode where relevant, and before and after shots if it's a change.
 - **Check the build and tests:** `swift build` and `swift test` must pass.
+- **Add user-facing changes to the changelog** as a bullet under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).
 - **Update the docs** when you change behavior. That means the README, the pages in [`docs/`](docs/) (such as the [keyboard shortcuts](docs/keyboard-shortcuts.md) and [known limitations](docs/known-limitations.md)), or the sync spec.
 - **Don't include secrets.** Never commit or paste real access keys, secrets or passphrases, including in test fixtures, logs or screenshots.
 

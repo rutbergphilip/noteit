@@ -12,11 +12,11 @@ A native macOS notes app with Apple Notes speed, power-user formatting, capture 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-lightgrey.svg)
 ![Swift](https://img.shields.io/badge/Swift-6%20toolchain-orange.svg)
 
-NoteIt is a SwiftUI and AppKit app with no third-party dependencies. Your notes are files on your Mac. There's no account and no NoteIt server. If you want your Macs in sync, point NoteIt at a folder or an S3-compatible bucket you control, such as a MinIO instance on your NAS, and it encrypts everything before it leaves the machine.
+NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle](https://sparkle-project.org), for updates. Your notes are files on your Mac. There's no account and no NoteIt server. If you want your Macs in sync, point NoteIt at a folder or an S3-compatible bucket you control, such as a MinIO instance on your NAS, and it encrypts everything before it leaves the machine.
 
 > NoteIt was formerly called Inkwell. Existing notes, settings and sync setup migrate automatically the first time NoteIt launches; if Inkwell is still open, NoteIt asks to quit it first. Afterwards `~/Library/Application Support/Inkwell` is a link to the NoteIt folder, so an old copy of Inkwell opens the same notes, and NoteIt asks you to quit Inkwell if both are open.
 
-> **Status:** working app, single user, macOS 14 Sonoma or later. There are no signed or notarized release builds yet, so build it from source. See [Known limitations](docs/known-limitations.md) for what's missing.
+> **Status:** working app, single user, macOS 14 Sonoma or later. See [Known limitations](docs/known-limitations.md) for what's missing, and the [changelog](CHANGELOG.md) for what changed in each release.
 
 ## Features
 
@@ -44,7 +44,7 @@ NoteIt is a SwiftUI and AppKit app with no third-party dependencies. Your notes 
 
 ## Sync & encryption
 
-Sync is off until you connect it in **Settings › Sync**. Until then NoteIt makes no network requests and runs no sync timers.
+Sync is off until you connect it in **Settings › Sync**. Until then NoteIt makes no sync requests and runs no sync timers. The only other network traffic is the update check, which you can turn off in **Settings › General**.
 
 | Provider | Notes |
 |---|---|
@@ -63,7 +63,17 @@ Sync is off until you connect it in **Settings › Sync**. Until then NoteIt mak
 
 The full sync and encryption design is documented in [`docs/specs/2026-10-12-sync-design.md`](docs/specs/2026-10-12-sync-design.md). Its limitations are listed in [Known limitations](docs/known-limitations.md#sync). Folders synced by tools like Dropbox and S3 providers without conditional writes get best-effort race protection only.
 
-## Install / build from source
+## Install
+
+Download the latest `NoteIt-<version>.dmg` from [Releases](https://github.com/rutbergphilip/noteit/releases/latest), open it and drag NoteIt to Applications. Or install it with [Homebrew](https://brew.sh):
+
+```sh
+brew install --cask rutbergphilip/tap/noteit
+```
+
+Release builds are signed and notarized, and need macOS 14 Sonoma or later. Updates arrive through **Check for Updates…** in the NoteIt menu, and NoteIt can check for them automatically.
+
+## Build from source
 
 **Requirements**
 
@@ -78,7 +88,7 @@ cd noteit
 open ~/Applications/NoteIt.app
 ```
 
-`build_app.sh` builds in release mode, writes `Info.plist`, builds the app icon, ad-hoc signs the bundle and installs it atomically. You can set `NOTEIT_INSTALL_DIR`, `NOTEIT_VERSION` and `NOTEIT_BUILD` to override the install location and version numbers.
+`build_app.sh` builds in release mode, writes `Info.plist`, builds the app icon, ad-hoc signs the bundle and installs it atomically. You can set `NOTEIT_INSTALL_DIR`, `NOTEIT_VERSION` and `NOTEIT_BUILD` to override the install location and version numbers, `NOTEIT_SIGN_IDENTITY` to sign with a real identity, and `NOTEIT_UNIVERSAL=1` to build for both Apple silicon and Intel. See [docs/development.md](docs/development.md) for details.
 
 For development:
 
@@ -107,7 +117,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 
   To test against another server, such as your own MinIO, set `NOTEIT_LIVE_S3_ENDPOINT` and optionally `NOTEIT_LIVE_S3_REGION`, `_BUCKET`, `_ACCESS_KEY`, `_SECRET` and `_CREATE_BUCKET=1`.
 - The app layer is checked with debug-only self-test modes such as `NOTEIT_SYNC_SELFTEST=1` and `NOTEIT_EDITOR_SELFTEST=1`. Always pair them with `NOTEIT_DATA_DIR`.
-- CI runs `swift build`, `swift test` and a release build on macOS. The live emulator tests don't run in CI, because the macOS runners have no Docker.
+- CI runs `swift build`, `swift test` and a release build on macOS. Releases are built, signed and published by a separate workflow; see [docs/releasing.md](docs/releasing.md). The live emulator tests don't run in CI, because the macOS runners have no Docker.
 
 ## Roadmap
 
@@ -129,7 +139,6 @@ These items aren't built yet. Contributions and design discussion are welcome.
 - **Polish:**
   - a motion language for Quick Capture, checklists, pinning and sync status
   - an accessibility audit
-  - notarized builds and auto-update
 
 ## Project layout
 
@@ -151,10 +160,11 @@ Sources/NoteItSync/           sync engine with no AppKit dependency
 ├── Model/                    manifest, sync state, records
 └── Migration/                app identity, env vars, Inkwell → NoteIt migration
 Tests/NoteItSyncTests/        XCTest suite (+ opt-in live S3 tests)
-scripts/                      build_app.sh, live_s3_tests.sh, make_icon.swift, render_icon.sh
+scripts/                      build_app.sh, release scripts, live_s3_tests.sh, make_icon.swift, render_icon.sh
 design/                       logo and icon assets, brand guidelines
-docs/                         architecture, development, keyboard shortcuts, known limitations
+docs/                         architecture, development, releasing, keyboard shortcuts, known limitations
 docs/specs/, docs/plans/      design specs and implementation plans
+CHANGELOG.md                  user-facing changes per release
 ```
 
 ## Contributing
