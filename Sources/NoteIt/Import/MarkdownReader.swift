@@ -682,7 +682,7 @@ private struct InlineParser {
                 let alt = String(chars[link.text])
                 if let url = Self.webURL(link.destination) {
                     appendLink(alt.isEmpty ? link.destination : alt, url)
-                } else if let url = resolveImage(link.destination), let attachment = MarkdownReader.attachment(for: url) {
+                } else if MarkdownReader.isImagePath(link.destination), let url = resolveImage(link.destination), let attachment = MarkdownReader.attachment(for: url) {
                     appendAttachment(attachment)
                 } else {
                     buffer += alt

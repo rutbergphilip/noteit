@@ -104,6 +104,16 @@ final class MarkdownReaderTests: XCTestCase {
         XCTAssertEqual(attrs(s, of: "h")[.link] as? URL, URL(string: "ftp://example.com"))
     }
 
+    func testImageSyntaxOnlyAsksForImages() {
+        var asked: [String] = []
+        let s = read("![key](secret.txt) ![pic](photo.jpg)") { ref in
+            asked.append(ref)
+            return nil
+        }
+        XCTAssertEqual(asked, ["photo.jpg"])
+        XCTAssertEqual(s.string, "key pic\n")
+    }
+
     func testBulletedAndNumberedListsWithNesting() {
         let md = """
         - Fruit

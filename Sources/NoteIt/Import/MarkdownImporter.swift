@@ -6,13 +6,17 @@ import AppKit
 final class MarkdownImporter {
     nonisolated static let textExtensions: Set<String> = ["md", "markdown", "txt"]
     nonisolated static let bundleExtensions: Set<String> = ["textbundle", "textpack"]
+    /// Larger images are left out of the note and counted as skipped attachments.
+    nonisolated static let maxImageBytes = 25 * 1024 * 1024
 
     /// One note to import, with the notebook it goes into.
     struct Item: Equatable {
         var url: URL
         var notebook: String
-        /// Where wiki-style `![[image.png]]` names are looked up.
+        /// Images must stay inside this folder; for a chosen folder, `![[image.png]]` names are looked up anywhere in it.
         var root: URL
+        /// False for loose files, whose images are only looked up next to them.
+        var indexesRoot = true
     }
 
     private let store: NoteStore
@@ -34,7 +38,7 @@ final class MarkdownImporter {
                 walk(url, notebook: url.lastPathComponent, root: url, into: &result)
             } else if isImportable(url) {
                 let parent = url.deletingLastPathComponent()
-                result.append(Item(url: url, notebook: parent.lastPathComponent, root: parent))
+                result.append(Item(url: url, notebook: parent.lastPathComponent, root: parent, indexesRoot: false))
             }
         }
         return result
@@ -48,7 +52,7 @@ final class MarkdownImporter {
             .filter { !isSkipped($0.lastPathComponent) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
         for url in sorted where !isDirectory(url) || isBundle(url) {
-            if isImportable(url) { result.append(Item(url: url, notebook: notebook, root: root)) }
+            if isImportable(url), isInside(url, root: root) { result.append(Item(url: url, notebook: notebook, root: root)) }
         }
         for url in sorted where isDirectory(url) && !isBundle(url) {
             walk(url, notebook: notebook + " / " + url.lastPathComponent, root: root, into: &result)
@@ -82,8 +86,8 @@ final class MarkdownImporter {
         for (index, item) in items.enumerated() {
             if Task.isCancelled { report.cancelled = true; break }
             progress(ImportProgress(completed: index, total: items.count, currentName: item.url.deletingPathExtension().lastPathComponent))
-            if nameIndexes[item.root] == nil { nameIndexes[item.root] = Self.fileIndex(under: item.root) }
-            if importItem(item, nameIndex: nameIndexes[item.root] ?? [:], report: &report) == false {
+            if item.indexesRoot, nameIndexes[item.root] == nil { nameIndexes[item.root] = Self.fileIndex(under: item.root) }
+            if importItem(item, nameIndex: item.indexesRoot ? nameIndexes[item.root] ?? [:] : [:], report: &report) == false {
                 report.filesSkipped += 1
             }
             await Task.yield()
@@ -109,11 +113,13 @@ final class MarkdownImporter {
         guard let text = Self.readText(item.url) else { return false }
         let fileDates = Self.fileDates(item.url)
         let folder = item.url.deletingLastPathComponent()
-        let resolver = Self.resolver(base: folder, root: item.root, nameIndex: nameIndex)
+        let skipped = SkippedImages()
+        let resolver = Self.resolver(base: folder, root: item.root, nameIndex: nameIndex, skipped: skipped)
         let name = item.url.deletingPathExtension().lastPathComponent
         let note: MarkdownNote = ext == "txt"
             ? Self.plainTextNote(text, fallbackTitle: name)
             : MarkdownReader.note(from: text, fallbackTitle: name, resolveImage: resolver)
+        report.attachmentsSkipped += skipped.count
         save(note, notebook: item.notebook, created: note.frontMatter.created ?? fileDates.created,
              updated: note.frontMatter.updated ?? fileDates.modified, report: &report)
         return true
@@ -125,11 +131,13 @@ final class MarkdownImporter {
         let textURL = candidates.first { fileManager.fileExists(atPath: $0.path) }
             ?? ((try? fileManager.contentsOfDirectory(at: bundle, includingPropertiesForKeys: nil)) ?? [])
                 .first { Self.textExtensions.contains($0.pathExtension.lowercased()) }
-        guard let textURL, let text = Self.readText(textURL) else { return false }
-        let resolver = Self.resolver(base: bundle, root: bundle, nameIndex: Self.fileIndex(under: bundle))
+        guard let textURL, Self.isInside(textURL, root: bundle), let text = Self.readText(textURL) else { return false }
+        let skipped = SkippedImages()
+        let resolver = Self.resolver(base: bundle, root: bundle, nameIndex: Self.fileIndex(under: bundle), skipped: skipped)
         let note = textURL.pathExtension.lowercased() == "txt"
             ? Self.plainTextNote(text, fallbackTitle: name)
             : MarkdownReader.note(from: text, fallbackTitle: name, resolveImage: resolver)
+        report.attachmentsSkipped += skipped.count
         let info = Self.bundleDates(bundle)
         let fileDates = Self.fileDates(item.url)
         save(note, notebook: item.notebook,
@@ -145,7 +153,9 @@ final class MarkdownImporter {
         report.notebookIDs.insert(nb.id)
     }
 
+    /// Unpacks a `.textpack` into a temporary folder, refusing archives with entries that would land outside it.
     private func unzip(_ url: URL) -> URL? {
+        guard let entries = Self.zipEntries(url), entries.allSatisfy(Self.isSafeZipEntry) else { return nil }
         let destination = fileManager.temporaryDirectory.appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -158,11 +168,44 @@ final class MarkdownImporter {
         } catch {
             return nil
         }
-        guard process.terminationStatus == 0 else {
+        guard process.terminationStatus == 0, Self.staysInside(destination) else {
             try? fileManager.removeItem(at: destination)
             return nil
         }
         return destination
+    }
+
+    /// The entry names in a zip archive, or nil when it can't be listed.
+    nonisolated static func zipEntries(_ url: URL) -> [String]? {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
+        process.arguments = ["-1", url.path]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else { return nil }
+        return text.split(whereSeparator: \.isNewline).map(String.init)
+    }
+
+    nonisolated static func isSafeZipEntry(_ name: String) -> Bool {
+        let parts = name.split(separator: "/", omittingEmptySubsequences: false)
+        return !name.hasPrefix("/") && !name.hasPrefix("~") && !parts.contains("..")
+    }
+
+    /// True when everything under `folder`, with symlinks followed, is still inside it.
+    nonisolated static func staysInside(_ folder: URL) -> Bool {
+        guard let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil) else { return false }
+        for case let url as URL in enumerator where !isInside(url, root: folder) {
+            return false
+        }
+        return true
     }
 
     /// The bundle inside an unpacked `.textpack`, or the unpacked folder itself.
@@ -238,24 +281,49 @@ final class MarkdownImporter {
         return index
     }
 
-    /// Resolves a reference relative to the note, then to the import root, then by file name.
-    nonisolated static func resolver(base: URL, root: URL, nameIndex: [String: URL]) -> MarkdownReader.ImageResolver {
+    /// Resolves an image reference relative to the note, then to the import root, then by file name.
+    /// Only image files inside `root` (after following symlinks) and no larger than `maxImageBytes` are used.
+    nonisolated static func resolver(base: URL, root: URL, nameIndex: [String: URL],
+                                     skipped: SkippedImages = SkippedImages()) -> MarkdownReader.ImageResolver {
         { reference in
-            var path = reference.removingPercentEncoding ?? reference
-            if path.hasPrefix("file://"), let url = URL(string: reference) { path = url.path }
+            let path = reference.removingPercentEncoding ?? reference
+            guard MarkdownReader.isImagePath(path), !path.hasPrefix("/"), !path.hasPrefix("~"), !hasScheme(path) else { return nil }
             let fm = FileManager.default
-            var candidates: [URL] = []
-            if path.hasPrefix("/") {
-                candidates.append(URL(fileURLWithPath: path))
-            } else {
-                candidates.append(base.appendingPathComponent(path))
-                candidates.append(root.appendingPathComponent(path))
-            }
+            var candidates = [base.appendingPathComponent(path), root.appendingPathComponent(path)]
+            if let named = nameIndex[(path as NSString).lastPathComponent.lowercased()] { candidates.append(named) }
+            var refused = false
             for url in candidates {
                 var isDir: ObjCBool = false
-                if fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue { return url.standardizedFileURL }
+                guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { continue }
+                let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+                guard isInside(resolved, root: root), MarkdownReader.isImagePath(resolved.path),
+                      let size = (try? resolved.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxImageBytes else {
+                    refused = true
+                    continue
+                }
+                return resolved
             }
-            return nameIndex[(path as NSString).lastPathComponent.lowercased()]
+            if refused { skipped.count += 1 }
+            return nil
         }
     }
+
+    /// True for `file:`, `http:` and other URL schemes.
+    nonisolated private static func hasScheme(_ path: String) -> Bool {
+        guard let colon = path.firstIndex(of: ":") else { return false }
+        let scheme = path[..<colon]
+        return !scheme.isEmpty && scheme.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "+.-".contains($0)) }
+    }
+
+    /// True when `url`, with symlinks followed, is `root` or inside it.
+    nonisolated static func isInside(_ url: URL, root: URL) -> Bool {
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        return path == rootPath || path.hasPrefix(rootPath.hasSuffix("/") ? rootPath : rootPath + "/")
+    }
+}
+
+/// Counts images an import refused, such as ones that are too large or outside the import folder.
+final class SkippedImages {
+    var count = 0
 }
