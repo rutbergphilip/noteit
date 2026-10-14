@@ -21,6 +21,7 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 - **Simple organization.** Notebooks can't be nested, a note belongs to one notebook, and notes are always sorted pinned first, then by last edit.
 - **Basic search.** All words must match (ignoring case and accents). Results aren't ranked, and matches aren't highlighted.
 - **No note info.** There's no word count or created date.
+- **One window.** Notes can't be opened in separate windows.
 
 ## Import
 
@@ -29,9 +30,8 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 - **Apple Notes attachments other than images are skipped** (PDFs, drawings, scans, audio and so on), and so are locked notes. The summary at the end counts both.
 - **Apple Notes formatting is approximate.** Headings are recognized by font size, and fonts and text colors are dropped.
 - **Wikilinks become plain text.** `[[Note]]` and `[[Note|alias]]` keep their text but don't link anywhere, since notes can't link to each other yet. Links to other Markdown files become plain text too.
-- **Markdown that NoteIt has no style for is simplified.** Underline, colors and alignment don't exist in Markdown, HTML inside Markdown is kept as text, footnotes and math aren't rendered, and other front matter fields are dropped.
-- **Notebooks can't be nested**, so subfolders become notebooks named `Folder / Subfolder`.
-- **One window.** Notes can't be opened in separate windows.
+- **Markdown that NoteIt has no style for is simplified.** Underline, colors and alignment don't exist in Markdown, HTML inside Markdown is kept as text (except `<br>`), footnotes and math aren't rendered, and other front matter fields are dropped.
+- **Subfolders become flat notebooks** named `Folder / Subfolder`, since notebooks can't be nested.
 
 ## Setup and distribution
 
