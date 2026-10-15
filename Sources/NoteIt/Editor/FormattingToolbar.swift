@@ -13,22 +13,48 @@ struct FormattingToolbar: View {
     /// Lowest priority first: these move into the overflow menu first.
     private static let collapseOrder: [Group] = [.size, .layout, .insert, .color, .lists]
 
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            ForEach(0...Self.collapseOrder.count, id: \.self) { hiddenCount in
-                bar(hidden: Array(Self.collapseOrder.prefix(hiddenCount)))
-            }
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 4)
+    /// Ideal width of the bar with the first n groups of `collapseOrder` hidden, indexed by n.
+    @State private var barWidths: [Int: CGFloat] = [:]
+    @State private var availableWidth: CGFloat = 0
+    /// Drives the measuring copies, so selection changes don't re-render them.
+    @StateObject private var sizingController = EditorController()
+
+    /// Picks the fullest bar that fits from widths measured once, rather than with `ViewThatFits`, which
+    /// re-measures every variant on each width change and made sidebar animations stutter.
+    private var hiddenCount: Int {
+        let count = Self.collapseOrder.count
+        guard barWidths.count == count + 1 else { return 0 }
+        return (0...count).first { barWidths[$0]! <= availableWidth + 0.5 } ?? count
     }
 
-    private func bar(hidden: [Group]) -> some View {
+    var body: some View {
+        bar(hidden: Array(Self.collapseOrder.prefix(hiddenCount)), controller: controller)
+            .frame(minWidth: 0, maxWidth: .infinity)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { availableWidth = $0 }
+            .background(measuredBars)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+    }
+
+    /// Every variant at its ideal size, hidden. The fixed zero-size frame keeps them out of the editor's
+    /// layout, so resizing the editor doesn't measure them again.
+    private var measuredBars: some View {
+        ZStack {
+            ForEach(0...Self.collapseOrder.count, id: \.self) { n in
+                bar(hidden: Array(Self.collapseOrder.prefix(n)), controller: sizingController)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { barWidths[n] = $0 }
+            }
+        }
+        .frame(width: 0, height: 0)
+        .hidden()
+        .accessibilityHidden(true)
+    }
+
+    private func bar(hidden: [Group], controller: EditorController) -> some View {
         HStack(spacing: 2) {
             ForEach(Group.allCases.filter { !hidden.contains($0) }, id: \.self) { group in
                 if group != .style { ToolbarSeparator() }
-                groupView(group)
+                groupView(group, controller: controller)
             }
             if !hidden.isEmpty {
                 ToolbarSeparator()
@@ -39,41 +65,41 @@ struct FormattingToolbar: View {
     }
 
     @ViewBuilder
-    private func groupView(_ group: Group) -> some View {
+    private func groupView(_ group: Group, controller: EditorController) -> some View {
         let s = controller.state
         switch group {
         case .style:
             ParagraphStyleMenu(controller: controller)
         case .text:
-            button(.bold, active: s.bold)
-            button(.italic, active: s.italic)
-            button(.underline, active: s.underline)
-            button(.strikethrough, active: s.strikethrough)
-            button(.inlineCode, active: s.inlineCode)
+            button(.bold, active: s.bold, in: controller)
+            button(.italic, active: s.italic, in: controller)
+            button(.underline, active: s.underline, in: controller)
+            button(.strikethrough, active: s.strikethrough, in: controller)
+            button(.inlineCode, active: s.inlineCode, in: controller)
         case .color:
             TextColorButton(controller: controller)
             HighlightButton(controller: controller)
         case .lists:
-            button(.list(.bullet), active: s.list == .bullet)
-            button(.list(.numbered), active: s.list == .numbered)
-            button(.list(.checklist), active: s.list == .checklist)
+            button(.list(.bullet), active: s.list == .bullet, in: controller)
+            button(.list(.numbered), active: s.list == .numbered, in: controller)
+            button(.list(.checklist), active: s.list == .checklist, in: controller)
         case .layout:
-            button(.outdent)
-            button(.indent)
+            button(.outdent, in: controller)
+            button(.indent, in: controller)
             AlignmentMenu(controller: controller)
         case .insert:
-            button(.link, active: s.link)
+            button(.link, active: s.link, in: controller)
             TableButton(controller: controller)
-            button(.image)
-            button(.divider)
+            button(.image, in: controller)
+            button(.divider, in: controller)
         case .size:
-            button(.fontSmaller)
-            button(.fontBigger)
-            button(.clearFormatting)
+            button(.fontSmaller, in: controller)
+            button(.fontBigger, in: controller)
+            button(.clearFormatting, in: controller)
         }
     }
 
-    private func button(_ command: FormatCommand, active: Bool = false) -> some View {
+    private func button(_ command: FormatCommand, active: Bool = false, in controller: EditorController) -> some View {
         ToolbarIconButton(symbol: command.symbol, help: command.helpText, active: active) {
             controller.perform(command)
         }
