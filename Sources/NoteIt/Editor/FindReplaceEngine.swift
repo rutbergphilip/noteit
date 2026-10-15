@@ -15,7 +15,7 @@ enum FindReplaceEngine {
     /// More matches than this are not collected (keeps highlighting responsive in huge notes).
     static let matchLimit = 10_000
 
-    static func matches(in text: String, query: String, options: Options) throws -> [NSRange] {
+    static func matches(in text: String, query: String, options: Options, limit: Int? = matchLimit) throws -> [NSRange] {
         guard !query.isEmpty, !text.isEmpty else { return [] }
         let regex = try expression(for: query, options: options)
         let ns = text as NSString
@@ -24,7 +24,7 @@ enum FindReplaceEngine {
             guard let range = result?.range, range.length > 0 else { return }
             if options.wholeWord, !isWholeWord(range, in: ns) { return }
             ranges.append(range)
-            if ranges.count >= matchLimit { stop.pointee = true }
+            if let limit, ranges.count >= limit { stop.pointee = true }
         }
         return ranges
     }
@@ -92,22 +92,42 @@ enum FindReplaceApplier {
         let pairs = zip(ranges, replacements)
             .filter { NSMaxRange($0.0) <= storage.length }
             .sorted { $0.0.location > $1.0.location }
-        guard !pairs.isEmpty else { return false }
-        let sortedRanges = pairs.map { NSValue(range: $0.0) }
+        guard let first = pairs.last?.0, let last = pairs.first?.0 else { return false }
         let undo = textView.undoManager
         textView.breakUndoCoalescing()
         undo?.beginUndoGrouping()
         defer { undo?.endUndoGrouping() }
-        guard textView.shouldChangeText(inRanges: sortedRanges, replacementStrings: pairs.map(\.1)) else { return false }
-        storage.beginEditing()
-        for (range, string) in pairs {
-            var attributes = storage.attributes(at: range.location, effectiveRange: nil)
-            attributes[.attachment] = nil
-            storage.replaceCharacters(in: range, with: NSAttributedString(string: string, attributes: attributes))
+        if pairs.count <= batchThreshold {
+            let sortedRanges = pairs.map { NSValue(range: $0.0) }
+            guard textView.shouldChangeText(inRanges: sortedRanges, replacementStrings: pairs.map(\.1)) else { return false }
+            storage.beginEditing()
+            for (range, string) in pairs {
+                storage.replaceCharacters(in: range, with: replacement(string, at: range, in: storage))
+            }
+            storage.endEditing()
+        } else {
+            // Many ranges make NSTextView's per-range undo bookkeeping quadratic, so edit their span at once.
+            let span = NSUnionRange(first, last)
+            let edited = NSMutableAttributedString(attributedString: storage.attributedSubstring(from: span))
+            for (range, string) in pairs {
+                let local = NSRange(location: range.location - span.location, length: range.length)
+                edited.replaceCharacters(in: local, with: replacement(string, at: range, in: storage))
+            }
+            guard textView.shouldChangeText(in: span, replacementString: edited.string) else { return false }
+            storage.beginEditing()
+            storage.replaceCharacters(in: span, with: edited)
+            storage.endEditing()
         }
-        storage.endEditing()
         textView.didChangeText()
         undo?.setActionName(actionName)
         return true
+    }
+
+    static let batchThreshold = 200
+
+    private static func replacement(_ string: String, at range: NSRange, in storage: NSTextStorage) -> NSAttributedString {
+        var attributes = storage.attributes(at: range.location, effectiveRange: nil)
+        attributes[.attachment] = nil
+        return NSAttributedString(string: string, attributes: attributes)
     }
 }

@@ -108,6 +108,15 @@ final class FindReplaceModel: ObservableObject {
         focusRequest = (field, focusRequest.token + 1)
     }
 
+    private var handledFocusToken = 0
+
+    /// True the first time a field asks about `token`, so a re-created field doesn't steal focus.
+    func consumeFocus(_ token: Int) -> Bool {
+        guard token > handledFocusToken else { return false }
+        handledFocusToken = token
+        return true
+    }
+
     // MARK: Navigation
 
     func findNext() { step(forward: true) }
@@ -174,12 +183,15 @@ final class FindReplaceModel: ObservableObject {
         flushPendingRecompute()
         guard !ranges.isEmpty else { return }
         let text = textView.string
-        let strings = ranges.map {
+        let all = matchCount >= FindReplaceEngine.matchLimit
+            ? ((try? FindReplaceEngine.matches(in: text, query: query, options: options, limit: nil)) ?? ranges)
+            : ranges
+        let strings = all.map {
             FindReplaceEngine.replacement(for: $0, in: text, query: query, template: replacement, options: options)
         }
-        guard FindReplaceApplier.replace(ranges, with: strings, in: textView, actionName: "Replace All") else { return }
+        guard FindReplaceApplier.replace(all, with: strings, in: textView, actionName: "Replace All") else { return }
         pendingRecompute?.cancel()
-        anchor = ranges.first?.location ?? 0
+        anchor = all.first?.location ?? 0
         currentIndex = nil
         recompute(fromAnchor: true)
     }

@@ -189,6 +189,28 @@ final class FindReplaceTests: XCTestCase {
         XCTAssertEqual(storage.string, "tiger tiger and tiger")
     }
 
+    func testBatchedReplaceAllKeepsFormattingAndIsOneUndoStep() throws {
+        let original = NSMutableAttributedString()
+        for _ in 0...FindReplaceApplier.batchThreshold { original.append(sample()); original.append(NSAttributedString(string: "\n")) }
+        let (textView, undo) = makeTextView(original)
+        let text = textView.string
+        let ranges = try Engine.matches(in: text, query: "cat", options: Options())
+        XCTAssertGreaterThan(ranges.count, FindReplaceApplier.batchThreshold)
+
+        XCTAssertTrue(FindReplaceApplier.replace(ranges, with: ranges.map { _ in "tiger" }, in: textView, actionName: "Replace All"))
+
+        let storage = try XCTUnwrap(textView.textStorage)
+        XCTAssertFalse(storage.string.contains("cat"))
+        XCTAssertTrue(storage.string.hasPrefix("tiger tiger and tiger\ntiger tiger and tiger\n"))
+        let secondBold = 22 + 6
+        XCTAssertEqual(storage.attribute(.foregroundColor, at: secondBold, effectiveRange: nil) as? NSColor, NSColor.systemRed)
+        XCTAssertEqual(storage.attribute(.underlineStyle, at: 22 + 16, effectiveRange: nil) as? Int, NSUnderlineStyle.single.rawValue)
+        XCTAssertEqual(undo.undoActionName, "Replace All")
+        undo.undo()
+        XCTAssertTrue(storage.isEqual(to: original), "one undo restores the text and its formatting")
+        XCTAssertFalse(undo.canUndo)
+    }
+
     func testReplaceSingleMatchIsUndoable() throws {
         let original = sample()
         let (textView, undo) = makeTextView(original)
@@ -360,5 +382,26 @@ final class FindReplaceModelTests: XCTestCase {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { done.fulfill() }
         wait(for: [done], timeout: 2)
         XCTAssertEqual(model.matchCount, 4)
+    }
+
+    func testReplaceAllCoversMatchesBeyondTheLimit() {
+        let count = FindReplaceEngine.matchLimit + 500
+        textView.textStorage?.setAttributedString(NSAttributedString(string: String(repeating: "x ", count: count), attributes: EditorStyle.bodyAttributes))
+        model.open(replace: true)
+        model.query = "x"
+        model.replacement = "y"
+        XCTAssertEqual(model.matchCount, FindReplaceEngine.matchLimit)
+        model.replaceAll()
+        XCTAssertFalse(textView.string.contains("x"))
+        XCTAssertEqual(model.statusText, "No results")
+    }
+
+    func testFocusRequestIsHandledOnce() {
+        model.open(replace: false)
+        let token = model.focusRequest.token
+        XCTAssertTrue(model.consumeFocus(token))
+        XCTAssertFalse(model.consumeFocus(token))
+        model.requestFocus(.find)
+        XCTAssertTrue(model.consumeFocus(model.focusRequest.token))
     }
 }

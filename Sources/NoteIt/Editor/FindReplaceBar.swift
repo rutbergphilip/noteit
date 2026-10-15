@@ -56,6 +56,8 @@ struct FindReplaceBar: View {
                     placeholder: "Find",
                     isFocused: $findFocused,
                     focusToken: model.focusRequest.field == .find ? model.focusRequest.token : nil,
+                    consumeFocus: model.consumeFocus,
+                    noteUndoManager: { model.textView?.undoManager },
                     onSubmit: { shift in shift ? model.findPrevious() : model.findNext() },
                     onTab: { _ in
                         guard model.showsReplace else { return false }
@@ -107,6 +109,8 @@ struct FindReplaceBar: View {
                 placeholder: "Replace",
                 isFocused: $replaceFocused,
                 focusToken: model.focusRequest.field == .replace ? model.focusRequest.token : nil,
+                consumeFocus: model.consumeFocus,
+                noteUndoManager: { model.textView?.undoManager },
                 onSubmit: { _ in model.replaceCurrent() },
                 onTab: { _ in
                     model.requestFocus(.find)
@@ -205,8 +209,11 @@ struct FindBarTextField: NSViewRepresentable {
     @Binding var text: String
     var placeholder: String
     @Binding var isFocused: Bool
-    /// When this changes to a new non-nil value, the field becomes first responder with its text selected.
+    /// A new non-nil token makes the field first responder with its text selected, once per token.
     var focusToken: Int?
+    var consumeFocus: (Int) -> Bool
+    /// ⌘Z / ⇧⌘Z in the field act on the note, so a replace can be undone without leaving the bar.
+    var noteUndoManager: () -> UndoManager?
     var onSubmit: (_ shift: Bool) -> Void
     /// Returns true when the Tab (or ⇧Tab, `backward`) was handled.
     var onTab: (_ backward: Bool) -> Bool
@@ -228,14 +235,14 @@ struct FindBarTextField: NSViewRepresentable {
         field.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         field.setAccessibilityLabel(placeholder)
         field.onFocus = { [weak coordinator = context.coordinator] in coordinator?.setFocused(true) }
+        field.noteUndoManager = { [weak coordinator = context.coordinator] in coordinator?.parent.noteUndoManager() }
         return field
     }
 
     func updateNSView(_ field: NSTextField, context: Context) {
         context.coordinator.parent = self
         if field.stringValue != text { field.stringValue = text }
-        if let focusToken, context.coordinator.lastFocusToken != focusToken {
-            context.coordinator.lastFocusToken = focusToken
+        if let focusToken, consumeFocus(focusToken) {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let window = field.window else { return }
@@ -251,7 +258,6 @@ struct FindBarTextField: NSViewRepresentable {
     @MainActor
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var parent: FindBarTextField
-        var lastFocusToken: Int?
 
         init(parent: FindBarTextField) { self.parent = parent }
 
@@ -264,8 +270,19 @@ struct FindBarTextField: NSViewRepresentable {
             parent.text = field.stringValue
         }
 
-        func controlTextDidBeginEditing(_ notification: Notification) { setFocused(true) }
-        func controlTextDidEndEditing(_ notification: Notification) { setFocused(false) }
+        func controlTextDidBeginEditing(_ notification: Notification) {
+            fieldEditor(notification)?.allowsUndo = false
+            setFocused(true)
+        }
+
+        func controlTextDidEndEditing(_ notification: Notification) {
+            fieldEditor(notification)?.allowsUndo = true
+            setFocused(false)
+        }
+
+        private func fieldEditor(_ notification: Notification) -> NSTextView? {
+            notification.userInfo?["NSFieldEditor"] as? NSTextView
+        }
 
         func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
             switch selector {
@@ -285,9 +302,29 @@ struct FindBarTextField: NSViewRepresentable {
     }
 }
 
-/// Reports when it becomes first responder (before any editing begins).
-private final class FocusReportingTextField: NSTextField {
+/// Reports when it becomes first responder (before any editing begins) and routes undo to the note.
+private final class FocusReportingTextField: NSTextField, NSMenuItemValidation {
     var onFocus: (() -> Void)?
+    var noteUndoManager: (() -> UndoManager?)?
+
+    @objc func undo(_ sender: Any?) { noteUndoManager?()?.undo() }
+    @objc func redo(_ sender: Any?) { noteUndoManager?()?.redo() }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard let undo = noteUndoManager?() else {
+            return item.action != #selector(undo(_:)) && item.action != #selector(redo(_:))
+        }
+        switch item.action {
+        case #selector(undo(_:)):
+            item.title = undo.undoMenuItemTitle
+            return undo.canUndo
+        case #selector(redo(_:)):
+            item.title = undo.redoMenuItemTitle
+            return undo.canRedo
+        default:
+            return true
+        }
+    }
 
     override func becomeFirstResponder() -> Bool {
         let accepted = super.becomeFirstResponder()
