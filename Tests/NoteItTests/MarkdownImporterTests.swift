@@ -297,15 +297,15 @@ final class MarkdownImporterTests: XCTestCase {
         for (name, data) in files {
             let nameData = Data(name.utf8)
             let offset = UInt32(out.count)
-            let fields = le16(20) + le16(0) + le16(0) + le16(0) + le16(0) + le32(crc32(data))
-                + le32(UInt32(data.count)) + le32(UInt32(data.count)) + le16(nameData.count) + le16(0)
-            out += le32(0x0403_4B50) + fields + nameData + data
-            central += le32(0x0201_4B50) + le16(20) + fields + le16(0) + le16(0) + le16(0) + le32(0) + le32(offset) + nameData
+            let fields: Data = [le16(20), le16(0), le16(0), le16(0), le16(0), le32(crc32(data)),
+                                le32(UInt32(data.count)), le32(UInt32(data.count)), le16(nameData.count), le16(0)].reduce(Data(), +)
+            out += [le32(0x0403_4B50), fields, nameData, data].reduce(Data(), +)
+            central += [le32(0x0201_4B50), le16(20), fields, le16(0), le16(0), le16(0), le32(0), le32(offset), nameData].reduce(Data(), +)
         }
         let centralOffset = UInt32(out.count)
         out += central
-        out += le32(0x0605_4B50) + le16(0) + le16(0) + le16(files.count) + le16(files.count)
-            + le32(UInt32(central.count)) + le32(centralOffset) + le16(0)
+        out += [le32(0x0605_4B50), le16(0), le16(0), le16(files.count), le16(files.count),
+                le32(UInt32(central.count)), le32(centralOffset), le16(0)].reduce(Data(), +)
         return out
     }
 
