@@ -4,6 +4,10 @@ struct EditorSettingsView: View {
     @EnvironmentObject private var store: NoteStore
     @AppStorage(PrefKey.editorFontSize) private var fontSize = PrefDefault.editorFontSize
     @AppStorage(PrefKey.defaultNotebookID) private var defaultNotebookRaw = ""
+    @AppStorage(PrefKey.inlineCodeColor) private var inlineCodeColor = InlineCodeColor.pink.rawValue
+    @AppStorage(PrefKey.inlineCodeFont) private var inlineCodeFont = InlineCodeFont.monospaced.rawValue
+    @AppStorage(PrefKey.codeBlockTheme) private var codeBlockTheme = CodeTheme.xcode.id
+    @AppStorage(PrefKey.syntaxHighlighting) private var syntaxHighlighting = true
 
     var body: some View {
         Form {
@@ -34,6 +38,32 @@ struct EditorSettingsView: View {
             }
 
             Section {
+                Picker("Inline code color", selection: $inlineCodeColor) {
+                    ForEach(InlineCodeColor.allCases) { color in
+                        Text(color.displayName).tag(color.rawValue)
+                    }
+                }
+                Picker("Inline code font", selection: $inlineCodeFont) {
+                    ForEach(InlineCodeFont.allCases) { font in
+                        Text(font.displayName).tag(font.rawValue)
+                    }
+                }
+                Picker("Code block theme", selection: $codeBlockTheme) {
+                    ForEach(CodeTheme.all) { theme in
+                        Text(theme.name).tag(theme.id)
+                    }
+                }
+                Toggle("Syntax highlighting", isOn: $syntaxHighlighting)
+                CodePreview(settings: CodeStyleSettings(
+                    inlineColor: InlineCodeColor(rawValue: inlineCodeColor) ?? .pink,
+                    inlineFont: InlineCodeFont(rawValue: inlineCodeFont) ?? .monospaced,
+                    theme: CodeTheme.named(codeBlockTheme),
+                    highlighting: syntaxHighlighting))
+            } header: {
+                Text("Code")
+            }
+
+            Section {
                 Picker("Default notebook for new notes", selection: notebookBinding) {
                     Label("No Notebook", systemImage: "tray.full").tag(PrefDefault.noNotebook)
                     Divider()
@@ -47,7 +77,7 @@ struct EditorSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(height: 300)
+        .frame(height: 560)
     }
 
     private var notebookBinding: Binding<String> {
@@ -58,5 +88,68 @@ struct EditorSettingsView: View {
             },
             set: { defaultNotebookRaw = $0 }
         )
+    }
+}
+
+/// A small sample of inline code and a highlighted code block in the current code settings.
+private struct CodePreview: View {
+    let settings: CodeStyleSettings
+    @Environment(\.colorScheme) private var colorScheme
+
+    private static let sample = """
+    // Greet everyone
+    let names = ["Ada", "Grace"]
+    for name in names {
+        print("Hello, \\(name)!", 42)
+    }
+    """
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            (Text("Run ") + inlineCode + Text(" to build the app."))
+                .font(.system(size: 13))
+            Text(highlighted)
+                .font(.system(size: 12, design: .monospaced))
+                .lineSpacing(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(cardFill))
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(Color(nsColor: EditorStyle.codeBlockBorder), lineWidth: 0.5))
+        }
+        .padding(.vertical, 4)
+        .animation(.easeOut(duration: 0.12), value: settings)
+    }
+
+    private var inlineCode: Text {
+        let font: Font = settings.inlineFont == .monospaced ? .system(size: 12, design: .monospaced) : .system(size: 13)
+        var string = AttributedString("\u{2009}swift build\u{2009}")
+        string.font = font
+        string.foregroundColor = Color(nsColor: settings.inlineColor.textColor)
+        string.backgroundColor = Color(nsColor: settings.inlineColor.fillColor)
+        return Text(string)
+    }
+
+    private var cardFill: Color {
+        Color(nsColor: (settings.highlighting ? settings.theme.background : nil) ?? EditorStyle.codeBlockBackground)
+    }
+
+    private var highlighted: AttributedString {
+        let ns = Self.sample as NSString
+        let out = NSMutableAttributedString(string: Self.sample)
+        let appearance = NSAppearance(named: colorScheme == .dark ? .darkAqua : .aqua) ?? NSAppearance.currentDrawing()
+        func resolved(_ color: NSColor) -> NSColor {
+            var result = color
+            appearance.performAsCurrentDrawingAppearance { result = color.usingColorSpace(.sRGB) ?? color }
+            return result
+        }
+        let plain = settings.highlighting ? settings.theme.color(for: nil) : NSColor.labelColor
+        out.addAttribute(.foregroundColor, value: resolved(plain), range: NSRange(location: 0, length: ns.length))
+        if settings.highlighting {
+            for token in SyntaxHighlighter.tokenize(Self.sample, language: .swift) {
+                out.addAttribute(.foregroundColor, value: resolved(settings.theme.color(for: token.kind)), range: token.range)
+            }
+        }
+        return (try? AttributedString(out, including: \.appKit)) ?? AttributedString(Self.sample)
     }
 }

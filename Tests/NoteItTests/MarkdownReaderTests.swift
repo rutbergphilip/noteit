@@ -69,7 +69,7 @@ final class MarkdownReaderTests: XCTestCase {
         XCTAssertEqual(attrs(s, of: "gone")[.strikethroughStyle] as? Int, NSUnderlineStyle.single.rawValue)
         let code = attrs(s, of: "code")
         XCTAssertEqual(code[.font] as? NSFont, EditorStyle.inlineCodeFont)
-        XCTAssertEqual(code[.backgroundColor] as? NSColor, EditorStyle.inlineCodeBackground)
+        XCTAssertNil(code[.backgroundColor], "inline code is drawn as a pill, not a stored background")
         XCTAssertFalse(traits(s, "Some").contains(.bold))
     }
 

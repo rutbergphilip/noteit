@@ -56,11 +56,11 @@ extension NoteItTextView {
         if sel.length > 0 {
             state.bold = allFonts(in: sel) { EditorStyle.isBold($0) }
             state.italic = allFonts(in: sel) { EditorStyle.isItalic($0) }
-            state.inlineCode = allFonts(in: sel) { EditorStyle.isMonospaced($0) }
+            state.inlineCode = allInlineCode(in: sel)
         } else {
             state.bold = EditorStyle.isBold(font)
             state.italic = EditorStyle.isItalic(font)
-            state.inlineCode = EditorStyle.isMonospaced(font)
+            state.inlineCode = EditorStyle.isInlineCode(attrs)
         }
         state.fontSize = font.pointSize
         state.underline = ((attrs[.underlineStyle] as? Int) ?? 0) != 0
@@ -90,6 +90,14 @@ extension NoteItTextView {
         var all = true
         storage.enumerateAttribute(.font, in: range) { value, _, stop in
             if !test((value as? NSFont) ?? EditorStyle.bodyFont) { all = false; stop.pointee = true }
+        }
+        return all
+    }
+
+    private func allInlineCode(in range: NSRange) -> Bool {
+        var all = true
+        storage.enumerateAttributes(in: range) { attrs, _, stop in
+            if !EditorStyle.isInlineCode(attrs) { all = false; stop.pointee = true }
         }
         return all
     }
@@ -135,20 +143,22 @@ extension NoteItTextView {
         let para = paragraphRanges(for: sel).first ?? sel
         guard blockKind(ofParagraph: para) != .code else { return }
         if sel.length == 0 {
-            let font = (typingAttributes[.font] as? NSFont) ?? EditorStyle.bodyFont
-            if EditorStyle.isMonospaced(font) {
+            if EditorStyle.isInlineCode(typingAttributes) {
                 typingAttributes[.font] = EditorStyle.bodyFont
                 typingAttributes[.backgroundColor] = nil
+                typingAttributes[.inlineCodeDisplay] = nil
+                typingAttributes[.kern] = nil
             } else {
                 typingAttributes.merge(EditorStyle.inlineCodeAttributes) { $1 }
             }
             return
         }
-        let remove = allFonts(in: sel) { EditorStyle.isMonospaced($0) }
+        let remove = allInlineCode(in: sel)
         editAttributes(in: sel, actionName: "Inline Code") { ts in
             if remove {
                 ts.addAttribute(.font, value: EditorStyle.bodyFont, range: sel)
                 ts.removeAttribute(.backgroundColor, range: sel)
+                ts.removeAttribute(.inlineCodeDisplay, range: sel)
             } else {
                 ts.addAttributes(EditorStyle.inlineCodeAttributes, range: sel)
             }
@@ -225,6 +235,7 @@ extension NoteItTextView {
         case .code:
             s.addAttribute(.font, value: EditorStyle.codeFont, range: full)
             s.removeAttribute(.backgroundColor, range: full)
+            s.removeAttribute(.inlineCodeDisplay, range: full)
         case .title, .heading, .subheading:
             let target = EditorStyle.font(for: kind)
             s.enumerateAttribute(.font, in: full) { value, r, _ in

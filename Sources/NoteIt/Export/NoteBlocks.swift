@@ -29,7 +29,8 @@ enum NoteBlock {
     case paragraph(kind: BlockKind, alignment: NSTextAlignment, runs: [InlineRun])
     case listItem(marker: ListMarker.Kind, level: Int, alignment: NSTextAlignment, runs: [InlineRun])
     /// Consecutive code paragraphs, joined with "\n".
-    case code(String)
+    /// `language` nil means Automatic (no info string on export).
+    case code(String, language: CodeLanguage?)
     case divider
     /// Rows of cells; the first row is the header row. A cell with several paragraphs has U+2028 between them.
     case table(rows: [[[InlineRun]]])
@@ -43,11 +44,12 @@ enum NoteBlocks {
         let ns = text.string as NSString
         var blocks: [NoteBlock] = []
         var codeLines: [String] = []
+        var codeLanguage: CodeLanguage?
         var loc = 0
 
         func flushCode() {
             guard !codeLines.isEmpty else { return }
-            blocks.append(.code(codeLines.joined(separator: "\n")))
+            blocks.append(.code(codeLines.joined(separator: "\n"), language: codeLanguage))
             codeLines = []
         }
 
@@ -70,6 +72,9 @@ enum NoteBlocks {
             let content = contentRange(of: para, in: ns)
             let string = ns.substring(with: content)
             if kind == .code {
+                let language = EditorStyle.codeLanguage(of: ps)
+                if !codeLines.isEmpty, language != codeLanguage { flushCode() }
+                if codeLines.isEmpty { codeLanguage = language }
                 codeLines.append(string.replacingOccurrences(of: lineBreak, with: "\n"))
                 continue
             }

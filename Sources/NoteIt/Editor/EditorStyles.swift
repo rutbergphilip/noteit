@@ -66,7 +66,7 @@ enum EditorStyle {
     static let listBaseIndent: CGFloat = 4
     static let codeIndent: CGFloat = 14
     static let quoteIndent: CGFloat = 18
-    static let codeBlockOuterSpacing: CGFloat = 12
+    static let codeBlockOuterSpacing: CGFloat = 15
     static let dividerCharacter = "\u{00A0}"
 
     static var bodySize: CGFloat {
@@ -97,7 +97,6 @@ enum EditorStyle {
     // Text colors are stored as light-appearance values; the text view's adaptive color mapping
     // converts them for dark mode. Drawing-only colors (code background, rules) are dynamic.
 
-    static let inlineCodeBackground = NSColor(srgbRed: 0.92, green: 0.92, blue: 0.94, alpha: 1)
     static let checkedTextColor = NSColor(srgbRed: 0.56, green: 0.56, blue: 0.58, alpha: 1)
 
     static let codeBlockBackground = NSColor(name: nil) { appearance in
@@ -197,6 +196,9 @@ enum EditorStyle {
         }
         if let existing {
             if kind != .divider { ps.alignment = existing.alignment }
+            if kind == .code, blockKind(paragraphStyle: existing, font: nil) == .code {
+                setCodeLanguage(codeLanguage(of: existing), on: ps)
+            }
             let tableBlocks = existing.textBlocks.filter { $0 is NSTextTableBlock }
             if !tableBlocks.isEmpty { ps.textBlocks = tableBlocks }
         }
@@ -340,7 +342,40 @@ enum EditorStyle {
     }
 
     static var inlineCodeAttributes: [NSAttributedString.Key: Any] {
-        [.font: inlineCodeFont, .backgroundColor: inlineCodeBackground]
+        [.font: inlineCodeFont]
+    }
+
+    /// Inline code is stored as a monospaced font outside code blocks. With the *Same as Text* inline
+    /// code font, the editor shows it in the text font and marks it with `inlineCodeDisplay` instead.
+    static func isInlineCode(_ attrs: [NSAttributedString.Key: Any]) -> Bool {
+        if attrs[.inlineCodeDisplay] != nil { return true }
+        return (attrs[.font] as? NSFont).map(isMonospaced) ?? false
+    }
+
+    // MARK: Code block language
+    // A code paragraph's language is an extra left tab stop at `rawValue × 0.5` pt (0.5–10.5 pt).
+    // Tab stops are written to RTF in twips, so the value survives exactly, and a stop left of the
+    // code indent is never reached by typing a tab. No such stop means Automatic.
+
+    static let codeLanguageStep: CGFloat = 0.5
+
+    static func codeLanguage(of ps: NSParagraphStyle?) -> CodeLanguage? {
+        guard let ps else { return nil }
+        for tab in ps.tabStops where tab.location > 0 && tab.location < codeIndent {
+            let raw = Int((tab.location / codeLanguageStep).rounded())
+            if abs(CGFloat(raw) * codeLanguageStep - tab.location) < 0.01, let language = CodeLanguage(rawValue: raw) {
+                return language
+            }
+        }
+        return nil
+    }
+
+    static func setCodeLanguage(_ language: CodeLanguage?, on ps: NSMutableParagraphStyle) {
+        var tabs = ps.tabStops.filter { !($0.location > 0 && $0.location < codeIndent) }
+        if let language {
+            tabs.append(NSTextTab(textAlignment: .left, location: CGFloat(language.rawValue) * codeLanguageStep))
+        }
+        ps.tabStops = tabs
     }
 
     static func divider() -> NSAttributedString {
@@ -414,6 +449,11 @@ enum EditorStyle {
         block.backgroundColor = isHeader ? tableHeaderBackground : nil
         return block
     }
+}
+
+extension NSAttributedString.Key {
+    /// Editor-only marker for inline code shown in the text font; never saved (see `NoteItTextView.attributedString()`).
+    static let inlineCodeDisplay = NSAttributedString.Key("NoteItInlineCodeDisplay")
 }
 
 extension NSAppearance {

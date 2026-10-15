@@ -11,6 +11,8 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     /// Union of ranges edited since the last normalization pass.
     private var pendingNormalizeRange: NSRange?
     private var isNormalizing = false
+    private(set) lazy var codeStyler = CodeStyler(textView: self)
+    private var hoverTrackingArea: NSTrackingArea?
 
     // MARK: Setup
 
@@ -67,9 +69,15 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             .underlineStyle: NSUnderlineStyle.single.rawValue,
             .cursor: NSCursor.pointingHand,
         ]
+        (layoutManager as? NoteItLayoutManager)?.codeSettings = codeStyler.settings
     }
 
     var storage: NSTextStorage { textStorage! }
+
+    /// The note as saved: without the editor's display-only inline code styling.
+    override func attributedString() -> NSAttributedString {
+        CodeStyler.persisted(super.attributedString())
+    }
     var nsString: NSString { storage.string as NSString }
 
     // MARK: Layout
@@ -97,6 +105,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
 
     override func didChangeText() {
         normalizePendingEdits()
+        codeStyler.flush(typing: true)
         super.didChangeText()
         if storage.length <= 1 { needsDisplay = true }
     }
@@ -128,8 +137,9 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         changeInLength delta: Int
     ) {
         MainActor.assumeIsolated {
-            guard !isNormalizing else { return }
+            guard !isNormalizing, !codeStyler.isApplying else { return }
             let r = NSRange(location: editedRange.location, length: max(editedRange.length, 0))
+            codeStyler.noteEdit(r)
             pendingNormalizeRange = pendingNormalizeRange.map { NSUnionRange($0, r) } ?? r
             if let p = pendingNormalizeRange, NSMaxRange(p) > textStorage.length {
                 pendingNormalizeRange = NSRange(location: min(p.location, textStorage.length), length: textStorage.length - min(p.location, textStorage.length))
@@ -170,12 +180,18 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
                 let nextCode = NSMaxRange(para) < ns.length && blockKind(of: ts, at: NSMaxRange(para)) == .code
                 let before: CGFloat = prevCode ? 0 : EditorStyle.codeBlockOuterSpacing
                 let after: CGFloat = nextCode ? 0 : EditorStyle.codeBlockOuterSpacing
+                // A block's language is its first paragraph's; new lines and pasted lines follow it.
+                let language: CodeLanguage? = prevCode
+                    ? EditorStyle.codeLanguage(of: ts.attribute(.paragraphStyle, at: para.location - 1, effectiveRange: nil) as? NSParagraphStyle)
+                    : nil
                 if let ps = ts.attribute(.paragraphStyle, at: para.location, effectiveRange: nil) as? NSParagraphStyle,
-                   ps.paragraphSpacingBefore != before || ps.paragraphSpacing != after {
+                   ps.paragraphSpacingBefore != before || ps.paragraphSpacing != after
+                    || (prevCode && EditorStyle.codeLanguage(of: ps) != language) {
                     ts.enumerateAttribute(.paragraphStyle, in: para) { value, sub, _ in
                         guard let m = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
                         m.paragraphSpacingBefore = before
                         m.paragraphSpacing = after
+                        if prevCode { EditorStyle.setCodeLanguage(language, on: m) }
                         ts.addAttribute(.paragraphStyle, value: m, range: sub)
                     }
                 }
@@ -222,6 +238,28 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     }
 
     // MARK: Paragraph helpers
+
+    /// The whole code block (consecutive code paragraphs outside tables) containing `location`.
+    func codeBlockRange(at location: Int) -> NSRange? {
+        let ns = nsString
+        guard location < ns.length else { return nil }
+        func isCode(_ para: NSRange) -> Bool {
+            Self.blockKind(of: storage, at: para.location) == .code && tableBlock(at: para.location) == nil
+        }
+        var block = ns.paragraphRange(for: NSRange(location: location, length: 0))
+        guard isCode(block) else { return nil }
+        while block.location > 0 {
+            let prev = ns.paragraphRange(for: NSRange(location: block.location - 1, length: 0))
+            guard isCode(prev) else { break }
+            block = NSUnionRange(block, prev)
+        }
+        while NSMaxRange(block) < ns.length {
+            let next = ns.paragraphRange(for: NSRange(location: NSMaxRange(block), length: 0))
+            guard isCode(next) else { break }
+            block = NSUnionRange(block, next)
+        }
+        return block
+    }
 
     func paragraphRange(at location: Int) -> NSRange {
         nsString.paragraphRange(for: NSRange(location: min(location, nsString.length), length: 0))
@@ -472,6 +510,14 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if let (block, chrome) = codeChrome(at: point) {
+            if chrome.copy.contains(point) {
+                codeStyler.copyBlock(at: block)
+            } else {
+                codeStyler.showLanguageMenu(forBlockAt: block, at: NSPoint(x: chrome.label.minX, y: chrome.label.maxY + 4))
+            }
+            return
+        }
         if let index = checkboxCharacter(at: point) {
             toggleCheckbox(atParagraphStart: index)
             return
@@ -481,11 +527,66 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
 
     override func mouseMoved(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        updateCodeHover(at: point)
+        if codeChrome(at: point) != nil {
+            NSCursor.arrow.set()
+            return
+        }
         if checkboxCharacter(at: point) != nil {
             NSCursor.pointingHand.set()
             return
         }
         super.mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        setHoveredCodeBlock(nil)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea { removeTrackingArea(hoverTrackingArea) }
+        let area = NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self)
+        addTrackingArea(area)
+        hoverTrackingArea = area
+    }
+
+    /// Code block start and card, for a point inside a code card.
+    private func codeBlock(at point: NSPoint) -> (NSRange, NSRect)? {
+        guard let lm = layoutManager as? NoteItLayoutManager, let tc = textContainer, storage.length > 0 else { return nil }
+        let origin = textContainerOrigin
+        let local = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+        let glyph = lm.glyphIndex(for: local, in: tc, fractionOfDistanceThroughGlyph: nil)
+        let index = min(lm.characterIndexForGlyph(at: glyph), storage.length - 1)
+        guard let block = codeBlockRange(at: index), let card = lm.codeCardRect(forBlock: block, origin: origin),
+              card.contains(point) else { return nil }
+        return (block, card)
+    }
+
+    private func codeChrome(at point: NSPoint) -> (Int, NoteItLayoutManager.CodeChrome)? {
+        guard let lm = layoutManager as? NoteItLayoutManager, let (block, card) = codeBlock(at: point) else { return nil }
+        let chrome = lm.codeChrome(forBlockAt: block.location, card: card)
+        guard chrome.label.contains(point) || chrome.copy.contains(point) else { return nil }
+        return (block.location, chrome)
+    }
+
+    private func updateCodeHover(at point: NSPoint) {
+        setHoveredCodeBlock(codeBlock(at: point)?.0.location)
+    }
+
+    private func setHoveredCodeBlock(_ location: Int?) {
+        guard let lm = layoutManager as? NoteItLayoutManager, lm.hoveredCodeBlock != location else { return }
+        let old = lm.hoveredCodeBlock
+        lm.hoveredCodeBlock = location
+        if let old { invalidateCodeCard(at: old) }
+        if let location { invalidateCodeCard(at: location) }
+    }
+
+    func invalidateCodeCard(at location: Int) {
+        guard let lm = layoutManager as? NoteItLayoutManager, let block = codeBlockRange(at: location),
+              let card = lm.codeCardRect(forBlock: block, origin: textContainerOrigin) else { return }
+        setNeedsDisplay(card.insetBy(dx: -2, dy: -2))
     }
 
     private func checkboxCharacter(at point: NSPoint) -> Int? {
@@ -586,11 +687,22 @@ extension NoteItTextView.ParagraphEdit: Equatable {
 
 // MARK: - Layout manager
 
-/// Draws code block backgrounds, quote bars, dividers and checklist checkboxes.
+/// Draws code block cards, inline code pills, quote bars, dividers and checklist checkboxes.
 final class NoteItLayoutManager: NSLayoutManager {
+    var codeSettings = CodeStyleSettings.current
+    /// Start of the code block under the mouse, which shows the copy button.
+    var hoveredCodeBlock: Int?
+    /// Start of the code block that was just copied, which shows a checkmark.
+    var copiedCodeBlock: Int?
+
+    static let pillPadding: CGFloat = 4
+    static let cardPadding: CGFloat = 9
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
-        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
-        guard let ts = textStorage, ts.length > 0, let tc = textContainers.first else { return }
+        guard let ts = textStorage, ts.length > 0, let tc = textContainers.first else {
+            super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+            return
+        }
         let ns = ts.string as NSString
         let chars = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
         var range = ns.paragraphRange(for: chars)
@@ -622,11 +734,15 @@ final class NoteItLayoutManager: NSLayoutManager {
                 } else {
                     runs.append((k, para))
                 }
+            } else if para.location < NSMaxRange(chars) && NSMaxRange(para) > chars.location {
+                drawInlineCodePills(in: para, storage: ts, origin: origin)
             }
             if NSMaxRange(para) <= loc { break }
             loc = NSMaxRange(para)
         }
 
+        // Cards and bars go under the selection, which `super` draws.
+        var chrome: [(NSRange, NSRect)] = []
         for (k, run) in runs {
             let glyphs = glyphRange(forCharacterRange: run, actualCharacterRange: nil)
             var lineBox = NSRect.null
@@ -640,15 +756,10 @@ final class NoteItLayoutManager: NSLayoutManager {
             let maxX = isTableCell(ts, at: run.location) ? lineBox.maxX : max(lineBox.maxX, tc.size.width)
             switch k {
             case .code:
-                let rect = NSRect(x: minX + origin.x, y: used.minY + origin.y - 6, width: maxX - minX, height: used.height + 12)
-                let path = NSBezierPath(roundedRect: rect, xRadius: 7, yRadius: 7)
-                EditorStyle.codeBlockBackground.setFill()
-                path.fill()
-                EditorStyle.codeBlockBorder.setStroke()
-                path.lineWidth = 1
-                let inner = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6.5, yRadius: 6.5)
-                inner.lineWidth = 1
-                inner.stroke()
+                let pad = Self.cardPadding
+                let rect = NSRect(x: minX + origin.x, y: used.minY + origin.y - pad, width: maxX - minX, height: used.height + pad * 2)
+                drawCodeCard(rect)
+                chrome.append((run, rect))
             case .quote:
                 let ps = ts.attribute(.paragraphStyle, at: run.location, effectiveRange: nil) as? NSParagraphStyle
                 let indent = (ps?.firstLineHeadIndent ?? EditorStyle.quoteIndent) - EditorStyle.quoteIndent
@@ -664,12 +775,160 @@ final class NoteItLayoutManager: NSLayoutManager {
                 break
             }
         }
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        for (run, rect) in chrome { drawCodeChrome(run: run, card: rect, storage: ts) }
     }
 
     private func isTableCell(_ ts: NSTextStorage, at loc: Int) -> Bool {
         guard loc < ts.length else { return false }
         let ps = ts.attribute(.paragraphStyle, at: loc, effectiveRange: nil) as? NSParagraphStyle
         return ps?.textBlocks.contains { $0 is NSTextTableBlock } ?? false
+    }
+
+    /// Inline code has no stored background; it's drawn as a pill instead (older notes may still carry one).
+    override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int, forCharacterRange charRange: NSRange, color: NSColor) {
+        if let ts = textStorage, charRange.location < ts.length {
+            let attrs = ts.attributes(at: charRange.location, effectiveRange: nil)
+            if let stored = attrs[.backgroundColor] as? NSColor, stored == color, EditorStyle.isInlineCode(attrs) { return }
+        }
+        super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
+    }
+
+    // MARK: Inline code
+
+    private func drawInlineCodePills(in para: NSRange, storage ts: NSTextStorage, origin: NSPoint) {
+        var runs: [(NSRange, NSFont)] = []
+        ts.enumerateAttributes(in: para) { attrs, r, _ in
+            guard EditorStyle.isInlineCode(attrs), let font = attrs[.font] as? NSFont else { return }
+            if let last = runs.last, NSMaxRange(last.0) == r.location {
+                runs[runs.count - 1].0.length += r.length
+                if font.pointSize > last.1.pointSize { runs[runs.count - 1].1 = font }
+            } else {
+                runs.append((r, font))
+            }
+        }
+        guard !runs.isEmpty, let tc = textContainers.first else { return }
+        let ns = ts.string as NSString
+        let fill = codeSettings.inlineColor.fillColor
+        for (run, font) in runs {
+            var content = run
+            while content.length > 0, [10, 13, 0x2028, 0x2029].contains(ns.character(at: NSMaxRange(content) - 1)) { content.length -= 1 }
+            guard content.length > 0 else { continue }
+            let glyphs = glyphRange(forCharacterRange: content, actualCharacterRange: nil)
+            let lastGlyph = NSMaxRange(glyphs) - 1
+            let trailingKern = (ts.attribute(.kern, at: NSMaxRange(content) - 1, effectiveRange: nil) as? CGFloat) ?? 0
+            enumerateLineFragments(forGlyphRange: glyphs) { lineRect, _, _, lineGlyphs, _ in
+                let sub = NSIntersectionRange(lineGlyphs, glyphs)
+                guard sub.length > 0 else { return }
+                var box = self.boundingRect(forGlyphRange: sub, in: tc)
+                if NSMaxRange(sub) - 1 == lastGlyph { box.size.width -= trailingKern }
+                let baseline = lineRect.minY + self.location(forGlyphAt: sub.location).y
+                let top = baseline - font.ascender - 1.5
+                let bottom = baseline - font.descender + 1.5
+                let p = Self.pillPadding
+                let rect = NSRect(x: box.minX - p + origin.x, y: top + origin.y, width: box.width + p * 2, height: bottom - top)
+                let radius = min(rect.height / 2, 5.5)
+                fill.setFill()
+                NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            }
+        }
+    }
+
+    // MARK: Code cards
+
+    private func drawCodeCard(_ rect: NSRect) {
+        let theme = codeSettings.theme
+        let background = codeSettings.highlighting ? (theme.background ?? EditorStyle.codeBlockBackground) : EditorStyle.codeBlockBackground
+        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        background.setFill()
+        path.fill()
+        EditorStyle.codeBlockBorder.setStroke()
+        let inner = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 7.5, yRadius: 7.5)
+        inner.lineWidth = 1
+        inner.stroke()
+    }
+
+    struct CodeChrome {
+        var label: NSRect
+        var copy: NSRect
+        var title: String
+    }
+
+    static let chromeFont = NSFont.systemFont(ofSize: 10.5, weight: .medium)
+
+    func languageTitle(forBlockAt location: Int) -> String {
+        guard let ts = textStorage, location < ts.length else { return "" }
+        let ps = ts.attribute(.paragraphStyle, at: location, effectiveRange: nil) as? NSParagraphStyle
+        if let language = EditorStyle.codeLanguage(of: ps) { return language.shortName }
+        if let raw = temporaryAttribute(.guessedCodeLanguage, atCharacterIndex: location, effectiveRange: nil) as? Int,
+           let language = CodeLanguage(rawValue: raw) {
+            return language.shortName
+        }
+        return CodeLanguage.plain.shortName
+    }
+
+    /// Hit areas of the language label and copy button of a code card (view coordinates).
+    func codeChrome(forBlockAt location: Int, card: NSRect) -> CodeChrome {
+        let title = languageTitle(forBlockAt: location)
+        let textWidth = ceil((title as NSString).size(withAttributes: [.font: Self.chromeFont]).width)
+        let height: CGFloat = 20
+        let y = card.minY + 5
+        let copy = NSRect(x: card.maxX - 6 - 22, y: y, width: 22, height: height)
+        let labelWidth = textWidth + 12 + 12
+        let label = NSRect(x: copy.minX - 2 - labelWidth, y: y, width: labelWidth, height: height)
+        return CodeChrome(label: label, copy: copy, title: title)
+    }
+
+    /// The card rect of the code block starting at `location`, in view coordinates.
+    func codeCardRect(forBlock block: NSRange, origin: NSPoint) -> NSRect? {
+        guard let tc = textContainers.first else { return nil }
+        let glyphs = glyphRange(forCharacterRange: block, actualCharacterRange: nil)
+        var lineBox = NSRect.null
+        var used = NSRect.null
+        enumerateLineFragments(forGlyphRange: glyphs) { rect, usedRect, _, _, _ in
+            lineBox = lineBox.union(rect)
+            used = used.union(usedRect)
+        }
+        guard !lineBox.isNull else { return nil }
+        let minX = max(lineBox.minX, 0)
+        let maxX = max(lineBox.maxX, tc.size.width)
+        let pad = Self.cardPadding
+        return NSRect(x: minX + origin.x, y: used.minY + origin.y - pad, width: maxX - minX, height: used.height + pad * 2)
+    }
+
+    private func drawCodeChrome(run: NSRange, card: NSRect, storage ts: NSTextStorage) {
+        guard !isTableCell(ts, at: run.location) else { return }
+        let chrome = codeChrome(forBlockAt: run.location, card: card)
+        let hovered = hoveredCodeBlock == run.location
+        let copied = copiedCodeBlock == run.location
+        let ink = hovered ? NSColor.secondaryLabelColor : NSColor.tertiaryLabelColor
+        if hovered {
+            NSColor.labelColor.withAlphaComponent(0.06).setFill()
+            NSBezierPath(roundedRect: chrome.label, xRadius: 5, yRadius: 5).fill()
+        }
+        let attrs: [NSAttributedString.Key: Any] = [.font: Self.chromeFont, .foregroundColor: ink]
+        let size = (chrome.title as NSString).size(withAttributes: attrs)
+        let textOrigin = NSPoint(x: chrome.label.minX + 7, y: chrome.label.midY - size.height / 2)
+        (chrome.title as NSString).draw(at: textOrigin, withAttributes: attrs)
+        drawSymbol("chevron.down", pointSize: 7.5, color: ink,
+                   center: NSPoint(x: chrome.label.maxX - 9, y: chrome.label.midY + 0.5))
+        if hovered || copied {
+            if hovered {
+                NSColor.labelColor.withAlphaComponent(0.06).setFill()
+                NSBezierPath(roundedRect: chrome.copy, xRadius: 5, yRadius: 5).fill()
+            }
+            drawSymbol(copied ? "checkmark" : "doc.on.doc", pointSize: 10.5, color: copied ? .systemGreen : ink,
+                       center: NSPoint(x: chrome.copy.midX, y: chrome.copy.midY))
+        }
+    }
+
+    private func drawSymbol(_ name: String, pointSize: CGFloat, color: NSColor, center: NSPoint) {
+        let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [color]))
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config) else { return }
+        let s = image.size
+        image.draw(in: NSRect(x: (center.x - s.width / 2).rounded(), y: (center.y - s.height / 2).rounded(), width: s.width, height: s.height),
+                   from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
     }
 
     override func drawGlyphs(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {

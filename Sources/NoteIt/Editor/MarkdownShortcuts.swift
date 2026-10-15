@@ -8,6 +8,16 @@ extension NoteItTextView {
     private static let codeRegex = try! NSRegularExpression(pattern: "`([^`\\n]*[^`\\s][^`\\n]*)$")
     private static let strikeRegex = try! NSRegularExpression(pattern: "~~([^~\\s](?:[^~\\n]*[^~\\s])?)~$")
     private static let numberedRegex = try! NSRegularExpression(pattern: "^(\\d{1,3})[.)]$")
+    private static let fenceRegex = try! NSRegularExpression(pattern: "^```([A-Za-z0-9+#_.-]*)$")
+
+    /// ```` ``` ```` or ```` ```swift ````: a code fence, with its language (nil = Automatic). Unknown languages don't count.
+    static func codeFence(_ prefix: String) -> CodeLanguage?? {
+        guard let m = fenceRegex.firstMatch(in: prefix, range: NSRange(location: 0, length: (prefix as NSString).length)) else { return nil }
+        let info = (prefix as NSString).substring(with: m.range(at: 1))
+        if info.isEmpty { return .some(nil) }
+        guard let language = CodeLanguage(identifier: info) else { return nil }
+        return .some(language)
+    }
 
     // MARK: Typing triggers
 
@@ -18,7 +28,7 @@ extension NoteItTextView {
         guard let para = paragraphRanges(for: sel).first else { return false }
         let kind = blockKind(ofParagraph: para)
         guard kind != .code, kind != .divider else { return false }
-        if let font = typingAttributes[.font] as? NSFont, EditorStyle.isMonospaced(font), text != "`" { return false }
+        if EditorStyle.isInlineCode(typingAttributes), text != "`" { return false }
         let prefixRange = NSRange(location: para.location, length: sel.location - para.location)
         let prefix = nsString.substring(with: prefixRange)
 
@@ -84,6 +94,7 @@ extension NoteItTextView {
         if dryRun {
             let ns = prefix as NSString
             return ["#", "##", "###", ">", "-", "*", "+", "•", "[]", "[ ]", "[x]", "[X]"].contains(prefix)
+                || Self.codeFence(prefix) != nil
                 || Self.numberedRegex.firstMatch(in: prefix, range: NSRange(location: 0, length: ns.length)) != nil
         }
         let prefixRange = NSRange(location: para.location, length: (prefix as NSString).length)
@@ -98,6 +109,16 @@ extension NoteItTextView {
             attrs[.link] = nil
             attrs[.attachment] = nil
             typingAttributes = attrs
+        }
+
+        if let fence = Self.codeFence(prefix), blockKind(ofParagraph: para) != .code {
+            strip()
+            setBlock(.code)
+            if let language = fence {
+                codeStyler.setLanguage(language, forBlockAt: paragraphRange(at: selectedRange().location).location)
+                typingAttributes[.paragraphStyle] = attributes(ofParagraph: paragraphRange(at: selectedRange().location))[.paragraphStyle]
+            }
+            return true
         }
 
         switch prefix {
@@ -170,9 +191,14 @@ extension NoteItTextView {
             let trimmed = text.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("```") {
                 breakUndoCoalescing()
-                let code = NSAttributedString(string: "\n", attributes: EditorStyle.attributes(for: .code, existing: existingPS))
-                replace(para, with: code, select: NSRange(location: para.location, length: 0), actionName: "Code Block")
-                typingAttributes = EditorStyle.attributes(for: .code, existing: existingPS)
+                var attrs = EditorStyle.attributes(for: .code, existing: existingPS)
+                if let language = CodeLanguage(identifier: String(trimmed.dropFirst(3))),
+                   let ps = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle {
+                    EditorStyle.setCodeLanguage(language, on: ps)
+                    attrs[.paragraphStyle] = ps
+                }
+                replace(para, with: NSAttributedString(string: "\n", attributes: attrs), select: NSRange(location: para.location, length: 0), actionName: "Code Block")
+                typingAttributes = attrs
                 return true
             }
             if ["---", "***", "___", "—-", "—", "–-"].contains(trimmed) {
