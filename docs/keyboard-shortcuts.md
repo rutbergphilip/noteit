@@ -10,7 +10,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⇧⌘N | New notebook… |
 | ⌘F | Search all notes |
 | ⌥⌘F | Find in the current note (see [Find and replace](#find-and-replace)) |
-| ⇧⌥⌘F | Find and replace in the current note |
+| ⇧⌘F | Find and replace in the current note |
 | ⇧⌘S | Export note as… |
 | ⌘P | Print the note |
 | ⌥⇧⌘C | Copy as Markdown (the selection, or the whole note) |
@@ -56,7 +56,7 @@ Inside a list, Return starts a new item and Return on an empty item ends the lis
 | Shortcut | Action |
 |---|---|
 | ⌥⌘F | Open the find bar. Selected text fills the find field |
-| ⇧⌥⌘F | Open the find bar with the replace row |
+| ⇧⌘F | Open the find bar with the replace row |
 | ↩ / ⇧↩ (in the find field) | Next / previous match |
 | ⌘G / ⇧⌘G | Next / previous match |
 | ⌘E | Use the selection for find |

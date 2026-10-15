@@ -14,7 +14,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Export a note, a notebook or all notes as Markdown, HTML, PDF, RTFD or plain text. Notes in Recently Deleted are left out.
 - Print a note (⌘P), share it from the toolbar or File › Share, or copy it as Markdown (⌥⇧⌘C).
 - Import from Apple Notes, Bear, Obsidian and Markdown folders with File › Import…, keeping folders, images and dates.
-- Find and replace in a note. ⌥⌘F opens a find bar and ⇧⌥⌘F opens it with replace. It shows how many matches there are, highlights them all, and can match case, whole words or regular expressions. Replacements keep the text's formatting, and each one can be undone with ⌘Z.
+- Find and replace in a note. ⌥⌘F opens a find bar and ⇧⌘F opens it with replace. It shows how many matches there are, highlights them all, and can match case, whole words or regular expressions. Replacements keep the text's formatting, and each one can be undone with ⌘Z.
 - Code blocks have a language. Pick it from the label in the block's top-right corner, or type ```` ```swift ```` and Space. Automatic guesses the language from the code.
 - Syntax highlighting in code blocks, with Xcode, GitHub, Solarized and Nord themes in light and dark.
 - A copy button on code blocks, shown when you hover over them.

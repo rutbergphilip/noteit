@@ -69,7 +69,7 @@ struct NoteItCommands: Commands {
                 Button("Find…") { FindReplaceModel.active()?.open(replace: false) }
                     .keyboardShortcut("f", modifiers: [.command, .option])
                 Button("Find and Replace…") { FindReplaceModel.active()?.open(replace: true) }
-                    .keyboardShortcut("f", modifiers: [.command, .option, .shift])
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
                 Button("Find Next") { FindReplaceModel.active()?.findNext() }
                     .keyboardShortcut("g", modifiers: .command)
                 Button("Find Previous") { FindReplaceModel.active()?.findPrevious() }

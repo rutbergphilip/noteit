@@ -40,7 +40,7 @@ There's a live preview of inline code and a short code block next to the setting
 
 ## 3. Find and replace
 
-- **⌥⌘F** opens a find bar pinned to the top-right of the editor, in VS Code style. **⇧⌥⌘F** opens it with the replace row expanded. A chevron toggles the replace row.
+- **⌥⌘F** opens a find bar pinned to the top-right of the editor, in VS Code style. **⇧⌘F** opens it with the replace row expanded. A chevron toggles the replace row.
 - **Find field:**
   - Toggles for **Match Case** (Aa), **Whole Word** (ab) and **Regular Expression** (.*).
   - A live match count such as "3 of 12", or "No results" in red.
