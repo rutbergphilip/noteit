@@ -80,6 +80,25 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     }
     var nsString: NSString { storage.string as NSString }
 
+    /// Copies and drags carry the saved form too, so inline code shown in the text font stays code.
+    override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard type == .rtf || type == .rtfd else { return super.writeSelection(to: pboard, type: type) }
+        let ranges = selectedRanges.map(\.rangeValue).filter { $0.length > 0 && NSMaxRange($0) <= storage.length }
+        guard !ranges.isEmpty else { return super.writeSelection(to: pboard, type: type) }
+        let selection = NSMutableAttributedString()
+        for (i, r) in ranges.enumerated() {
+            if i > 0 { selection.append(NSAttributedString(string: "\n")) }
+            selection.append(storage.attributedSubstring(from: r))
+        }
+        let saved = CodeStyler.persisted(selection)
+        guard saved !== selection else { return super.writeSelection(to: pboard, type: type) }
+        let full = NSRange(location: 0, length: saved.length)
+        guard let data = type == .rtfd ? saved.rtfd(from: full, documentAttributes: [:]) : saved.rtf(from: full, documentAttributes: [:]) else {
+            return super.writeSelection(to: pboard, type: type)
+        }
+        return pboard.setData(data, forType: type)
+    }
+
     // MARK: Layout
 
     override func setFrameSize(_ newSize: NSSize) {

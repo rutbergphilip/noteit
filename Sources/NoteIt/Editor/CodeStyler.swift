@@ -123,10 +123,12 @@ final class CodeStyler {
             let para = ns.paragraphRange(for: NSRange(location: loc, length: 0))
             defer { loc = max(NSMaxRange(para), loc + 1) }
             guard para.length > 0 else { continue }
+            var kerned = IndexSet()
             storage.enumerateAttribute(.kern, in: para) { value, r, _ in
-                if let k = value as? CGFloat, abs(k - Self.pillKern) < 0.001 { storage.removeAttribute(.kern, range: r) }
+                if let k = value as? CGFloat, abs(k - Self.pillKern) < 0.001 { kerned.insert(integersIn: r.location..<NSMaxRange(r)) }
             }
             if kind(at: para.location) == .code {
+                for r in kerned.rangeView { storage.removeAttribute(.kern, range: NSRange(r)) }
                 storage.removeAttribute(.inlineCodeDisplay, range: para)
                 continue
             }
@@ -151,16 +153,16 @@ final class CodeStyler {
                     runs.append(r)
                 }
             }
+            // Only touch kerns that change, so typing doesn't re-layout more than it must.
+            var wanted = IndexSet()
             for run in runs {
                 let lastChar = NSMaxRange(run) - 1
-                if !isLineEnd(ns.character(at: lastChar)) {
-                    storage.addAttribute(.kern, value: Self.pillKern, range: NSRange(location: lastChar, length: 1))
-                }
+                if !isLineEnd(ns.character(at: lastChar)) { wanted.insert(lastChar) }
                 let before = run.location - 1
-                if before >= para.location, !isLineEnd(ns.character(at: before)) {
-                    storage.addAttribute(.kern, value: Self.pillKern, range: NSRange(location: before, length: 1))
-                }
+                if before >= para.location, !isLineEnd(ns.character(at: before)) { wanted.insert(before) }
             }
+            for r in kerned.subtracting(wanted).rangeView { storage.removeAttribute(.kern, range: NSRange(r)) }
+            for r in wanted.subtracting(kerned).rangeView { storage.addAttribute(.kern, value: Self.pillKern, range: NSRange(r)) }
         }
     }
 

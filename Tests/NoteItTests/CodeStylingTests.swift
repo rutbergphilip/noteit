@@ -269,6 +269,30 @@ final class CodeStylingTests: XCTestCase {
         XCTAssertEqual(inlineCodeRuns(saved), ["git"])
     }
 
+    func testCopiedInlineCodeStaysCode() throws {
+        let defaults = UserDefaults.standard
+        let old = defaults.object(forKey: PrefKey.inlineCodeFont)
+        defaults.set(InlineCodeFont.sameAsText.rawValue, forKey: PrefKey.inlineCodeFont)
+        defer { defaults.set(old, forKey: PrefKey.inlineCodeFont) }
+
+        let (_, textView) = NoteItTextView.make()
+        let text = NSMutableAttributedString(string: "use git here\n", attributes: EditorStyle.bodyAttributes)
+        text.addAttributes(EditorStyle.inlineCodeAttributes, range: (text.string as NSString).range(of: "git"))
+        textView.storage.setAttributedString(text)
+        textView.codeStyler.restyleAll()
+        textView.setSelectedRange(NSRange(location: 0, length: 12))
+
+        let pb = NSPasteboard(name: NSPasteboard.Name("NoteItTests.\(UUID().uuidString)"))
+        defer { pb.releaseGlobally() }
+        pb.clearContents()
+        XCTAssertTrue(textView.writeSelection(to: pb, type: .rtf))
+        let data = try XCTUnwrap(pb.data(forType: .rtf))
+        let copied = try XCTUnwrap(NSAttributedString(rtf: data, documentAttributes: nil))
+        XCTAssertEqual(inlineCodeRuns(copied), ["git"])
+        let at = (copied.string as NSString).range(of: "git").location
+        XCTAssertNil(copied.attribute(.kern, at: at - 1, effectiveRange: nil))
+    }
+
     func testOldBackgroundInlineCodeStillExports() {
         let text = NSMutableAttributedString(string: "call foo() please\n", attributes: EditorStyle.bodyAttributes)
         let r = (text.string as NSString).range(of: "foo()")
