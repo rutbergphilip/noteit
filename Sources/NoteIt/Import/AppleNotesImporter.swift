@@ -54,6 +54,7 @@ final class AppleScriptThread: @unchecked Sendable {
 
     private let condition = NSCondition()
     private var jobs: [() -> Void] = []
+    private var unfinishedJobs = 0
 
     private init() {
         let thread = Thread { [self] in loop() }
@@ -68,9 +69,17 @@ final class AppleScriptThread: @unchecked Sendable {
         }
     }
 
+    /// True while a script is running or waiting to run.
+    var isBusy: Bool {
+        condition.lock()
+        defer { condition.unlock() }
+        return unfinishedJobs > 0
+    }
+
     private func enqueue(_ job: @escaping () -> Void) {
         condition.lock()
         jobs.append(job)
+        unfinishedJobs += 1
         condition.signal()
         condition.unlock()
     }
@@ -82,6 +91,9 @@ final class AppleScriptThread: @unchecked Sendable {
             let job = jobs.removeFirst()
             condition.unlock()
             autoreleasepool { job() }
+            condition.lock()
+            unfinishedJobs -= 1
+            condition.unlock()
         }
     }
 }

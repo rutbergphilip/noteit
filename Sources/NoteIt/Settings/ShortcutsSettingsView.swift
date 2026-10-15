@@ -14,7 +14,7 @@ struct ShortcutsSettingsView: View {
                 Text("Global")
             } footer: {
                 HStack(alignment: .firstTextBaseline) {
-                    SettingsFootnote(text: "Global shortcuts work from any app. They're off until you set one, and need no special permissions.",
+                    SettingsFootnote(text: "Global shortcuts work from any app. They're off until you set one. Only Capture Selection needs a permission, to read the selected text.",
                                      symbol: "globe")
                     Spacer()
                     if !manager.bindings.isEmpty {
@@ -118,6 +118,7 @@ private struct HotkeyRow: View {
         case .quickCapture: Tokens.Color.tileQuickCapture
         case .openQuickly: Tokens.Color.tileOpenQuickly
         case .commandPalette: Tokens.Color.tileCommandPalette
+        case .captureSelection: Tokens.Color.tileCaptureSelection
         }
     }
 }

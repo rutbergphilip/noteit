@@ -1,15 +1,18 @@
+import AppKit
 import ServiceManagement
 import SwiftUI
 
 struct GeneralSettingsView: View {
     @AppStorage(PrefKey.hideDockIcon) private var hideDockIcon = false
     @AppStorage(PrefKey.showMenuBarIcon) private var showMenuBarIcon = true
+    @AppStorage(PrefKey.captureIncludesBrowserLinks) private var captureIncludesBrowserLinks = true
 
     @ObservedObject private var updater = AppUpdater.shared
 
     @State private var launchAtLogin = false
     @State private var loginStatus: SMAppService.Status = .notRegistered
     @State private var loginError: String?
+    @State private var accessibilityTrusted = AccessibilityAccess.isTrusted
 
     /// SMAppService.mainApp only works for a real .app bundle.
     private var isBundled: Bool { Bundle.main.bundleURL.pathExtension == "app" }
@@ -51,6 +54,18 @@ struct GeneralSettingsView: View {
                 Text("Startup")
             }
 
+            Section {
+                accessibilityRow
+                Toggle("Include page links from browsers", isOn: $captureIncludesBrowserLinks)
+                SettingsFootnote(text: "Works in Safari and Chrome-based browsers. macOS asks once per browser before NoteIt can read the page address.")
+            } header: {
+                Text("Capture")
+            } footer: {
+                SettingsFootnote(text: "Set a Capture Selection shortcut in Settings › Shortcuts, or select text and choose right-click › Services › Capture to NoteIt. Captures go to the notebook chosen for new notes in Settings › Editor.",
+                                 symbol: "text.quote")
+                    .padding(.top, 4)
+            }
+
             if updater.isEnabled {
                 Section {
                     HStack {
@@ -65,8 +80,44 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(height: updater.isEnabled ? 380 : 300)
+        .frame(height: updater.isEnabled ? 620 : 540)
         .onAppear(perform: refreshLoginStatus)
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { note in
+            let window = note.object as? NSWindow
+            if window?.identifier?.rawValue == SettingsOpener.windowIdentifier {
+                refreshAccessibility()
+            }
+        }
+    }
+
+    private var accessibilityRow: some View {
+        LabeledContent {
+            if accessibilityTrusted {
+                Label("Allowed", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(Tokens.Color.success)
+            } else {
+                HStack(spacing: 8) {
+                    Text("Not allowed")
+                        .foregroundStyle(.secondary)
+                    Button("Allow…") { AccessibilityAccess.requestAccess() }
+                }
+            }
+        } label: {
+            Text("Read selected text")
+            Text("Accessibility permission, for the Capture Selection shortcut")
+        }
+        .task {
+            // Permission is granted in System Settings, so poll while this row is on screen.
+            while !Task.isCancelled {
+                if SettingsOpener.settingsWindow?.isVisible != false { refreshAccessibility() }
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private func refreshAccessibility() {
+        let trusted = AccessibilityAccess.isTrusted
+        if trusted != accessibilityTrusted { accessibilityTrusted = trusted }
     }
 
     private var dockBinding: Binding<Bool> {

@@ -46,6 +46,7 @@ enum Tokens {
         static let tileQuickCapture = notebookBlue
         static let tileOpenQuickly = notebookTeal
         static let tileCommandPalette = notebookPurple
+        static let tileCaptureSelection = notebookGreen
 
         // Brand (fixed): app icon, Quick Capture tile, marketing. Never note content or app chrome.
         static let brandViolet = SwiftUI.Color(hex: Hex.brandViolet)
@@ -167,6 +168,7 @@ enum Tokens {
         static let captureWidth: CGFloat = 580
         static let captureHeight: CGFloat = 330
         static let settingsWidth: CGFloat = 520
+        static let toastWidth: CGFloat = 320
     }
 
     // MARK: - Opacity

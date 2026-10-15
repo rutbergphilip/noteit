@@ -7,6 +7,7 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
     case quickCapture
     case openQuickly
     case commandPalette
+    case captureSelection
 
     var id: String { rawValue }
 
@@ -17,6 +18,7 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         case .quickCapture: "Quick Capture"
         case .openQuickly: "Open Quickly"
         case .commandPalette: "Command Palette"
+        case .captureSelection: "Capture Selection"
         }
     }
 
@@ -27,6 +29,7 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         case .quickCapture: "Jot something down in a floating panel without leaving your app."
         case .openQuickly: "Find a note, notebook or command from any app."
         case .commandPalette: "Run a NoteIt command from any app."
+        case .captureSelection: "Save the text selected in any app as a new note, with a link back to where it came from."
         }
     }
 
@@ -37,6 +40,7 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         case .quickCapture: "bolt.fill"
         case .openQuickly: "magnifyingglass"
         case .commandPalette: "command"
+        case .captureSelection: "text.quote"
         }
     }
 

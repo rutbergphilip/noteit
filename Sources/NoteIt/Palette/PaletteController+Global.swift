@@ -23,9 +23,9 @@ enum PaletteHandOff: Equatable {
     }
 }
 
-/// Whether closing the global palette should hide NoteIt again. Showing a panel un-hides the app,
-/// so a palette opened while NoteIt was hidden hides it again unless a row was chosen, NoteIt
-/// became the active app, or another NoteIt window (such as Quick Capture) took over.
+/// Whether closing the last panel shown over another app should hide NoteIt again. Showing a panel
+/// un-hides the app, so NoteIt is hidden again unless a panel opened NoteIt (a palette row, a capture
+/// notice), NoteIt became the active app, or another NoteIt window (such as Quick Capture) took over.
 struct PaletteHiddenApp {
     struct Environment {
         var appIsActive: @MainActor () -> Bool
@@ -43,9 +43,9 @@ struct PaletteHiddenApp {
         }
     }
 
-    /// NoteIt was hidden (⌘H) when the global hotkey showed the palette.
+    /// NoteIt was hidden (⌘H) when the first panel appeared.
     var wasHidden = false
-    /// Set while the palette closes because a row was chosen.
+    /// A panel opened NoteIt (a palette row was chosen, a capture notice opened its note).
     var closingForChosenItem = false
 
     static func shouldRehide(wasHidden: Bool, choseItem: Bool, appIsActive: Bool,
@@ -53,7 +53,7 @@ struct PaletteHiddenApp {
         wasHidden && !choseItem && !appIsActive && !otherWindowIsKey && !quickCaptureIsVisible
     }
 
-    /// Called once the palette is off screen. Hiding an inactive app leaves the frontmost app and its focus alone.
+    /// Called once the last panel is off screen. Hiding an inactive app leaves the frontmost app and its focus alone.
     @MainActor mutating func paletteClosed(_ environment: Environment) {
         let wasHidden = self.wasHidden
         self.wasHidden = false
@@ -64,6 +64,84 @@ struct PaletteHiddenApp {
                              quickCaptureIsVisible: environment.quickCaptureIsVisible()) {
             environment.hide()
         }
+    }
+}
+
+/// One hide session shared by every transient panel shown over another app: the global palette and
+/// capture notices. The first panel to appear records whether NoteIt was hidden, later ones join, and
+/// NoteIt is hidden again only when the last one closes, so one panel closing never hides another.
+@MainActor
+final class TransientSurfaceHider {
+    enum Surface: Hashable {
+        case palette
+        case captureToast
+    }
+
+    static let shared = TransientSurfaceHider(environment: .live, notifications: .default)
+
+    private let environment: PaletteHiddenApp.Environment
+    private let nextTurn: @MainActor (@escaping @MainActor () -> Void) -> Void
+    private(set) var session = PaletteHiddenApp()
+    private(set) var openSurfaces: Set<Surface> = []
+    private var sessionNumber = 0
+
+    init(environment: PaletteHiddenApp.Environment, notifications: NotificationCenter? = nil,
+         nextTurn: @escaping @MainActor (@escaping @MainActor () -> Void) -> Void = TransientSurfaceHider.onNextRunLoopTurn) {
+        self.environment = environment
+        self.nextTurn = nextTurn
+        guard let notifications else { return }
+        notifications.addObserver(forName: NSApplication.didHideNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appDidHide() }
+        }
+        notifications.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.appDidBecomeActive() }
+        }
+    }
+
+    static func onNextRunLoopTurn(_ work: @escaping @MainActor () -> Void) {
+        DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
+    }
+
+    /// Call before un-hiding NoteIt and ordering the panel front. Showing an open panel again is a no-op.
+    func surfaceWillAppear(_ surface: Surface, appIsHidden: Bool) {
+        if appIsHidden {
+            session.wasHidden = true
+            session.closingForChosenItem = false
+        }
+        openSurfaces.insert(surface)
+    }
+
+    /// A panel brought NoteIt forward, so the session ends without hiding it.
+    func surfaceOpenedNoteIt() {
+        guard !openSurfaces.isEmpty else { return }
+        session.closingForChosenItem = true
+    }
+
+    /// Call once the panel is off screen, also when it was already ordered out by something else.
+    func surfaceDidClose(_ surface: Surface) {
+        guard openSurfaces.remove(surface) != nil, openSurfaces.isEmpty else { return }
+        var ending = session
+        session = PaletteHiddenApp()
+        sessionNumber += 1
+        ending.paletteClosed(environment)
+    }
+
+    /// The panels never activate NoteIt, so the user brought it forward (Dock, ⌘Tab) and wants it shown.
+    /// Only an activation still in place a run-loop turn later counts; a brief one doesn't end the session.
+    func appDidBecomeActive() {
+        guard !openSurfaces.isEmpty else { return }
+        let activated = sessionNumber
+        nextTurn { [weak self] in
+            guard let self, activated == self.sessionNumber, self.environment.appIsActive() else { return }
+            self.surfaceOpenedNoteIt()
+        }
+    }
+
+    /// Hiding NoteIt takes every panel off screen, so nothing is left to hide again.
+    func appDidHide() {
+        openSurfaces.removeAll()
+        session = PaletteHiddenApp()
+        sessionNumber += 1
     }
 }
 
@@ -99,8 +177,6 @@ extension PaletteController {
     }
 
     func showOverCurrentApp(mode: PaletteMode) {
-        // Still set if the previous palette is fading out and hasn't hidden NoteIt yet.
-        let wasHidden = NSApp.isHidden || hiddenApp.wasHidden
         let panel = globalPanel ?? makePanel(nonactivating: true)
         globalPanel = panel
         let screens = NSScreen.screens.map { (frame: $0.frame, visibleFrame: $0.visibleFrame) }
@@ -108,18 +184,12 @@ extension PaletteController {
             ?? NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
         present(panel, mode: mode, anchor: anchor, overOtherApp: true)
-        hiddenApp.wasHidden = wasHidden
     }
 
     /// Closes the palette for a chosen row; NoteIt then comes forward, so it stays un-hidden.
     func dismissForChosenItem() {
-        hiddenApp.closingForChosenItem = true
-        defer { hiddenApp.closingForChosenItem = false }
+        TransientSurfaceHider.shared.surfaceOpenedNoteIt()
         dismiss(animated: false)
-    }
-
-    func rehideAppIfNeeded(_ environment: PaletteHiddenApp.Environment = .live) {
-        hiddenApp.paletteClosed(environment)
     }
 
     /// Runs `work` once NoteIt is active with its main window key, or after about two seconds regardless.

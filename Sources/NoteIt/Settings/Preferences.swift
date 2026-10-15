@@ -13,6 +13,7 @@ enum PrefKey {
     static let inlineCodeFont = "inlineCodeFont"
     static let codeBlockTheme = "codeBlockTheme"
     static let syntaxHighlighting = "syntaxHighlighting"
+    static let captureIncludesBrowserLinks = "captureIncludesBrowserLinks"
 }
 
 enum PrefDefault {

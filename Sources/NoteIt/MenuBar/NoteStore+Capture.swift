@@ -22,22 +22,33 @@ extension NoteStore {
 
     /// A bold first-line title followed by the body, in the editor's font size.
     static func capturedText(title: String, body: String) -> NSAttributedString {
-        let size = CGFloat(UserDefaults.standard.object(forKey: PrefKey.editorFontSize) as? Double ?? PrefDefault.editorFontSize)
+        let size = capturedTextSize
+        let styledBody = NSAttributedString(string: body, attributes: [
+            .font: NSFont.systemFont(ofSize: size),
+            .foregroundColor: NSColor.labelColor,
+        ])
+        return capturedText(title: title, body: styledBody)
+    }
+
+    /// Same title line as the plain-text variant, followed by an already styled body.
+    nonisolated static func capturedText(title: String, body: NSAttributedString) -> NSAttributedString {
+        let size = capturedTextSize
         let text = NSMutableAttributedString()
         if !title.isEmpty {
             text.append(NSAttributedString(string: title, attributes: [
                 .font: NSFont.systemFont(ofSize: round(size * 1.6), weight: .bold),
                 .foregroundColor: NSColor.labelColor,
             ]))
-            if !body.isEmpty { text.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: size)])) }
+            if body.length > 0 { text.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: size)])) }
         }
-        if !body.isEmpty {
-            text.append(NSAttributedString(string: body, attributes: [
-                .font: NSFont.systemFont(ofSize: size),
-                .foregroundColor: NSColor.labelColor,
-            ]))
+        if body.length > 0 {
+            text.append(body)
         }
         return text
+    }
+
+    private nonisolated static var capturedTextSize: CGFloat {
+        CGFloat(UserDefaults.standard.object(forKey: PrefKey.editorFontSize) as? Double ?? PrefDefault.editorFontSize)
     }
 
     /// Makes a note the visible selection in the main window.

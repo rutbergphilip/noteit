@@ -16,7 +16,7 @@ BUNDLE_ID="$(sed -nE 's/^ *public static let bundleID = "([^"]+)".*/\1/p' Source
 [[ -n "$BUNDLE_ID" ]] || { echo "error: couldn't read AppIdentity.bundleID" >&2; exit 1; }
 BUILD_DIR="$ROOT/build"
 APP="$BUILD_DIR/$APP_NAME.app"
-# The main app's entitlements: Apple Events, for importing from the Notes app.
+# The main app's entitlements: Apple Events, for importing from the Notes app and reading browser page addresses.
 ENTITLEMENTS="$ROOT/Resources/NoteIt.entitlements"
 # NOTEIT_* first, then the legacy INKWELL_* names (pre-rename), then the default.
 INSTALL_DIR="${NOTEIT_INSTALL_DIR:-${INKWELL_INSTALL_DIR:-$HOME/Applications}}"
@@ -82,8 +82,10 @@ plutil -replace NSAppTransportSecurity -json '{"NSAllowsLocalNetworking":true}' 
 # Sparkle: the appcast is attached to each GitHub release; updates are verified with this EdDSA key.
 plist_str SUFeedURL "https://github.com/rutbergphilip/noteit/releases/latest/download/appcast.xml"
 plist_str SUPublicEDKey "xK/MPK9UYC+zcyvc1/b1PUdPShY7k4F3+NGyaFF1B4o="
-# Shown when macOS asks for permission to control Notes (File › Import… › Apple Notes).
-plist_str NSAppleEventsUsageDescription "NoteIt reads your notes from the Notes app when you choose to import them."
+# Shown when macOS asks for permission to control Notes (File › Import… › Apple Notes) or a browser (capture).
+plist_str NSAppleEventsUsageDescription "NoteIt reads your notes from the Notes app when you choose to import them, and the address of the page you're viewing in your browser when you capture selected text."
+# Services › Capture to NoteIt, for selected text in any app (handled by CaptureServiceProvider).
+plutil -replace NSServices -json '[{"NSMenuItem":{"default":"Capture to NoteIt"},"NSMessage":"captureService","NSPortName":"NoteIt","NSSendTypes":["public.utf8-plain-text","NSStringPboardType"],"NSRequiredContext":{}}]' "$PLIST"
 plutil -lint "$PLIST"
 
 echo "==> Building AppIcon.icns"

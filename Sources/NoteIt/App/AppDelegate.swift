@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Last (hideDockIcon, showMenuBarIcon) pair seen by the defaults observer.
     private var lastVisibilityPrefs: (hide: Bool, showMenuBar: Bool)?
     private var defaultsSyncScheduled = false
+    private let captureServiceProvider = CaptureServiceProvider()
     #if DEBUG
     private var debugWindow: NSWindow?
     #endif
@@ -27,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         UserDefaults.standard.register(defaults: [
             PrefKey.showMenuBarIcon: true,
             PrefKey.editorFontSize: PrefDefault.editorFontSize,
+            PrefKey.captureIncludesBrowserLinks: true,
         ])
         applyActivationPolicy()
     }
@@ -61,7 +63,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor [weak self] in self?.scheduleDefaultsSync() }
         })
 
-        // Carbon global hotkeys (no Accessibility permission required). All unbound by default.
+        // Carbon global hotkeys need no Accessibility permission. All unbound by default. Capture Selection
+        // reads the selected text in other apps, which needs Accessibility; that's opt-in.
         HotkeyManager.shared.handler = { action in
             switch action {
             case .showMainWindow:
@@ -74,9 +77,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 PaletteController.shared.hotkeyToggle(mode: .everything)
             case .commandPalette:
                 PaletteController.shared.hotkeyToggle(mode: .commands)
+            case .captureSelection:
+                CaptureController.shared.captureSelection()
             }
         }
         HotkeyManager.shared.start()
+        NSApp.servicesProvider = captureServiceProvider
+        NSUpdateDynamicServices()
         SyncController.shared.start()
 
         handleDebugArguments()

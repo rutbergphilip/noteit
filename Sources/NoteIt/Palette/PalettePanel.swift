@@ -114,7 +114,6 @@ final class PaletteController: NSObject, NSWindowDelegate {
     var globalPanel: PalettePanel?
     /// Whether the current presentation started while another app was active.
     private(set) var presentedOverOtherApp = false
-    var hiddenApp = PaletteHiddenApp()
     private var keyMonitor: Any?
     private var itemsObserver: AnyCancellable?
     private var topEdge: CGFloat = 0
@@ -159,10 +158,11 @@ final class PaletteController: NSObject, NSWindowDelegate {
 
     /// Shows `panel` with a fresh query, its top edge `PaletteLayout.topOffset` down `anchor`.
     func present(_ panel: PalettePanel, mode: PaletteMode, anchor: NSRect, overOtherApp: Bool) {
+        let hider = TransientSurfaceHider.shared
+        if !overOtherApp { hider.surfaceOpenedNoteIt() }
         if let current = self.panel, current !== panel, current.isVisible { dismiss(animated: false) }
         self.panel = panel
         presentedOverOtherApp = overOtherApp
-        if !overOtherApp { hiddenApp.wasHidden = false }
         model.reset(query: Self.initialQuery(for: mode))
 
         let frame = PaletteLayout.frame(in: anchor, height: PaletteLayout.height(rowCount: model.items.count))
@@ -172,6 +172,10 @@ final class PaletteController: NSObject, NSWindowDelegate {
         presentationGeneration += 1
         shownAt = Date()
         panel.alphaValue = 0
+        if overOtherApp {
+            hider.surfaceWillAppear(.palette, appIsHidden: NSApp.isHidden)
+            if NSApp.isHidden { NSApp.unhideWithoutActivation() }
+        }
         panel.makeKeyAndOrderFront(nil)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.1
@@ -181,7 +185,10 @@ final class PaletteController: NSObject, NSWindowDelegate {
     }
 
     func dismiss(animated: Bool = true) {
-        guard let panel, panel.isVisible else { return }
+        guard let panel, panel.isVisible else {
+            TransientSurfaceHider.shared.surfaceDidClose(.palette)
+            return
+        }
         removeKeyMonitor()
         model.stopObserving()
         presentationGeneration += 1
@@ -189,7 +196,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
         guard animated else {
             panel.orderOut(nil)
             panel.alphaValue = 1
-            rehideAppIfNeeded()
+            TransientSurfaceHider.shared.surfaceDidClose(.palette)
             return
         }
         NSAnimationContext.runAnimationGroup({ context in
@@ -200,7 +207,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
                 guard generation == self.presentationGeneration else { return }
                 panel.orderOut(nil)
                 panel.alphaValue = 1
-                self.rehideAppIfNeeded()
+                TransientSurfaceHider.shared.surfaceDidClose(.palette)
             }
         })
     }

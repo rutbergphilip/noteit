@@ -163,6 +163,17 @@ final class PaletteGlobalTests: XCTestCase {
         XCTAssertEqual(HotkeyAction(hotkeyID: 5), .commandPalette)
     }
 
+    func testCaptureSelectionHotkeyIsAppendedAndUnboundByDefault() throws {
+        XCTAssertEqual(HotkeyAction.captureSelection.hotkeyID, 6)
+        XCTAssertEqual(HotkeyAction(hotkeyID: 6), .captureSelection)
+        XCTAssertEqual(HotkeyAction.allCases.last, .captureSelection)
+
+        let suite = "noteit.capture.hotkeys.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertNil(HotkeyManager(defaults: defaults).bindings[.captureSelection])
+    }
+
     func testPaletteHotkeysAreUnboundByDefault() throws {
         let suite = "noteit.palette.hotkeys.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
