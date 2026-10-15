@@ -7,6 +7,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-15
+
 ### Added
 
 - Recently Deleted. Deleted notes stay there for 30 days and can be recovered. ⌘Z undoes a delete.
@@ -57,5 +59,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Folders kept in sync by another tool, such as iCloud Drive or Dropbox, and S3 services without conditional writes only get best-effort protection when two Macs write at the same time.
 - The full list is in [Known limitations](https://github.com/rutbergphilip/noteit/blob/main/docs/known-limitations.md).
 
-[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/rutbergphilip/noteit/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rutbergphilip/noteit/releases/tag/v0.1.0
