@@ -23,7 +23,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
 ![Quick Capture: capture anything, from anywhere](.github/assets/noteit-banner-capture.png)
 
 - **Capture from anywhere**
-  - Global hotkeys for *Show / Hide NoteIt*, *New Note* and *Quick Capture*. They're unbound by default, you record your own, and they need no Accessibility permission.
+  - Global hotkeys for *Show / Hide NoteIt*, *New Note*, *Quick Capture*, *Open Quickly* and *Command Palette*. They're unbound by default, you record your own, and they need no Accessibility permission.
   - A Spotlight-style **Quick Capture** panel that floats over any app, including full-screen ones, and keeps your draft when dismissed.
   - A **menu bar panel** with search, a quick-note composer, and Pinned and Recent notes. It's fully keyboard-driven.
   - A *Menu bar only* mode and *Launch at login*.
@@ -38,6 +38,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
   - Text colors and highlights.
   - Markdown as you type: `#`, `-`, `1.`, `[ ]`, `>`, ```` ``` ````, `---`, `**bold**`, `*italic*`, `` `code` `` and `~~strike~~`.
   - About 30 keyboard shortcuts. See the [shortcut reference](docs/keyboard-shortcuts.md).
+  - Menu shortcuts such as New Note, Find… and Print… can be changed in Settings › Shortcuts.
 - **Native and local-first**
   - Light and dark mode, system accent color, and standard menus and Settings.
   - Notes are stored as RTFD in `~/Library/Application Support/NoteIt/`, with autosave and atomic writes.

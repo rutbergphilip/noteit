@@ -22,6 +22,20 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⌘Z (after deleting) | Undo the deletion |
 | ⌥⌘Y | Version History… |
 
+### Changing menu shortcuts
+
+The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Version History… and Delete Note (⌘⌫) can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
+
+When recording one:
+
+- It must include ⌘ or ⌃, or be a function key. ⌥ or ⇧ on their own aren't enough.
+- Arrow, delete, Home, End and Page Up/Down keys are kept for moving around and editing text.
+- Esc cancels and ⌫ removes the shortcut, so the command has none.
+- A combination that's already used by another NoteIt command, a formatting shortcut or a standard macOS shortcut such as ⌘Q is rejected.
+- You'll see a warning, but can still go ahead, if one of your global hotkeys uses the same keys. The global hotkey takes priority.
+
+The button next to a changed shortcut puts back its default, and **Restore Defaults** resets them all. The other shortcuts on this page can't be changed.
+
 ## Text formatting
 
 | Shortcut | Action |
@@ -65,6 +79,8 @@ Inside a list, Return starts a new item and Return on an empty item ends the lis
 | Esc or ⌘W | Close the palette |
 
 Letters can be spread out, so `gn` finds *Grocery Notes*. With nothing typed, the palette lists the 10 most recently edited notes. The last row, *New Note “…”*, creates a note with the title you typed and puts the cursor on the line below it.
+
+If you change the Open Quickly or Command Palette shortcut, the new one opens and closes the palette instead. Both can also get a [global hotkey](#global-hotkeys).
 
 Text editing shortcuts such as ⌘A, ⌘C, ⌘V and ⌘Z work in the palette's search field. Any other menu shortcut, such as ⌘P, closes the palette first and then runs in the main window.
 
@@ -132,13 +148,17 @@ Each conversion can be undone with ⌘Z.
 
 ## Global hotkeys
 
-These work from any app. They're **unbound by default**, so NoteIt never takes over a shortcut you already use. Set them in **Settings › Shortcuts**:
+These work from any app. They're **unbound by default**, so NoteIt never takes over a shortcut you already use. Set them in **Settings › Shortcuts › Global**:
 
 | Hotkey | What it does |
 |---|---|
 | Show / Hide NoteIt | Brings the main window forward, or hides NoteIt if it's already in front |
 | New Note | Opens NoteIt with a fresh note, ready to type |
 | Quick Capture | Opens or closes the floating Quick Capture panel |
+| Open Quickly | Opens the command palette to find notes, notebooks and commands |
+| Command Palette | Opens the command palette with `>` typed, to find commands only |
+
+Pressed while you're in another app, the palette opens over that app. Esc closes it and takes you back there.
 
 When recording a shortcut:
 

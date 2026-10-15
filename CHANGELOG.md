@@ -11,6 +11,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Open Quickly. File › Open Quickly… (⌘O) finds notes, notebooks and commands as you type. Letters don't need to be next to each other, so "gn" finds "Grocery Notes". With nothing typed it shows your 10 most recently edited notes, and the last row creates a new note with the title you typed.
 - Command palette. File › Command Palette… (⇧⌘P), or typing `>` in Open Quickly, lists only the commands you can use right now, each with its shortcut. It includes moving the open note to another notebook.
+- Change the shortcuts for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Version History… and Delete Note in Settings › Shortcuts › In NoteIt. The menus and the command palette use the new keys right away, and Restore Defaults puts them all back.
+- Global hotkeys for Open Quickly and Command Palette. From any app they open the palette over what you're doing, and Esc takes you back.
 
 ## [0.2.0] - 2026-10-15
 

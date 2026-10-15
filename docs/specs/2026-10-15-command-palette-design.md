@@ -82,7 +82,7 @@ Only commands that make sense right now are listed. A command that would do noth
 | Import… | | Always |
 | Settings… | ⌘, | Always |
 
-The shortcuts shown come from the same table the menus use, so they can't drift apart.
+The shortcuts shown come from the same table the menus use, so they can't drift apart. That includes shortcuts changed in Settings › Shortcuts › In NoteIt.
 
 Commands run the same actions as their menu items, so they behave the same way and can be undone the same way.
 
@@ -90,5 +90,5 @@ Commands run the same actions as their menu items, so they behave the same way a
 
 - The palette lives in `Sources/NoteIt/Palette/`.
 - `FuzzyMatcher` scores one query against one string and returns the matched ranges for highlighting. `PaletteRanker` turns notes, notebooks and the available commands into the ordered list of rows. Both are pure Swift with no AppKit, and are unit tested without any UI.
-- `PaletteCommandRegistry` builds the command list from the app state each time the palette opens or the store changes. `MenuShortcuts` (in `App/`) holds the key equivalents that both the menus and the palette use.
+- `PaletteCommandRegistry` builds the command list from the app state each time the palette opens or the store changes. `MenuShortcuts` (in `App/`) holds the key equivalents that both the menus and the palette use, read from `MenuShortcutStore` so changed shortcuts apply to both.
 - The palette window is an `NSPanel` hosting a SwiftUI view, built the same way as the Quick Capture panel. It closes when it stops being the key window. A key monitor sorts ⌘ shortcuts into ones the palette handles, text editing in the field, and menu shortcuts that close the palette and go to the main window first.

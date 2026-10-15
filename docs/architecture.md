@@ -17,7 +17,7 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 
 | Folder | What's in it |
 |---|---|
-| `App/` | `NoteItApp` (main window, Settings, menu bar extra and menu commands), `AppDelegate` (activation policy, hotkey wiring, debug arguments), `WindowRouter` (show, hide and focus), `MenuShortcuts` (the menu key equivalents, also shown in the command palette), `AppUpdater` (in-app updates), and the launch-time migration from Inkwell (`LaunchMigration`, `LibraryLauncher`, `LegacyAppQuitter`, `LegacyAppMonitor`) |
+| `App/` | `NoteItApp` (main window, Settings, menu bar extra and menu commands), `AppDelegate` (activation policy, hotkey wiring, debug arguments), `WindowRouter` (show, hide and focus), `MenuShortcuts` and `MenuShortcutStore` (the menu key equivalents and the user's changes to them, also shown in the command palette), `MenuShortcutRules` (which menu shortcuts can be recorded), `AppUpdater` (in-app updates), and the launch-time migration from Inkwell (`LaunchMigration`, `LibraryLauncher`, `LegacyAppQuitter`, `LegacyAppMonitor`) |
 | `Design/` | `Tokens` (colors, spacing, radii and chrome type styles) and `AppResources` (app icon and menu bar glyph images) |
 | `Model/` | `Models` (notebooks, note metadata, sidebar selection, palette), `NoteStore` (the single observable store: queries, editing, tags and persistence), `NoteStore+Trash` (Recently Deleted), `VersionHistory`, seed content |
 | `Views/` | The main window: three-column split, sidebar, note list, editor container with the note header and conflict badge, empty states, notebook sheet, the sync status pill, the Recently Deleted banner, undo toast and confirmations, and the Version History sheet |
@@ -26,7 +26,7 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 | `Editor/` | `RichTextEditor` (the SwiftUI wrapper), `NoteItTextView` (an `NSTextView` subclass whose layout manager draws code blocks, quotes, dividers and checkboxes), `TextFormatter`, `MarkdownShortcuts`, `FormatCommand` (every formatting command and its shortcut), `FormattingToolbar`, `EditorStyles` (type scale, colors and block kinds), `FindReplaceEngine`, `FindReplaceModel` and `FindReplaceBar` (find and replace in a note) |
 | `MenuBar/` | The menu bar panel, the Quick Capture panel, the panel search field and shared views |
 | `Palette/` | `FuzzyMatcher`, `PaletteRanker`, the palette commands and the command palette panel |
-| `Hotkeys/` | `HotkeyAction`, `HotkeyManager` (Carbon `RegisterEventHotKey`), `KeyCombo` and the `ShortcutRecorder` view |
+| `Hotkeys/` | `HotkeyAction`, `HotkeyManager` (Carbon `RegisterEventHotKey`), `KeyCombo` and the `ShortcutRecorder` view, whose recording session is shared with the menu shortcut recorder |
 | `Settings/` | The Settings window and its General, Shortcuts, Editor, Sync and About tabs, plus `Preferences` (defaults keys) |
 | `Sync/` | `SyncController`, `NoteStoreSyncAdapter`, `SyncConfiguration` (providers and settings) and `Keychain` |
 
@@ -61,7 +61,7 @@ Your library lives in `~/Library/Application Support/NoteIt/`. Set `NOTEIT_DATA_
 - **Removing for good** (*Delete Now*, *Empty Recently Deleted* or the 30-day purge). The metadata removal is saved first, then the body moves to `.trash/` and the note's history is removed. While sync is set up, the removal is also recorded in `sync-deletions.json` and pushed as a tombstone.
 - **Version history** (`VersionHistory.swift`). Before a save replaces a note's body on disk, the old body is copied to `history/` if the newest version is more than 10 minutes old (or there's none). A version is always kept before restoring a version. Sync follows the 10-minute rule when it replaces a body with a different one, unless the body holds local edits not kept as a version yet. Each note keeps up to 50 versions, none older than 30 days. Versions are written to a temp package and renamed into place. They aren't synced, indexed or listed in `library.json`.
 - **Starting over.** Quit NoteIt and delete the whole folder, including the hidden `.initialized` marker, `.trash/` and `history/`.
-- **Preferences** live in `UserDefaults`: `hideDockIcon`, `showMenuBarIcon`, `launchAtLogin`, `editorFontSize`, `defaultNotebookID` and the hotkey bindings. Sync adds `syncConfiguration` (non-secret settings as JSON), `syncDeviceID` and `syncLastSync`. Secrets are kept only in the Keychain.
+- **Preferences** live in `UserDefaults`: `hideDockIcon`, `showMenuBarIcon`, `launchAtLogin`, `editorFontSize`, `defaultNotebookID`, the hotkey bindings and `menuShortcutOverrides` (changed menu shortcuts as JSON). Sync adds `syncConfiguration` (non-secret settings as JSON), `syncDeviceID` and `syncLastSync`. Secrets are kept only in the Keychain.
 
 ### Migration from Inkwell
 
@@ -102,6 +102,8 @@ File › Import… (`ImportCommands`) opens `ImportSheet` on the main window. Im
 ## Global hotkeys
 
 Global hotkeys use Carbon's `RegisterEventHotKey`, so they work from any app without Accessibility permission. `HotkeyManager` registers the bindings saved in `UserDefaults` and reports combinations that another app already owns. None are bound by default. `ShortcutRecorder` is the Settings control that records them.
+
+Menu shortcuts can be changed too. `MenuShortcutStore` keeps only the changes from the defaults, either a different shortcut or none, and saves them under `menuShortcutOverrides`. Menu items read their shortcut through `.menuShortcut(_:)`, which observes the store. SwiftUI only rebuilds menu items when a menu is about to open, so after a change the store asks the main menu to update right away, otherwise the old keys would keep working until the menu was opened. The command palette and its ⌘O / ⇧⌘P handling read the current values. `MenuShortcutRules` turns a key press into a shortcut using the character on the ⌘ layer of the keyboard, so non-Latin layouts record Latin letters, and rejects combinations that other NoteIt or macOS shortcuts already use.
 
 ## Menu bar and Quick Capture
 
