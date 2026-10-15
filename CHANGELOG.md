@@ -18,6 +18,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - Note text now rewraps to use the extra room when the window or editor gets wider, instead of staying in a narrow centered column. Very wide editors still keep it centered at a comfortable reading width.
+- Showing and hiding the sidebar is smooth again. The formatting bar no longer measures itself over and over while the editor resizes, and note text rewraps once when the animation ends instead of on every frame.
 
 ## [0.1.0] - 2026-10-14
 

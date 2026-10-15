@@ -20,7 +20,8 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         layoutManager.allowsNonContiguousLayout = false
         storage.addLayoutManager(layoutManager)
         let container = NSTextContainer(size: NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
-        container.widthTracksTextView = true
+        // The text view sizes the container itself (see `setFrameSize`), so it can hold the line width during animations.
+        container.widthTracksTextView = false
         container.lineFragmentPadding = 0
         layoutManager.addTextContainer(container)
 
@@ -32,6 +33,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         textView.autoresizingMask = [.width]
         storage.delegate = textView
         textView.configure()
+        textView.applyColumn(.fitting(width: textView.frame.width))
 
         let scrollView = NSScrollView()
         scrollView.drawsBackground = false
@@ -74,12 +76,49 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
 
     // MARK: Layout
 
+    /// Width changes this close together (the sidebar or a split view animating) keep the current line width,
+    /// centered, and the text rewraps once when they stop. Rewrapping a whole note on every frame drops frames.
+    static let columnSettleDelay: TimeInterval = 0.12
+    private var lastWidthChange: TimeInterval = 0
+    private var hasDrawnSinceWidthChange = false
+
     override func setFrameSize(_ newSize: NSSize) {
-        let inset = EditorColumnLayout.fitting(width: newSize.width).inset
-        if abs(textContainerInset.width - inset) > 0.5 {
-            textContainerInset = NSSize(width: inset, height: EditorStyle.verticalInset)
-        }
+        let widthChanged = abs(newSize.width - frame.width) > 0.5
         super.setFrameSize(newSize)
+        guard widthChanged else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        // Window and divider drags follow the pointer, so they rewrap as they go. (`inLiveResize` can't tell
+        // them apart: split views set it while animating too.)
+        let isAnimating = now - lastWidthChange < Self.columnSettleDelay && hasDrawnSinceWidthChange
+            && NSEvent.pressedMouseButtons == 0
+        lastWidthChange = now
+        hasDrawnSinceWidthChange = false
+        let target = EditorColumnLayout.fitting(width: newSize.width)
+        if isAnimating, let container = textContainer, abs(container.size.width - target.containerWidth) > 0.5 {
+            applyColumn(.keeping(containerWidth: container.size.width, in: newSize.width))
+            NSObject.cancelPreviousPerformRequests(withTarget: self, selector: #selector(settleColumn), object: nil)
+            perform(#selector(settleColumn), with: nil, afterDelay: Self.columnSettleDelay, inModes: [.common])
+        } else {
+            applyColumn(target)
+        }
+    }
+
+    @objc private func settleColumn() {
+        applyColumn(.fitting(width: frame.width))
+    }
+
+    func applyColumn(_ column: EditorColumnLayout) {
+        if abs(textContainerInset.width - column.inset) > 0.5 {
+            textContainerInset = NSSize(width: column.inset, height: EditorStyle.verticalInset)
+        }
+        if let container = textContainer, abs(container.size.width - column.containerWidth) > 0.5 {
+            container.size = NSSize(width: column.containerWidth, height: CGFloat.greatestFiniteMagnitude)
+        }
+    }
+
+    override func viewWillDraw() {
+        hasDrawnSinceWidthChange = true
+        super.viewWillDraw()
     }
 
     override func draw(_ dirtyRect: NSRect) {
