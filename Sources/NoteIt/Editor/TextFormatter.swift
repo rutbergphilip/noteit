@@ -145,7 +145,7 @@ extension NoteItTextView {
         if sel.length == 0 {
             if EditorStyle.isInlineCode(typingAttributes) {
                 typingAttributes[.font] = EditorStyle.bodyFont
-                typingAttributes[.backgroundColor] = nil
+                if EditorStyle.isLegacyInlineCodeBackground(typingAttributes[.backgroundColor] as? NSColor) { typingAttributes[.backgroundColor] = nil }
                 typingAttributes[.inlineCodeDisplay] = nil
                 typingAttributes[.kern] = nil
             } else {
@@ -157,7 +157,9 @@ extension NoteItTextView {
         editAttributes(in: sel, actionName: "Inline Code") { ts in
             if remove {
                 ts.addAttribute(.font, value: EditorStyle.bodyFont, range: sel)
-                ts.removeAttribute(.backgroundColor, range: sel)
+                ts.enumerateAttribute(.backgroundColor, in: sel) { value, r, _ in
+                    if EditorStyle.isLegacyInlineCodeBackground(value as? NSColor) { ts.removeAttribute(.backgroundColor, range: r) }
+                }
                 ts.removeAttribute(.inlineCodeDisplay, range: sel)
             } else {
                 ts.addAttributes(EditorStyle.inlineCodeAttributes, range: sel)

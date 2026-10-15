@@ -114,7 +114,7 @@ final class CodeStyler {
         NoteItTextView.blockKind(of: storage, at: location)
     }
 
-    /// Strips the old flat background, swaps the font for *Same as Text*, and adds pill padding.
+    /// Strips the legacy flat background (highlights stay), swaps the font for *Same as Text*, and adds pill padding.
     private func applyInlineDisplay(in range: NSRange) {
         let ns = storage.string as NSString
         let sameAsText = settings.inlineFont == .sameAsText
@@ -138,7 +138,7 @@ final class CodeStyler {
                     if attrs[.inlineCodeDisplay] != nil { storage.removeAttribute(.inlineCodeDisplay, range: r) }
                     return
                 }
-                if attrs[.backgroundColor] != nil { storage.removeAttribute(.backgroundColor, range: r) }
+                if EditorStyle.isLegacyInlineCodeBackground(attrs[.backgroundColor] as? NSColor) { storage.removeAttribute(.backgroundColor, range: r) }
                 if let font = attrs[.font] as? NSFont {
                     if sameAsText, attrs[.inlineCodeDisplay] == nil {
                         storage.addAttributes([.font: Self.textFont(forCode: font), .inlineCodeDisplay: true], range: r)

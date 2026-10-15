@@ -348,6 +348,16 @@ enum EditorStyle {
         [.font: inlineCodeFont]
     }
 
+    /// The flat background older versions stored on inline code; it's replaced by the drawn pill.
+    static let legacyInlineCodeBackground = NSColor(srgbRed: 0.92, green: 0.92, blue: 0.94, alpha: 1)
+
+    static func isLegacyInlineCodeBackground(_ color: NSColor?) -> Bool {
+        guard let color, let c = color.usingColorSpace(.sRGB), let l = legacyInlineCodeBackground.usingColorSpace(.sRGB) else { return false }
+        let tolerance: CGFloat = 0.01
+        return abs(c.redComponent - l.redComponent) < tolerance && abs(c.greenComponent - l.greenComponent) < tolerance
+            && abs(c.blueComponent - l.blueComponent) < tolerance && abs(c.alphaComponent - l.alphaComponent) < tolerance
+    }
+
     /// Inline code is stored as a monospaced font outside code blocks. With the *Same as Text* inline
     /// code font, the editor shows it in the text font and marks it with `inlineCodeDisplay` instead.
     static func isInlineCode(_ attrs: [NSAttributedString.Key: Any]) -> Bool {

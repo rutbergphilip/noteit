@@ -841,11 +841,13 @@ final class NoteItLayoutManager: NSLayoutManager {
         return ps?.textBlocks.contains { $0 is NSTextTableBlock } ?? false
     }
 
-    /// Inline code has no stored background; it's drawn as a pill instead (older notes may still carry one).
+    /// Inline code is drawn as a pill; the legacy flat gray older notes may still carry is skipped.
+    /// Any other background (a highlight) is drawn normally, over the pill.
     override func fillBackgroundRectArray(_ rectArray: UnsafePointer<NSRect>, count rectCount: Int, forCharacterRange charRange: NSRange, color: NSColor) {
         if let ts = textStorage, charRange.location < ts.length {
             let attrs = ts.attributes(at: charRange.location, effectiveRange: nil)
-            if let stored = attrs[.backgroundColor] as? NSColor, stored == color, EditorStyle.isInlineCode(attrs) { return }
+            if let stored = attrs[.backgroundColor] as? NSColor, stored == color, EditorStyle.isLegacyInlineCodeBackground(stored),
+               EditorStyle.isInlineCode(attrs) { return }
         }
         super.fillBackgroundRectArray(rectArray, count: rectCount, forCharacterRange: charRange, color: color)
     }

@@ -251,7 +251,7 @@ final class CodeStylingTests: XCTestCase {
         let text = NSMutableAttributedString(string: "use git here\n", attributes: EditorStyle.bodyAttributes)
         let r = (text.string as NSString).range(of: "git")
         text.addAttributes(EditorStyle.inlineCodeAttributes, range: r)
-        text.addAttribute(.backgroundColor, value: NSColor.gray, range: r)
+        text.addAttribute(.backgroundColor, value: EditorStyle.legacyInlineCodeBackground, range: r)
         textView.storage.setAttributedString(text)
         textView.codeStyler.restyleAll()
 
@@ -291,6 +291,59 @@ final class CodeStylingTests: XCTestCase {
         XCTAssertEqual(inlineCodeRuns(copied), ["git"])
         let at = (copied.string as NSString).range(of: "git").location
         XCTAssertNil(copied.attribute(.kern, at: at - 1, effectiveRange: nil))
+    }
+
+    func testInlineCodeKeepsHighlightButDropsLegacyGray() throws {
+        for font in [InlineCodeFont.sameAsText, .monospaced] {
+            let defaults = UserDefaults.standard
+            let old = defaults.object(forKey: PrefKey.inlineCodeFont)
+            defaults.set(font.rawValue, forKey: PrefKey.inlineCodeFont)
+            defer { defaults.set(old, forKey: PrefKey.inlineCodeFont) }
+
+            let (_, textView) = NoteItTextView.make()
+            let text = NSMutableAttributedString(string: "old gray and new mark\n", attributes: EditorStyle.bodyAttributes)
+            let ns = text.string as NSString
+            let gray = ns.range(of: "gray"), mark = ns.range(of: "mark")
+            text.addAttributes(EditorStyle.inlineCodeAttributes, range: gray)
+            text.addAttributes(EditorStyle.inlineCodeAttributes, range: mark)
+            // Round-trip the legacy gray through RTF, as stored notes do.
+            let legacy = NSAttributedString(string: "x", attributes: [.backgroundColor: EditorStyle.legacyInlineCodeBackground])
+            let rtf = try XCTUnwrap(legacy.rtf(from: NSRange(location: 0, length: 1), documentAttributes: [:]))
+            let loaded = try XCTUnwrap(NSAttributedString(rtf: rtf, documentAttributes: nil))
+            let loadedGray = try XCTUnwrap(loaded.attribute(.backgroundColor, at: 0, effectiveRange: nil) as? NSColor)
+            text.addAttribute(.backgroundColor, value: loadedGray, range: gray)
+            let yellow = EditorStyle.highlightColors[0].color
+            text.addAttribute(.backgroundColor, value: yellow, range: mark)
+            textView.storage.setAttributedString(text)
+            textView.codeStyler.restyleAll()
+
+            XCTAssertNil(textView.storage.attribute(.backgroundColor, at: gray.location, effectiveRange: nil))
+            XCTAssertEqual(textView.storage.attribute(.backgroundColor, at: mark.location, effectiveRange: nil) as? NSColor, yellow)
+            let saved = textView.attributedString()
+            XCTAssertNil(saved.attribute(.backgroundColor, at: gray.location, effectiveRange: nil))
+            XCTAssertEqual(saved.attribute(.backgroundColor, at: mark.location, effectiveRange: nil) as? NSColor, yellow)
+            XCTAssertEqual(inlineCodeRuns(saved), ["gray", "mark"])
+        }
+        XCTAssertFalse(EditorStyle.isLegacyInlineCodeBackground(NSColor.gray))
+        XCTAssertFalse(EditorStyle.isLegacyInlineCodeBackground(nil))
+    }
+
+    func testHighlightingInlineCodeSticks() {
+        let (_, textView) = NoteItTextView.make()
+        textView.storage.setAttributedString(NSAttributedString(string: "run make now\n", attributes: EditorStyle.bodyAttributes))
+        let r = (textView.string as NSString).range(of: "make")
+        textView.setSelectedRange(r)
+        textView.perform(.inlineCode)
+        textView.setSelectedRange(r)
+        let yellow = EditorStyle.highlightColors[0].color
+        textView.perform(.highlight(yellow))
+        textView.codeStyler.restyleAll()
+        XCTAssertEqual(textView.attributedString().attribute(.backgroundColor, at: r.location, effectiveRange: nil) as? NSColor, yellow)
+
+        textView.setSelectedRange(r)
+        textView.perform(.inlineCode)
+        XCTAssertEqual(textView.attributedString().attribute(.backgroundColor, at: r.location, effectiveRange: nil) as? NSColor, yellow)
+        XCTAssertEqual(inlineCodeRuns(textView.attributedString()), [])
     }
 
     func testOldBackgroundInlineCodeStillExports() {
