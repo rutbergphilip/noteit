@@ -146,7 +146,9 @@ enum NoteBlocks {
                 run.link = URL(string: s)
             }
             run.color = attrs[.foregroundColor] as? NSColor
-            if !run.code { run.highlight = attrs[.backgroundColor] as? NSColor }
+            if let bg = attrs[.backgroundColor] as? NSColor, !(run.code && EditorStyle.isLegacyInlineCodeBackground(bg)) {
+                run.highlight = bg
+            }
             if let last = result.last, last.hasSameStyle(as: run) {
                 result[result.count - 1].text += run.text
             } else {

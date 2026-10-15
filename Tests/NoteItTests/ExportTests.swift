@@ -299,6 +299,19 @@ final class ExportTests: XCTestCase {
         XCTAssertEqual(HTMLWriter.escape("a'b\"c<d>&"), "a&#39;b&quot;c&lt;d&gt;&amp;")
     }
 
+    func testHTMLKeepsHighlightOnInlineCodeButNotLegacyGray() {
+        let body = NSMutableAttributedString(string: "run it then old", attributes: EditorStyle.attributes(for: .body))
+        let yellow = NSColor.systemYellow
+        body.addAttributes(EditorStyle.inlineCodeAttributes, range: NSRange(location: 4, length: 2))
+        body.addAttribute(.backgroundColor, value: yellow, range: NSRange(location: 4, length: 2))
+        body.addAttributes(EditorStyle.inlineCodeAttributes, range: NSRange(location: 12, length: 3))
+        body.addAttribute(.backgroundColor, value: EditorStyle.legacyInlineCodeBackground, range: NSRange(location: 12, length: 3))
+        let html = HTMLWriter.write(body, title: "Code")
+        XCTAssertTrue(html.contains("<mark style=\"background-color: \(HTMLWriter.cssColor(yellow)!)\"><code>it</code></mark>"), html)
+        XCTAssertTrue(html.contains("<code>old</code>"), html)
+        XCTAssertFalse(html.contains("<mark style=\"background-color: \(HTMLWriter.cssColor(EditorStyle.legacyInlineCodeBackground)!)\""), html)
+    }
+
     private func linkedNote(_ links: [(text: String, url: String)]) -> NoteItTextView {
         let tv = editor([links.map(\.text).joined(separator: " ")])
         for link in links {
