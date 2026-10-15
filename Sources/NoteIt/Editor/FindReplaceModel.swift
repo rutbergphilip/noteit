@@ -76,7 +76,7 @@ final class FindReplaceModel: ObservableObject {
         guard let textView else { return }
         attach(to: textView)
         let selection = textView.selectedRange()
-        if let selected = Self.findString(fromSelection: selection, in: textView) {
+        if let selected = query(fromSelection: selection, in: textView) {
             query = selected
         }
         if replace, allowsReplace { showsReplace = true }
@@ -133,7 +133,7 @@ final class FindReplaceModel: ObservableObject {
     func useSelectionForFind() {
         guard let textView else { return }
         let selection = textView.selectedRange()
-        guard let selected = Self.findString(fromSelection: selection, in: textView) else { return }
+        guard let selected = query(fromSelection: selection, in: textView) else { return }
         anchor = selection.location
         currentIndex = nil
         query = selected
@@ -307,6 +307,12 @@ final class FindReplaceModel: ObservableObject {
     }
 
     /// Single-line selections fill the find field; longer or multi-line ones don't.
+    /// The selection as a query; escaped in regex mode so it matches literally.
+    private func query(fromSelection selection: NSRange, in textView: NSTextView) -> String? {
+        guard let selected = Self.findString(fromSelection: selection, in: textView) else { return nil }
+        return options.regex ? NSRegularExpression.escapedPattern(for: selected) : selected
+    }
+
     static func findString(fromSelection selection: NSRange, in textView: NSTextView) -> String? {
         guard selection.length > 0, selection.length <= 500, NSMaxRange(selection) <= (textView.string as NSString).length else { return nil }
         let string = (textView.string as NSString).substring(with: selection)

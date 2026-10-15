@@ -302,6 +302,26 @@ final class FindReplaceModelTests: XCTestCase {
         XCTAssertEqual(textView.string, "One cat, two cats and a Cat.", "highlighting never edits the text")
     }
 
+    func testSelectionIsEscapedInRegexMode() {
+        let cat = (textView.string as NSString).range(of: "Cat.")
+        model.options = .init(regex: true)
+        textView.setSelectedRange(cat)
+        model.open(replace: false)
+        XCTAssertEqual(model.query, "Cat\\.")
+        XCTAssertEqual(model.matchCount, 1)
+
+        model.query = "zzz"
+        textView.setSelectedRange(cat)
+        model.useSelectionForFind()
+        XCTAssertEqual(model.query, "Cat\\.")
+        XCTAssertEqual(model.matchCount, 1)
+
+        model.options = .init()
+        textView.setSelectedRange(cat)
+        model.useSelectionForFind()
+        XCTAssertEqual(model.query, "Cat.")
+    }
+
     func testNextAndPreviousWrapAround() {
         model.open(replace: false)
         model.query = "cat"
