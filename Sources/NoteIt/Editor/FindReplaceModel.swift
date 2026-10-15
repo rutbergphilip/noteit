@@ -177,6 +177,7 @@ final class FindReplaceModel: ObservableObject {
         let range = ranges[currentIndex]
         let text = textView.string
         let string = FindReplaceEngine.replacement(for: range, in: text, query: query, template: replacement, options: options)
+        dismissFindIndicator()
         guard FindReplaceApplier.replace([range], with: [string], in: textView, actionName: "Replace") else { return }
         pendingRecompute?.cancel()
         anchor = range.location + (string as NSString).length
@@ -196,6 +197,7 @@ final class FindReplaceModel: ObservableObject {
         let strings = all.map {
             FindReplaceEngine.replacement(for: $0, in: text, query: query, template: replacement, options: options)
         }
+        dismissFindIndicator()
         guard FindReplaceApplier.replace(all, with: strings, in: textView, actionName: "Replace All") else { return }
         pendingRecompute?.cancel()
         anchor = all.first?.location ?? 0
@@ -276,12 +278,26 @@ final class FindReplaceModel: ObservableObject {
             let color = index == currentIndex ? Self.currentMatchColor : Self.matchColor
             layoutManager.addTemporaryAttribute(.backgroundColor, value: color, forCharacterRange: range)
         }
+        redraw(textView)
     }
 
     private func clearHighlights() {
         guard let textView = observedTextView, let layoutManager = textView.layoutManager,
               let length = textView.textStorage?.length else { return }
         layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: NSRange(location: 0, length: length))
+        redraw(textView)
+    }
+
+    /// Temporary attributes and edits made while another view has focus don't always repaint on their own.
+    private func redraw(_ textView: NSTextView) {
+        guard let layoutManager = textView.layoutManager, let length = textView.textStorage?.length else { return }
+        layoutManager.invalidateDisplay(forCharacterRange: NSRange(location: 0, length: length))
+        textView.setNeedsDisplay(textView.visibleRect)
+    }
+
+    /// The find bubble is a snapshot of the old text; it would linger over the replacement.
+    private func dismissFindIndicator() {
+        observedTextView?.showFindIndicator(for: NSRange(location: 0, length: 0))
     }
 
     // MARK: Text view
