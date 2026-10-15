@@ -309,7 +309,8 @@ final class CodeStylingTests: XCTestCase {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.insertText("```rust", replacementRange: textView.selectedRange())
         textView.insertText(" ", replacementRange: NSRange(location: NSNotFound, length: 0))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        let deadline = Date().addingTimeInterval(2)
+        while textView.string.contains("```"), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
         let ps = textView.storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
         XCTAssertEqual(NoteItTextView.blockKind(of: textView.storage, at: 0), .code)
         XCTAssertEqual(EditorStyle.codeLanguage(of: ps), .rust)
