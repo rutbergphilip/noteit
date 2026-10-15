@@ -146,17 +146,26 @@ struct VersionHistorySheet: View {
 private struct VersionPreview: NSViewRepresentable {
     let text: NSAttributedString
 
+    final class Coordinator {
+        var shown: NSAttributedString?
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeNSView(context: Context) -> NSScrollView {
         let (scrollView, textView) = NoteItTextView.make()
         textView.isEditable = false
         textView.isSelectable = true
         show(text, in: textView)
+        context.coordinator.shown = text
         return scrollView
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
-        guard let textView = nsView.documentView as? NoteItTextView, !textView.attributedString().isEqual(to: text) else { return }
+        guard let textView = nsView.documentView as? NoteItTextView,
+              context.coordinator.shown.map({ !$0.isEqual(to: text) }) ?? true else { return }
         show(text, in: textView)
+        context.coordinator.shown = text
     }
 
     private func show(_ text: NSAttributedString, in textView: NoteItTextView) {
