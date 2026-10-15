@@ -3,6 +3,7 @@ import SwiftUI
 struct EditorContainerView: View {
     @EnvironmentObject private var store: NoteStore
     @StateObject private var editor = EditorController()
+    @StateObject private var find = FindReplaceModel()
 
     var body: some View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
@@ -21,7 +22,20 @@ struct EditorContainerView: View {
                 Divider().opacity(0.5)
                 RichTextEditor(noteID: id, controller: editor, isEditable: !readOnly)
                     .id(id)
+                    .overlay(alignment: .topTrailing) {
+                        if find.isVisible {
+                            FindReplaceBar(model: find)
+                                .padding(.top, Tokens.Space.s8)
+                                .padding(.horizontal, Tokens.Space.s16)
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                    }
+                    .animation(.easeOut(duration: 0.15), value: find.isVisible)
             }
+            .onAppear { find.editor = editor }
+            .onDisappear { find.close(refocusText: false) }
+            .onChange(of: readOnly, initial: true) { find.allowsReplace = !readOnly }
+            .onChange(of: id) { find.close(refocusText: false) }
             .background(Tokens.Color.surfaceEditor)
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {

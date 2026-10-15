@@ -180,6 +180,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if args.contains("--debug-quick-capture") {
                     QuickCaptureController.shared.show()
                 }
+                if let index = args.firstIndex(of: "--debug-find"), index + 1 < args.count,
+                   let model = FindReplaceModel.anyVisible() {
+                    let replacement = args.firstIndex(of: "--debug-replace").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
+                    model.open(replace: replacement != nil)
+                    model.query = args[index + 1]
+                    if let replacement { model.replacement = replacement }
+                }
             }
         }
         #endif

@@ -9,9 +9,8 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⌘N | New note in the selected notebook, with the cursor in the editor |
 | ⇧⌘N | New notebook… |
 | ⌘F | Search all notes |
-| ⌥⌘F | Find in the current note |
-| ⌘G / ⇧⌘G | Find next / previous |
-| ⌘E | Use selection for find |
+| ⌥⌘F | Find in the current note (see [Find and replace](#find-and-replace)) |
+| ⇧⌥⌘F | Find and replace in the current note |
 | ⇧⌘S | Export note as… |
 | ⌘P | Print the note |
 | ⌥⇧⌘C | Copy as Markdown (the selection, or the whole note) |
@@ -51,6 +50,22 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⌥⇧⌘D | Divider |
 
 Inside a list, Return starts a new item and Return on an empty item ends the list.
+
+## Find and replace
+
+| Shortcut | Action |
+|---|---|
+| ⌥⌘F | Open the find bar. Selected text fills the find field |
+| ⇧⌥⌘F | Open the find bar with the replace row |
+| ↩ / ⇧↩ (in the find field) | Next / previous match |
+| ⌘G / ⇧⌘G | Next / previous match |
+| ⌘E | Use the selection for find |
+| Tab / ⇧Tab | Move between the find and replace fields |
+| ↩ (in the replace field) or ⇧⌘1 | Replace the current match and go to the next one |
+| ⌥⌘↩ | Replace all matches |
+| Esc | Close the find bar and go back to the text, with the current match selected |
+
+The **Aa**, **ab** and **.\*** buttons in the find field turn on Match Case, Whole Word and Regular Expression. In regex mode, `$1`, `$2` and so on in the replacement insert the matching groups. Each Replace or Replace All can be undone with one ⌘Z, and replaced text keeps its formatting. In notes in Recently Deleted you can find, but not replace.
 
 ## Markdown as you type
 

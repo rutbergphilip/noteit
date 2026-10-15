@@ -50,8 +50,6 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         importsGraphics = true
         allowsImageEditing = false
         allowsUndo = true
-        usesFindBar = true
-        isIncrementalSearchingEnabled = true
         drawsBackground = false
         usesAdaptiveColorMappingForDarkAppearance = true
         textContainerInset = NSSize(width: EditorStyle.minHorizontalInset, height: EditorStyle.verticalInset)

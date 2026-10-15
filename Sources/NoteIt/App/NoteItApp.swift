@@ -65,14 +65,18 @@ struct NoteItCommands: Commands {
 
             Divider()
 
-            Button("Find in Note…") { FindCommand.send(.showFindInterface) }
-                .keyboardShortcut("f", modifiers: [.command, .option])
-            Button("Find Next") { FindCommand.send(.nextMatch) }
-                .keyboardShortcut("g", modifiers: .command)
-            Button("Find Previous") { FindCommand.send(.previousMatch) }
-                .keyboardShortcut("g", modifiers: [.command, .shift])
-            Button("Use Selection for Find") { FindCommand.send(.setSearchString) }
-                .keyboardShortcut("e", modifiers: .command)
+            Menu("Find") {
+                Button("Find…") { FindReplaceModel.active()?.open(replace: false) }
+                    .keyboardShortcut("f", modifiers: [.command, .option])
+                Button("Find and Replace…") { FindReplaceModel.active()?.open(replace: true) }
+                    .keyboardShortcut("f", modifiers: [.command, .option, .shift])
+                Button("Find Next") { FindReplaceModel.active()?.findNext() }
+                    .keyboardShortcut("g", modifiers: .command)
+                Button("Find Previous") { FindReplaceModel.active()?.findPrevious() }
+                    .keyboardShortcut("g", modifiers: [.command, .shift])
+                Button("Use Selection for Find") { FindReplaceModel.active()?.useSelectionForFind() }
+                    .keyboardShortcut("e", modifiers: .command)
+            }
         }
 
         CommandGroup(after: .windowArrangement) {
@@ -91,16 +95,6 @@ struct CheckForUpdatesButton: View {
             Button("Check for Updates…") { updater.checkForUpdates() }
                 .disabled(!updater.canCheckForUpdates)
         }
-    }
-}
-
-/// Routes find-bar actions to the first responder (the editor's NSTextView).
-enum FindCommand {
-    @MainActor
-    static func send(_ action: NSTextFinder.Action) {
-        let sender = NSMenuItem()
-        sender.tag = action.rawValue
-        NSApp.sendAction(#selector(NSTextView.performFindPanelAction(_:)), to: nil, from: sender)
     }
 }
 
