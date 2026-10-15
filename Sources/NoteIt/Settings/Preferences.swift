@@ -9,6 +9,10 @@ enum PrefKey {
     static let defaultNotebookID = "defaultNotebookID"
     /// Mirror of the login item state, so a future bundle-id change can re-register it.
     static let launchAtLogin = "launchAtLogin"
+    static let inlineCodeColor = "inlineCodeColor"
+    static let inlineCodeFont = "inlineCodeFont"
+    static let codeBlockTheme = "codeBlockTheme"
+    static let syntaxHighlighting = "syntaxHighlighting"
 }
 
 enum PrefDefault {

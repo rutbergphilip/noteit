@@ -239,8 +239,21 @@ private struct BlockBuilder {
                     i += 1
                 }
                 beginBlock(list: false)
+                // Back-to-back fences would merge into one code block; keep an empty line between them.
+                if output.length > 0, (output.string as NSString).character(at: output.length - 1) == 10,
+                   EditorStyle.blockKind(paragraphStyle: output.attribute(.paragraphStyle, at: output.length - 1, effectiveRange: nil) as? NSParagraphStyle,
+                                         font: output.attribute(.font, at: output.length - 1, effectiveRange: nil) as? NSFont) == .code {
+                    output.append(NSAttributedString(string: "\n", attributes: EditorStyle.bodyAttributes))
+                }
+                var attrs = EditorStyle.attributes(for: .code)
+                let info = Self.group(m, 3, line).trimmingCharacters(in: .whitespaces).split(separator: " ").first.map(String.init) ?? ""
+                if let language = CodeLanguage(identifier: info),
+                   let ps = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle {
+                    EditorStyle.setCodeLanguage(language, on: ps)
+                    attrs[.paragraphStyle] = ps
+                }
                 for codeLine in code.isEmpty ? [""] : code {
-                    output.append(NSAttributedString(string: codeLine + "\n", attributes: EditorStyle.attributes(for: .code)))
+                    output.append(NSAttributedString(string: codeLine + "\n", attributes: attrs))
                 }
                 continue
             }

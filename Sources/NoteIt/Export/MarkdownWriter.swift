@@ -93,10 +93,11 @@ enum MarkdownWriter {
                 let indent = String(repeating: " ", count: column)
                 let continuation = indent + String(repeating: " ", count: prefix.count)
                 return indent + prefix + escapeLines(inline(runs, continuation: continuation), continuation: continuation)
-            case .code(let code):
+            case .code(let code, let language):
                 var fence = "```"
                 while code.contains(fence) { fence += "`" }
-                return fence + "\n" + code + "\n" + fence
+                let info = language.flatMap { $0 == .plain ? nil : $0.identifier } ?? ""
+                return fence + info + "\n" + code + "\n" + fence
             case .divider:
                 return "---"
             case .table(let rows):

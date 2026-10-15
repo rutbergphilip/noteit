@@ -76,8 +76,10 @@ final class MarkdownRoundTripTests: XCTestCase {
                 case .checkbox(let checked): name = checked ? "checked" : "unchecked"
                 }
                 return ["\(name) level \(level): \(describe(runs))"]
-            case .code(let code):
-                return code.components(separatedBy: "\n").map { "code: \($0)" }
+            case .code(let code, let language):
+                let lines = code.components(separatedBy: "\n").map { "code: \($0)" }
+                guard let language else { return lines }
+                return ["code language: \(language.identifier)"] + lines
             case .divider:
                 return ["divider"]
             case .table(let rows):

@@ -91,8 +91,9 @@ enum HTMLWriter {
             }
         case .listItem:
             return ""
-        case .code(let code):
-            return "<pre><code>\(escape(code))</code></pre>"
+        case .code(let code, let language):
+            let cls = language.flatMap { $0 == .plain ? nil : " class=\"language-\($0.identifier)\"" } ?? ""
+            return "<pre><code\(cls)>\(escape(code))</code></pre>"
         case .divider:
             return "<hr>"
         case .table(let rows):

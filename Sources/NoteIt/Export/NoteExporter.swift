@@ -137,7 +137,7 @@ enum NoteExporter {
                 case .checkbox(let checked): prefix = (checked ? EditorStyle.checkedBox : EditorStyle.uncheckedBox) + " "
                 }
                 lines.append(String(repeating: "  ", count: level) + prefix + text(runs))
-            case .code(let code):
+            case .code(let code, _):
                 lines.append(code)
             case .divider:
                 lines.append("---")
