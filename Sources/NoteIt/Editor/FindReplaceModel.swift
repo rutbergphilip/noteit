@@ -52,6 +52,13 @@ final class FindReplaceModel: ObservableObject {
             ?? models.first { $0.textView?.window === NSApp.mainWindow }
     }
 
+    #if DEBUG
+    /// For `--debug-find`: an on-screen editor's bar, even when the app isn't active.
+    static func anyVisible() -> FindReplaceModel? {
+        instances.allObjects.first { $0.textView?.window != nil }
+    }
+    #endif
+
     var statusText: String? {
         if isInvalidRegex { return "Invalid regex" }
         guard !query.isEmpty else { return nil }
