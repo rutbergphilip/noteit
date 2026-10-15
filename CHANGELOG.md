@@ -14,6 +14,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Export a note, a notebook or all notes as Markdown, HTML, PDF, RTFD or plain text. Notes in Recently Deleted are left out.
 - Print a note (⌘P), share it from the toolbar or File › Share, or copy it as Markdown (⌥⇧⌘C).
 - Import from Apple Notes, Bear, Obsidian and Markdown folders with File › Import…, keeping folders, images and dates.
+- Code blocks have a language. Pick it from the label in the block's top-right corner, or type ```` ```swift ```` and Space. Automatic guesses the language from the code.
+- Syntax highlighting in code blocks, with Xcode, GitHub, Solarized and Nord themes in light and dark.
+- A copy button on code blocks, shown when you hover over them.
+- Settings › Editor › Code: inline code color and font, code block theme, syntax highlighting on or off, and a live preview.
+- Markdown export writes the code block language after the opening ```` ``` ````, Markdown import reads it, and HTML export marks code with its language.
+
+### Changed
+
+- Inline code looks like a rounded, tinted pill, and code blocks are rounded cards.
 
 ## [0.1.0] - 2026-10-14
 

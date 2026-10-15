@@ -63,7 +63,8 @@ Type these at the start of a line:
 | `1.` or `1)` | Space | Numbered list |
 | `[]` or `[ ]` / `[x]` | Space | Checklist item, unchecked / checked |
 | `>` | Space | Quote |
-| ```` ``` ```` | Return | Code block |
+| ```` ``` ```` | Space or Return | Code block |
+| ```` ```swift ```` (any language name or alias, such as `py`, `js` or `sh`) | Space or Return | Code block in that language |
 | `---`, `***` or `___` | Return | Divider |
 
 And these anywhere in a line:
