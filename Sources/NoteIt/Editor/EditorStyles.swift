@@ -49,6 +49,9 @@ struct ListMarker: Equatable {
 enum EditorStyle {
     // MARK: Metrics
 
+    /// Widest the text column gets; wider editors center it.
+    static let maxReadingWidth: CGFloat = Tokens.Size.readingMax
+    /// Images wider than this (less padding) are scaled down when inserted.
     static let maxTextWidth: CGFloat = 760
     static let minHorizontalInset: CGFloat = 28
     static let verticalInset: CGFloat = 22

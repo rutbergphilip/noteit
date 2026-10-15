@@ -153,7 +153,7 @@ enum Tokens {
         static let emptyStateCircle: CGFloat = 88
         static let aboutIcon: CGFloat = 96
         static let menuBarGlyph: CGFloat = 18
-        static let readingMax: CGFloat = 760
+        static let readingMax: CGFloat = 1100
         static let sidebarMin: CGFloat = 190
         static let sidebarWidth: CGFloat = 220
         static let sidebarMax: CGFloat = 320
