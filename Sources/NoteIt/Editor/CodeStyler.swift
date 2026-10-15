@@ -182,11 +182,17 @@ final class CodeStyler {
         return result
     }
 
-    /// The text as it is saved: inline code back in its monospaced font, without pill padding.
+    /// The text as it is saved: inline code back in its monospaced font, without pill padding, and code
+    /// blocks without the room for their chrome (RTF would store it as an absolute right indent).
     static func persisted(_ text: NSAttributedString) -> NSAttributedString {
         let full = NSRange(location: 0, length: text.length)
         var needsWork = false
         text.enumerateAttribute(.inlineCodeDisplay, in: full) { v, _, stop in if v != nil { needsWork = true; stop.pointee = true } }
+        if !needsWork {
+            text.enumerateAttribute(.paragraphStyle, in: full) { v, _, stop in
+                if hasChromeInset(v as? NSParagraphStyle) { needsWork = true; stop.pointee = true }
+            }
+        }
         if !needsWork {
             text.enumerateAttribute(.kern, in: full) { v, _, stop in
                 if let k = v as? CGFloat, abs(k - pillKern) < 0.001 { needsWork = true; stop.pointee = true }
@@ -204,7 +210,17 @@ final class CodeStyler {
             }
             copy.removeAttribute(.inlineCodeDisplay, range: r)
         }
+        copy.enumerateAttribute(.paragraphStyle, in: full) { v, r, _ in
+            guard let ps = v as? NSParagraphStyle, hasChromeInset(ps), let m = ps.mutableCopy() as? NSMutableParagraphStyle else { return }
+            m.tailIndent = 0
+            copy.addAttribute(.paragraphStyle, value: m, range: r)
+        }
         return copy
+    }
+
+    private static func hasChromeInset(_ ps: NSParagraphStyle?) -> Bool {
+        guard let ps else { return false }
+        return ps.tailIndent == -EditorStyle.codeChromeInset && EditorStyle.blockKind(paragraphStyle: ps, font: nil) == .code
     }
 
     private func applyInlineColors(in range: NSRange) {

@@ -111,7 +111,7 @@ struct RichTextEditor: NSViewRepresentable {
             let body = NoteStore.shared.body(for: noteID)
             textView.storage.setAttributedString(body)
             NoteItTextView.refreshTableColors(in: textView.storage)
-            NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length))
+            NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
             textView.setSelectedRange(NSRange(location: 0, length: 0))
             if body.length == 0 {
@@ -146,7 +146,7 @@ struct RichTextEditor: NSViewRepresentable {
             defer { isLoading = false }
             textView.storage.setAttributedString(body)
             NoteItTextView.refreshTableColors(in: textView.storage)
-            NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length))
+            NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
             let length = textView.storage.length
             let location = min(selection.location, length)

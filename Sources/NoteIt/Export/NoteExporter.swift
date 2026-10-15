@@ -252,7 +252,7 @@ enum NoteExporter {
             guard let wrapper = (value as? NSTextAttachment)?.fileWrapper else { return }
             storage.addAttribute(.attachment, value: NSTextAttachment(fileWrapper: wrapper), range: range)
         }
-        NoteItTextView.normalize(storage, around: full)
+        NoteItTextView.normalize(storage, around: full, chromeInsets: true)
         NoteItTextView.fitAttachments(in: storage, range: full, maxWidth: width)
         let layoutManager = NoteItLayoutManager()
         storage.addLayoutManager(layoutManager)

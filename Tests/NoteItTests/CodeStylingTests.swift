@@ -193,6 +193,62 @@ final class CodeStylingTests: XCTestCase {
         }
     }
 
+    func testFirstCodeLineClearsChrome() throws {
+        let (_, textView) = NoteItTextView.make()
+        let long = String(repeating: "let value = compute(input) + 1; ", count: 6)
+        textView.storage.setAttributedString(MarkdownReader.attributedString(from: "Intro\n\n```typescript\n\(long)\nnext line\n```\n"))
+        textView.normalizePendingEdits()
+        let ns = textView.string as NSString
+        let first = ns.range(of: "let value").location
+        let second = ns.range(of: "next line").location
+        func style(_ ts: NSAttributedString, _ at: Int) -> NSParagraphStyle? { ts.attribute(.paragraphStyle, at: at, effectiveRange: nil) as? NSParagraphStyle }
+        XCTAssertEqual(style(textView.storage, first)?.tailIndent, -EditorStyle.codeChromeInset)
+        XCTAssertEqual(style(textView.storage, second)?.tailIndent, 0)
+        XCTAssertEqual(style(textView.storage, 0)?.tailIndent, 0)
+
+        let lm = try XCTUnwrap(textView.layoutManager as? NoteItLayoutManager)
+        let tc = try XCTUnwrap(textView.textContainer)
+        tc.size = NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude)
+        lm.ensureLayout(for: tc)
+        let block = try XCTUnwrap(textView.codeBlockRange(at: first))
+        let origin = textView.textContainerOrigin
+        let card = try XCTUnwrap(lm.codeCardRect(forBlock: block, origin: origin))
+        let chrome = lm.codeChrome(forBlockAt: block.location, card: card)
+        let firstLine = lm.glyphRange(forCharacterRange: NSRange(location: first, length: 1), actualCharacterRange: nil).location
+        let used = lm.lineFragmentUsedRect(forGlyphAt: firstLine, effectiveRange: nil)
+        XCTAssertLessThan(used.maxX + origin.x, chrome.label.minX)
+        XCTAssertGreaterThan(lm.lineFragmentUsedRect(forGlyphAt: lm.glyphIndexForCharacter(at: NSMaxRange(ns.paragraphRange(for: NSRange(location: first, length: 0))) - 2), effectiveRange: nil).minY, used.minY, "the long first line wraps")
+
+        for language in CodeLanguage.allCases {
+            let ps = style(textView.storage, first)!.mutableCopy() as! NSMutableParagraphStyle
+            EditorStyle.setCodeLanguage(language, on: ps)
+            textView.storage.addAttribute(.paragraphStyle, value: ps, range: ns.paragraphRange(for: NSRange(location: first, length: 0)))
+            let c = lm.codeChrome(forBlockAt: block.location, card: card)
+            XCTAssertLessThanOrEqual(card.maxX - c.label.minX + 4, EditorStyle.codeChromeInset + tc.lineFragmentPadding, c.title)
+        }
+        let ps = style(textView.storage, first)!.mutableCopy() as! NSMutableParagraphStyle
+        EditorStyle.setCodeLanguage(.typescript, on: ps)
+        textView.storage.addAttribute(.paragraphStyle, value: ps, range: ns.paragraphRange(for: NSRange(location: first, length: 0)))
+
+        // A new first line takes over the inset; the old one gives it up.
+        textView.setSelectedRange(NSRange(location: first, length: 0))
+        textView.insertText("top\n", replacementRange: textView.selectedRange())
+        textView.normalizePendingEdits()
+        XCTAssertEqual(style(textView.storage, first)?.tailIndent, -EditorStyle.codeChromeInset)
+        XCTAssertEqual(style(textView.storage, first + 4)?.tailIndent, 0)
+
+        let saved = textView.attributedString()
+        let data = try XCTUnwrap(saved.rtfd(from: NSRange(location: 0, length: saved.length), documentAttributes: [:]))
+        let read = try XCTUnwrap(NSAttributedString(rtfd: data, documentAttributes: nil))
+        // The inset is display-only: RTF would turn it into an absolute right indent.
+        XCTAssertEqual(style(saved, first)?.tailIndent, 0)
+        XCTAssertEqual(style(read, first)?.tailIndent, 0)
+        XCTAssertEqual(EditorStyle.codeLanguage(of: style(read, first)), .typescript)
+        XCTAssertEqual(EditorStyle.blockKind(paragraphStyle: style(read, first), font: read.attribute(.font, at: first, effectiveRange: nil) as? NSFont), .code)
+        let markdown = MarkdownWriter.write(read, title: "T").markdown
+        XCTAssertTrue(markdown.contains("```typescript\ntop\nlet value"), markdown)
+    }
+
     func testAutomaticHasNoSentinel() {
         let ps = EditorStyle.attributes(for: .code)[.paragraphStyle] as? NSParagraphStyle
         XCTAssertNil(EditorStyle.codeLanguage(of: ps))

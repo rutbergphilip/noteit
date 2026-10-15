@@ -70,6 +70,9 @@ enum EditorStyle {
     static let codeIndent: CGFloat = 14
     static let quoteIndent: CGFloat = 18
     static let codeBlockOuterSpacing: CGFloat = 15
+    /// Right inset (as a negative tail indent) of a code block's first paragraph, so its text never runs
+    /// under the language label and copy button.
+    static let codeChromeInset: CGFloat = 120
     static let dividerCharacter = "\u{00A0}"
 
     static var bodySize: CGFloat {

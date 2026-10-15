@@ -22,6 +22,7 @@ Make the editor feel as polished as Apple Notes, then go further: fix layout bug
 - A small **language** label sits in the card's top-right corner and opens a picker: Plain Text, Bash/Shell, C, C++, C#, CSS, Go, HTML/XML, Java, JavaScript, JSON, Kotlin, Markdown, PHP, Python, Ruby, Rust, SQL, Swift, TypeScript, YAML. The default is **Automatic**, which guesses the language from the content.
 - **Syntax highlighting** colors keywords, strings, comments, numbers, types and punctuation using a small built-in tokenizer, with no new dependencies. The colors are display-only (layout-manager temporary attributes), so they're never saved into the note, copied, or exported as colors.
 - A copy button appears on hover in the top-right corner and copies the block's text.
+- The block's first line wraps short of the label and copy button, so code never runs under them. This right inset is display-only and is not saved.
 - The chosen language is saved with the note and survives sync. It uses the same RTFD-safe paragraph-style sentinel technique as the existing block kinds.
 - When typing ```` ```swift ````, the block's language is set to Swift.
 - Markdown export writes ```` ```swift ```` fences, Markdown import reads them, and HTML export adds `class="language-swift"`.

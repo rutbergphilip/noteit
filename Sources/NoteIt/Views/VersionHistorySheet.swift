@@ -162,6 +162,7 @@ private struct VersionPreview: NSViewRepresentable {
     private func show(_ text: NSAttributedString, in textView: NoteItTextView) {
         textView.storage.setAttributedString(text)
         NoteItTextView.refreshTableColors(in: textView.storage)
+        NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.scrollToBeginningOfDocument(nil)
         textView.needsDisplay = true

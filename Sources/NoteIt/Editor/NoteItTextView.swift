@@ -175,7 +175,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         isNormalizing = true
         defer { isNormalizing = false }
         storage.beginEditing()
-        Self.normalize(storage, around: range)
+        Self.normalize(storage, around: range, chromeInsets: true)
         storage.endEditing()
     }
 
@@ -204,8 +204,9 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     }
 
     /// Keeps sentinel-based blocks consistent: explicit tab intervals (RTF inherits them otherwise),
-    /// code block outer spacing, dividers that received text, oversized images.
-    static func normalize(_ ts: NSTextStorage, around editedRange: NSRange) {
+    /// code block outer spacing, dividers that received text, oversized images. `chromeInsets` adds the
+    /// display-only room for code card chrome (see `EditorStyle.codeChromeInset`); it's never saved.
+    static func normalize(_ ts: NSTextStorage, around editedRange: NSRange, chromeInsets: Bool = false) {
         let ns = ts.string as NSString
         guard ns.length > 0 else { return }
         let clamped = NSIntersectionRange(editedRange, NSRange(location: 0, length: ns.length))
@@ -240,13 +241,18 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
                 let language: CodeLanguage? = prevCode
                     ? EditorStyle.codeLanguage(of: ts.attribute(.paragraphStyle, at: para.location - 1, effectiveRange: nil) as? NSParagraphStyle)
                     : nil
-                if let ps = ts.attribute(.paragraphStyle, at: para.location, effectiveRange: nil) as? NSParagraphStyle,
-                   ps.paragraphSpacingBefore != before || ps.paragraphSpacing != after
-                    || (prevCode && EditorStyle.codeLanguage(of: ps) != language) {
+                if let ps = ts.attribute(.paragraphStyle, at: para.location, effectiveRange: nil) as? NSParagraphStyle {
+                    // The first line makes room for the card's language label and copy button (not drawn in tables).
+                    let prevStyle = prevCode ? ts.attribute(.paragraphStyle, at: para.location - 1, effectiveRange: nil) as? NSParagraphStyle : nil
+                    let startsCard = ps.textBlocks.isEmpty && (prevStyle?.textBlocks.isEmpty == false || !prevCode)
+                    let tail: CGFloat = chromeInsets ? (startsCard ? -EditorStyle.codeChromeInset : 0) : ps.tailIndent
+                    guard ps.paragraphSpacingBefore != before || ps.paragraphSpacing != after || ps.tailIndent != tail
+                        || (prevCode && EditorStyle.codeLanguage(of: ps) != language) else { continue }
                     ts.enumerateAttribute(.paragraphStyle, in: para) { value, sub, _ in
                         guard let m = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
                         m.paragraphSpacingBefore = before
                         m.paragraphSpacing = after
+                        m.tailIndent = tail
                         if prevCode { EditorStyle.setCodeLanguage(language, on: m) }
                         ts.addAttribute(.paragraphStyle, value: m, range: sub)
                     }
