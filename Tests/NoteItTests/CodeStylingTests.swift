@@ -342,7 +342,7 @@ final class CodeStylingTests: XCTestCase {
     func testHTMLLanguageClass() {
         let text = MarkdownReader.attributedString(from: "```py\nprint(1)\n```\n\n```\nx\n```\n")
         let html = HTMLWriter.write(text, title: "T")
-        XCTAssertTrue(html.contains("<pre><code class=\"language-python\">print(1)</code></pre>"), html)
+        XCTAssertTrue(html.contains("<pre><code class=\"language-python\"><span class=\"tk-keyword\">print</span><span class=\"tk-punctuation\">(</span><span class=\"tk-number\">1</span>"), html)
         XCTAssertTrue(html.contains("<pre><code>x</code></pre>"), html)
     }
 

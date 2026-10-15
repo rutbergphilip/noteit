@@ -19,7 +19,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Syntax highlighting in code blocks, with Xcode, GitHub, Solarized and Nord themes in light and dark.
 - A copy button on code blocks, shown when you hover over them.
 - Settings › Editor › Code: inline code color and font, code block theme, syntax highlighting on or off, and a live preview.
-- Markdown export writes the code block language after the opening ```` ``` ````, Markdown import reads it, and HTML export marks code with its language.
+- Markdown export writes the code block language after the opening ```` ``` ````, Markdown import reads it, and HTML export keeps code looking like it does in the editor, with syntax colors and inline code pills in your chosen theme and color.
 
 ### Changed
 

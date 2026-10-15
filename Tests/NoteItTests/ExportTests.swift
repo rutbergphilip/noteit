@@ -255,7 +255,9 @@ final class ExportTests: XCTestCase {
         apply(.textColor(red), to: "Quoted", in: tv)
         apply(.highlight(yellow), to: "After", in: tv)
         apply(.underline, to: "here", in: tv)
-        let html = HTMLWriter.write(tv.attributedString(), title: "Groceries & more")
+        var plainCode = CodeStyleSettings.default
+        plainCode.highlighting = false
+        let html = HTMLWriter.write(tv.attributedString(), title: "Groceries & more", code: plainCode)
 
         XCTAssertTrue(html.hasPrefix("<!DOCTYPE html>"))
         XCTAssertTrue(html.contains("<title>Groceries &amp; more</title>"))
@@ -310,6 +312,43 @@ final class ExportTests: XCTestCase {
         XCTAssertTrue(html.contains("<mark style=\"background-color: \(HTMLWriter.cssColor(yellow)!)\"><code>it</code></mark>"), html)
         XCTAssertTrue(html.contains("<code>old</code>"), html)
         XCTAssertFalse(html.contains("<mark style=\"background-color: \(HTMLWriter.cssColor(EditorStyle.legacyInlineCodeBackground)!)\""), html)
+    }
+
+    func testHTMLColorsCodeBlocksWithTheTheme() {
+        let text = MarkdownReader.attributedString(from: "```swift\nlet name = \"<b>\" // hi\n```\n")
+        let settings = CodeStyleSettings(inlineColor: .blue, inlineFont: .monospaced, theme: .github, highlighting: true)
+        let html = HTMLWriter.write(text, title: "Code", code: settings)
+        XCTAssertTrue(html.contains("<span class=\"tk-keyword\">let</span> name"), html)
+        XCTAssertTrue(html.contains("<span class=\"tk-string\">&quot;&lt;b&gt;&quot;</span>"), html)
+        XCTAssertTrue(html.contains("<span class=\"tk-comment\">// hi</span>"), html)
+        XCTAssertFalse(html.contains("\"<b>\""), html)
+        XCTAssertTrue(html.contains(".tk-keyword { color: #cf222e; }"), html)
+        XCTAssertTrue(html.contains("@media (prefers-color-scheme: dark) { code {"), html)
+        XCTAssertTrue(html.contains(".tk-keyword { color: #ff7b72; }"), html)
+        XCTAssertTrue(html.contains("pre { background: #f6f8fa; }"), html)
+    }
+
+    func testHTMLHighlightingFollowsLanguageAndSetting() {
+        let swift = CodeStyleSettings(inlineColor: .pink, inlineFont: .monospaced, theme: .xcode, highlighting: true)
+        XCTAssertEqual(HTMLWriter.highlighted("a < b", language: .plain, settings: swift), "a &lt; b")
+        XCTAssertTrue(HTMLWriter.highlighted("def f(): return 1", language: .python, settings: swift).contains("<span class=\"tk-keyword\">def</span>"))
+        var off = swift
+        off.highlighting = false
+        XCTAssertEqual(HTMLWriter.highlighted("let x = 1", language: .swift, settings: off), "let x = 1")
+        XCTAssertFalse(HTMLWriter.codeStylesheet(off).contains(".tk-"))
+        XCTAssertTrue(HTMLWriter.codeStylesheet(off).contains("pre code { color: var(--ink); }"))
+    }
+
+    func testHTMLStylesInlineCodeAsAPill() {
+        let pink = CodeStyleSettings(inlineColor: .pink, inlineFont: .monospaced, theme: .xcode, highlighting: true)
+        let css = HTMLWriter.codeStylesheet(pink)
+        XCTAssertTrue(css.contains("code { border-radius: 5px;"), css)
+        XCTAssertTrue(css.contains("code { color: rgba(192, 40, 106, 1.00); background: rgba(232, 53, 122, 0.10); }"), css)
+        XCTAssertTrue(css.contains("code { color: rgba(255, 126, 179, 1.00); background: rgba(232, 53, 122, 0.17); }"), css)
+        XCTAssertFalse(css.contains("font-family: inherit"))
+        var sameFont = pink
+        sameFont.inlineFont = .sameAsText
+        XCTAssertTrue(HTMLWriter.codeStylesheet(sameFont).contains("font-family: inherit"))
     }
 
     private func linkedNote(_ links: [(text: String, url: String)]) -> NoteItTextView {

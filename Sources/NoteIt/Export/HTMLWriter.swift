@@ -4,7 +4,7 @@ import AppKit
 /// colors, highlights, underline and alignment are kept.
 @MainActor
 enum HTMLWriter {
-    static func write(_ text: NSAttributedString, title: String) -> String {
+    static func write(_ text: NSAttributedString, title: String, code: CodeStyleSettings = .current) -> String {
         var body = ""
         /// Open lists, innermost last. Each has an unclosed `<li>`.
         var lists: [(key: String, tag: String, level: Int)] = []
@@ -19,7 +19,7 @@ enum HTMLWriter {
         for block in NoteBlocks.parse(text) {
             guard case .listItem(let marker, let level, let alignment, let runs) = block else {
                 closeLists(above: -1)
-                body += html(for: block) + "\n"
+                body += html(for: block, code: code) + "\n"
                 continue
             }
             let tag: String, key: String
@@ -67,6 +67,7 @@ enum HTMLWriter {
         <title>\(escape(title))</title>
         <style>
         \(stylesheet)
+        \(codeStylesheet(code))
         </style>
         </head>
         <body>
@@ -78,7 +79,7 @@ enum HTMLWriter {
         """
     }
 
-    private static func html(for block: NoteBlock) -> String {
+    private static func html(for block: NoteBlock, code settings: CodeStyleSettings) -> String {
         switch block {
         case .paragraph(let kind, let alignment, let runs):
             let style = alignmentStyle(alignment)
@@ -93,7 +94,7 @@ enum HTMLWriter {
             return ""
         case .code(let code, let language):
             let cls = language.flatMap { $0 == .plain ? nil : " class=\"language-\($0.identifier)\"" } ?? ""
-            return "<pre><code\(cls)>\(escape(code))</code></pre>"
+            return "<pre><code\(cls)>\(highlighted(code, language: language, settings: settings))</code></pre>"
         case .divider:
             return "<hr>"
         case .table(let rows):
@@ -158,6 +159,50 @@ enum HTMLWriter {
     private static func isDefaultTextColor(_ color: NSColor) -> Bool {
         guard let rgb = color.usingColorSpace(.sRGB) else { return false }
         return max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) < 0.2
+    }
+
+    /// Wraps syntax tokens in `tk-*` spans; Automatic blocks use the same guess as the editor.
+    static func highlighted(_ code: String, language: CodeLanguage?, settings: CodeStyleSettings) -> String {
+        guard settings.highlighting, let language = language ?? SyntaxHighlighter.guessLanguage(code) else {
+            return escape(code)
+        }
+        let ns = code as NSString
+        var out = "", cursor = 0
+        for token in SyntaxHighlighter.tokenize(code, language: language).sorted(by: { $0.range.location < $1.range.location }) {
+            guard token.range.location >= cursor, NSMaxRange(token.range) <= ns.length, token.range.length > 0 else { continue }
+            out += escape(ns.substring(with: NSRange(location: cursor, length: token.range.location - cursor)))
+            out += "<span class=\"tk-\(token.kind)\">\(escape(ns.substring(with: token.range)))</span>"
+            cursor = NSMaxRange(token.range)
+        }
+        return out + escape(ns.substring(from: cursor))
+    }
+
+    static func codeStylesheet(_ settings: CodeStyleSettings) -> String {
+        func hex(_ v: UInt32) -> String { String(format: "#%06x", v) }
+        func rules(_ palette: CodeTheme.Palette, _ ink: NSColor, _ fill: NSColor, dark: Bool) -> String {
+            var css = "code { color: \(rgba(ink, dark: dark)); background: \(rgba(fill, dark: dark)); }"
+            guard settings.highlighting else { return css + " pre code { color: var(--ink); }" }
+            css += " pre code { color: \(hex(palette.plain)); }"
+            if let background = palette.background { css += " pre { background: \(hex(background)); }" }
+            for kind in TokenKind.allCases { css += " .tk-\(kind) { color: \(hex(palette.hex(for: kind))); }" }
+            return css
+        }
+        let ink = settings.inlineColor.textColor, fill = settings.inlineColor.fillColor
+        var css = "code { border-radius: 5px; padding: 0.12em 0.4em; }"
+        if settings.inlineFont == .sameAsText { css += " :not(pre) > code { font-family: inherit; font-size: 1em; }" }
+        css += "\n" + rules(settings.theme.light, ink, fill, dark: false)
+        css += "\n@media (prefers-color-scheme: dark) { " + rules(settings.theme.dark, ink, fill, dark: true) + " }"
+        return css + "\npre code, mark code { background: none; } pre code { padding: 0; }"
+    }
+
+    private static func rgba(_ color: NSColor, dark: Bool) -> String {
+        var resolved: NSColor?
+        (NSAppearance(named: dark ? .darkAqua : .aqua) ?? NSAppearance.currentDrawing()).performAsCurrentDrawingAppearance {
+            resolved = color.usingColorSpace(.sRGB)
+        }
+        guard let c = resolved else { return "inherit" }
+        func byte(_ v: CGFloat) -> Int { Int((min(max(v, 0), 1) * 255).rounded()) }
+        return "rgba(\(byte(c.redComponent)), \(byte(c.greenComponent)), \(byte(c.blueComponent)), \(String(format: "%.2f", c.alphaComponent)))"
     }
 
     static func cssColor(_ color: NSColor) -> String? {
