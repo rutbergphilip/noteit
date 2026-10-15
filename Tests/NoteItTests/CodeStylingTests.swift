@@ -266,6 +266,43 @@ final class CodeStylingTests: XCTestCase {
         XCTAssertEqual(EditorStyle.codeLanguage(of: ps), .python)
     }
 
+    func testMergedCodeBlocksTakeOneLanguage() {
+        func code(_ text: String, _ language: CodeLanguage) -> NSAttributedString {
+            var attrs = EditorStyle.attributes(for: .code)
+            let ps = (attrs[.paragraphStyle] as! NSParagraphStyle).mutableCopy() as! NSMutableParagraphStyle
+            EditorStyle.setCodeLanguage(language, on: ps)
+            attrs[.paragraphStyle] = ps
+            return NSAttributedString(string: text, attributes: attrs)
+        }
+        let text = NSMutableAttributedString(string: "Intro\n", attributes: EditorStyle.bodyAttributes)
+        text.append(code("let a = 1\n", .swift))
+        text.append(NSAttributedString(string: "body line\n", attributes: EditorStyle.bodyAttributes))
+        text.append(code((1...5).map { "x\($0) = \($0)\n" }.joined(), .python))
+        text.append(NSAttributedString(string: "Outro\n", attributes: EditorStyle.bodyAttributes))
+
+        let (_, textView) = NoteItTextView.make()
+        textView.storage.setAttributedString(text)
+        textView.normalizePendingEdits()
+        let body = (textView.string as NSString).range(of: "body line\n")
+        textView.setSelectedRange(body)
+        textView.insertText("", replacementRange: body)
+
+        let ns = textView.string as NSString
+        let block = try! XCTUnwrap(textView.codeBlockRange(at: ns.range(of: "let a").location))
+        XCTAssertEqual(ns.substring(with: block), "let a = 1\n" + (1...5).map { "x\($0) = \($0)\n" }.joined())
+        var loc = block.location
+        while loc < NSMaxRange(block) {
+            let para = ns.paragraphRange(for: NSRange(location: loc, length: 0))
+            let ps = textView.storage.attribute(.paragraphStyle, at: para.location, effectiveRange: nil) as? NSParagraphStyle
+            XCTAssertEqual(EditorStyle.codeLanguage(of: ps), .swift, ns.substring(with: para))
+            loc = NSMaxRange(para)
+        }
+        let markdown = MarkdownWriter.write(textView.attributedString(), title: "T").markdown
+        XCTAssertEqual(markdown.components(separatedBy: "```").count, 3, markdown)
+        XCTAssertTrue(markdown.contains("```swift\nlet a = 1\nx1 = 1"), markdown)
+        XCTAssertFalse(markdown.contains("python"), markdown)
+    }
+
     func testFenceShortcutSetsLanguage() {
         let (_, textView) = NoteItTextView.make()
         textView.storage.setAttributedString(NSAttributedString(string: "\n", attributes: EditorStyle.bodyAttributes))

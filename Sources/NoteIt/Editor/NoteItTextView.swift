@@ -228,7 +228,8 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         }
 
         var loc = range.location
-        while loc < NSMaxRange(range) {
+        var limit = NSMaxRange(range)
+        while loc < limit {
             let para = ns.paragraphRange(for: NSRange(location: loc, length: 0))
             defer { loc = NSMaxRange(para) > loc ? NSMaxRange(para) : loc + 1 }
             let kind = blockKind(of: ts, at: para.location)
@@ -246,15 +247,24 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
                     let prevStyle = prevCode ? ts.attribute(.paragraphStyle, at: para.location - 1, effectiveRange: nil) as? NSParagraphStyle : nil
                     let startsCard = ps.textBlocks.isEmpty && (prevStyle?.textBlocks.isEmpty == false || !prevCode)
                     let tail: CGFloat = chromeInsets ? (startsCard ? -EditorStyle.codeChromeInset : 0) : ps.tailIndent
-                    guard ps.paragraphSpacingBefore != before || ps.paragraphSpacing != after || ps.tailIndent != tail
-                        || (prevCode && EditorStyle.codeLanguage(of: ps) != language) else { continue }
-                    ts.enumerateAttribute(.paragraphStyle, in: para) { value, sub, _ in
-                        guard let m = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
-                        m.paragraphSpacingBefore = before
-                        m.paragraphSpacing = after
-                        m.tailIndent = tail
-                        if prevCode { EditorStyle.setCodeLanguage(language, on: m) }
-                        ts.addAttribute(.paragraphStyle, value: m, range: sub)
+                    if ps.paragraphSpacingBefore != before || ps.paragraphSpacing != after || ps.tailIndent != tail
+                        || (prevCode && EditorStyle.codeLanguage(of: ps) != language) {
+                        ts.enumerateAttribute(.paragraphStyle, in: para) { value, sub, _ in
+                            guard let m = (value as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { return }
+                            m.paragraphSpacingBefore = before
+                            m.paragraphSpacing = after
+                            m.tailIndent = tail
+                            if prevCode { EditorStyle.setCodeLanguage(language, on: m) }
+                            ts.addAttribute(.paragraphStyle, value: m, range: sub)
+                        }
+                    }
+                }
+                // Merged blocks: carry the language on to the end of the block, past the edited range.
+                if nextCode, NSMaxRange(para) >= limit {
+                    let mine = EditorStyle.codeLanguage(of: ts.attribute(.paragraphStyle, at: para.location, effectiveRange: nil) as? NSParagraphStyle)
+                    let next = ns.paragraphRange(for: NSRange(location: NSMaxRange(para), length: 0))
+                    if EditorStyle.codeLanguage(of: ts.attribute(.paragraphStyle, at: next.location, effectiveRange: nil) as? NSParagraphStyle) != mine {
+                        limit = NSMaxRange(next)
                     }
                 }
             } else if kind == .divider {
@@ -266,7 +276,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             }
         }
 
-        fitAttachments(in: ts, range: range)
+        fitAttachments(in: ts, range: NSRange(location: range.location, length: limit - range.location))
     }
 
     static func fitAttachments(in ts: NSTextStorage, range: NSRange, maxWidth: CGFloat = EditorStyle.maxTextWidth - 40) {
