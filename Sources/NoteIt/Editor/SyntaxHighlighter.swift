@@ -280,10 +280,12 @@ enum SyntaxHighlighter {
         return true
     }
 
-    private static func find(_ u: [UInt16], _ s: String, from i: Int) -> Int? {
+    /// First match of `s` starting before `limit` (default: the end of the text).
+    private static func find(_ u: [UInt16], _ s: String, from i: Int, before limit: Int? = nil) -> Int? {
         let first = s.utf16.first!
+        let stop = min(limit ?? u.count, u.count)
         var j = i
-        while j < u.count {
+        while j < stop {
             if u[j] == first, hasPrefix(u, j, s) { return j }
             j += 1
         }
@@ -470,7 +472,7 @@ enum SyntaxHighlighter {
                 i = j
                 continue
             }
-            if u[i] == 38, let semi = find(u, ";", from: i), semi - i < 10 {
+            if u[i] == 38, let semi = find(u, ";", from: i, before: i + 10), !u[i..<semi].contains(10) {
                 add(i, semi + 1, .number)
                 i = semi + 1
                 continue
@@ -489,6 +491,17 @@ enum SyntaxHighlighter {
         }
         var i = 0
         var inFence = false
+        // The `](` and `)` found for a `[`; later `[`s before that `](` share it, so a line full of `[` stays linear.
+        var link: (from: Int, close: Int?, paren: Int?)?
+        func linkEnd(at k: Int, line: Int, lineEnd end: Int) -> (Int, Int)? {
+            if let l = link, l.from >= line, l.from <= k, l.close.map({ $0 >= k }) ?? true {
+                return l.close.flatMap { c in l.paren.map { (c, $0) } }
+            }
+            let close = find(u, "](", from: k, before: end)
+            let paren = close.flatMap { find(u, ")", from: $0, before: end) }
+            link = (k, close, paren)
+            return close.flatMap { c in paren.map { (c, $0) } }
+        }
         while i < u.count {
             let end = lineEnd(u, from: i)
             var j = i
@@ -509,10 +522,10 @@ enum SyntaxHighlighter {
                 var k = j
                 while k < end {
                     let c = u[k]
-                    if c == 96, let close = find(u, "`", from: k + 1), close < end {
+                    if c == 96, let close = find(u, "`", from: k + 1, before: end) {
                         add(k, close + 1, .string)
                         k = close + 1
-                    } else if c == 91, let close = find(u, "](", from: k), close < end, let paren = find(u, ")", from: close), paren < end {
+                    } else if c == 91, let (close, paren) = linkEnd(at: k, line: i, lineEnd: end) {
                         add(k, close + 1, .type)
                         add(close + 1, paren + 1, .property)
                         k = paren + 1

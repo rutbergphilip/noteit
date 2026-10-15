@@ -123,6 +123,39 @@ final class CodeStylingTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
     }
 
+    func testTokenizersStayLinearOnLargeBlocks() {
+        func sized(_ unit: String) -> String { String(repeating: unit, count: 256 * 1024 / unit.utf16.count) }
+        let cases: [(String, CodeLanguage)] = [
+            (sized("- [ ] buy milk and [bread\n"), .markdown),
+            (sized("[ "), .markdown),
+            (sized("tick ` here\n"), .markdown),
+            (sized("<p>Tom & Jerry &amp co</p>\n"), .html),
+            (sized("& "), .html),
+        ]
+        for (text, language) in cases {
+            let start = Date()
+            _ = SyntaxHighlighter.tokenize(text, language: language)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 0.5, "\(language) \(text.prefix(12))")
+        }
+        for language in CodeLanguage.allCases {
+            for unit in ["[ & ` ( ${ \" ' /* <!-- # : ", "x\n"] {
+                let start = Date()
+                _ = SyntaxHighlighter.tokenize(sized(unit), language: language)
+                XCTAssertLessThan(Date().timeIntervalSince(start), 0.5, "\(language)")
+            }
+        }
+    }
+
+    func testBoundedSearchesKeepTokens() {
+        XCTAssertEqual(kind(of: "&amp;", in: "a &amp; b", .html), .number)
+        XCTAssertNil(tokens("&a\nb;", .html).first { $0.1 == .number })
+        XCTAssertEqual(kind(of: "[[ see [x]", in: "[[ see [x](y)", .markdown), .type)
+        XCTAssertEqual(kind(of: "(y)", in: "[[ see [x](y)", .markdown), .property)
+        XCTAssertNil(tokens("- [ ] a\n[b](c)", .markdown).first { $0.0 == "[ ] a\n[b]" })
+        XCTAssertEqual(tokens("- [ ] a\n[b](c)", .markdown).filter { $0.1 == .type }.map(\.0), ["[b]"])
+        XCTAssertTrue(tokens("a `b\nc` d", .markdown).filter { $0.1 == .string }.isEmpty)
+    }
+
     // MARK: Language persistence
 
     func testLanguageAliases() {
