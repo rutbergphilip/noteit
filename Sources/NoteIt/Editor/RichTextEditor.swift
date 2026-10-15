@@ -35,6 +35,9 @@ struct RichTextEditor: NSViewRepresentable {
         self.isEditable = isEditable
     }
 
+    /// One-shot caret locations for notes about to open, used instead of the start of the note.
+    @MainActor static var pendingCaret: [UUID: Int] = [:]
+
     func makeCoordinator() -> Coordinator { Coordinator(noteID: noteID, controller: controller ?? EditorController()) }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -113,8 +116,12 @@ struct RichTextEditor: NSViewRepresentable {
             NoteItTextView.refreshTableColors(in: textView.storage)
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
-            textView.setSelectedRange(NSRange(location: 0, length: 0))
-            if body.length == 0 {
+            let caret = RichTextEditor.pendingCaret.removeValue(forKey: noteID).map { min(max($0, 0), textView.storage.length) }
+            textView.setSelectedRange(NSRange(location: caret ?? 0, length: 0))
+            if let caret, caret > 0 {
+                textView.typingAttributes = EditorStyle.bodyAttributes
+                textView.scrollRangeToVisible(NSRange(location: caret, length: 0))
+            } else if body.length == 0 {
                 textView.typingAttributes = EditorStyle.attributes(for: .title)
                 DispatchQueue.main.async { [weak textView] in
                     guard let textView, let window = textView.window else { return }

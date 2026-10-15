@@ -30,7 +30,11 @@ enum ExportActions {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: formatKey) }
     }
 
-    private static var window: NSWindow? { NSApp.keyWindow ?? NSApp.mainWindow }
+    /// Sheets go on the key window, but never on the command palette, which closes when it loses key.
+    static var window: NSWindow? {
+        if let key = NSApp.keyWindow, !(key is PalettePanel) { return key }
+        return WindowRouter.mainWindow ?? NSApp.mainWindow
+    }
 
     /// The note's saved body, including edits still waiting in the editor.
     static func body(of note: NoteMeta) -> NSAttributedString {

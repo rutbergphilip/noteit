@@ -17,7 +17,11 @@ extension NoteStore {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty || !body.isEmpty else { return nil }
+        return createNote(in: notebookID, initial: Self.capturedText(title: title, body: body))
+    }
 
+    /// A bold first-line title followed by the body, in the editor's font size.
+    static func capturedText(title: String, body: String) -> NSAttributedString {
         let size = CGFloat(UserDefaults.standard.object(forKey: PrefKey.editorFontSize) as? Double ?? PrefDefault.editorFontSize)
         let text = NSMutableAttributedString()
         if !title.isEmpty {
@@ -33,7 +37,7 @@ extension NoteStore {
                 .foregroundColor: NSColor.labelColor,
             ]))
         }
-        return createNote(in: notebookID, initial: text)
+        return text
     }
 
     /// Makes a note the visible selection in the main window.
