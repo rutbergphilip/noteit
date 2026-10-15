@@ -17,7 +17,7 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 
 | Folder | What's in it |
 |---|---|
-| `App/` | `NoteItApp` (main window, Settings, menu bar extra and menu commands), `AppDelegate` (activation policy, hotkey wiring, debug arguments), `WindowRouter` (show, hide and focus), `AppUpdater` (in-app updates), and the launch-time migration from Inkwell (`LaunchMigration`, `LibraryLauncher`, `LegacyAppQuitter`, `LegacyAppMonitor`) |
+| `App/` | `NoteItApp` (main window, Settings, menu bar extra and menu commands), `AppDelegate` (activation policy, hotkey wiring, debug arguments), `WindowRouter` (show, hide and focus), `MenuShortcuts` (the menu key equivalents, also shown in the command palette), `AppUpdater` (in-app updates), and the launch-time migration from Inkwell (`LaunchMigration`, `LibraryLauncher`, `LegacyAppQuitter`, `LegacyAppMonitor`) |
 | `Design/` | `Tokens` (colors, spacing, radii and chrome type styles) and `AppResources` (app icon and menu bar glyph images) |
 | `Model/` | `Models` (notebooks, note metadata, sidebar selection, palette), `NoteStore` (the single observable store: queries, editing, tags and persistence), `NoteStore+Trash` (Recently Deleted), `VersionHistory`, seed content |
 | `Views/` | The main window: three-column split, sidebar, note list, editor container with the note header and conflict badge, empty states, notebook sheet, the sync status pill, the Recently Deleted banner, undo toast and confirmations, and the Version History sheet |
@@ -25,6 +25,7 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 | `Import/` | `MarkdownReader` (Markdown → editor rich text), `MarkdownImporter` (folders, Obsidian vaults, Bear TextBundles), `AppleNotesImporter` (Notes app over Apple Events, HTML → editor styles) and `ImportSheet` (File › Import…) |
 | `Editor/` | `RichTextEditor` (the SwiftUI wrapper), `NoteItTextView` (an `NSTextView` subclass whose layout manager draws code blocks, quotes, dividers and checkboxes), `TextFormatter`, `MarkdownShortcuts`, `FormatCommand` (every formatting command and its shortcut), `FormattingToolbar`, `EditorStyles` (type scale, colors and block kinds), `FindReplaceEngine`, `FindReplaceModel` and `FindReplaceBar` (find and replace in a note) |
 | `MenuBar/` | The menu bar panel, the Quick Capture panel, the panel search field and shared views |
+| `Palette/` | `FuzzyMatcher`, `PaletteRanker`, the palette commands and the command palette panel |
 | `Hotkeys/` | `HotkeyAction`, `HotkeyManager` (Carbon `RegisterEventHotKey`), `KeyCombo` and the `ShortcutRecorder` view |
 | `Settings/` | The Settings window and its General, Shortcuts, Editor, Sync and About tabs, plus `Preferences` (defaults keys) |
 | `Sync/` | `SyncController`, `NoteStoreSyncAdapter`, `SyncConfiguration` (providers and settings) and `Keychain` |
@@ -107,6 +108,10 @@ Global hotkeys use Carbon's `RegisterEventHotKey`, so they work from any app wit
 - The menu bar item is a SwiftUI `MenuBarExtra` with a window-style panel (`MenuBarView`). Its icon is a template image from `Sources/NoteIt/Resources/`, which switches to a "capturing" variant while Quick Capture is open.
 - Quick Capture (`QuickCapturePanel.swift`) is a non-activating floating panel, so the app you were using stays in front. It appears on every Space, including over full-screen apps. Its draft (title, body and notebook) is kept until you save or discard it.
 - In *Menu bar only* mode the app switches to the accessory activation policy and hides its Dock icon. The menu bar icon can't be turned off in that mode, so NoteIt stays reachable.
+
+## Command palette
+
+The palette (File › Open Quickly… and File › Command Palette…) lives in `Palette/`. `FuzzyMatcher` scores a query against one string, ignoring case and accents, and returns the matched ranges for highlighting. `PaletteRanker` merges notes, notebooks and the commands available right now into one ordered list, with notes that only match in their text after title matches. Both are pure Swift with no AppKit, so they're unit tested without any UI. `PaletteCommandRegistry` lists the commands that make sense for the current selection, and each one calls the same code as its menu item. `PaletteModel` keeps the results up to date while the palette is open, including when the store changes. The window is an `NSPanel` hosting a SwiftUI view, like Quick Capture, centered over the main window and closed when it stops being key. Menu shortcuts other than text editing close the palette before the menu sees them, so sheets attach to the main window.
 
 ## Updates
 

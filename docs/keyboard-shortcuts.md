@@ -8,6 +8,8 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 |---|---|
 | ⌘N | New note in the selected notebook, with the cursor in the editor |
 | ⇧⌘N | New notebook… |
+| ⌘O | Open Quickly… (see [Command palette](#command-palette)) |
+| ⇧⌘P | Command Palette… |
 | ⌘F | Search all notes |
 | ⌥⌘F | Find in the current note (see [Find and replace](#find-and-replace)) |
 | ⇧⌘F | Find and replace in the current note |
@@ -50,6 +52,21 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⌥⇧⌘D | Divider |
 
 Inside a list, Return starts a new item and Return on an empty item ends the list.
+
+## Command palette
+
+| Shortcut | Action |
+|---|---|
+| ⌘O | Open the palette to find notes, notebooks and commands |
+| ⇧⌘P | Open the palette with `>` typed, to find commands only |
+| `>` at the start of the query | Search commands only |
+| ↑ / ↓ or ⌃P / ⌃N | Move through the results |
+| ↩ | Open the note, show the notebook, or run the command |
+| Esc or ⌘W | Close the palette |
+
+Letters can be spread out, so `gn` finds *Grocery Notes*. With nothing typed, the palette lists the 10 most recently edited notes. The last row, *New Note “…”*, creates a note with the title you typed and puts the cursor on the line below it.
+
+Text editing shortcuts such as ⌘A, ⌘C, ⌘V and ⌘Z work in the palette's search field. Any other menu shortcut, such as ⌘P, closes the palette first and then runs in the main window.
 
 ## Find and replace
 

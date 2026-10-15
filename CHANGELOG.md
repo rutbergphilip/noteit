@@ -7,6 +7,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Open Quickly. File › Open Quickly… (⌘O) finds notes, notebooks and commands as you type. Letters don't need to be next to each other, so "gn" finds "Grocery Notes". With nothing typed it shows your 10 most recently edited notes, and the last row creates a new note with the title you typed.
+- Command palette. File › Command Palette… (⇧⌘P), or typing `>` in Open Quickly, lists only the commands you can use right now, each with its shortcut. It includes moving the open note to another notebook.
+
 ## [0.2.0] - 2026-10-15
 
 ### Added

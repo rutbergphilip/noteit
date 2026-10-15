@@ -31,6 +31,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
   - Notebooks with a color and an SF Symbol icon. Drag to reorder, and drop notes onto them to move them.
   - Automatic `#hashtag` tags, plus Pinned and Recent (last 7 days) smart views.
   - Search across titles and full text that ignores case and accents.
+  - A **command palette** (⌘O) to open notes and notebooks or run commands by typing a few letters.
 - **Format richly**
   - Title, heading and subheading styles, bold, italic, underline, strikethrough and inline code.
   - Bulleted, numbered and checklist lists, tables, code blocks, quotes, dividers, links and images.

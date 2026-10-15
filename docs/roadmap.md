@@ -13,18 +13,20 @@ Design: [`specs/2026-10-14-trash-export-import-design.md`](specs/2026-10-14-tras
 
 ## Next: fastest capture
 
+- [x] **Command palette.** Open notes, run commands and move between notebooks without a mouse.
 - [ ] **Capture from any app.** Select text anywhere, press a hotkey, and it's saved with a link back to where it came from.
-- [ ] **Command palette.** Open notes, run commands and move between notebooks without a mouse.
 - [ ] **Reminders in plain words.** "Call Anna tomorrow 9am" in a note becomes a notification.
 - [ ] **Screenshot to text.** Capture part of the screen, and its text becomes searchable.
 - [ ] **Voice notes.** Record and transcribe on your Mac.
+
+Design: [`specs/2026-10-15-command-palette-design.md`](specs/2026-10-15-command-palette-design.md)
 
 ## Later: depth
 
 - [ ] **Locked notes** with Touch ID.
 - [ ] **Cheat sheets.** Show a note as a floating overlay with a hotkey, which is ideal for shortcut lists.
 - [ ] **Floating notes** that stay above other windows.
-- [ ] **Snippets.** Copy a code block or command with one click, with syntax highlighting.
+- [x] **Snippets.** Copy a code block or command with one click, with syntax highlighting.
 - [ ] **Links between notes** with `[[`, and backlinks.
 - [ ] **Nested notebooks**, smart folders and saved searches.
 - [ ] **Better tags.** Styled tag chips, plus renaming and merging tags.
