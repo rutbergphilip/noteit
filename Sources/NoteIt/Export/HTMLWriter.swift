@@ -192,7 +192,7 @@ enum HTMLWriter {
         if settings.inlineFont == .sameAsText { css += " :not(pre) > code { font-family: inherit; font-size: 1em; }" }
         css += "\n" + rules(settings.theme.light, ink, fill, dark: false)
         css += "\n@media (prefers-color-scheme: dark) { " + rules(settings.theme.dark, ink, fill, dark: true) + " }"
-        return css + "\npre code, mark code { background: none; } pre code { padding: 0; }"
+        return css + "\npre code, mark code { background: none; } pre code { padding: 0; } a code { color: inherit; }"
     }
 
     private static func rgba(_ color: NSColor, dark: Bool) -> String {

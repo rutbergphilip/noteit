@@ -346,6 +346,9 @@ final class ExportTests: XCTestCase {
         XCTAssertTrue(css.contains("code { color: rgba(192, 40, 106, 1.00); background: rgba(232, 53, 122, 0.10); }"), css)
         XCTAssertTrue(css.contains("code { color: rgba(255, 126, 179, 1.00); background: rgba(232, 53, 122, 0.17); }"), css)
         XCTAssertFalse(css.contains("font-family: inherit"))
+        XCTAssertTrue(css.contains("a code { color: inherit; }"), css)
+        let linked = HTMLWriter.write(MarkdownReader.attributedString(from: "[`x`](https://example.com)"), title: "L", code: pink)
+        XCTAssertTrue(linked.contains("<a href=\"https://example.com\"><code>x</code></a>"), linked)
         var sameFont = pink
         sameFont.inlineFont = .sameAsText
         XCTAssertTrue(HTMLWriter.codeStylesheet(sameFont).contains("font-family: inherit"))
