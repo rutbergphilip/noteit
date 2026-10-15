@@ -13,6 +13,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Command palette. File › Command Palette… (⇧⌘P), or typing `>` in Open Quickly, lists only the commands you can use right now, each with its shortcut. It includes moving the open note to another notebook.
 - Change the shortcuts for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Version History… and Delete Note in Settings › Shortcuts › In NoteIt. The menus and the command palette use the new keys right away, and Restore Defaults puts them all back.
 - Global hotkeys for Open Quickly and Command Palette. From any app they open the palette over what you're doing, and Esc takes you back.
+- Capture from any app. Select text anywhere and press the Capture Selection hotkey, and NoteIt saves it as a note without leaving the app you're in. The note is titled after the page or window and links back to where the text came from, including the page in Safari and Chrome-based browsers. Reading the selection needs Accessibility permission, which you can allow in Settings › General › Capture.
+- Capture to NoteIt in the Services menu saves the selected text as a note from any app, without Accessibility permission.
 
 ## [0.2.0] - 2026-10-15
 

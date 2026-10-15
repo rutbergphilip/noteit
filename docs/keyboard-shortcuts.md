@@ -157,8 +157,11 @@ These work from any app. They're **unbound by default**, so NoteIt never takes o
 | Quick Capture | Opens or closes the floating Quick Capture panel |
 | Open Quickly | Opens the command palette to find notes, notebooks and commands |
 | Command Palette | Opens the command palette with `>` typed, to find commands only |
+| Capture Selection | Saves the text selected in the app you're in as a new note, with a link back to where it came from |
 
 Pressed while you're in another app, the palette opens over that app. Esc closes it and takes you back there.
+
+Capture Selection keeps you in the app you're in. A notice in the top-right corner says where the note was saved, and clicking it opens the note. You can also capture with **Services › Capture to NoteIt** in the right-click or app menu, and give that its own shortcut in System Settings › Keyboard › Keyboard Shortcuts › Services.
 
 When recording a shortcut:
 
@@ -168,4 +171,4 @@ When recording a shortcut:
 - You'll see a warning, but can still go ahead, if it clashes with a macOS shortcut or a common app shortcut.
 - You'll see an error if another app already owns it.
 
-Global hotkeys don't need Accessibility permission.
+Global hotkeys don't need Accessibility permission. Capture Selection does need it to read the selected text, and you can allow it in **Settings › General › Capture**. Without it, the hotkey shows a notice with **Allow Access…** and **Capture Clipboard**, which saves the text on the clipboard instead.
