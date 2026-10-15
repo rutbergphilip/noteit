@@ -44,6 +44,8 @@ enum Tokens {
         static let tileShowHide = notebookIndigo
         static let tileNewNote = notebookOrange
         static let tileQuickCapture = notebookBlue
+        static let tileOpenQuickly = notebookTeal
+        static let tileCommandPalette = notebookPurple
 
         // Brand (fixed): app icon, Quick Capture tile, marketing. Never note content or app chrome.
         static let brandViolet = SwiftUI.Color(hex: Hex.brandViolet)

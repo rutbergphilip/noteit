@@ -14,111 +14,39 @@ struct ShortcutRecorder: View {
     @State private var liveModifiers: NSEvent.ModifierFlags = []
     @State private var token = UUID()
     @State private var warning: String?
-    @State private var isHovering = false
     @State private var shake: CGFloat = 0
 
     private var combo: KeyCombo? { manager.displayedCombo(for: action) }
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
-            field
-            if let message = statusMessage {
-                Label(message.text, systemImage: message.symbol)
-                    .font(.caption)
-                    .foregroundStyle(message.color)
-                    .multilineTextAlignment(.trailing)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .transition(.opacity)
-            }
+            ShortcutRecorderField(
+                isRecording: isRecording,
+                keycaps: combo?.keycaps,
+                liveModifiers: liveModifiers,
+                shake: shake,
+                accessibilityLabel: "\(action.title) shortcut",
+                accessibilityValue: combo?.displayString ?? "None",
+                onToggle: { isRecording ? stopRecording() : startRecording() },
+                onCancel: { stopRecording() },
+                onClear: combo == nil ? nil : {
+                    warning = nil
+                    manager.setCombo(nil, for: action)
+                }
+            )
+            ShortcutRecorderStatus(message: statusMessage)
         }
         .animation(.easeOut(duration: 0.15), value: isRecording)
         .animation(.easeOut(duration: 0.15), value: warning)
         .onDisappear { stopRecording() }
     }
 
-    // MARK: - Field
-
-    private var field: some View {
-        HStack(spacing: 6) {
-            Group {
-                if isRecording {
-                    recordingContent
-                } else if let combo {
-                    KeycapRow(keys: combo.keycaps)
-                } else {
-                    Text("Record Shortcut")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity)
-
-            if isRecording {
-                Button { stopRecording() } label: {
-                    Image(systemName: "escape")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Cancel (Esc)")
-            } else if combo != nil {
-                Button {
-                    warning = nil
-                    manager.setCombo(nil, for: action)
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .symbolRenderingMode(.hierarchical)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Clear shortcut")
-            }
-        }
-        .font(.system(size: 12))
-        .padding(.horizontal, 8)
-        .frame(width: 170, height: 28)
-        .background(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(isRecording ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .strokeBorder(isRecording ? Color.accentColor : Color.primary.opacity(isHovering ? 0.25 : 0.14),
-                              lineWidth: isRecording ? 1.5 : 1)
-        )
-        .contentShape(Rectangle())
-        .onTapGesture { isRecording ? stopRecording() : startRecording() }
-        .onHover { isHovering = $0 }
-        .modifier(ShakeEffect(travel: shake))
-        .help(isRecording ? "Press a shortcut — Esc to cancel, ⌫ to clear" : "Click to record a shortcut")
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(action.title) shortcut")
-        .accessibilityValue(combo?.displayString ?? "None")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { isRecording ? stopRecording() : startRecording() }
-    }
-
-    @ViewBuilder
-    private var recordingContent: some View {
-        let symbols = KeyCombo(keyCode: 0, modifiers: KeyCombo.carbonModifiers(from: liveModifiers)).modifierSymbols
-        if symbols.isEmpty {
-            Text("Type Shortcut…")
-                .foregroundStyle(Color.accentColor)
-        } else {
-            KeycapRow(keys: symbols + ["…"])
-        }
-    }
-
-    private struct StatusMessage {
-        var text: String
-        var symbol: String
-        var color: Color
-    }
-
-    private var statusMessage: StatusMessage? {
+    private var statusMessage: ShortcutRecorderStatus.Message? {
         if let warning {
-            return StatusMessage(text: warning, symbol: "exclamationmark.triangle.fill", color: .orange)
+            return .warning(warning)
         }
         if !isRecording, let status = manager.registrationErrors[action] {
-            return StatusMessage(text: HotkeyManager.describe(status), symbol: "exclamationmark.octagon.fill", color: .red)
+            return .error(HotkeyManager.describe(status))
         }
         return nil
     }
@@ -133,8 +61,8 @@ struct ShortcutRecorder: View {
         // Ends any other recorder's session first (synchronously), so hotkeys are suspended exactly once.
         ShortcutRecordingSession.begin(
             token: token,
-            onEvent: { keyCode, flags, isFlagsChanged in
-                handle(keyCode: keyCode, flags: flags, isFlagsChanged: isFlagsChanged)
+            onEvent: { key in
+                handle(keyCode: key.keyCode, flags: key.flags, isFlagsChanged: key.isFlagsChanged)
             },
             onEnd: {
                 isRecording = false
@@ -197,6 +125,16 @@ struct ShortcutRecorder: View {
     }
 }
 
+/// A key event seen while recording.
+struct RecordedKey {
+    let keyCode: UInt16
+    let flags: NSEvent.ModifierFlags
+    let isFlagsChanged: Bool
+    /// The key's ⌘-layer character with no other modifiers; nil for modifier changes.
+    let commandCharacters: String?
+    let charactersIgnoringModifiers: String?
+}
+
 /// The single app-wide shortcut recording session. Starting a new one ends the previous one,
 /// and suspend/resume of the global hotkeys is always balanced (one suspend per session).
 @MainActor
@@ -209,7 +147,7 @@ enum ShortcutRecordingSession {
     static func isActive(_ token: UUID) -> Bool { currentToken == token }
 
     static func begin(token: UUID,
-                      onEvent: @escaping @MainActor (UInt16, NSEvent.ModifierFlags, Bool) -> Bool,
+                      onEvent: @escaping @MainActor (RecordedKey) -> Bool,
                       onEnd: @escaping @MainActor () -> Void) {
         if let current = currentToken { end(current) }
         currentToken = token
@@ -217,12 +155,17 @@ enum ShortcutRecordingSession {
         HotkeyManager.shared.suspend()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
             // Local monitors are invoked synchronously on the main thread.
-            let keyCode = event.keyCode
-            let flags = event.modifierFlags
             let isFlagsChanged = event.type == .flagsChanged
+            let key = RecordedKey(
+                keyCode: event.keyCode,
+                flags: event.modifierFlags,
+                isFlagsChanged: isFlagsChanged,
+                commandCharacters: isFlagsChanged ? nil : event.characters(byApplyingModifiers: .command),
+                charactersIgnoringModifiers: isFlagsChanged ? nil : event.charactersIgnoringModifiers
+            )
             let swallow = MainActor.assumeIsolated { () -> Bool in
                 guard currentToken == token else { return false }
-                return onEvent(keyCode, flags, isFlagsChanged)
+                return onEvent(key)
             }
             return swallow ? nil : event
         }
@@ -247,6 +190,118 @@ enum ShortcutRecordingSession {
         onEnd = nil
         HotkeyManager.shared.resume()
         callback?()
+    }
+}
+
+/// The recorder control shared by global hotkeys and menu shortcuts.
+struct ShortcutRecorderField: View {
+    let isRecording: Bool
+    let keycaps: [String]?
+    let liveModifiers: NSEvent.ModifierFlags
+    let shake: CGFloat
+    let accessibilityLabel: String
+    let accessibilityValue: String
+    let onToggle: () -> Void
+    let onCancel: () -> Void
+    /// Shows the clear button when set.
+    let onClear: (() -> Void)?
+
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Group {
+                if isRecording {
+                    recordingContent
+                } else if let keycaps {
+                    KeycapRow(keys: keycaps)
+                } else {
+                    Text("Record Shortcut")
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+
+            if isRecording {
+                Button { onCancel() } label: {
+                    Image(systemName: "escape")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Cancel (Esc)")
+            } else if let onClear {
+                Button { onClear() } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Clear shortcut")
+            }
+        }
+        .font(.system(size: 12))
+        .padding(.horizontal, 8)
+        .frame(width: 170, height: 28)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(isRecording ? Color.accentColor.opacity(0.12) : Color(nsColor: .controlBackgroundColor))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(isRecording ? Color.accentColor : Color.primary.opacity(isHovering ? 0.25 : 0.14),
+                              lineWidth: isRecording ? 1.5 : 1)
+        )
+        .contentShape(Rectangle())
+        .onTapGesture { onToggle() }
+        .onHover { isHovering = $0 }
+        .modifier(ShakeEffect(travel: shake))
+        .help(isRecording ? "Press a shortcut — Esc to cancel, ⌫ to clear" : "Click to record a shortcut")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityValue(accessibilityValue)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { onToggle() }
+    }
+
+    @ViewBuilder
+    private var recordingContent: some View {
+        let symbols = KeyCombo(keyCode: 0, modifiers: KeyCombo.carbonModifiers(from: liveModifiers)).modifierSymbols
+        if symbols.isEmpty {
+            Text("Type Shortcut…")
+                .foregroundStyle(Color.accentColor)
+        } else {
+            KeycapRow(keys: symbols + ["…"])
+        }
+    }
+}
+
+/// The warning or error line under a recorder.
+struct ShortcutRecorderStatus: View {
+    struct Message: Equatable {
+        var text: String
+        var symbol: String
+        var color: Color
+
+        static func warning(_ text: String) -> Message {
+            Message(text: text, symbol: "exclamationmark.triangle.fill", color: .orange)
+        }
+
+        static func error(_ text: String) -> Message {
+            Message(text: text, symbol: "exclamationmark.octagon.fill", color: .red)
+        }
+    }
+
+    let message: Message?
+
+    var body: some View {
+        if let message {
+            Label(message.text, systemImage: message.symbol)
+                .font(.caption)
+                .foregroundStyle(message.color)
+                .multilineTextAlignment(.trailing)
+                .fixedSize(horizontal: false, vertical: true)
+                .transition(.opacity)
+        }
     }
 }
 

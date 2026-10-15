@@ -5,6 +5,8 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
     case showMainWindow
     case newNote
     case quickCapture
+    case openQuickly
+    case commandPalette
 
     var id: String { rawValue }
 
@@ -13,6 +15,8 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         case .showMainWindow: "Show / Hide NoteIt"
         case .newNote: "New Note"
         case .quickCapture: "Quick Capture"
+        case .openQuickly: "Open Quickly"
+        case .commandPalette: "Command Palette"
         }
     }
 
@@ -21,6 +25,8 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         case .showMainWindow: "Bring NoteIt to the front, or hide it if it's already there."
         case .newNote: "Open NoteIt with a fresh note, ready to type."
         case .quickCapture: "Jot something down in a floating panel without leaving your app."
+        case .openQuickly: "Find a note, notebook or command from any app."
+        case .commandPalette: "Run a NoteIt command from any app."
         }
     }
 
@@ -29,6 +35,8 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         case .showMainWindow: "macwindow"
         case .newNote: "square.and.pencil"
         case .quickCapture: "bolt.fill"
+        case .openQuickly: "magnifyingglass"
+        case .commandPalette: "command"
         }
     }
 

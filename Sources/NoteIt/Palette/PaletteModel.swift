@@ -8,14 +8,30 @@ struct PaletteHost {
     var focusEditor: @MainActor () -> Void
     /// Runs work on a later main run-loop turn.
     var later: @MainActor (@escaping @MainActor () -> Void) -> Void
+    /// Runs a command after the palette closed; `later` when nil.
+    var runCommand: (@MainActor (@escaping @MainActor () -> Void) -> Void)? = nil
 
     @MainActor static var live: PaletteHost {
         PaletteHost(
-            dismiss: { PaletteController.shared.dismiss(animated: false) },
+            dismiss: { PaletteController.shared.dismissForChosenItem() },
             showMainWindow: { WindowRouter.showMainWindow() },
-            focusEditor: { WindowRouter.focusEditor() },
+            focusEditor: {
+                if PaletteController.shared.presentedOverOtherApp {
+                    PaletteController.whenMainWindowIsKey { WindowRouter.focusEditor() }
+                } else {
+                    WindowRouter.focusEditor()
+                }
+            },
             later: { work in
                 DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
+            },
+            runCommand: { work in
+                guard PaletteController.shared.presentedOverOtherApp else {
+                    DispatchQueue.main.async { MainActor.assumeIsolated { work() } }
+                    return
+                }
+                WindowRouter.showMainWindow()
+                PaletteController.whenMainWindowIsKey(work)
             }
         )
     }
@@ -156,7 +172,7 @@ final class PaletteModel: ObservableObject {
         case .command(let id):
             guard let command = commands.first(where: { $0.info.id == id }) else { return refresh() }
             host.dismiss()
-            host.later { command.perform() }
+            (host.runCommand ?? host.later) { command.perform() }
         case .createNote(let title):
             host.dismiss()
             createNote(titled: title)

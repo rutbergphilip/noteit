@@ -34,7 +34,7 @@ enum PaletteKeyRoute: Equatable {
     case toggleCommands
     /// ⌘W / ⌘.: close the palette and swallow the key.
     case close
-    /// Any other ⌘ shortcut: close the palette and let the menu run it against the main window.
+    /// Any other menu shortcut: close the palette and let the menu run it against the main window.
     case handOff
 
     private static let editingKeys: Set<String> = ["a", "c", "v", "x", "z"]
@@ -47,19 +47,47 @@ enum PaletteKeyRoute: Equatable {
     /// is the base layer and is only used when ⌥ or ⌃ turn `characters` into something else.
     static func route(keyCode: Int, characters: String?, charactersIgnoringModifiers: String?,
                       modifierFlags: NSEvent.ModifierFlags) -> PaletteKeyRoute {
+        route(keyCode: keyCode, characters: characters, charactersIgnoringModifiers: charactersIgnoringModifiers,
+              modifierFlags: modifierFlags, openQuickly: MenuShortcuts.openQuickly, commandPalette: MenuShortcuts.commandPalette,
+              otherMenuShortcuts: otherMenuShortcuts)
+    }
+
+    private static var otherMenuShortcuts: [MenuShortcut] {
+        MenuShortcutCommand.allCases.compactMap { command -> MenuShortcut? in
+            command == .openQuickly || command == .commandPalette ? nil : MenuShortcuts.current(command)
+        }
+    }
+
+    /// `openQuickly` and `commandPalette` are the current menu shortcuts; nil when cleared in Settings.
+    /// `otherMenuShortcuts` lets shortcuts without ⌘ (⌃ or a function key) hand off like ⌘ ones.
+    static func route(keyCode: Int, characters: String?, charactersIgnoringModifiers: String?,
+                      modifierFlags: NSEvent.ModifierFlags,
+                      openQuickly: MenuShortcut?, commandPalette: MenuShortcut?,
+                      otherMenuShortcuts: [MenuShortcut] = []) -> PaletteKeyRoute {
         let flags = modifierFlags.intersection([.command, .shift, .option, .control])
-        guard flags.contains(.command) else { return .pass }
         // ⌃⌘Space (Emoji & Symbols) and other ⌘-Space input shortcuts belong to the field.
         if keyCode == kVK_Space { return .pass }
         let characters = commandLayerKey(characters, charactersIgnoringModifiers, flags: flags)
-        if MenuShortcuts.openQuickly.matches(characters: characters, modifierFlags: flags) { return .toggleEverything }
-        if MenuShortcuts.commandPalette.matches(characters: characters, modifierFlags: flags) { return .toggleCommands }
+        if types(openQuickly, keyCode: keyCode, characters: characters, flags: flags) { return .toggleEverything }
+        if types(commandPalette, keyCode: keyCode, characters: characters, flags: flags) { return .toggleCommands }
+        guard flags.contains(.command) else {
+            let isMenuShortcut = otherMenuShortcuts.contains { types($0, keyCode: keyCode, characters: characters, flags: flags) }
+            return isMenuShortcut ? .handOff : .pass
+        }
         let key = characters?.lowercased() ?? ""
         if flags == [.command], key == "w" || key == "." { return .close }
         if editingKeyCodes.contains(keyCode), !flags.contains(.control) { return .pass }
         if flags == [.command], editingKeys.contains(key) { return .pass }
         if flags == [.command, .shift], key == "z" { return .pass }
         return .handOff
+    }
+
+    /// ⇧ turns "1" into "!", so a shifted shortcut is also compared with the key's unshifted ⌘-layer character.
+    private static func types(_ shortcut: MenuShortcut?, keyCode: Int, characters: String?, flags: NSEvent.ModifierFlags) -> Bool {
+        guard let shortcut else { return false }
+        if shortcut.matches(characters: characters, modifierFlags: flags) { return true }
+        guard flags.contains(.shift), shortcut.modifiers.contains(.shift) else { return false }
+        return shortcut.matches(characters: MenuShortcutRules.commandLayerCharacter(keyCode: keyCode), modifierFlags: flags)
     }
 
     private static func commandLayerKey(_ characters: String?, _ ignoringModifiers: String?,
@@ -79,7 +107,14 @@ final class PaletteController: NSObject, NSWindowDelegate {
     static let shared = PaletteController()
 
     let model = PaletteModel()
-    private var panel: PalettePanel?
+    /// The panel on screen, or the one shown last.
+    private(set) var panel: PalettePanel?
+    private var inAppPanel: PalettePanel?
+    /// Non-activating twin used by the global hotkeys while another app is active.
+    var globalPanel: PalettePanel?
+    /// Whether the current presentation started while another app was active.
+    private(set) var presentedOverOtherApp = false
+    var hiddenApp = PaletteHiddenApp()
     private var keyMonitor: Any?
     private var itemsObserver: AnyCancellable?
     private var topEdge: CGFloat = 0
@@ -114,17 +149,25 @@ final class PaletteController: NSObject, NSWindowDelegate {
             }
             return
         }
-        let panel = panel ?? makePanel()
-        self.panel = panel
-        model.reset(query: Self.initialQuery(for: mode))
-
-        let height = PaletteLayout.height(rowCount: model.items.count)
+        let panel = inAppPanel ?? makePanel(nonactivating: false)
+        inAppPanel = panel
         let anchor = WindowRouter.mainWindow.flatMap { $0.isVisible ? $0.frame : nil }
             ?? NSScreen.main?.visibleFrame
             ?? NSRect(x: 0, y: 0, width: 1280, height: 800)
-        topEdge = anchor.maxY - anchor.height * PaletteLayout.topOffset
-        let origin = NSPoint(x: anchor.midX - PaletteLayout.width / 2, y: topEdge - height)
-        panel.setFrame(NSRect(origin: origin, size: NSSize(width: PaletteLayout.width, height: height)), display: false)
+        present(panel, mode: mode, anchor: anchor, overOtherApp: false)
+    }
+
+    /// Shows `panel` with a fresh query, its top edge `PaletteLayout.topOffset` down `anchor`.
+    func present(_ panel: PalettePanel, mode: PaletteMode, anchor: NSRect, overOtherApp: Bool) {
+        if let current = self.panel, current !== panel, current.isVisible { dismiss(animated: false) }
+        self.panel = panel
+        presentedOverOtherApp = overOtherApp
+        if !overOtherApp { hiddenApp.wasHidden = false }
+        model.reset(query: Self.initialQuery(for: mode))
+
+        let frame = PaletteLayout.frame(in: anchor, height: PaletteLayout.height(rowCount: model.items.count))
+        topEdge = frame.maxY
+        panel.setFrame(frame, display: false)
 
         presentationGeneration += 1
         shownAt = Date()
@@ -146,6 +189,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
         guard animated else {
             panel.orderOut(nil)
             panel.alphaValue = 1
+            rehideAppIfNeeded()
             return
         }
         NSAnimationContext.runAnimationGroup({ context in
@@ -156,25 +200,28 @@ final class PaletteController: NSObject, NSWindowDelegate {
                 guard generation == self.presentationGeneration else { return }
                 panel.orderOut(nil)
                 panel.alphaValue = 1
+                self.rehideAppIfNeeded()
             }
         })
     }
 
-    private static func initialQuery(for mode: PaletteMode) -> String {
+    static func initialQuery(for mode: PaletteMode) -> String {
         mode == .commands ? ">" : ""
     }
 
-    private func makePanel() -> PalettePanel {
+    /// A non-activating panel takes key without activating NoteIt and shows on every Space,
+    /// like Quick Capture.
+    func makePanel(nonactivating: Bool) -> PalettePanel {
         let size = NSSize(width: PaletteLayout.width, height: PaletteLayout.height(rowCount: 0))
         let panel = PalettePanel(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.borderless, .fullSizeContentView],
+            styleMask: nonactivating ? [.borderless, .nonactivatingPanel, .fullSizeContentView] : [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: true
         )
         panel.isFloatingPanel = true
         panel.level = .floating
-        panel.collectionBehavior = [.fullScreenAuxiliary, .transient]
+        panel.collectionBehavior = nonactivating ? [.canJoinAllSpaces, .fullScreenAuxiliary, .transient] : [.fullScreenAuxiliary, .transient]
         panel.hidesOnDeactivate = false
         panel.backgroundColor = .clear
         panel.isOpaque = false
@@ -191,6 +238,7 @@ final class PaletteController: NSObject, NSWindowDelegate {
         hosting.autoresizingMask = [.width, .height]
         panel.contentView = hosting
 
+        guard itemsObserver == nil else { return panel }
         itemsObserver = model.$items
             .map(\.count)
             .removeDuplicates()
@@ -235,6 +283,10 @@ final class PaletteController: NSObject, NSWindowDelegate {
                     controller.dismiss()
                     return true
                 case .handOff:
+                    if PaletteHandOff.decide(appIsActive: NSApp.isActive) == .closeOnly {
+                        controller.dismiss()
+                        return true
+                    }
                     controller.handOffToMainWindow()
                     return false
                 }

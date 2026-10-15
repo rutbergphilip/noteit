@@ -70,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NotificationCenter.default.post(name: .noteItNewNote, object: nil)
             case .quickCapture:
                 QuickCaptureController.shared.toggle()
+            case .openQuickly:
+                PaletteController.shared.hotkeyToggle(mode: .everything)
+            case .commandPalette:
+                PaletteController.shared.hotkeyToggle(mode: .commands)
             }
         }
         HotkeyManager.shared.start()

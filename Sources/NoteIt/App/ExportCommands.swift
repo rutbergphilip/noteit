@@ -25,7 +25,7 @@ private struct ExportMenuItems: View {
         Divider()
 
         Button("Export Note As…") { ExportActions.exportCurrentNote() }
-            .keyboardShortcut(MenuShortcuts.exportNote)
+            .menuShortcut(.exportNote)
             .disabled(note == nil)
         Button("Export Notebook…") { ExportActions.exportCurrentNotebook() }
             .disabled(ExportActions.currentNotebook == nil)
@@ -54,7 +54,7 @@ private struct PrintMenuItem: View {
 
     var body: some View {
         Button("Print…") { ExportActions.printCurrentNote() }
-            .keyboardShortcut(MenuShortcuts.print)
+            .menuShortcut(.print)
             .disabled(store.note(with: store.selectedNoteID) == nil)
     }
 }
@@ -64,7 +64,7 @@ private struct CopyAsMarkdownMenuItem: View {
 
     var body: some View {
         Button("Copy as Markdown") { ExportActions.copyAsMarkdown() }
-            .keyboardShortcut(MenuShortcuts.copyAsMarkdown)
+            .menuShortcut(.copyAsMarkdown)
             .disabled(store.note(with: store.selectedNoteID) == nil)
     }
 }

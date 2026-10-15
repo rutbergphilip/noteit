@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SwiftUI
 
 /// File menu items for Recently Deleted and Version History.
@@ -21,11 +22,11 @@ private struct RecentlyDeletedMenuItems: View {
             guard let note = selectedNote else { return }
             NoteMenuActions.showVersionHistory(of: note)
         }
-        .keyboardShortcut(MenuShortcuts.versionHistory)
+        .menuShortcut(.versionHistory)
         .disabled(selectedNote == nil || selectedNote?.deletedAt != nil)
 
         Button(selectedNote?.deletedAt != nil ? "Delete Now…" : "Delete Note") { deleteSelectedNote() }
-            .keyboardShortcut(MenuShortcuts.deleteNote)
+            .menuShortcut(.deleteNote)
             .disabled(selectedNote == nil)
 
         Button("Empty Recently Deleted…") {
@@ -37,12 +38,19 @@ private struct RecentlyDeletedMenuItems: View {
 
     /// ⌘⌫ keeps its text meaning (delete to the start of the line) while typing anywhere.
     private func deleteSelectedNote() {
-        if let textView = NSApp.keyWindow?.firstResponder as? NSTextView {
+        if let textView = NSApp.keyWindow?.firstResponder as? NSTextView, !isOtherKeyPress(NSApp.currentEvent) {
             textView.deleteToBeginningOfLine(nil)
             return
         }
         guard let note = selectedNote, isMainWindowKey else { return }
         NoteMenuActions.delete(note, undoManager: NSApp.keyWindow?.undoManager)
+    }
+
+    /// A shortcut other than ⌘⌫ chosen in Settings deletes the note even while typing.
+    private func isOtherKeyPress(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .keyDown else { return false }
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        return !(Int(event.keyCode) == kVK_Delete && flags == .command)
     }
 
     private var isMainWindowKey: Bool {

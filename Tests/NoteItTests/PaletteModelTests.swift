@@ -177,6 +177,27 @@ final class PaletteModelTests: XCTestCase {
         XCTAssertEqual(store.note(with: id)?.isPinned, true)
     }
 
+    func testCommandsGoThroughRunCommandWhenTheHostHasOne() throws {
+        let store = makeStore()
+        let id = addNote(store, "Alpha")
+        store.selectedNoteID = id
+        let model = makeModel(store)
+        var queued: [@MainActor () -> Void] = []
+        model.host.runCommand = { [unowned self] work in
+            self.calls.append("runCommand")
+            queued.append(work)
+        }
+        model.reset(query: ">")
+
+        let pin = try XCTUnwrap(model.items.first { $0.kind == .command("togglePin") })
+        model.activate(pin)
+
+        XCTAssertEqual(calls, ["dismiss", "runCommand"])
+        queued.forEach { $0() }
+        XCTAssertEqual(store.note(with: id)?.isPinned, true)
+        XCTAssertEqual(calls.last, "later")
+    }
+
     func testUnavailableCommandsAreNotListed() {
         let store = makeStore()
         _ = addNote(store, "Alpha")

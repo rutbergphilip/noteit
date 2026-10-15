@@ -3,6 +3,7 @@ import Carbon.HIToolbox
 import XCTest
 @testable import NoteIt
 
+@MainActor
 final class PaletteKeyRouteTests: XCTestCase {
     private func route(_ keyCode: Int, _ characters: String, _ flags: NSEvent.ModifierFlags,
                        base: String? = nil) -> PaletteKeyRoute {
@@ -81,9 +82,64 @@ final class PaletteKeyRouteTests: XCTestCase {
     }
 
     func testRoutesFollowTheMenuTable() {
-        let open = MenuShortcuts.openQuickly
-        let palette = MenuShortcuts.commandPalette
+        let open = MenuShortcutCommand.openQuickly.defaultShortcut
+        let palette = MenuShortcutCommand.commandPalette.defaultShortcut
+        XCTAssertEqual(MenuShortcuts.openQuickly, open)
+        XCTAssertEqual(MenuShortcuts.commandPalette, palette)
         XCTAssertEqual(route(0, String(open.key.character), open.modifierFlags), .toggleEverything)
         XCTAssertEqual(route(0, String(palette.key.character).uppercased(), palette.modifierFlags), .toggleCommands)
+    }
+
+    private func route(_ keyCode: Int, _ characters: String, _ flags: NSEvent.ModifierFlags, base: String? = nil,
+                       using store: MenuShortcutStore) -> PaletteKeyRoute {
+        PaletteKeyRoute.route(keyCode: keyCode, characters: characters, charactersIgnoringModifiers: base ?? characters,
+                              modifierFlags: flags, openQuickly: store.current(.openQuickly),
+                              commandPalette: store.current(.commandPalette),
+                              otherMenuShortcuts: MenuShortcutCommand.allCases.compactMap { store.current($0) })
+    }
+
+    func testRoutesFollowChangedShortcuts() throws {
+        let suite = "noteit-route-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = MenuShortcutStore(defaults: defaults)
+        store.set(MenuShortcut("j", [.command, .control]), for: .openQuickly)
+        store.set(MenuShortcut("k", .control), for: .commandPalette)
+
+        XCTAssertEqual(route(kVK_ANSI_J, "\u{A}", [.command, .control], base: "j", using: store), .toggleEverything)
+        XCTAssertEqual(route(kVK_ANSI_K, "\u{B}", [.control], base: "k", using: store), .toggleCommands)
+        XCTAssertEqual(route(kVK_ANSI_O, "o", [.command], using: store), .handOff)
+        XCTAssertEqual(route(kVK_ANSI_P, "P", [.command, .shift], using: store), .handOff)
+        XCTAssertEqual(route(kVK_ANSI_J, "o", [.command, .control], base: "о", using: store), .handOff)
+
+        store.set(MenuShortcut(MenuShortcut.functionKey(5)!, []), for: .openQuickly)
+        XCTAssertEqual(route(kVK_F5, "\u{F708}", [.function], using: store), .toggleEverything)
+    }
+
+    func testClearedShortcutsToggleNothing() throws {
+        let suite = "noteit-route-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = MenuShortcutStore(defaults: defaults)
+        store.clear(.openQuickly)
+        store.clear(.commandPalette)
+
+        XCTAssertEqual(route(kVK_ANSI_O, "o", [.command], using: store), .handOff)
+        XCTAssertEqual(route(kVK_ANSI_P, "P", [.command, .shift], using: store), .handOff)
+        XCTAssertEqual(route(kVK_ANSI_O, "o", [.command], base: "щ", using: store), .handOff)
+    }
+
+    func testMenuShortcutsWithoutCommandAreHandedOff() throws {
+        let suite = "noteit-route-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = MenuShortcutStore(defaults: defaults)
+        store.set(MenuShortcut("p", .control), for: .print)
+        store.set(MenuShortcut(MenuShortcut.functionKey(6)!, []), for: .newNote)
+
+        XCTAssertEqual(route(kVK_ANSI_P, "\u{10}", [.control], base: "p", using: store), .handOff)
+        XCTAssertEqual(route(kVK_F6, "\u{F709}", [.function], using: store), .handOff)
+        XCTAssertEqual(route(kVK_ANSI_A, "\u{1}", [.control], base: "a", using: store), .pass)
+        XCTAssertEqual(route(kVK_ANSI_P, "p", [], using: store), .pass)
     }
 }

@@ -12,17 +12,28 @@ final class PaletteCommandRegistryTests: XCTestCase {
         "find", "findReplace", "export", "print", "copyMarkdown", "versionHistory", "togglePin", "deleteNote",
     ]
 
+    private var shortcutSuite = ""
+    private var menuShortcuts: MenuShortcutStore!
+
     override func setUpWithError() throws {
+        shortcutSuite = "noteit-palette-shortcuts-\(UUID().uuidString)"
+        menuShortcuts = MenuShortcutStore(defaults: UserDefaults(suiteName: shortcutSuite)!)
         base = fm.temporaryDirectory.appendingPathComponent("noteit-palette-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
     }
 
     override func tearDownWithError() throws {
+        UserDefaults(suiteName: shortcutSuite)?.removePersistentDomain(forName: shortcutSuite)
+        menuShortcuts = nil
         try? fm.removeItem(at: base)
     }
 
     private func makeStore() -> NoteStore {
         NoteStore(location: LibraryLocation(url: base.appendingPathComponent("lib", isDirectory: true), seedsFreshLibrary: false))
+    }
+
+    private func shortcutsByID(_ commands: [PaletteCommand]) -> [String: String?] {
+        Dictionary(uniqueKeysWithValues: commands.map { ($0.info.id, $0.info.shortcut) })
     }
 
     private func addNote(_ store: NoteStore, _ text: String, in notebook: UUID? = nil) -> UUID {
@@ -116,19 +127,19 @@ final class PaletteCommandRegistryTests: XCTestCase {
     func testShortcutsComeFromTheMenuTable() {
         let store = makeStore()
         store.selectedNoteID = addNote(store, "Alpha")
-        let shortcuts = Dictionary(uniqueKeysWithValues: PaletteCommandRegistry.commands(for: store).map { ($0.info.id, $0.info.shortcut) })
+        let shortcuts = shortcutsByID(PaletteCommandRegistry.commands(for: store, shortcuts: menuShortcuts))
 
         let expected: [String: MenuShortcut?] = [
-            "newNote": MenuShortcuts.newNote,
-            "newNotebook": MenuShortcuts.newNotebook,
-            "searchNotes": MenuShortcuts.searchNotes,
-            "find": MenuShortcuts.find,
-            "findReplace": MenuShortcuts.findAndReplace,
-            "export": MenuShortcuts.exportNote,
-            "print": MenuShortcuts.print,
-            "copyMarkdown": MenuShortcuts.copyAsMarkdown,
-            "versionHistory": MenuShortcuts.versionHistory,
-            "deleteNote": MenuShortcuts.deleteNote,
+            "newNote": MenuShortcutCommand.newNote.defaultShortcut,
+            "newNotebook": MenuShortcutCommand.newNotebook.defaultShortcut,
+            "searchNotes": MenuShortcutCommand.searchNotes.defaultShortcut,
+            "find": MenuShortcutCommand.find.defaultShortcut,
+            "findReplace": MenuShortcutCommand.findAndReplace.defaultShortcut,
+            "export": MenuShortcutCommand.exportNote.defaultShortcut,
+            "print": MenuShortcutCommand.print.defaultShortcut,
+            "copyMarkdown": MenuShortcutCommand.copyAsMarkdown.defaultShortcut,
+            "versionHistory": MenuShortcutCommand.versionHistory.defaultShortcut,
+            "deleteNote": MenuShortcutCommand.deleteNote.defaultShortcut,
             "settings": MenuShortcuts.settings,
             "togglePin": nil,
             "showRecentlyDeleted": nil,
@@ -141,12 +152,43 @@ final class PaletteCommandRegistryTests: XCTestCase {
     }
 
     func testShortcutDisplayUsesMenuGlyphOrder() {
-        XCTAssertEqual(MenuShortcuts.copyAsMarkdown.display, "⌥⇧⌘C")
-        XCTAssertEqual(MenuShortcuts.newNotebook.display, "⇧⌘N")
-        XCTAssertEqual(MenuShortcuts.versionHistory.display, "⌥⌘Y")
-        XCTAssertEqual(MenuShortcuts.deleteNote.display, "⌘⌫")
+        XCTAssertEqual(MenuShortcutCommand.copyAsMarkdown.defaultShortcut.display, "⌥⇧⌘C")
+        XCTAssertEqual(MenuShortcutCommand.newNotebook.defaultShortcut.display, "⇧⌘N")
+        XCTAssertEqual(MenuShortcutCommand.versionHistory.defaultShortcut.display, "⌥⌘Y")
+        XCTAssertEqual(MenuShortcutCommand.deleteNote.defaultShortcut.display, "⌘⌫")
         XCTAssertEqual(MenuShortcuts.settings.display, "⌘,")
         XCTAssertEqual(MenuShortcut("k", [.command, .control]).display, "⌃⌘K")
+    }
+
+    func testShortcutsFollowChangesMadeInSettings() {
+        let store = makeStore()
+        store.selectedNoteID = addNote(store, "Alpha")
+        menuShortcuts.set(MenuShortcut("p", [.command, .control]), for: .print)
+        menuShortcuts.clear(.find)
+
+        let shortcuts = shortcutsByID(PaletteCommandRegistry.commands(for: store, shortcuts: menuShortcuts))
+        XCTAssertEqual(shortcuts["print"], .some("⌃⌘P"))
+        XCTAssertEqual(shortcuts["find"], .some(nil))
+        XCTAssertEqual(shortcuts["export"], .some("⇧⌘S"))
+
+        menuShortcuts.resetAll()
+        let restored = shortcutsByID(PaletteCommandRegistry.commands(for: store, shortcuts: menuShortcuts))
+        XCTAssertEqual(restored["print"], .some("⌘P"))
+        XCTAssertEqual(restored["find"], .some("⌥⌘F"))
+    }
+
+    func testMenuTitlesMatchTheSettingsList() {
+        let store = makeStore()
+        store.selectedNoteID = addNote(store, "Alpha")
+        let titles = Dictionary(uniqueKeysWithValues: PaletteCommandRegistry.commands(for: store).map { ($0.info.id, $0.info.title) })
+        let paletteIDs: [MenuShortcutCommand: String] = [
+            .newNote: "newNote", .newNotebook: "newNotebook", .searchNotes: "searchNotes", .find: "find",
+            .findAndReplace: "findReplace", .exportNote: "export", .print: "print", .copyAsMarkdown: "copyMarkdown",
+            .versionHistory: "versionHistory", .deleteNote: "deleteNote",
+        ]
+        for (command, id) in paletteIDs {
+            XCTAssertEqual(titles[id], command.title, id)
+        }
     }
 
     func testExportCommandUsesTheMenuTitle() throws {

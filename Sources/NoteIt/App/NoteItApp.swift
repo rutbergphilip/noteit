@@ -48,20 +48,20 @@ struct NoteItCommands: Commands {
             Button("New Note") {
                 NotificationCenter.default.post(name: .noteItNewNote, object: nil)
             }
-            .keyboardShortcut(MenuShortcuts.newNote)
+            .menuShortcut(.newNote)
 
             Button("New Notebook…") {
                 NotificationCenter.default.post(name: .noteItNewNotebook, object: nil)
             }
-            .keyboardShortcut(MenuShortcuts.newNotebook)
+            .menuShortcut(.newNotebook)
 
             Divider()
 
             Button("Open Quickly…") { PaletteController.shared.toggle(mode: .everything) }
-                .keyboardShortcut(MenuShortcuts.openQuickly)
+                .menuShortcut(.openQuickly)
 
             Button("Command Palette…") { PaletteController.shared.toggle(mode: .commands) }
-                .keyboardShortcut(MenuShortcuts.commandPalette)
+                .menuShortcut(.commandPalette)
         }
 
         // ⌘F searches all notes; in-note find moves to ⌥⌘F.
@@ -69,15 +69,15 @@ struct NoteItCommands: Commands {
             Button("Search Notes") {
                 NotificationCenter.default.post(name: .noteItFocusSearch, object: nil)
             }
-            .keyboardShortcut(MenuShortcuts.searchNotes)
+            .menuShortcut(.searchNotes)
 
             Divider()
 
             Menu("Find") {
                 Button("Find…") { FindReplaceModel.active()?.open(replace: false) }
-                    .keyboardShortcut(MenuShortcuts.find)
+                    .menuShortcut(.find)
                 Button("Find and Replace…") { FindReplaceModel.active()?.open(replace: true) }
-                    .keyboardShortcut(MenuShortcuts.findAndReplace)
+                    .menuShortcut(.findAndReplace)
                 Button("Find Next") { FindReplaceModel.active()?.findNext() }
                     .keyboardShortcut("g", modifiers: .command)
                 Button("Find Previous") { FindReplaceModel.active()?.findPrevious() }
