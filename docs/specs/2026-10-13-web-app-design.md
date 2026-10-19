@@ -35,14 +35,16 @@ Design principles:
 
 - Menu bar icon, global hotkeys, Quick Capture panel, launch at login (OS features; a share target is future work, §16).
 - **Shared notebooks between users.** Every user's store is encrypted with that user's own key, so sharing
-  needs key sharing (wrapping a notebook key for several users) and a new store layout. Future work (§16).
+  needs key sharing (wrapping a notebook key for several users) and a new store layout. That design lives in
+  the sharing spec (`docs/specs/2026-10-19-sharing-design.md`); the web side of it is future work (§16).
 - Horizontal scaling: a server instance owns its data directory; run exactly one server process per data
   directory (no cluster workers, no replicas). An exclusive `flock` on `/data/.noteit.lock`, taken before anything else, enforces this (§8).
 - Real-time collaborative editing; CRDTs. NoteIt's model stays "conflict copies, never silent merge".
 - Rollback/freshness protection against a malicious store (same as native today).
 - Server-side search, previews, or any server-side plaintext.
-- iOS/Android native apps, iOS/iPadOS Safari and an installable PWA. v1 supports desktop browsers only (§4.4);
-  phones and tablets are future work (§16).
+- iOS/Android native apps, iOS/iPadOS Safari and an installable PWA. v1 supports desktop browsers only (§4.4).
+  iPhone and iPad are covered by the native mobile app (`docs/specs/2026-10-19-mobile-design.md`); a later
+  installable PWA targets Windows, Linux and any other browser (§16).
 - Forward-auth (trusting a `Remote-User` header from a reverse proxy). It was considered and dropped (§7.3).
 
 ## 2. Existing format — byte-level reference (verified against Swift source)
@@ -69,6 +71,7 @@ including the portable body format `noteit-doc` (§3), uses the NoteIt name.
 | `inkwell/v1/notes/<UUID>.meta` | sealed `RemoteEnvelope` (kind `note`) | yes |
 | `inkwell/v1/notes/<UUID>.body` | sealed note body (legacy RTFD) | yes |
 | `inkwell/v1/bodies/<UUID>.<VERSION>.<TAG>.body` | **new in format v2:** sealed noteit-doc body, one immutable object per publish; `<TAG>` names the base meta the commit is conditional on (§3.4 item 9) | yes |
+| `inkwell/v1/bodies/<UUID>.<VERSION>.<TAG>.locked` | a locked note's body (`locked-notes`, sync-security): the same path with `.locked` replacing `.body` (program spec §4 rule 13) | yes |
 | `inkwell/v1/tombstones/<UUID>.json` | sealed `Tombstone` | yes |
 | `inkwell/v1/devices/<deviceID>.json` | sealed `DeviceInfo` | yes |
 
@@ -83,6 +86,10 @@ Notes:
 - S3 backends may add a user prefix: `prefix + "/"` before `inkwell/` (`Storage/S3Backend.swift:72-73`).
   The S3 connectivity canary writes and deletes `inkwell/.canary/<UUID>` (`S3Backend.swift:166`).
 - Device IDs appear in cleartext key names (`devices/<deviceID>.json`).
+- Every remote prefix is registered in `RemoteLayout` (foundations task 3.5) with its depth and sealing
+  (program spec §4 rule 6). This project registers `inkwell/v1/bodies/` with depth 1, `sealing: .storeKey`
+  and owner `web-app`, and adds its keys to `fixtures/golden/layout-keys.json`. The key grammar is program
+  spec §4 rule 8 (§6.3).
 
 ### 2.2 JSON encoding rules
 
@@ -141,6 +148,11 @@ Created with `If-None-Match: *`; a 412 means another device created it first →
 refuse `formatVersion > 1` (`SyncEngine.swift:181` → `SyncError.unsupportedFormat`; also
 `Sync/SyncController.swift:698`).
 
+Format version 2 adds `features`, `keyring` and `rekey` to the manifest. Their types (`Manifest`,
+`StoreFeature`, `Keyring`, `Rekey`, `StoreSession`) are sync-security's shapes, built in foundations step 3
+(`docs/plans/2026-10-19-foundations.md`, tasks 3.1–3.4); this spec consumes them (§3.4). `rekey` is a
+manifest field, not a feature.
+
 ### 2.5 Envelope (`RemoteEnvelope`, `Model/SyncTypes.swift:42-62`)
 
 Sealed at the meta key (`notes/<UUID>.meta` or `notebooks/<UUID>.json`).
@@ -159,13 +171,29 @@ Sealed at the meta key (`notes/<UUID>.meta` or `notebooks/<UUID>.json`).
 | `bodyVersion` | UUID? | **new in v2:** present exactly when `bodyFormat` is; names the versioned body object (§3.4 item 9) |
 
 `Tombstone`: `{deletedAt: Double2001, deletedMetaETag?: string, deviceID, id, kind}`.
-`DeviceInfo`: `{deviceID, lastSync: Double2001, name}`, rewritten at most every 10 min.
+`DeviceInfo`: `{deviceID, lastSync: Double2001, name}`, rewritten at most every 10 min. Foundations
+(task 3.1, program spec §4 rule 4) adds `platform` (`"mac"`, `"ios"` or `"web"`), `appVersion`,
+`supportedFeatures: [string]` (the features the writer's build reads; a record without it counts as
+supporting none) and `rekeyAck` (written by sync-security). The web writes its own record with
+`platform: "web"` and the features `@noteit/core` reads, and keeps `rekeyAck` as sync-security defines.
+The web takes part in the rekey fence: on every pass, including the first one right after `connect`, if
+the manifest has a `rekey` owned by another device, the web writes its own device record with
+`rekeyAck = rekey.toKeyID` (sealed with its current cipher, without waiting for the 10-minute interval,
+and only if the record doesn't already carry that ack) and then stops the pass with `rekeyInProgress`
+(`rekeyIncomplete` for a stale one) before touching any record. `connect` itself is not blocked by `rekey`.
 
 ### 2.6 Inner metas (`Sources/NoteIt/Model/Models.swift`)
 
 `NoteMeta` (`Models.swift:14-28`): `conflictOriginalID?: UUID`, `conflictSource?: string`, `createdAt: ISO`,
 `id: UUID`, `isPinned: bool`, `notebookID?: UUID` (nil = no notebook), `preview: string`,
-`revision?: UUID`, `tags: [string]`, `title: string`, `updatedAt: ISO`.
+`revision?: UUID`, `tags: [string]`, `title: string`, `updatedAt: ISO`, `deletedAt?: ISO`.
+
+`deletedAt` is set while the note is in **Recently Deleted** (`Model/NoteStore+Trash.swift`). Moving a note
+there, and recovering it, is a normal metadata change with a new revision, so it syncs like a pin. A note
+with `deletedAt` is purged for good, through the normal tombstone path, 30 days after that date
+(`recentlyDeletedRetention`), or earlier by Delete Now or Empty Recently Deleted. Recovering clears
+`deletedAt`; if the note's notebook no longer exists, the note goes to the notebook named "Inbox"
+(case-insensitive), or to no notebook when there is none. Revisions include `deletedAt` only when it is set.
 
 `Notebook` (`Models.swift:4-12`): `colorHex: "#RRGGBB"`, `id`, `modifiedAt?: ISO`, `name`,
 `revision?: UUID`, `sortIndex: Int`, `symbol: string` (an SF Symbol name from the curated picker; the palette
@@ -201,8 +229,9 @@ The web must implement identical derivations (golden vectors, §9) so that list 
 - Every user change mints a **random revision UUID**: body edit (also clears conflict fields), pin, move,
   "Mark Resolved", notebook rename/recolor/reorder (`NoteStore.swift:1155-1255`). Native-only legacy
   records got a deterministic v8 UUID; the web never needs to generate those.
-- Deleting a notebook locally moves its notes to `notebookID = nil` with new revisions; *receiving* a notebook
-  deletion moves notes to nil **without** new revisions.
+- Deleting a notebook locally moves its notes to Recently Deleted (`deletedAt` set, new revisions, `notebookID`
+  kept); *receiving* a notebook deletion moves its notes that aren't in Recently Deleted to nil **without**
+  new revisions (`NoteStore.deleteNotebook`, `removeNotebookForRemote`).
 - **Note conflict** → `importConflictCopy` (`NoteStore+Sync.swift:107-122, 160-183`): a new note with a new
   id and revision whose body is the remote body with the first line suffixed
   `" (conflict — <deviceName>, <short date short time of envelope.modifiedAt>)"` (blank body → `"Untitled"` + suffix),
@@ -270,9 +299,19 @@ deviations"; the TS port reproduces it exactly and is tested against an exhausti
    extraction, not "natural" HTML text.
 4. Device IDs leak in cleartext key names; object sizes and counts leak (inherent).
 5. The passphrase is not NFC-normalized: "é" typed as precomposed vs combining produces different keys.
-   v1 keeps it that way and tells users in the passphrase fields (§7).
+   v1 `encryption` stores keep it that way and tell users in the passphrase fields (§7); `keyring` stores
+   (sync-security) NFC-normalize (§3.4 item 8).
 
 ## 3. Phase 0 — Portable note format
+
+The format below is unchanged, but its Swift side (Tasks 0.1–0.3 of the plan: `NoteItDoc`, the converter,
+golden vectors and `RandomDocGenerator`) is built in wave 0 foundations step 2
+(`docs/plans/2026-10-19-foundations.md`), and the store-session and manifest types of Task 0.4 come from
+sync-security in foundations step 3 (program spec §2). The native backend capabilities
+`atomicConditionalWrites()` and `atomicConditionalDelete()`, with the `S3Backend` and folder backend
+behaviour of §3.4 item 9 and §6.4, are built by sync-security in wave 2 (program spec §12); Task 0.4 uses
+them. The rest of this project runs in wave 3. Sync-security's locked notes need `noteit-doc`, so they land
+in wave 3 after Tasks 0.4–0.5.
 
 ### 3.1 Options
 
@@ -314,6 +353,15 @@ UTF-8 JSON:
   (§6.2). The constant lives in `NoteItDoc` and `@noteit/doc` and is the same in both.
 - Unknown top-level fields must be preserved by readers that re-save (forward compatibility), and unknown
   node/mark types make a reader treat the note as **read-only** rather than dropping content.
+- `frontMatter` is a known optional top-level field: a string written by the markdown-storage project
+  (`docs/specs/2026-10-19-markdown-storage-design.md` §3.12). The web app preserves it on save and never
+  shows or edits it.
+- A body container saved as a standalone file uses the extension `.noteitdoc` (markdown-storage uses it; a
+  later web **Download note** reuses it).
+- A locked note's remote body is not a container: it has `bodyFormat: "noteit-locked/1"` (allowed only in
+  stores with the `locked-notes` feature), lives at the note's versioned body path with `.locked` in place of
+  `.body` (program spec §4 rule 13), and holds a container sealed with the note's lock key. Readers that
+  cannot unlock it show the note as locked and never convert it (§3.4 item 8).
 - No byte-level canonicalization is required: ETags/`bodySHA256` are computed over whatever bytes the
   writer produced; vectors compare parsed structure.
 
@@ -326,7 +374,7 @@ Nodes (block):
 | `doc` | — | `block+` | whole attributed string |
 | `paragraph` | `align?: "left"\|"center"\|"right"\|"justify"`, `indent?: 0-8` | inline* | body paragraph (sentinel 29) |
 | `heading` | `level: 1\|2\|3`, `align?`, `indent?` | inline* | 1 = Title (37), 2 = Heading (39), 3 = Subheading (41) |
-| `codeBlock` | `align?` | inline* (all marks, `hardBreak`, `image`, `attachment`) | **one** code paragraph (31), monospaced base font; consecutive `codeBlock` nodes render as one visual block |
+| `codeBlock` | `align?`, `language?: string` (a `CodeLanguage.identifier`; absent = Automatic) | inline* (all marks, `hardBreak`, `image`, `attachment`) | **one** code paragraph (31), monospaced base font; consecutive `codeBlock` nodes render as one visual block |
 | `blockquote` | `indent?` | `paragraph+` | quote (33) |
 | `horizontalRule` | — | — | divider (35, NBSP text) |
 | `listItem` | `kind: "bullet"\|"ordered"\|"task"`, `level: 0-8`, `number?: int` (ordered), `checked?: bool` (task), `align?` | inline* | paragraph with marker `•/◦/▪\t`, `N.\t`, `☐/☑\t`; level = (firstLineHeadIndent − 4)/24 |
@@ -337,7 +385,9 @@ Nodes (block):
 Inline: `text`, `hardBreak` (U+2028), `image {sha, name, mime, width?}`, `attachment {sha, name, mime}`
 (non-image file chip).
 
-Marks: `bold`, `italic`, `underline`, `strike`, `code` (inline code), `link {href}`,
+Marks: `bold`, `italic`, `underline`, `strike`, `code` (inline code), `link {href}` (schemes `http:`,
+`https:`, `mailto:`, `tel:` and `noteit:`; a note link is `noteit://note/<UUID>` with optional `?heading=`,
+or `noteit://note?title=` for a note that does not exist yet, as the program spec §3 defines),
 `textColor {color: "#RRGGBB"}` (light-appearance value, as native stores it — `EditorStyles.swift:97`),
 `highlight {color: "#RRGGBB"}`, `fontSize {delta: int}` (points relative to the block's base size, so
 users' different base font sizes still look right; clamped to native's 8-96 pt absolute range).
@@ -403,57 +453,99 @@ Decisions:
    publish RTFD at the legacy key.
 2. **`RecordPayload`** (engine ↔ app boundary) gains `bodyFormat` so the engine stays body-agnostic: the
    adapter sets it on export and receives it on pull.
-3. **Manifest** gains `formatVersion: 2` and optional `features: [string]` (initially `["noteit-doc"]`).
-   Readers refuse `formatVersion > 2` or any unknown feature. Old (v1-only) native builds refuse new
-   connections to a v2 store with their existing "unsupported format — update NoteIt" message
-   (`SyncError.unsupportedFormat`). They fail safely and lose nothing. Locking them out is acceptable
-   because NoteIt has not been released: only pre-release builds lack v2 support.
-4. **Native v2** accepts `formatVersion ≤ 2` and creates new stores directly at v2. On a **v1 store it
-   writes RTFD** only until its first clean pass, which upgrades the store automatically (item 6); in a
-   **v2 store it writes noteit-doc**. It reads both body formats in both stores, dispatching on the
-   envelope's `bodyFormat` (with an RTFD magic-byte sniff as a fallback).
-5. **The store format travels with the session.** `connect` returns a `StoreSession`:
+3. **Manifest** gains `formatVersion: 2` and optional `features: [string]`. The manifest type, the
+   `StoreFeature` names (`noteit-doc`, `keyring`, `locked-notes`, `noteit-space`), `keyring` and the `rekey`
+   field (not a feature) come from sync-security and are built in foundations step 3; this spec only adds
+   the `noteit-doc` feature's behaviour. The rules (program spec §4, rules 1–3):
+   - **Features, not version numbers.** Body encoding, the upgrade trigger and the web's legacy-store
+     check all key on whether `features` contains `noteit-doc`, never on `formatVersion`. A v2 store
+     created by sync-security with only `keyring` is still a legacy-body store. In the rest of this spec,
+     a "v2 store" or "v2 session" means one whose `features` contain `noteit-doc`, and a "v1 store" means
+     one whose `features` don't.
+   - **Any feature means `formatVersion: 2`.** Readers refuse `formatVersion > 2` or any feature outside
+     `StoreFeature.supported` (`unsupportedFeature`).
+   - **Who reads `noteit-doc`.** Wave 0 ends with `StoreFeature.supported` = `[keyring]`, so a wave 0 build
+     refuses a store with `noteit-doc`. This project adds `.noteItDoc` to `supported` in the same task that
+     ships the Mac body conversion (plan Tasks 0.4–0.5); from then on the Mac lists `noteit-doc` in its device
+     record's `supportedFeatures`. The web reads it from its first release.
+   - Old (v1-only) native builds, including the released 0.2.0, refuse new connections to a v2 store with
+     their existing "unsupported format — update NoteIt" message (`SyncError.unsupportedFormat`). They fail
+     safely and lose nothing, but they stop syncing, so adding `noteit-doc` needs the device check of item 6.
+4. **Native v2** accepts `formatVersion ≤ 2` and creates new stores directly at v2 with `noteit-doc` in
+   `features`: it calls `connectSession` with `createIfMissing: true` and `initialFeatures: [.noteItDoc]`
+   (plus `.keyring` when the new store is encrypted with a keyring), which writes them into the first
+   manifest only (program spec §4 creation rule). In a store **without `noteit-doc` it writes RTFD** until it adds the feature (item 6); in a
+   store **with `noteit-doc` it writes noteit-doc**. It reads both body formats in both stores, dispatching
+   on the envelope's `bodyFormat` (with an RTFD magic-byte sniff as a fallback).
+5. **The store format travels with the session.** `connectSession(backend:kind:credential:deviceName:createIfMissing:encrypted:initialFeatures:supported:cipher:)`
+   (foundations; the Mac app always passes `kind: .library` and leaves `supported` and `cipher` at their
+   defaults) returns a `StoreSession`:
    - `manifest`;
    - `manifestETag`;
-   - `formatVersion`;
-   - the cipher.
+   - `cipher`;
+   - `keyID` (the keyring's key ID, the legacy key ID for an encrypted v1 store, nil for plaintext);
+   - `features: Set<StoreFeature>`.
 
    The engine and `NoteStoreSyncAdapter` share one `StoreSessionRef`, and `export` reads its body encoding
-   from it (RTFD for v1, noteit-doc for v2). Today `SyncController.ensureSession` keeps only the cipher
-   and discards the manifest (`SyncController.swift:603-620`); v2 keeps the whole session.
+   from it: noteit-doc when `features` contains `noteit-doc`, RTFD otherwise. Today
+   `SyncController.ensureSession` keeps only the cipher and discards the manifest
+   (`SyncController.swift:603-620`); v2 keeps the whole session.
 
    Every pass already lists the root, and the listing includes the manifest's ETag. When that ETag differs
-   from `session.manifestETag`, a v2 engine re-reads the manifest before processing any record. It then
-   checks that salt, iterations and keyCheck are unchanged; if they changed, the pass fails with
-   `encryptionMismatch`. Finally it swaps the session. A v2 Mac with a long-lived session therefore
-   notices an upgrade made by another device on its next pass. Running *v1* binaries still can't notice
-   (§2.12), which is what item 8 handles.
-6. **Upgrade is automatic.** There is no button and no setting. A native build that supports noteit-doc
-   (a "v2 client") upgrades a v1 store by itself, with no user action:
-   - **When.** `SyncEngine.sync()` on a v1 session runs the normal pass first. If that pass finished
-     without a fatal error and `report.errors` is empty (a *clean pass*), the same `sync()` call then runs
-     `upgradeToV2()`. The first pass after connecting is usually clean, so a v2 client normally upgrades
-     on connect. If the pass had errors, the store stays v1 and the next clean pass tries again. The clean
-     pass first publishes every pending local edit as RTFD, so nothing is left behind in the old format.
+   from `session.manifestETag`, the engine calls `refreshedSession` before processing any record. It
+   compares **key identity**, not salt, iterations or keyCheck (a passphrase change re-wraps the same key
+   with a new salt and must not stop other devices):
+   - same `keyID` and no foreign rekey: swap the session (new ETag, new features);
+   - a fresh `rekey` owned by another device: the pass writes the rekey ack (§2.5) and fails with
+     `rekeyInProgress`;
+   - a different `keyID`: the pass fails with `keyChanged`.
+
+   A v2 Mac with a long-lived session therefore notices a feature added by another device on its next
+   pass. Running *v1* binaries still can't notice (§2.12), which is what item 8 handles.
+6. **Upgrade is automatic when it is safe.** There is no button and no setting. A native build that
+   supports noteit-doc (a "v2 client") adds the feature to a store that lacks it:
+   - **When.** `SyncEngine.sync()` on a session without `noteit-doc` runs the normal pass first. If that
+     pass finished without a fatal error and `report.errors` is empty (a *clean pass*), the same `sync()`
+     call then runs `upgradeToV2()`. The first pass after connecting is usually clean, so a v2 client
+     normally upgrades on connect. If the pass had errors, the store stays as it is and the next clean pass
+     tries again. The clean pass first publishes every pending local edit as RTFD, so nothing is left
+     behind in the old format.
+   - **Device check** (program spec §4 rule 4). `upgradeToV2()` goes through foundations'
+     `SyncEngine.ensureFeature(.noteItDoc, backend:session:currentDeviceID:confirm:)` (task 3.4), the only path that adds a
+     feature; this project adds no device check of its own. `ensureFeature` lists `devices/` and runs
+     without asking only when every other device's `supportedFeatures` contains `noteit-doc`; a record
+     without `supportedFeatures` (every build before foundations, including 0.2.0) counts as supporting
+     none. Otherwise it calls `confirm` with the blocking devices, and the app shows them with their last
+     sync time: "These Macs will stop syncing until NoteIt is updated on them." The upgrade runs after the
+     user confirms; a decline (`featureDeclined`) writes nothing. Until then the store stays as it is,
+     every pass is unaffected and the question comes back on the next launch (not on every pass). The
+     check is a warning, not a lock: a device can register between the check and the write, so after the
+     write `ensureFeature` lists devices again, and the app shows any new blocker once as a notice.
    - **Serialized.** `upgradeToV2()` runs inside that `sync()` call, on the pass queue, so no other pass
      can observe a half-upgraded session. It is not exposed to the UI; it is public only for tests.
 
    `upgradeToV2()` runs these steps:
-   1. Precondition: the pass that just finished was clean (above).
-   2. Send a conditional `PUT manifest.json` with `If-Match: <session.manifestETag>`. The body keeps the
-      same `createdAt`, salt, iterations and keyCheck (or no `encryption` for a plaintext store), and sets
-      `formatVersion: 2` and `features: ["noteit-doc"]`. On 412, re-read the manifest:
-      - If it is already v2 with the same encryption, adopt it, because another device upgraded first.
-        Two v2 clients upgrading at the same time therefore end with one write and one adoption.
-      - If it is v2 with different encryption, fail with `encryptionMismatch`, as a session refresh would.
-      - If it is still v1, leave the store as it is and try again after the next clean pass.
+   1. Preconditions: the pass that just finished was clean (above) and the device check passed. If the
+      manifest has `rekey` set, it does nothing and tries again after a later clean pass
+      (`rekeyInProgress` is not reported as an error here).
+   2. **Read-modify-write** (foundations' `updateManifest`, called by `ensureFeature`). Re-read
+      `manifest.json` and send a conditional `PUT` with `If-Match: <its ETag>`. The body is the manifest just read with `noteit-doc` added to `features` and
+      `formatVersion: 2`. Every other key is preserved: `createdAt`, `encryption` (or none), `keyring`,
+      every other feature, and any key this build doesn't know. On 412, re-read the manifest:
+      - If `features` already contains `noteit-doc` and the key identity is unchanged, adopt it, because
+        another device upgraded first. Two v2 clients upgrading at the same time therefore end with one
+        write and one adoption.
+      - If the key identity changed, fail with `keyChanged`, as a session refresh would.
+      - If `rekey` is now set, stop and try again after a later clean pass.
+      - Otherwise retry the read-modify-write, up to 3 times in all (`updateManifest`), then leave the store
+        as it is (`manifestChangedConcurrently`) and try again after the next clean pass.
    3. Replace the shared `StoreSessionRef` with the new manifest and ETag. Only then does any export
       produce noteit-doc.
    4. Run the **conversion sweep** (item 7) and then a normal pass.
 
    A non-fatal failure in steps 2–4 (network, 412) does not make `sync()` throw. It is logged, and the
-   next pass continues from the state that was reached: still v1 if the manifest PUT did not land, or v2
-   with the remaining notes converted by later sweeps. Fatal errors (`unauthorized`, `clockSkew`,
+   next pass continues from the state that was reached: still without `noteit-doc` if the manifest PUT did
+   not land, or with it and the remaining notes converted by later sweeps. Fatal errors (`unauthorized`, `clockSkew`,
    `insecureConnectionBlocked`) propagate as for any pass. The web app and the server never upgrade a
    store (item 8).
 
@@ -462,7 +554,8 @@ Decisions:
    > Notes on your Mac are saved in Apple's rich text format (RTFD), which web browsers can't read. The
    > first time an up-to-date NoteIt for Mac syncs with your storage, it switches the storage to a
    > portable format that both the Mac and the browser understand, and converts your notes in the
-   > background. You don't need to do anything. While this happens, each of your devices downloads every
+   > background. If another Mac still runs an older NoteIt, it asks you first. Otherwise you don't need to
+   > do anything. While this happens, each of your devices downloads every
    > note once, which can take a while for a large library with images. After that, the web app can open
    > all your notes. Older NoteIt builds stop syncing with that storage and ask you to update NoteIt;
    > nothing on those Macs is lost.
@@ -472,7 +565,7 @@ Decisions:
    new format. So conversion re-publishes **meta and body** with **the same revision**, through the
    crash-safe v2 publish of item 9 (body first, to a new versioned key; the conditional meta write commits).
    A record is a *conversion candidate* when all of these hold:
-   - this is a v2 session;
+   - the session's `features` contain `noteit-doc`;
    - the last envelope seen for the note had no `bodyFormat`; the engine tracks this in the new
      `SyncState.legacyBodies: Set<UUID>`, filled on pull and on `.none` with a legacy remote;
    - the local revision equals `base.revision`, meaning no unpushed local edit;
@@ -528,7 +621,7 @@ Decisions:
 
    The next pass handles the record through the planner, as `.pull` or `.conflict`. If the body it then
    holds is still legacy, the record becomes a candidate again. Conversion runs at the end of **every**
-   v2 pass, not only during the upgrade. That is also how legacy bodies are lazily converted after the
+   pass of a session with `noteit-doc`, not only during the upgrade. That is also how legacy bodies are lazily converted after the
    upgrade, when they come from an old session still running (§2.12). It is capped at 200 records per
    pass to bound pass time. Retries are therefore bounded by the planner's own progress: a record is
    converted once its meta stops changing between two passes.
@@ -542,22 +635,51 @@ Decisions:
       (`SyncEngine.swift:427-432`).
 
    The edit stays safe on that Mac, unsynced, until NoteIt on it is updated. That Mac shows the record in
-   its existing "N items will be retried" line. Only pre-release builds can be in this state.
-8. **Web app**: never upgrades or converts a store; a browser can't parse RTFD, so it must not try. When
-   it connects to a v1 store (through the server or in direct mode) it shows **"Open NoteIt on your Mac
-   once to finish setting up web access"**, followed by the plain-words explanation from item 6, and
-   re-checks the manifest every 60 s and on focus, so it continues on its own once a Mac has upgraded the
-   store. The server never parses the manifest (it stays zero-knowledge; §6.2), so the check lives in
-   `connect` in `@noteit/core`. The web creates new stores directly at v2 (always encrypted). Legacy-RTFD notes found in a v2
-   store are shown **read-only** with a placeholder ("Formatted on an older Mac — open NoteIt on macOS to
+   its existing "N items will be retried" line. Only builds without noteit-doc support (0.2.0 and older)
+   can be in this state, and only after the user confirmed the upgrade despite them (item 6).
+8. **Web app**: never upgrades or converts a store and never adds a feature; a browser can't parse RTFD,
+   so it must not try. When it connects to a store whose `features` don't contain `noteit-doc` (a v1 store,
+   or a v2 store with only `keyring`; through the server or in direct mode) it shows
+   **"Open NoteIt on your Mac once to finish setting up web access"**, followed by the plain-words
+   explanation from item 6, and re-checks the manifest every 60 s and on focus, so it continues on its own
+   once a Mac has added the feature. The check never looks at `formatVersion`. The server never parses the
+   manifest (it stays zero-knowledge; §6.2), so the check lives in `connect` in `@noteit/core`.
+   - **Keyring stores.** `connect` understands `keyring`: it unwraps the data key with the passphrase
+     (NFC-normalized, PBKDF2-SHA256 at the keyring's iterations, AES-GCM with AAD `keyring/<keyID>`), as
+     sync-security defines. The session carries `keyID` and `features`; a manifest refresh compares
+     `keyID` (item 5) and maps a fresh foreign `rekey` to `rekeyInProgress` and a new `keyID` to
+     `keyChanged`, which asks for the passphrase again. A foreign `rekey` on any pass, including the first
+     after `connect` (when no refresh runs), first writes the web's `rekeyAck` (§2.5), so the web never
+     holds up another device's rekey fence.
+   - **Creating stores.** The web creates new stores directly at v2 with `features: ["noteit-doc"]`
+     (always encrypted, with the v1-style `encryption` block until the web supports writing a keyring).
+   - **Preserving what it doesn't know** (program spec §4 rule 5). Every manifest write is a
+     read-modify-write with `If-Match`. Every note and notebook meta write starts from the last decrypted
+     JSON of that record, following `RawMetaOverlay` (foundations): the keys the web owns (every field of
+     its `NoteMeta` and `NotebookMeta`, `lock` and `deletedAt` included) come only from the web's newly encoded
+     meta, so an owned key it leaves out is removed even if the last decrypted JSON had it (Recover clears
+     `deletedAt`, moving to no notebook clears `notebookID`); every other key is kept from the last decrypted
+     JSON, so keys added by other projects (for example organise's `parent` or linking's `defaultTemplateID`)
+     survive a web edit. Optional fields are written only when set.
+   - **Records it doesn't know.** Records and tombstones under prefixes other than `notebooks/`, `notes/`,
+     `bodies/` and `tombstones/` (for example `smart-folders/`, `claims/`, `boards/`, `keys/`), and
+     tombstones whose `kind` is not `note` or `notebook` (for example `smartFolder`), are skipped without a
+     per-record error and never deleted (program spec §4 rule 9).
+   - **Locked notes.** A note whose envelope has `bodyFormat: "noteit-locked/1"` (§3.2) is listed with
+     its title and a lock icon, an empty preview and no tags. Opening it shows "This note is locked. Unlock
+     it in NoteIt on your Mac." The web never downloads its body for conversion, never converts it and never
+     writes its body. Pin, move and delete write only the meta, patched from the last decrypted JSON, so
+     `bodyFormat`, `bodyVersion`, `bodySHA256` and `lock` stay exactly as they were.
+   - **Legacy notes.** Legacy-RTFD notes found in a store with `noteit-doc` are shown **read-only** with a placeholder ("Formatted on an older Mac — open NoteIt on macOS to
    convert") plus the meta title/preview; pin/move/delete are allowed. A pin or move
    writes **only the meta** (`If-Match` on its base), **without** `bodyFormat` or `bodyVersion` and with
    the unchanged `bodySHA256`; the legacy `notes/<id>.body` is left untouched, since its plaintext didn't
    change, so the web never writes a legacy body key (§3.4 item 10). The web never converts bodies (it cannot parse RTFD).
 
-   **Wire rule (both implementations):** the envelope's `bodyFormat` key is either `"noteit-doc/1"` or
-   **omitted**. It is never `null`, `""` or any legacy marker such as `"rtfd"`. `bodyVersion` is present
-   (an uppercase UUID) exactly when `bodyFormat` is, and omitted otherwise; a pulled envelope that breaks
+   **Wire rule (both implementations):** the envelope's `bodyFormat` key is either `"noteit-doc/1"`,
+   `"noteit-locked/1"` (only in a store with the `locked-notes` feature, and published only by native
+   builds that lock notes) or **omitted**. It is never `null`, `""` or any legacy marker such as `"rtfd"`. `bodyVersion` is present
+   (an uppercase UUID) exactly when `bodyFormat` is present (`"noteit-doc/1"` or `"noteit-locked/1"`), and omitted otherwise; a pulled envelope that breaks
    this is the same per-record `invalidPayload`. Local stores keep exactly
    the wire value: `undefined`/`nil` means legacy, and there is no internal `'rtfd'` tag that could leak.
    Any other value is rejected **per record** with `invalidPayload`. In TS the check is in
@@ -594,6 +716,27 @@ Decisions:
        the sweep keep a body it could have deleted.
      - Objects under `bodies/` are written once and never overwritten. Legacy RTFD bodies stay at
        `notes/<UUID>.body`.
+     - A locked note's body uses the same name with `.locked` in place of `.body` (program spec §4
+       rule 13). Every rule below treats `<NOTE>.<VERSION>.<TAG>.locked` exactly like a `.body` name; it is
+       never an "unparsable name".
+   - **Rekey keeps body keys** (program spec §4 rule 7). sync-security's `RekeyRunner` re-seals every object
+     under `bodies/` and `notes/` in place, so every meta gets a new ETag while body keys, versions and tags
+     stay as they were. The tag is only a commit precondition and never part of how a committed body is
+     found: pull finds a body by note and `bodyVersion` (below), and the sweep keeps every body its note's
+     meta references (condition (a)), whatever its tag. So after a rekey every tag is stale, which has these
+     effects and no others:
+     - committed bodies stay readable and are never swept;
+     - there are no `uploading` entries, because the runner starts only when no body version is waiting to
+       upload; an `inDoubt` commit fails its `If-Match` and is dropped as usual, and its version is swept;
+     - stranded bodies (below) become deletable without a meta refresh;
+     - every device sees new meta ETags with unchanged revisions and pulls each note once, as after a
+       conversion;
+     - a tombstone bound to a leftover meta through `deletedMetaETag` no longer matches the re-sealed meta, so
+       the pair falls back to the date rule (`envelope.modifiedAt <= deletedAt`), which the tombstone still
+       wins because the meta was not edited.
+
+     A test vector checks this: after a simulated rekey of a store with committed, superseded, stranded and
+     locked bodies, the sweep deletes only the superseded and stranded ones and every note still pulls.
    - **Why a new directory, not body-first at the legacy key.**
      - A v1 binary that is still running (§2.12 fact 1) classifies any unknown name under `notes/` as a
        sync-tool sidecar and deletes it after 30 days (`RemoteIndex`, `SyncEngine.swift:820-833`;
@@ -699,7 +842,9 @@ Decisions:
    - **Atomic conditional writes and deletes: two capabilities.** The orphan sweep relies on conditional
      writes being atomic, which the HEAD-verify fallback is not, and every optional delete relies on
      conditional deletes being atomic, which a `HEAD` check followed by a plain `DELETE` is not. Each
-     backend reports both, separately:
+     backend reports both, separately. On the native side, sync-security adds both capabilities to
+     `StorageBackend` in wave 2, with the `S3Backend` and folder backend behaviour below and in §6.4; this
+     project's TypeScript backends mirror them:
      - `atomicConditionalWrites`: an S3 backend reports true only after the write steps of the extended
        canary (§6.4) **passed in this session**: write preconditions are enforced, and an overwrite with
        different bytes gets a new ETag that makes the old one fail `If-Match`. Before the canary has
@@ -806,7 +951,7 @@ Decisions:
        noteit-doc envelope. A meta never goes back from noteit-doc to legacy: a legacy envelope is written
        only by a writer whose `base` is a legacy meta, with `If-Match` on that meta's ETag.
      - An **unparsable name** under `bodies/` may be deleted: no writer creates one, and no meta can
-       reference one.
+       reference one. `.body` and `.locked` names with a valid note UUID, version and tag are parsable.
 
      On a store **with** atomic conditional deletes but **without** atomic conditional writes, the sweep
      deletes only unparsable names. It never deletes a body, not even one of a note that has a tombstone
@@ -883,16 +1028,19 @@ Decisions:
        and the engine refuses with `cleanupUnavailable`, deleting nothing. On confirmation the engine runs a pass, then
        deletes, with `If-Match: <listed ETag>` (a plain `DELETE` on a store without atomic conditional
        deletes: the key is immutable, and the condition was never what made this safe), every `new` body whose note has no meta and no tombstone
-       in that pass's listing and that isn't this device's own pending version, and reports how many
-       objects and bytes it removed. It works at full quota (deleting is always allowed) and in direct
+       in that pass's listing, that isn't this device's own pending version, and whose listed
+       `LastModified` is more than 30 days (`orphanBodyGracePeriod`) before the cleanup started, and reports
+       how many objects and bytes it removed. A body listed without a `LastModified` is kept. It works at full quota (deleting is always allowed) and in direct
        mode (when the bucket passes the canary). There is no protocol coordination with other devices; the confirmation is the
-       only safeguard, and the dialog says so. If another device is in fact mid-create, its create can
-       commit between the cleanup's listing and its `DELETE`, leaving a meta whose body is gone. That is
-       the "missing committed body" case below: the creating device republishes the note on its next
-       pass. If that device is lost first (wiped, or never syncs again), **the note is lost**: no other
-       device ever held its contents, so nobody can repair it, and every reader skips it with a body 404
-       and lists it in the sync report until the user deletes it. That is why the action is never
-       automatic and the warning says exactly this.
+       only safeguard, and the dialog says so. The grace period means a body uploaded by a device that is
+       still creating its note is never removed. The residual risk is narrow: a device uploads a `new`
+       body, stays offline for more than 30 days, and commits its meta after the cleanup listed the body.
+       That leaves a meta whose body is gone, the "missing committed body"
+       case below: the creating device republishes the note on its next pass. Only if that device is also
+       lost before its next pass (wiped, or never syncs again) is **the note lost**: no other device ever
+       held its contents, so nobody can repair it, and every reader skips it with a body 404 and lists it
+       in the sync report until the user deletes it. That is why the action is never automatic and still
+       asks for confirmation.
    - **Why the sweep can't delete a body that will be committed.** This argument applies to stores with
      atomic conditional writes. A body becomes referenced only through the conditional meta write of the
      publish that created it, or of a re-send with the same tag. So it doesn't matter how late that write
@@ -1052,24 +1200,38 @@ Decisions:
       deleted note can come back (never the reverse: a tombstone deletes only the meta it names); for the
       manifest, two racing upgrades write the same content, and a create race on an empty store (today's
       behaviour) is caught by the next pass, which re-reads a changed manifest and stops with
-      `encryptionMismatch` if the encryption differs. Legacy bodies are never repaired in place there.
+      `keyChanged` if the key identity differs (item 5). Legacy bodies are never repaired in place there.
       Body keys stay immutable, so bodies are never overwritten, and no committed body is deleted there
       (item 9), so such a late meta write never references a missing body; bodies are only possibly left
       unreferenced.
 
-    Pre-release v1 binaries keep their unconditional calls, but they stop at a v2 store
+    v1 binaries (0.2.0 and older) keep their unconditional calls, but they stop at a v2 store
     (`unsupportedFormat`, item 4). Quota needs nothing extra: a late landing is covered by the existing
     reservation and dirty-flag rules (§6.2), and an ambiguous DELETE also marks the user dirty.
 
 ### 3.5 Native converter
 
-New SwiftPM library target **`NoteItDoc`** (depends on AppKit; used by the `NoteIt` app):
+**Moved to foundations** (wave 0, step 2; `docs/plans/2026-10-19-foundations.md`). The native side of
+Phase 0 is built once for every sub-project, split into three SwiftPM targets (program spec §2):
 
-- `Codable` schema types, container encode/decode, validation (unknown types → `.readOnly`).
-- `DocConverter.export(NSAttributedString, styles:) -> BodyContainer` and
-  `DocConverter.import(BodyContainer, styles:) -> NSAttributedString`, with an injected `DocStyleProvider`
+- **`NoteItDoc`** (macOS and iOS, Foundation only, depends on `NoteItCore`): `Codable` schema types,
+  container encode/decode, validation (unknown types → `.readOnly`), `BodyFormat`, `AttachmentLimit`,
+  derivation rules and the block-kind sentinel constants.
+- **`NoteItDocAppKit`** (macOS): the `NSAttributedString` converter and `DocStyleProvider`.
+- **`NoteItDocTestSupport`** (test-only library at `Tests/Support/NoteItDocTestSupport`, macOS and iOS):
+  the seeded `RandomDocGenerator` and the golden fixtures loader, shared by web-app, mobile and
+  markdown-storage tests.
+
+The same step adds what markdown-storage needs (its spec §3.12): `codeBlock.language` (read from and
+written to the paragraph's code-language marker by the converter), the image policy below, `frontMatter`
+as a known container field (§3.2) and `.noteitdoc` for standalone container files. It also allows
+`noteit:` hrefs in `DocValidation` and in the `@noteit/doc` validator, with golden vectors (§3.3, §12).
+The rules below are unchanged; only their home moved.
+
+- `DocConverter.export(_:styles:imagePolicy:) throws -> BodyContainer` (`imagePolicy` defaults to `.normalize`) and
+  `DocConverter.importDocument(_:styles:) throws -> NSAttributedString`, with an injected `DocStyleProvider`
   (fonts, colors, base size) so the converter is testable headless.
-- The block-kind sentinel constants (29…41) move from `EditorStyle` into `NoteItDoc` so both sides share them;
+- The block-kind sentinel constants (29…41) move from `EditorStyle` into `NoteItDoc` so every target shares them;
   legacy font-based classification is reused for pre-sentinel content.
 - Image export: PNG/JPEG/GIF/WebP pass through; TIFF/BMP → PNG; HEIC/HEIF → JPEG (q 0.9); anything else →
   `attachment` (download chip). This conversion exists only because browsers can't display HEIC or TIFF,
@@ -1077,13 +1239,16 @@ New SwiftPM library target **`NoteItDoc`** (depends on AppKit; used by the `Note
   rewrites anything already stored: legacy RTFD bodies keep their original images, an attachment already
   in a noteit-doc body keeps its bytes and `sha` when the note is imported and exported again, and the
   note's local RTFD on the Mac keeps the original file. The web app never transcodes images; it stores
-  what the user adds and shows anything it can't display as a download chip.
+  what the user adds and shows anything it can't display as a download chip. `ImagePolicy.keepOriginal`
+  skips the TIFF/BMP and HEIC/HEIF conversion; markdown-storage uses it for files on the user's disk. Sync
+  export always uses `.normalize`.
 - Foreign rich-paste attributes (arbitrary fonts, kerning, shadows) degrade to
   the nearest supported mark or are dropped — documented in the converter's README comment table.
 
-Fidelity tests (`Tests/NoteItDocTests`):
+Fidelity tests (`Tests/NoteItDocTests` and `Tests/NoteItDocAppKitTests`):
 
-- **doc → NSAS → doc is exact** for fixtures and for a seeded random doc generator (every node/mark/attr).
+- **doc → NSAS → doc is exact** for fixtures and for the seeded `RandomDocGenerator` from
+  `NoteItDocTestSupport` (every node/mark/attr, including `codeBlock.language`).
 - **NSAS → doc → NSAS is semantically equal**: block kind, marker, level, alignment, marks, colors, links,
   attachment hash per paragraph range (not byte-equal RTFD).
 - Corpus: the app's seed notes, every `FormatCommand` applied to sample text, tables, mixed lists, images,
@@ -1172,10 +1337,10 @@ Browser (desktop)                               Nuxt/Nitro server (Docker, NOTEI
   tabs; `BroadcastChannel("noteit")` fans out "records changed"/"status" events. (SharedWorker is not used:
   missing on Chrome Android.)
 - **Local cache (IndexedDB, via `idb`)**: stores `records` (each value sealed with the store key under context
-  `local/<storeName>/<id>`), `deletions`, `syncState`, `trash` (deleted bodies kept locally — native moves them
-  to `.trash` and never deletes them outright, `NoteStore.swift:498-531, 1106-1128`; the web caps this at 30
-  days because browser quota is finite), `settings`. Like native's `.trash`, the web's `trash` store is a
-  safety copy with no UI: v1 has no restore or "delete forever" in either app (§10).
+  `local/<storeName>/<id>`), `deletions`, `syncState`, `trash` (bodies of notes deleted for good, kept locally as a safety copy, like
+  native's hidden `.trash/` folder; the web caps this at 30 days because browser quota is finite),
+  `settings`. Notes in Recently Deleted are ordinary records with `deletedAt` set (§2.6, §10); the `trash`
+  store has no UI.
   Locking makes the cache unreadable; wiping is "Sign out & forget this device".
 - **Offline**: edits apply to IDB immediately; sync passes run after local changes (2 s debounce, 10 s max
   delay), every 60 s while visible and 600 s while hidden, and on `online`/focus — the native constants
@@ -1222,8 +1387,11 @@ one CI workflow, so a format change in Swift that is not mirrored in TS fails th
 - **Unsupported browsers** (no WebCrypto, IndexedDB, Web Locks or module workers) see a short "This browser
   isn't supported" page listing the supported browsers, instead of a broken app.
 - **Not in v1:** iOS/iPadOS Safari, an installable PWA (web app manifest, service worker, offline launch)
-  and a share target. They are future work (§16). Narrow windows still get the two- and one-pane layouts
-  (§10), but phones and tablets are not tested or supported.
+  and a share target. iPhone and iPad get the native mobile app instead
+  (`docs/specs/2026-10-19-mobile-design.md`); the web app adds no iOS-specific work and opens in iOS Safari
+  only as a best-effort browser. The installable PWA is future work for Windows, Linux and any other
+  browser (§16). Narrow windows still get the two- and one-pane layouts (§10), but phones and tablets are
+  not tested or supported by the web app.
 
 ## 5. Monorepo layout
 
@@ -1305,8 +1473,10 @@ server. Neither mode gives anyone but the user's own devices the keys or the pla
 **Per-user namespaces.** Every user has a fully isolated store. Each storage operation, REST or `/s3`, runs
 for exactly one authenticated user and reaches a driver only through one choke point,
 `namespacedKey(user, key)` in `server/utils/namespace.ts`:
-1. The key (or list prefix) is validated first, against the key regex of §6.3 for objects, and for list
-   prefixes against "starts with `inkwell/`, no `..` segment, no NUL, no `\`" after percent-decoding.
+1. The key (or list prefix) is validated first, against the key grammar of §6.3 for objects, and for list
+   prefixes against the listable prefixes of §6.3 (registered prefixes and their parent roots,
+   `RemoteLayout.isListablePrefix`), after
+   percent-decoding.
    Anything else is 400 `badRequest` before a driver is called.
 2. The namespace comes only from the user's immutable id (an uppercase UUID assigned at creation), never
    from the username, the display name or any request input:
@@ -1511,13 +1681,51 @@ relative to the signed-in user's namespace (§6.2):
 
 | Method & path | Request | Response |
 |---|---|---|
-| `GET /api/storage/list?prefix=inkwell/v1/&continuationToken=` | — | `200 {objects:[{key,etag,size}], nextContinuationToken?}` (etags unquoted, ≤1000/page) |
+| `GET /api/storage/list?prefix=inkwell/v1/notes/&continuationToken=` | — | `200 {objects:[{key,etag,size,lastModified}], nextContinuationToken?}` (etags unquoted, `lastModified` in ms since the epoch, ≤1000/page) |
 | `GET /api/storage/object/<key>` | — | `200` bytes, header `ETag: "<etag>"` (quoted on the wire); `404` |
 | `PUT /api/storage/object/<key>` | bytes; `If-Match: "<etag>"` (bare accepted) or `If-None-Match: *` | `200 {etag}` (JSON, unquoted) + header `ETag: "<etag>"`; `412` precondition failed; `507` quotaExceeded; `429` busy; `502` storeUnavailable (ambiguous: the write may have landed) |
 | `DELETE /api/storage/object/<key>` | optional `If-Match` | `204`; `404`; `412`; `502` storeUnavailable (ambiguous) |
 
-Keys must match `^inkwell/(v1/(manifest\.json|notebooks/[0-9A-F-]{36}\.json|notes/[0-9A-F-]{36}\.(meta|body)|bodies/[0-9A-F-]{36}\.[0-9A-F-]{36}\.([A-Z2-7]{16}|new)\.body|tombstones/[0-9A-F-]{36}\.json|devices/[0-9A-Za-z-]{1,64}\.json)|\.canary/[0-9A-F-]{36})$`
-(case-insensitive hex accepted for reads, writes uppercase-only). Body limit `NOTEIT_MAX_OBJECT_MB` (default 50).
+**Key grammar** (program spec §4 rule 8; sync-security owns it, foundations implements it as
+`RemoteLayout.isValidKey` and `isListablePrefix`, task 3.5). The server accepts only keys that fit the
+`RemoteLayout` depth table:
+- every segment matches `[A-Za-z0-9._-]+` (at most 128 characters) and is not `.` or `..`;
+- a segment whose part before the first `.` is a UUID must be the uppercase canonical form, for reads and
+  writes;
+- the key is `inkwell/v1/manifest.json`, a canary key `inkwell/.canary/<UUID>`, or sits under a registered
+  prefix (program spec §4 rule 6, including sharing's `noteit/identity/v1/` and `noteit/space/v1/`) at
+  exactly that prefix's depth.
+
+Keys are checked after percent-decoding; an empty segment (`//`), a trailing `/`, a NUL or a `\` is
+rejected. A list request must name a registered prefix, a parent root of one (for example `inkwell/` or
+`inkwell/v1/`, so legacy clients such as the 0.2.x engine and rclone keep working), or `inkwell/.canary/`.
+A key or prefix that fails is 400 `badRequest`
+before a driver is called. A prefix registered later needs a server update that carries the new table.
+
+Key test vectors: the server tests and `@noteit/core` run foundations' `fixtures/golden/layout-keys.json`
+(every sub-project that registers a prefix adds its vectors there). Examples:
+
+| Key | Result |
+|---|---|
+| `inkwell/v1/manifest.json` | accepted |
+| `inkwell/v1/notes/<UUID>.meta`, `inkwell/v1/bodies/<UUID>.<UUID>.<TAG>.body` | accepted |
+| `inkwell/v1/notes/<uuid lowercase>.meta` | rejected |
+| `inkwell/v1/bodies/<UUID>.<UUID>.<TAG>.locked` | accepted (sync-security) |
+| `inkwell/v1/smart-folders/<UUID>.json` | accepted (organise) |
+| `inkwell/v1/claims/reminders/<UUID>.json` | accepted (organise) |
+| `inkwell/v1/keys/locked-notes.json` | accepted (sync-security) |
+| `inkwell/v1/boards/<UUID>.json` | accepted (surfaces-polish) |
+| `noteit/identity/v1/identity.sealed`, `noteit/identity/v1/spaces.sealed` | accepted (sharing) |
+| `noteit/space/v1/log/0000000001.json`, `noteit/space/v1/keys/3/<member-id>.key`, `noteit/space/v1/profiles/<member-id>.json` | accepted (sharing) |
+| `inkwell/.canary/<UUID>` | accepted |
+| `inkwell/v1/a/b/c/d/e`, `inkwell/v1/unknown/x.json` (no registered prefix) | rejected |
+| `inkwell/v1/notes/<UUID>.meta/x` (deeper than the prefix's depth) | rejected |
+| `inkwell/v1/../manifest.json`, `inkwell/v1/./x`, `inkwell/v1/notes//x` | rejected |
+| `inkwell/v2/manifest.json`, `noteit/other/v1/x`, `noteit/space/v2/x` | rejected |
+| `inkwell/v1/notes/<UUID>/x.meta`, `inkwell/v1/notes/x.meta` | rejected |
+| a segment of 129 characters, or containing a space, `%`, `:` or non-ASCII | rejected |
+
+Body limit `NOTEIT_MAX_OBJECT_MB` (default 50).
 Errors are JSON `{error: code, message}`; `401` → client shows login.
 
 **(b) S3-compatible subset — `/s3`** for native apps and backup tools (rclone), so **no new Swift sync code** is
@@ -1743,6 +1951,24 @@ driver, which ports the native one:
 - Unlock runs two derivations in the worker: `credKey` to open the vault, then the store key from the
   manifest's salt, as in server mode. A wrong passphrase fails the GCM tag and shows "Wrong passphrase".
   For a plaintext store (a native option), the user picks a device passphrase that protects only the vault.
+- **Passphrase changed on another device.** The vault stays sealed under the passphrase this browser last
+  used, so after a passphrase change elsewhere (for example while this browser was offline) the two can
+  differ. Unlock handles both cases in the worker and never writes to the store:
+  - The passphrase opens the vault but the store rejects it (`wrongPassphrase` from `connect`: the keyring
+    no longer unwraps with it, or a v1 key check fails): the unlock screen asks **"Your sync passphrase was
+    changed on another device. Enter the current one."** When the current passphrase opens the store, the
+    worker reseals the vault under it (new salt) and only then deletes the old record. A wrong current
+    passphrase shows "Wrong passphrase" and leaves the vault as it was.
+  - The passphrase doesn't open the vault: below "Wrong passphrase" the screen offers **"Passphrase changed
+    on another device?"**, which asks for the previous passphrase (it opens the vault) and the current one
+    (it opens the store). On success the vault is resealed under the current passphrase. A wrong previous
+    passphrase shows "Wrong previous passphrase"; a wrong current one shows "Wrong passphrase"; neither
+    changes the vault.
+  - Someone who no longer knows the previous passphrase picks **"Set up again"**, which runs the connect
+    wizard from the start (S3 credentials, CORS check, current passphrase). The old vault is replaced only
+    when that setup succeeds.
+  - If "Remember on this device" was on, the reseal replaces the remembered keys with ones for the current
+    passphrase; it never turns the option on.
 - The S3 secret is never written to `localStorage`, `sessionStorage`, cookies or URLs, and never leaves
   the device; requests carry only SigV4 signatures.
 - "Remember on this device" (off by default, with the §4.2 warning) stores the non-extractable `credKey`
@@ -2093,14 +2319,14 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 | Native feature (`docs/keyboard-shortcuts.md`, `FormatCommand.swift`) | Native representation | noteit-doc | TipTap |
 |---|---|---|---|
 | Title / Heading / Subheading / Body | sentinel 37/39/41/29 | `heading 1/2/3`, `paragraph` | `Heading` (levels 1-3), `Paragraph` + align/indent attrs |
-| Code block | sentinel 31 per paragraph, mono base font, all marks allowed | `codeBlock{align?}` with inline content | custom `NoteItCodeBlock` node (`marks: '_'`, `whitespace: 'pre'`, inline images); not the stock `CodeBlock`, which forbids marks |
+| Code block | sentinel 31 per paragraph, mono base font, all marks allowed | `codeBlock{align?, language?}` with inline content (`language` kept, not edited or highlighted in v1) | custom `NoteItCodeBlock` node (`marks: '_'`, `whitespace: 'pre'`, inline images); not the stock `CodeBlock`, which forbids marks |
 | Quote | sentinel 33 | `blockquote` | `Blockquote` |
 | Divider | sentinel 35 + NBSP | `horizontalRule` | `HorizontalRule` |
 | Bulleted / numbered / checklist, nesting | text marker + indent | `listItem{kind,level,number,checked}` | custom flat `NoteItListItem` node, Tab/Shift-Tab change `level`, Enter continues, empty Enter exits |
 | Toggle checkbox / strike-through checked | ☐/☑, derived style | `checked` | click on marker toggles; CSS derives style |
 | Bold/italic/underline/strike | font traits / attrs | marks | starter-kit marks + `Underline` |
 | Inline code | mono + background | `code` | `Code` |
-| Link | `.link` | `link{href}` | `Link` (autolink, `openOnClick` with ⌘/Ctrl) |
+| Link | `.link` | `link{href}` | `Link` (autolink, `openOnClick` with ⌘/Ctrl). Note links use `noteit://note/<UUID>` (below) |
 | Highlight (6 swatches) | `.backgroundColor` | `highlight{color}` | `Highlight` multicolor |
 | Text color (9 + custom) | `.foregroundColor` (light values) | `textColor{color}` | `TextStyle` + `Color`, dark-mode mapping in CSS |
 | Bigger/smaller font | absolute pt 8-96 | `fontSize{delta}` | custom mark |
@@ -2110,6 +2336,16 @@ Trusting a `Remote-User` header from a reverse proxy was considered and **droppe
 | Images / files | `NSTextAttachment` | `image`/`attachment` | custom node views rendering `blob:` URLs |
 | Markdown-as-you-type (`Editor/MarkdownShortcuts.swift`) | prefix + space at paragraph start; inline closers | — | input rules: `#`/`##`/`###` → title/heading/subheading; `>` quote; `-` `*` `+` `•` bullet; `N.`/`N)` (1-3 digits) numbered; `[]` `[ ]` checklist, `[x]` checked; a line that is ```` ``` ```` → code block; `---` `***` `___` `—` → divider; `**x**` bold, `*x*` italic, `` `x` `` code, `~~x~~` strike |
 | Hashtags | derived | text | decoration plugin styling `#tag` |
+
+**Note links.** The web editor stores links to other notes in the program-wide form (program spec §3):
+`noteit://note/<UUID>`, with optional `?heading=<text>`; a link to a note that doesn't exist yet is
+`noteit://note?title=<text>`. The link dialog (Mod+K) has a "Link to Note" field that searches note titles
+and inserts `noteit://note/<UUID>` with the note's title as the text. Following a note link (click with
+Mod, or Enter on a focused link) opens the note in the same tab, scrolled to the heading when one is given
+and found. A link to a missing, deleted or not-yet-synced note shows "This note isn't available." A
+`?title=` link opens the one note with exactly that title, if there is one; otherwise it shows "No note
+named “<title>”" and creates nothing. Other `noteit:` hosts (`new`, `append`, `daily` and the rest) are kept
+in the document but do nothing on the web; hovering shows "This link works in NoteIt for Mac".
 
 ### 9.1 Shortcuts (browser-safe)
 
@@ -2157,15 +2393,24 @@ binding uses a browser-reserved combination (Mod+N/T/W/Q, Mod+Shift+N/T/W, Mod+S
   the same way.
 - **Brand-new store**: opens to the designed empty state, with no sample notes or notebooks (§4.2).
 - **Deleting** works as in the native app (`Views/NoteListView.swift`, `Views/SidebarView.swift`):
-  - Delete… in a note's context menu, or the Delete key with a note selected, asks first: "Delete
-    “<title>”?" with "This note will be deleted." and the buttons Delete Note and Cancel. Confirming removes
-    the note and syncs a tombstone. There is no undo.
-  - Delete Notebook… asks "Delete “<name>”?" with "Notes in this notebook will be kept in All Notes." The
-    notes move to no notebook.
-  - **No trash UI in v1.** The native app has no restorable trash: it moves a deleted note's body to a
-    hidden `.trash/` folder and offers no restore or "delete forever" (`NoteStore.swift:498-531`). The web
-    matches it: the body goes to the local `trash` store (§4.2), which no screen shows. A Recently Deleted
-    view with restore and delete forever, in both apps, is future work (§16).
+  - Delete Note in a note's context menu, or the Delete key with a note selected, moves the note to
+    **Recently Deleted** without asking: it sets `deletedAt` with a new revision (§2.6), a meta-only write
+    like a pin, and shows "Moved to Recently Deleted" with Undo.
+  - Delete Notebook… asks "Delete “<name>”?" with "Its notes will be moved to Recently Deleted." and the
+    buttons Delete Notebook and Cancel. The notebook is deleted and its notes move to Recently Deleted,
+    keeping their `notebookID`.
+  - **Recently Deleted** is a library entry in the sidebar, as on the Mac (`Views/SidebarView.swift`,
+    `Views/RecentlyDeletedUI.swift`). Its notes open read-only with "Deleted 3 days ago. It will be removed
+    in 27 days." and offer **Recover** and **Delete Now…**; the list offers **Empty Recently Deleted…**.
+    Recover clears `deletedAt` and puts the note back in its notebook, or in "Inbox" when that notebook is
+    gone (§2.6). Delete Now asks "This note will be removed immediately. You can’t undo this action.";
+    Empty asks "Delete all notes in Recently Deleted?" with "They will be removed immediately. You can’t
+    undo this action." Both then delete for good: the tombstone path (`pushDeletion`), and the body goes to
+    the local `trash` store (§4.2).
+  - **Purge.** Like the Mac, the web deletes notes for good 30 days after `deletedAt`, at unlock and once a
+    day while open. Any device may do it.
+  - Notes in Recently Deleted are left out of All Notes, notebooks, tags, search and conflict counts.
+    Locked notes move and recover the same way; only their meta is written (§3.4 item 8).
 - **Search**: fold rules of §2.8, in the worker.
 - **Conflicts**: badge "Conflict" + source device on copies; "Mark Resolved" clears fields with a new revision;
   Conflicts library filter.
@@ -2260,12 +2505,15 @@ are not part of v1. Both are future work (§16).
   `connect-src` stays `'self'`.
 - No third-party scripts, fonts, analytics or CDNs; all assets self-hosted.
 - Note content never goes through `innerHTML`: documents are parsed with `Node.fromJSON`, `doc.check()`; invalid
-  docs fall back to read-only plain text. Link `href` allowlist `http:`, `https:`, `mailto:`, `tel:`; colors must
+  docs fall back to read-only plain text. Link `href` allowlist `http:`, `https:`, `mailto:`, `tel:`,
+  `noteit:` (the same list in `DocValidation` and `@noteit/doc`, with golden vectors). A `noteit:` link is
+  never handed to the browser: `noteit://note/…` navigates inside the app (§9, Note links) and every other `noteit:`
+  host is inert; colors must
   match `^#[0-9A-Fa-f]{6}$`; images render only from `blob:` URLs created from attachment bytes with an
   allowlisted image MIME; SVG is never rendered inline (download chip).
 - Paste: HTML clipboard data goes through DOMPurify (strict profile) *before* ProseMirror's DOM parser.
 - Server: CSRF via `SameSite=Strict` + `X-NoteIt` header + `Origin` check against `NOTEIT_PUBLIC_URL`;
-  OIDC `state`, `nonce` and PKCE; key regex; size limits; rate limits on login, setup and invite
+  OIDC `state`, `nonce` and PKCE; key grammar and the §6.3 key vectors; size limits; rate limits on login, setup and invite
   redemption; no directory traversal (keys never become paths without validation, and only through
   `namespacedKey`, §6.2).
 - Playwright asserts no request body/URL/header contains the passphrase or raw key bytes, and that CSP reports
@@ -2278,20 +2526,44 @@ are not part of v1. Both are future work (§16).
    `manifest.json` (key check), `envelopes.json` (envelope/tombstone/device/inner metas, ISO + Double2001),
    `planner.json` (exhaustive cartesian product of planner inputs → action), `store-snapshot.json` (a small sealed
    store + passphrase), `engine-scenarios.json` (scripted multi-device traces), `derive.json` (title/preview/tags/
-   search fold), `doc-convert.json` (noteit-doc fixtures + expected derived text).
+   search fold), `doc-convert.json` (noteit-doc fixtures + expected derived text, including
+   `codeBlock.language` and `frontMatter`), `doc-validate.json` (valid and invalid hrefs, including
+   `noteit://note/<UUID>`, `noteit://note/<UUID>?heading=…` and `noteit://note?title=…` as valid and
+   `javascript:` as invalid), `manifest-features.json` (manifests with and without `noteit-doc`, with
+   `keyring`, `locked-notes` and `rekey`, and the expected body encoding, legacy-store state and upgrade
+   decision; every manifest with `locked-notes` also has `noteit-doc`, and the pre-upgrade cases use
+   `["keyring"]`); the §6.3 key vectors are foundations' `layout-keys.json`.
 2. **Reverse vectors** `fixtures/golden/from-web/*.json` written by Vitest, decoded by a Swift test (catches date/UUID
    case/base64 drift).
 3. **Swift**:
    - `NoteItSyncTests` (existing 149).
    - New format-v2 tests:
-     - session refresh when the manifest ETag changes;
-     - **automatic upgrade on connect**: a v2 client's first clean pass on a v1 store upgrades it with no
-       user action, swaps the session before the sweep, and the first note it then exports is noteit-doc;
-     - a pass with errors leaves the store at v1, and the next clean pass upgrades it;
+     - session refresh when the manifest ETag changes: same `keyID` swaps the session, a new salt for the
+       same key does not fail, a different `keyID` gives `keyChanged`, a fresh foreign `rekey` gives
+       `rekeyInProgress`;
+     - body encoding follows `features`, never `formatVersion`: a v2 manifest with only `keyring` still
+       exports RTFD and still upgrades;
+     - **automatic upgrade on connect**: a v2 client's first clean pass on a store without `noteit-doc`
+       upgrades it with no user action when every device in `devices/` supports noteit-doc, swaps the
+       session before the sweep, and the first note it then exports is noteit-doc. With a device record that
+       lacks `supportedFeatures`, or whose list lacks `noteit-doc`, nothing is written until the user
+       confirms (`ensureFeature`'s `confirm`), and a decline writes nothing;
+     - a build whose `StoreFeature.supported` lacks `noteitDoc` neither upgrades nor opens a store with
+       `noteit-doc`, and lists no `noteit-doc` in its device record;
+     - the upgraded manifest has `features ⊇ {noteit-doc}` and keeps every other key: `keyring`,
+       `encryption`, `createdAt`, other features and unknown keys;
+     - the upgrade does nothing while `rekey` is set, and runs after it is cleared;
+     - a pass with errors leaves the store without `noteit-doc`, and the next clean pass upgrades it;
      - a plaintext v1 store upgrades without gaining `encryption`;
-     - two v2 clients upgrading at once: one PUT wins, the other gets 412 and adopts the v2 manifest;
-       412 with different encryption gives `encryptionMismatch`; 412 on a still-v1 manifest retries later;
-     - new stores are created at v2; a v1-only build refuses a v2 store with `unsupportedFormat`;
+     - two v2 clients upgrading at once: one PUT wins, the other gets 412 and adopts the manifest with
+       `noteit-doc`; 412 with a different key identity gives `keyChanged`; 412 on a manifest that still
+       lacks `noteit-doc` retries the read-modify-write;
+     - new stores are created at v2 with `noteit-doc` through `connectSession`'s `initialFeatures`, and an
+       existing store connected with the same arguments is left unchanged; a v1-only build refuses a v2 store
+       with `unsupportedFormat`;
+     - a device that registers between the device check and the write is shown once as a notice after the
+       upgrade;
+     - the conversion sweep skips `noteit-locked/1` bodies;
      - conversion as a revision-preserving republish (versioned body, then meta), which peers see as
        `.pull` and never as a conflict;
      - **crash safety of the v2 publish** (§3.4 item 9), for both an edit and a conversion, using a
@@ -2369,11 +2641,12 @@ are not part of v1. Both are future work (§16).
        device reads M. Variants: a real user-delete tombstone of an unrelated note, and the same note
        deleted after A's commit, behave as before. **Clean up unused storage…**: never invoked by any pass
        (spy over the whole suite); deletes only `new` bodies of notes with no meta and no tombstone that
-       aren't the device's own pending version, with `If-Match`; when the user confirms while A's create
-       is held, A's later commit leaves a meta with a missing body and A republishes it on its next pass;
-       **commit before delete, then the creator is lost** (documents the warned loss): the cleanup lists
-       M's body with no meta, A's create commits, then the cleanup's `DELETE` lands; A is wiped before
-       its next pass. M is then unreadable on every device (body 404, listed in the sync report every
+       aren't the device's own pending version and whose listed `LastModified` is more than 30 days old,
+       with `If-Match`; a body 29 days old, or listed without a `LastModified`, is kept; when the user
+       confirms while A's create has been held for 31 days, A's later commit leaves a meta with a missing
+       body and A republishes it on its next pass; **commit before delete, then the creator is lost**
+       (documents the warned loss): with A's body 31 days old, the cleanup lists M's body with no meta,
+       A's create commits, then the cleanup's `DELETE` lands; A is wiped before its next pass. M is then unreadable on every device (body 404, listed in the sync report every
        pass, no conflict copy, no crash), no device ever repairs it (none holds its revision; the repair
        grace passes with no write), the other notes sync normally, and deleting M from any device
        removes its meta and writes a tombstone as usual (these cleanup cases run on atomic backends);
@@ -2417,11 +2690,23 @@ are not part of v1. Both are future work (§16).
        after that converts it. No revision is lost and no conflict copy is created. The reverse order is
        also tested: an old client editing *after* conversion gets 412 and then a non-fatal per-record
        `importConflictCopy` error. Its local edit survives.
-   - `NoteItDocTests` fidelity suite, including the §3.3 code-block command table, a link and an image.
+   - `NoteItDocTests` and `NoteItDocAppKitTests` fidelity suites (foundations step 2), including the §3.3
+     code-block command table, `codeBlock.language`, a `noteit://note/<UUID>` link and an image.
 4. **TS unit** (Vitest): core against all vectors; engine scenarios ported from the 53 `SyncEngineTests` using an
    `InMemoryBackend`; fast-check property tests for derivations and doc validation; server routes with
    `@nuxt/test-utils`. Also:
-   - `connect` on a v1 store returns the "Open NoteIt on your Mac…" state and never writes;
+   - `connect` on a store whose `features` lack `noteit-doc` (v1, or v2 with only `keyring`) returns the
+     "Open NoteIt on your Mac…" state and never writes; a v2 store with `noteit-doc` and `keyring` unwraps
+     the data key and connects;
+   - rekey ack (§2.5): with a foreign `rekey` in the manifest, the first pass after `connect`
+     (`testWebAcksForeignRekeyOnConnect`) and a pass that refreshes into one
+     (`testWebAcksForeignRekeyDuringPass`) each write only the web's device record, with
+     `rekeyAck = rekey.toKeyID` and sealed with the current cipher, and then fail with `rekeyInProgress`;
+     a later pass doesn't write the ack again, and a `rekey` owned by the web writes none;
+   - meta writes keep unknown note and notebook keys (for example `lock`, `parent`) byte for byte;
+   - records under unknown prefixes and `smartFolder` tombstones produce no per-record error and are never
+     deleted; a `noteit-locked/1` note lists as locked with an empty preview and its body is never fetched
+     for conversion;
    - `S3Backend` with a mocked `fetch`: the canary (supported, ignored `If-None-Match`, ignored `If-Match`,
      `501`/`NotImplemented`, a reissued ETag, an old ETag still matching, an ignored delete precondition,
      a rejected correct `If-Match` `DELETE`), `atomicConditionalWrites` and `atomicConditionalDelete`
@@ -2429,7 +2714,9 @@ are not part of v1. Both are future work (§16).
      `conditionalDeleteUnsupported` (no `HEAD`-then-`DELETE`) when deletes are unsupported, conditional requests sent once (a lost response → `network`, no second
      request), the HEAD-verify fallback (a failed verification → `network`), `cache: "no-store"` on every request, the
      missing-`ETag` HEAD fallback and `invalidResponse("ETag not exposed")`, and CORS `TypeError` → `network`;
-   - the credential vault: round trip, wrong passphrase, nothing in `localStorage`/`sessionStorage`;
+   - the credential vault: round trip, wrong passphrase, nothing in `localStorage`/`sessionStorage`, and the
+     passphrase-changed-on-another-device paths (current passphrase after the vault opens; previous plus
+     current; wrong previous or current changes nothing);
    - the engine crash, orphan-sweep, late-landing and no-atomic-delete scenarios listed under Swift, run from shared `engine-scenarios.json`
      traces so both engines behave the same;
    - "Remember on this device": off by default in both modes, the confirmation warning must be accepted
@@ -2553,7 +2840,9 @@ are not part of v1. Both are future work (§16).
      setting up web access", and the app continues by itself after the store is upgraded;
    - **`direct-s3.spec.ts`** (`scripts/direct_s3_e2e.sh`, opt-in, Floci on :4566): the static build with
      `{"mode": "direct"}` connects to a Floci bucket with CORS configured, passes the wizard's CORS check,
-     creates a store, syncs between two browser contexts and survives a reload (vault unlock). Negative
+     creates a store, syncs between two browser contexts and survives a reload (vault unlock); a browser
+     that was offline while the other context changed the passphrase comes back, unlocks with the current
+     passphrase through the previous-passphrase path, and later reloads unlock with the current one only. Negative
      cases: missing `ETag` exposure, wrong origin, and a bucket without CORS each show the matching hint.
      The script first checks that Floci enforces bucket CORS; if it doesn't, the negative cases run against
      MinIO with `MINIO_API_CORS_ALLOW_ORIGIN` instead.
@@ -2581,8 +2870,11 @@ are not part of v1. Both are future work (§16).
    - concurrent edit → one conflict copy on each side;
    - delete → tombstone;
    - a legacy RTFD note is read-only on the web until a native v2 pass converts it;
-   - automatic v1→v2 upgrade: the web shows the notice on a v1 store, the native app upgrades on connect
-     with no user action, the web then reads every note, and peers pull converted notes without conflicts;
+   - automatic upgrade: the web shows the notice on a store without `noteit-doc`, the native app adds the
+     feature on connect with no user action (every listed device supports it), the web then reads every
+     note, and peers pull converted notes without conflicts;
+   - a store with `keyring`, `noteit-doc` and `locked-notes`: the web connects with the passphrase, lists a locked note
+     by title only, and pinning it keeps `lock` and its body unchanged;
    - config A only: user B's native client, with B's key, never sees user A's objects.
 7. **rclone compatibility** (`scripts/rclone_compat.sh`, CI with a pinned rclone, against the disk and the
    upstream-S3 driver): with the documented remote (§6.3b) on a store of more than 1000 objects written by
@@ -2600,7 +2892,7 @@ are not part of v1. Both are future work (§16).
 | A create lands after its note was deleted (meta back without a body) | pre-existing in every format version; readers skip and report it; documented (§3.4 item 9, "Late creates") |
 | An abandoned device leaves uncommitted bodies | at most one per note per device, kept only while the note's meta is unchanged; counted in quota (§3.4 item 9) |
 | A wiped device leaves the body of a note it never created (`new`) | never collected automatically, since no write can make it stale without racing a valid create; at most one per wiped device per never-committed note, counted in quota; the user reclaims it with the confirmed "Clean up unused storage…" action (§3.4 item 9) |
-| "Clean up unused storage…" runs while another device is creating a note | user-initiated only, never automatic, and disabled on stores without atomic conditional writes (where nothing could stop its `DELETE` from removing a just-committed body); the dialog warns plainly that such a note can be lost if that device is lost before it syncs again; otherwise the creator repairs it (§3.4 item 9) |
+| "Clean up unused storage…" runs while another device is creating a note | user-initiated only, never automatic, and disabled on stores without atomic conditional writes (where nothing could stop its `DELETE` from removing a just-committed body); it deletes only `new` bodies listed as more than 30 days old (`orphanBodyGracePeriod`), so the risk is limited to a device that uploads a body, stays offline for more than 30 days, commits after the cleanup and is then lost before its next pass; the dialog warns plainly that such a note can be lost; otherwise the creator repairs it (§3.4 item 9) |
 | A deleted user's late upstream write lands after the purge | the operation gate closes atomically before the snapshot, every store operation runs in `withLease` (released in `finally` and at a hard `Promise.race` deadline), leases are aborted; the final purge pass runs only with no lease running and a grace after the latest request end (a detached call counts as ending at its deadline); passes have hard deadlines and are retried; the persisted `deleting` record keeps the namespace reserved until it succeeds (§7.4) |
 | Stores without atomic conditional writes or deletes (folder stores, S3 providers failing the canary) keep orphaned bodies, without atomic writes every previous body version (one per edit), and, without atomic deletes, deleted notes' objects, converted notes' RTFD bodies and sidecars | without atomic writes no committed body is ever deleted (step 6, conversion step 5 and every body deletion of the sweep are skipped, since a late fallback meta write can reference any earlier body again), only versions a writer uploaded and never committed, and the space comes back only by moving to an atomic store; without atomic deletes nothing but immutable versioned bodies is ever deleted, user deletes write only a tombstone, and the sweep doesn't run; both bounds are documented (§3.4 item 9, "What it costs" and "Deletes on stores without atomic conditional deletes"); a NoteIt server never runs in this mode (§6.2) |
 | One user fills storage shared with other users | finite byte and object limits for everyone; bounded control allowance; canary cap and sweeper; conservative reservations, ambiguous results reconciled, in-flight cap; reservations persisted across restarts in a bounded, compacted file; a quarantine after a lost state file (§6.2) |
@@ -2624,9 +2916,11 @@ are not part of v1. Both are future work (§16).
 
 ## 14. Assumptions
 
-- A1: Upgrading a store automatically when an up-to-date NoteIt for Mac connects is acceptable. Pre-release
-  builds without v2 support stop syncing with that store until updated (§3.4); this is fine because NoteIt
-  has not been released.
+- A1: Upgrading a store automatically when an up-to-date NoteIt for Mac connects is acceptable when every
+  device listed in `devices/` has `noteit-doc` in its `supportedFeatures`. NoteIt 0.2.0 is released and can't read
+  v2 stores, and its device record has no `supportedFeatures`, so when such a device is listed the upgrade waits
+  for the user's confirmation, and that device stops syncing with
+  the store until updated (§3.4 items 3 and 6).
 - A2: Homelab users terminate TLS at a reverse proxy (WebCrypto needs a secure context).
 - A3: An instance serves a family or small group (up to about 20 users), so a JSON account file and in-memory
   usage counters are enough, and one server process per data directory (enforced by the `flock` instance lock, §8) is
@@ -2647,35 +2941,42 @@ No open questions remain. Each decision lives in the section that describes the 
 3. **Sample notes:** the web never creates them; a brand-new store shows the empty state. Only the native
    app seeds its Welcome note (§4.2, §10).
 4. **Browsers:** desktop Safari, Chrome, Firefox and Edge, current and previous major versions, with E2E
-   in Chromium, Firefox and WebKit in CI (§4.4, §12 item 5). iOS/iPadOS Safari and a PWA are future work
-   (§16).
-5. **Trash:** the native app has no restorable trash, so the web matches it: confirmed deletes, a hidden
-   local safety copy, and no trash UI in v1 (§4.2, §10). A trash UI for both apps is future work (§16).
+   in Chromium, Firefox and WebKit in CI (§4.4, §12 item 5). iPhone and iPad are covered by the native
+   mobile app (`docs/specs/2026-10-19-mobile-design.md`); an installable PWA for Windows, Linux and any
+   other browser is future work (§16).
+5. **Trash:** the native app has Recently Deleted (`deletedAt` on the synced note meta, 30-day purge,
+   Recover, Delete Now). The web mirrors it with the same field, strings and 30 days, plus a hidden local
+   safety copy of bodies deleted for good (§2.6, §4.2, §10).
 6. **Official clients and signing:** no officially hosted static client and no cross-origin pinned client
    in v1 (§11.1, §16). The maintainer (rutbergphilip) holds the minisign key; its public key is published
    in the README and in each release from the first signed release (§11.1).
-7. **Passphrases:** not normalized in v1; compared byte for byte, with a hint in every passphrase field
-   of both apps (§2.3, §7). KDF-versioned normalization is future work (§16).
+7. **Passphrases:** not normalized for stores with a v1 `encryption` block; compared byte for byte, with a
+   hint in every passphrase field of both apps (§2.3, §7). Stores with a `keyring` (sync-security) derive
+   the key-wrapping key from the NFC-normalized passphrase, and the web does the same when it unwraps one
+   (§3.4 item 8).
 
-Also resolved earlier: repository and image names (§8), multi-user (§7), the format upgrade (automatic,
-§3.4), direct mode (§6.4), OIDC (§7.2), the default body size (15, §10), the minimum native version (any v2
-build; pre-release builds without v2 get `unsupportedFormat`), and the one-time re-download during
-conversion (accepted, explained to users in §3.4 item 6).
+Also resolved earlier: repository and image names (§8), multi-user (§7), the format upgrade (automatic when
+every listed device supports it, otherwise after confirmation, §3.4), direct mode (§6.4), OIDC (§7.2), the
+default body size (15, §10), the minimum native version (any build whose device record lists `noteit-doc` in
+`supportedFeatures`; 0.2.0 and older get `unsupportedFormat`), and the one-time re-download during conversion (accepted, explained to users in §3.4
+item 6).
 
 ## 16. Future work
 
-- **Shared notebooks between users.** Each store is encrypted with its owner's key, so sharing needs key
-  sharing: a per-notebook key wrapped for each member (which needs per-user public keys), a store layout for
-  shared notebooks, and a new conflict and revocation story. Out of scope for v1.
+- **Shared notebooks between users.** Designed in the sharing spec
+  (`docs/specs/2026-10-19-sharing-design.md`): per-user identities under `noteit/identity/v1/`, shared spaces
+  under `noteit/space/v1/` with a membership log, epoch keys and the `noteit-space` feature. The v1 server
+  already accepts those keys (§6.3). Web support needs TypeScript ports of the space log, the space cipher
+  and HPKE; out of scope for v1.
 - OIDC RP-initiated logout and back-channel logout.
 - **An official pinned static client.** A project-hosted, version-pinned static web client on its own
   origin, and pinned clients that use a NoteIt server on another origin (which needs CORS and a session
   model that works across origins). v1 has neither (§11.1).
 - **Content-addressed attachments.** Attachments stored as separate objects keyed by hash, so a large image
   is uploaded once instead of with every edit of its note (§3.2).
-- **Phones and tablets.** iOS/iPadOS Safari support and an installable PWA (web app manifest, service
-  worker, offline launch), then a share target (§4.4).
-- **Trash in both apps.** A Recently Deleted view with restore and delete forever, which needs the deleted
-  note's metadata kept next to its body. Today neither app offers one (§10).
-- **Passphrase normalization.** NFC-normalizing passphrases behind a KDF version field in the manifest,
-  with a way to move existing stores over, since today the key comes from the raw bytes (§2.3, §7).
+- **Installable PWA.** A web app manifest, service worker and offline launch for Windows, Linux and any
+  other browser, then a share target (§4.4). iPhone and iPad are not web-app work: the native mobile app
+  covers them (`docs/specs/2026-10-19-mobile-design.md`).
+- **Passphrase normalization.** Stores that move to a `keyring` (sync-security) already use NFC; v1
+  `encryption` stores keep deriving the key from the raw bytes (§2.3, §7). Web support for writing a keyring
+  (change passphrase from the browser) is future work.
