@@ -11,6 +11,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     /// Union of ranges edited since the last normalization pass.
     private var pendingNormalizeRange: NSRange?
     private var isNormalizing = false
+    private var lineBreakEditLocation: Int?
     private(set) lazy var codeStyler = CodeStyler(textView: self)
     private var hoverTrackingArea: NSTrackingArea?
 
@@ -164,6 +165,32 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         codeStyler.flush(typing: true)
         super.didChangeText()
         if storage.length <= 1 { needsDisplay = true }
+        if let location = lineBreakEditLocation {
+            lineBreakEditLocation = nil
+            redrawLines(from: location)
+        }
+    }
+
+    override func shouldChangeText(in affectedCharRange: NSRange, replacementString: String?) -> Bool {
+        guard super.shouldChangeText(in: affectedCharRange, replacementString: replacementString) else { return false }
+        if let replacementString, NSMaxRange(affectedCharRange) <= storage.length,
+           (replacementString as NSString).rangeOfCharacter(from: .newlines).location != NSNotFound
+            || nsString.rangeOfCharacter(from: .newlines, options: [], range: affectedCharRange).location != NSNotFound {
+            lineBreakEditLocation = min(lineBreakEditLocation ?? affectedCharRange.location, affectedCharRange.location)
+        }
+        return true
+    }
+
+    /// TextKit only redraws the edited paragraph when the view keeps its height, so lines that slid up or down
+    /// after an added or removed line break would show stale pixels until something else redraws them.
+    private func redrawLines(from location: Int) {
+        guard let lm = layoutManager, lm.numberOfGlyphs > 0 else { return }
+        let glyph = min(lm.glyphIndexForCharacter(at: min(location, storage.length)), lm.numberOfGlyphs - 1)
+        let top = lm.lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil).minY + textContainerOrigin.y
+        let visible = visibleRect
+        let start = max(top, visible.minY)
+        guard visible.maxY > start else { return }
+        setNeedsDisplay(NSRect(x: visible.minX, y: start, width: visible.width, height: visible.maxY - start))
     }
 
     /// Runs after the edit has been processed: attribute fixes that reach beyond the edited range
@@ -542,6 +569,13 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     }
 
     override func insertNewline(_ sender: Any?) {
+        let sel = selectedRange()
+        if sel.length > 0, !hasMarkedText() {
+            let para = paragraphRange(at: sel.location)
+            if let m = marker(ofParagraph: para), sel.location >= para.location + m.length {
+                replace(sel, with: NSAttributedString(), select: NSRange(location: sel.location, length: 0))
+            }
+        }
         if selectedRange().length == 0, !hasMarkedText() { autolinkWord(endingAt: selectedRange().location) }
         if selectedRange().length == 0, !hasMarkedText(), handleNewline() { return }
         super.insertNewline(sender)
@@ -1048,7 +1082,10 @@ final class NoteItLayoutManager: NSLayoutManager {
         let line = lineFragmentRect(forGlyphAt: glyph, effectiveRange: nil)
         let loc = location(forGlyphAt: glyph)
         // Size and center from the paragraph text's font, not the (possibly substituted) marker glyph font.
-        let textFont = (index + 2 < ts.length ? ts.attribute(.font, at: index + 2, effectiveRange: nil) : nil) as? NSFont
+        let contentIndex = index + 2
+        let hasContent = contentIndex < ts.length
+            && !CharacterSet.newlines.contains(UnicodeScalar((ts.string as NSString).character(at: contentIndex)) ?? " ")
+        let textFont = (hasContent ? ts.attribute(.font, at: contentIndex, effectiveRange: nil) : nil) as? NSFont
             ?? (ts.attribute(.font, at: index, effectiveRange: nil) as? NSFont) ?? .systemFont(ofSize: 14)
         let side = (textFont.pointSize * 1.08).rounded()
         let baseline = line.minY + loc.y

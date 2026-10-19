@@ -212,6 +212,123 @@ final class MarkdownRoundTripTests: XCTestCase {
         try assertRoundTrip(tv)
     }
 
+    func testNewListItemKeepsPreviousTextSizeBeforeTyping() {
+        let (_, tv) = NoteItTextView.make()
+        tv.storage.setAttributedString(EditorStyle.bullet("test"))
+        let text = range(of: "test", in: tv)
+        let customFont = NSFont.systemFont(ofSize: 24)
+        tv.storage.addAttribute(.font, value: customFont, range: text)
+        tv.setSelectedRange(NSRange(location: text.upperBound, length: 0))
+
+        XCTAssertTrue(tv.handleNewline())
+
+        let newParagraph = tv.paragraphRange(at: tv.selectedRange().location)
+        guard let marker = tv.marker(ofParagraph: newParagraph) else {
+            XCTFail("The new list item should have a marker.")
+            return
+        }
+        let markerFont = tv.storage.attribute(.font, at: tv.selectedRange().location - marker.length, effectiveRange: nil) as? NSFont
+        XCTAssertEqual(markerFont?.pointSize, customFont.pointSize)
+        XCTAssertEqual((tv.typingAttributes[.font] as? NSFont)?.pointSize, customFont.pointSize)
+    }
+
+    func testNewChecklistItemCheckboxKeepsPreviousTextSize() throws {
+        let (_, tv) = NoteItTextView.make()
+        let item: [NSAttributedString.Key: Any] = [.font: EditorStyle.bodyFont, .paragraphStyle: EditorStyle.listParagraphStyle(level: 0)]
+        tv.storage.setAttributedString(NSAttributedString(string: "\u{2610}\ttest\n", attributes: item))
+        let text = range(of: "test", in: tv)
+        let customFont = NSFont.systemFont(ofSize: 11)
+        tv.storage.addAttribute(.font, value: customFont, range: text)
+        tv.setSelectedRange(NSRange(location: text.upperBound, length: 0))
+
+        XCTAssertTrue(tv.handleNewline())
+
+        let lm = try XCTUnwrap(tv.layoutManager as? NoteItLayoutManager)
+        let newItem = tv.paragraphRange(at: tv.selectedRange().location)
+        let box = lm.checkboxRect(forCharacterAt: newItem.location, origin: .zero)
+        let firstBox = lm.checkboxRect(forCharacterAt: 0, origin: .zero)
+        XCTAssertEqual(box.width, firstBox.width)
+    }
+
+    func testReturnOnWhitespaceOnlyListItemEndsTheList() {
+        let (_, tv) = NoteItTextView.make()
+        let text = NSMutableAttributedString(attributedString: EditorStyle.bullet("a"))
+        text.append(EditorStyle.bullet("  "))
+        tv.storage.setAttributedString(text)
+        tv.setSelectedRange(NSRange(location: tv.storage.length - 1, length: 0))
+
+        tv.insertNewline(nil)
+
+        XCTAssertEqual(tv.string, "\u{2022}\ta\n\n")
+        XCTAssertEqual(tv.selectedRange(), NSRange(location: tv.storage.length - 1, length: 0))
+    }
+
+    func testReturnOverSelectionInListItemContinuesTheList() {
+        let (_, tv) = NoteItTextView.make()
+        tv.storage.setAttributedString(EditorStyle.bullet("abcdef"))
+        tv.setSelectedRange(NSRange(location: range(of: "cd", in: tv).location, length: 2))
+
+        tv.insertNewline(nil)
+
+        XCTAssertEqual(tv.string, "\u{2022}\tab\n\u{2022}\tef\n")
+        XCTAssertEqual(tv.selectedRange(), NSRange(location: range(of: "ef", in: tv).location, length: 0))
+    }
+
+    func testJoiningLinesRedrawsTheTextThatMovesUp() {
+        let (scrollView, tv) = NoteItTextView.make()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 400), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = scrollView
+        tv.isEditable = true
+        var item: [NSAttributedString.Key: Any] = [.font: EditorStyle.bodyFont, .paragraphStyle: EditorStyle.listParagraphStyle(level: 0)]
+        let text = NSMutableAttributedString(string: "\u{2610}\t", attributes: item)
+        item[.font] = NSFont.systemFont(ofSize: 11)
+        text.append(NSAttributedString(string: "test\n", attributes: item))
+        item[.font] = EditorStyle.bodyFont
+        text.append(NSAttributedString(string: "\u{2610}\t\n", attributes: item))
+        text.append(EditorStyle.paragraph("", kind: .body))
+        text.append(EditorStyle.paragraph("#welcome", kind: .body))
+        tv.storage.setAttributedString(text)
+        settleAndDisplay(tv)
+        tv.setSelectedRange(NSRange(location: (tv.string as NSString).range(of: "test\n").upperBound + 2, length: 0))
+        tv.deleteBackward(nil)
+        settleAndDisplay(tv)
+
+        let drawn = recordingDrawnRects(of: tv) {
+            tv.deleteBackward(nil)
+            settleAndDisplay(tv)
+        }
+
+        XCTAssertTrue(tv.string.hasSuffix("\u{2610}\ttest\n\n#welcome\n"), tv.string)
+        let lm = tv.layoutManager!
+        let glyphs = lm.glyphRange(forCharacterRange: (tv.string as NSString).range(of: "#welcome"), actualCharacterRange: nil)
+        let moved = lm.boundingRect(forGlyphRange: glyphs, in: tv.textContainer!)
+            .offsetBy(dx: tv.textContainerOrigin.x, dy: tv.textContainerOrigin.y)
+        XCTAssertTrue(drawn.contains { $0.contains(moved) }, "The line that moved up must be redrawn: \(moved) not in \(drawn)")
+    }
+
+    private func settleAndDisplay(_ view: NSView) {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        view.displayIfNeeded()
+    }
+
+    private func recordingDrawnRects(of view: NSView, during body: () -> Void) -> [NSRect] {
+        let selector = #selector(NSView.draw(_:))
+        let method = class_getInstanceMethod(NSTextView.self, selector)!
+        typealias Draw = @convention(c) (NSView, Selector, NSRect) -> Void
+        let original = unsafeBitCast(method_getImplementation(method), to: Draw.self)
+        var rects: [NSRect] = []
+        let block: @convention(block) (NSView, NSRect) -> Void = { target, rect in
+            if target === view { rects.append(rect) }
+            original(target, selector, rect)
+        }
+        let previous = method_setImplementation(method, imp_implementationWithBlock(block))
+        defer { method_setImplementation(method, previous) }
+        body()
+        return rects
+    }
+
     func testQuoteCodeDividerTableAndImage() throws {
         let tv = editor([
             "Quoted words", "Second quote",

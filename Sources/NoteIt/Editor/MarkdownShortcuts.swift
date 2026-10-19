@@ -217,6 +217,13 @@ extension NoteItTextView {
 
         if let m {
             let level = EditorStyle.listLevel(of: existingPS)
+            if textLength > m.length, sel.location >= para.location + m.length,
+               (text as NSString).substring(from: m.length).trimmingCharacters(in: .whitespaces).isEmpty {
+                breakUndoCoalescing()
+                let body = NSRange(location: para.location + m.length, length: textLength - m.length)
+                replace(body, with: NSAttributedString(), select: NSRange(location: body.location, length: 0))
+                return handleNewline()
+            }
             if textLength <= m.length {
                 breakUndoCoalescing()
                 if level > 0 {
@@ -242,8 +249,10 @@ extension NoteItTextView {
                 contentAttrs[.foregroundColor] = nil
             }
             let insertion = NSMutableAttributedString(string: "\n", attributes: contentAttrs)
+            var markerAttrs = EditorStyle.markerAttributes(level: level, existing: existingPS)
+            markerAttrs[.font] = contentAttrs[.font] ?? EditorStyle.bodyFont
             insertion.append(NSAttributedString(string: EditorStyle.markerText(nextKind, level: level),
-                                                attributes: EditorStyle.markerAttributes(level: level, existing: existingPS)))
+                                                attributes: markerAttrs))
             breakUndoCoalescing()
             replace(sel, with: insertion, select: NSRange(location: sel.location + insertion.length, length: 0), actionName: "New Item")
             // Text moved onto the new line keeps checked styling; reset it for the fresh item.

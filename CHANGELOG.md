@@ -16,6 +16,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Capture from any app. Select text anywhere and press the Capture Selection hotkey, and NoteIt saves it as a note without leaving the app you're in. The note is titled after the page or window and links back to where the text came from, including the page in Safari and Chrome-based browsers. Reading the selection needs Accessibility permission, which you can allow in Settings › General › Capture.
 - Capture to NoteIt in the Services menu saves the selected text as a note from any app, without Accessibility permission.
 
+### Fixed
+
+- A new list item keeps the text size of the one above it, including the checkbox, before you start typing.
+- Lines that move up after you delete a line no longer disappear for a moment.
+- Pressing Return with text selected in a list item now starts a new list item.
+- Pressing Return on a list item that only has spaces in it ends the list, like an empty item does.
+
 ## [0.2.0] - 2026-10-15
 
 ### Added
