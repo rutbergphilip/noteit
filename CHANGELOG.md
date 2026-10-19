@@ -7,6 +7,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-19
+
 ### Added
 
 - Open Quickly. File › Open Quickly… (⌘O) finds notes, notebooks and commands as you type. Letters don't need to be next to each other, so "gn" finds "Grocery Notes". With nothing typed it shows your 10 most recently edited notes, and the last row creates a new note with the title you typed.
@@ -75,6 +77,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Folders kept in sync by another tool, such as iCloud Drive or Dropbox, and S3 services without conditional writes only get best-effort protection when two Macs write at the same time.
 - The full list is in [Known limitations](https://github.com/rutbergphilip/noteit/blob/main/docs/known-limitations.md).
 
-[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/rutbergphilip/noteit/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rutbergphilip/noteit/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rutbergphilip/noteit/releases/tag/v0.1.0
