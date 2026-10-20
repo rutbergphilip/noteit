@@ -25,8 +25,12 @@ public struct RandomDocGenerator {
         attachments = [:]
         var blocks: [DocNode] = []
         for _ in 0..<int(1...12) {
+            let saved = attachments
             var block = randomBlock()
-            if case .blockquote? = blocks.last, case .blockquote = block { block = .horizontalRule }
+            if case .blockquote? = blocks.last, case .blockquote = block {
+                attachments = saved
+                block = .horizontalRule
+            }
             blocks.append(block)
         }
         var container = BodyContainer(doc: .doc(blocks), attachments: attachments,
@@ -77,7 +81,7 @@ public struct RandomDocGenerator {
         }
         var widths: [Double]?
         if chance(0.5) {
-            var parts = (0..<columns).map { _ in Double(int(10...40)) }
+            var parts = (0..<columns).map { _ in Double(int(10...25)) }
             parts[columns - 1] += 100 - parts.reduce(0, +)
             widths = parts
         }
