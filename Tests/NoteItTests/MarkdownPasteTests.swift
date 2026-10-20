@@ -323,6 +323,49 @@ final class MarkdownPasteTests: XCTestCase {
         PasteAndMatchStyleShortcut.apply(to: menu)
         XCTAssertEqual(item.keyEquivalent, "v")
         XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .shift])
-        XCTAssertEqual(MenuShortcutRules.reservedName(for: MenuShortcut("v", [.command, .shift])), "Paste and Match Style")
+        XCTAssertEqual(MenuShortcutRules.evaluate(PasteAndMatchStyleShortcut.shortcut, for: .find, store: shortcutStore(),
+                                                  keyCombo: nil, globalBindings: [:]),
+                       .reject("⇧⌘V is already used for “Paste and Match Style”."))
+    }
+
+    private func shortcutStore() -> MenuShortcutStore {
+        let suite = "noteit-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: suite) }
+        return MenuShortcutStore(defaults: defaults)
+    }
+
+    private func keyEvent(_ modifiers: NSEvent.ModifierFlags, window: NSWindow?) -> NSEvent {
+        NSEvent.keyEvent(with: .keyDown, location: .zero, modifierFlags: modifiers, timestamp: 0,
+                         windowNumber: window?.windowNumber ?? 0, context: nil, characters: "v",
+                         charactersIgnoringModifiers: "v", isARepeat: false, keyCode: 9)!
+    }
+
+    func testUsersOwnShiftCommandVWins() {
+        let shiftCommandV = PasteAndMatchStyleShortcut.shortcut
+        PasteAndMatchStyleShortcut.update(overrides: [.find: .shortcut(shiftCommandV)], globalBindings: [:])
+        defer { PasteAndMatchStyleShortcut.update(overrides: [:], globalBindings: [:]) }
+
+        let menu = NSMenu(title: "Edit")
+        let item = menu.addItem(withTitle: "Paste and Match Style", action: #selector(NSTextView.pasteAsPlainText(_:)), keyEquivalent: "v")
+        item.keyEquivalentModifierMask = [.command, .shift]
+        PasteAndMatchStyleShortcut.apply(to: menu)
+        XCTAssertEqual(item.keyEquivalentModifierMask, [.command, .option, .shift])
+
+        let view = editor(body("Start "))
+        view.window?.makeFirstResponder(view)
+        XCTAssertFalse(view.performKeyEquivalent(with: keyEvent([.command, .shift], window: view.window)))
+        XCTAssertTrue(NoteItTextView.isPasteAndMatchStyle(keyEvent([.command, .shift, .option], window: view.window)))
+
+        let store = shortcutStore()
+        store.set(shiftCommandV, for: .find)
+        XCTAssertEqual(MenuShortcutRules.evaluate(shiftCommandV, for: .find, store: store, keyCombo: nil, globalBindings: [:]),
+                       .accept(warning: nil))
+
+        let combo = KeyCombo(keyCode: 9, modifiers: KeyCombo.carbonModifiers(from: [.command, .shift]))
+        PasteAndMatchStyleShortcut.update(overrides: [:], globalBindings: [.newNote: combo])
+        XCTAssertFalse(PasteAndMatchStyleShortcut.holdsShiftCommandV)
+        PasteAndMatchStyleShortcut.update(overrides: [:], globalBindings: [:])
+        XCTAssertTrue(PasteAndMatchStyleShortcut.holdsShiftCommandV)
     }
 }

@@ -519,10 +519,11 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         return super.performKeyEquivalent(with: event)
     }
 
-    /// ⇧⌘V, and ⌥⇧⌘V as before.
+    /// ⇧⌘V unless the user has bound it to something else, and ⌥⇧⌘V as before.
     static func isPasteAndMatchStyle(_ event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
-        guard flags == [.command, .shift] || flags == [.command, .shift, .option] else { return false }
+        guard (flags == [.command, .shift] && PasteAndMatchStyleShortcut.holdsShiftCommandV)
+                || flags == [.command, .shift, .option] else { return false }
         return (event.characters(byApplyingModifiers: []) ?? event.charactersIgnoringModifiers ?? "").lowercased() == "v"
     }
 

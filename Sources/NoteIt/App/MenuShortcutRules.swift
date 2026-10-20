@@ -92,6 +92,9 @@ enum MenuShortcutRules {
         if let name = reservedName(for: shortcut) {
             return .reject(alreadyUsed(shortcut, by: name))
         }
+        if shortcut == PasteAndMatchStyleShortcut.shortcut, PasteAndMatchStyleShortcut.holdsShiftCommandV {
+            return .reject(alreadyUsed(shortcut, by: "Paste and Match Style"))
+        }
         if let keyCombo {
             for action in HotkeyAction.allCases where globalBindings[action] == keyCombo {
                 return .accept(warning: "\(shortcut.display) is also the global hotkey for “\(action.title)”. The global hotkey takes priority.")
@@ -145,7 +148,6 @@ enum MenuShortcutRules {
         (MenuShortcut("x", .command), "Cut"),
         (MenuShortcut("z", .command), "Undo"),
         (MenuShortcut("z", [.command, .shift]), "Redo"),
-        (MenuShortcut("v", [.command, .shift]), "Paste and Match Style"),
         (MenuShortcut("v", [.command, .option, .shift]), "Paste and Match Style"),
         (MenuShortcut("`", .command), "Cycle Through Windows"),
         (MenuShortcut("/", [.command, .shift]), "Help"),
