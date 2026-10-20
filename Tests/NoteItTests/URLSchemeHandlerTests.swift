@@ -140,12 +140,11 @@ final class URLSchemeHandlerTests: XCTestCase {
         await open(handler, "noteit://x-callback-url/append?id=\(UUID().uuidString)&text=x&x-error=https://example.com/err")
         await open(handler, "noteit://x-callback-url/append?id=\(UUID().uuidString)&text=x&x-error=app://err")
         XCTAssertEqual(callbacks.map { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems ?? [] },
-                       [[URLQueryItem(name: "errorCode", value: "not_found")],
-                        [URLQueryItem(name: "errorCode", value: "not_found"), URLQueryItem(name: "errorMessage", value: "No note with that id.")],
+                       [[URLQueryItem(name: "errorCode", value: "not_found"), URLQueryItem(name: "errorMessage", value: "No note with that id.")],
                         [URLQueryItem(name: "errorCode", value: "not_changed")],
                         [URLQueryItem(name: "errorCode", value: "not_found"), URLQueryItem(name: "errorMessage", value: "No note with that id.")]])
         XCTAssertEqual(questions, ["A link wants to add text to a note."], "only the web link asks")
-        XCTAssertTrue(notices.isEmpty)
+        XCTAssertEqual(notices, ["No note with that id."], "a web link tells the user, not the page")
     }
 
     func testAppendToMissingTitleSaysTitle() async {
@@ -199,6 +198,25 @@ final class URLSchemeHandlerTests: XCTestCase {
             }
         }
         XCTAssertTrue(notices.isEmpty)
+    }
+
+    /// Links that only show something call a web `x-success` the same way whether or not the note exists.
+    func testWebCallbacksCantTellWhetherShownNotesExist() async {
+        let (handler, store) = makeHandler()
+        let plain = store.createNote(in: nil, initial: NSAttributedString(string: "Plan")).id
+        let web = "x-error=https://example.com/err&x-success=https://example.com/ok"
+        for id in [plain, UUID()] {
+            for link in ["open?id=\(id.uuidString)&", "note/\(id.uuidString)?", "open?title=\(id == plain ? "Plan" : "Nothing")&",
+                         "note?title=\(id == plain ? "Plan" : "Nothing")&", "search?q=Plan&"] {
+                callbacks = []
+                await open(handler, "noteit://x-callback-url/" + link + web)
+                XCTAssertEqual(callbacks, [URL(string: "https://example.com/ok")!], link)
+            }
+        }
+        XCTAssertTrue(questions.isEmpty)
+        XCTAssertEqual(notices, ["No note with that id.", "No note with that id."], "a missing id is still explained locally")
+        XCTAssertEqual(shown, Array(repeating: plain, count: 4))
+        XCTAssertEqual(searches, ["Plan", "Nothing", "Nothing", "Plan"])
     }
 
     func testRegisteredHostDispatches() async {

@@ -91,7 +91,7 @@ final class URLSchemeHandler: NSObject {
         do {
             switch command {
             case let .note(id, heading):
-                try show(try service.note(id), heading: heading, callback: callback)
+                try showNote(id, heading: heading, callback: callback)
             case let .noteTitle(title, heading):
                 if let meta = service.findByTitle(title) {
                     try show(meta, heading: heading, callback: callback)
@@ -100,7 +100,7 @@ final class URLSchemeHandler: NSObject {
                     succeed(callback, note: nil)
                 }
             case let .open(.id(id)):
-                try show(try service.note(id), heading: nil, callback: callback)
+                try showNote(id, heading: nil, callback: callback)
             case let .open(.title(title)):
                 if let meta = service.findByTitle(title) {
                     try show(meta, heading: nil, callback: callback)
@@ -141,6 +141,18 @@ final class URLSchemeHandler: NSObject {
             }
         } catch {
             report(.invalidInput(Self.unknownLinkMessage), callback: callback)
+        }
+    }
+
+    /// With a web callback a note that can't be shown gets a local notice and a bare `x-success`, the same as a
+    /// note that is shown, so the page can't tell whether it exists.
+    private func showNote(_ id: UUID, heading: String?, callback: XCallback) throws(AutomationError) {
+        do {
+            try show(try service.note(id), heading: heading, callback: callback)
+        } catch {
+            guard Self.hasWebCallback(callback) else { throw error }
+            environment.notify(error.message)
+            succeed(callback, note: nil)
         }
     }
 
