@@ -1,0 +1,90 @@
+{
+  "cases" : [
+    {
+      "expect" : {
+        "bodyEncoding" : "rtfd",
+        "features" : [
+
+        ],
+        "legacyStore" : true,
+        "upgrade" : "run",
+        "upgradedManifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"bdbn42\\/sd8bLExvlJswfAEkFIJOOBA3ZUALznU2BvZFsPbtLCTeS+IpsHH6W\",\"salt\":\"+\\/lAeZjOdkiD3JY17q3pAw==\"},\"features\":[\"noteit-doc\"],\"formatVersion\":2}"
+      },
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"bdbn42\\/sd8bLExvlJswfAEkFIJOOBA3ZUALznU2BvZFsPbtLCTeS+IpsHH6W\",\"salt\":\"+\\/lAeZjOdkiD3JY17q3pAw==\"},\"formatVersion\":1}",
+      "name" : "v1"
+    },
+    {
+      "expect" : {
+        "bodyEncoding" : "rtfd",
+        "features" : [
+          "keyring"
+        ],
+        "legacyStore" : true,
+        "upgrade" : "run",
+        "upgradedManifestJSON" : "{\"createdAt\":788918400,\"features\":[\"keyring\",\"noteit-doc\"],\"formatVersion\":2,\"keyring\":{\"changedAt\":788918400,\"changedBy\":\"Vector Mac\",\"iterations\":100000,\"kdf\":\"pbkdf2-sha256\",\"keyID\":\"767ad3693f0f4a56\",\"salt\":\"idk\\/pB7TK8JHWr7BV9fRrw==\",\"wrappedKey\":\"2x8q62+kO3i5F7TpfgT6xp0ZSHhFz71MU6W23FsxwSHHV01pOyblulfdKxJztWkAMlj0ypCq9bEGDosx\"}}"
+      },
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"keyring\"],\"formatVersion\":2,\"keyring\":{\"changedAt\":788918400,\"changedBy\":\"Vector Mac\",\"iterations\":100000,\"kdf\":\"pbkdf2-sha256\",\"keyID\":\"767ad3693f0f4a56\",\"salt\":\"idk\\/pB7TK8JHWr7BV9fRrw==\",\"wrappedKey\":\"2x8q62+kO3i5F7TpfgT6xp0ZSHhFz71MU6W23FsxwSHHV01pOyblulfdKxJztWkAMlj0ypCq9bEGDosx\"}}",
+      "name" : "v2-keyring"
+    },
+    {
+      "expect" : {
+        "bodyEncoding" : "noteitDocV1",
+        "features" : [
+          "noteit-doc"
+        ],
+        "legacyStore" : false,
+        "upgrade" : "none"
+      },
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"noteit-doc\"],\"formatVersion\":2}",
+      "name" : "v2-noteit-doc"
+    },
+    {
+      "expect" : {
+        "bodyEncoding" : "noteitDocV1",
+        "features" : [
+          "keyring",
+          "locked-notes",
+          "noteit-doc"
+        ],
+        "legacyStore" : false,
+        "upgrade" : "none"
+      },
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"keyring\",\"locked-notes\",\"noteit-doc\"],\"formatVersion\":2,\"keyring\":{\"changedAt\":788918400,\"changedBy\":\"Vector Mac\",\"iterations\":100000,\"kdf\":\"pbkdf2-sha256\",\"keyID\":\"767ad3693f0f4a56\",\"salt\":\"idk\\/pB7TK8JHWr7BV9fRrw==\",\"wrappedKey\":\"2x8q62+kO3i5F7TpfgT6xp0ZSHhFz71MU6W23FsxwSHHV01pOyblulfdKxJztWkAMlj0ypCq9bEGDosx\"}}",
+      "name" : "keyring-noteit-doc-locked-notes"
+    },
+    {
+      "expect" : {
+        "error" : "invalidManifest"
+      },
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"locked-notes\"],\"formatVersion\":2}",
+      "name" : "locked-notes-without-noteit-doc"
+    },
+    {
+      "expect" : {
+        "bodyEncoding" : "rtfd",
+        "features" : [
+
+        ],
+        "legacyStore" : true,
+        "upgrade" : "skipRekey"
+      },
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"bdbn42\\/sd8bLExvlJswfAEkFIJOOBA3ZUALznU2BvZFsPbtLCTeS+IpsHH6W\",\"salt\":\"+\\/lAeZjOdkiD3JY17q3pAw==\"},\"formatVersion\":1,\"rekey\":{\"deviceID\":\"VECTOR\",\"deviceName\":\"Vector Mac\",\"fromKeyID\":\"6fecca207b2f8112\",\"startedAt\":788918400,\"toKeyID\":\"767ad3693f0f4a56\",\"updatedAt\":788918400}}",
+      "name" : "rekey-set"
+    },
+    {
+      "expect" : {
+        "bodyEncoding" : "rtfd",
+        "features" : [
+
+        ],
+        "legacyStore" : true,
+        "upgrade" : "run",
+        "upgradedManifestJSON" : "{\"createdAt\":788918400,\"features\":[\"noteit-doc\"],\"formatVersion\":2,\"futureKey\":{\"nested\":[1,2,3]},\"zzz\":\"kept\"}"
+      },
+      "manifestJSON" : "{\"createdAt\":788918400,\"formatVersion\":1,\"futureKey\":{\"nested\":[1,2,3]},\"zzz\":\"kept\"}",
+      "name" : "unknown-keys"
+    }
+  ],
+  "generator" : "swift",
+  "version" : 1
+}
