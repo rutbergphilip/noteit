@@ -7,6 +7,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-20
+
 ### Changed
 
 - Synced notes are now stored in a `noteit` folder in your sync folder or bucket instead of `inkwell`. The first time a Mac on this version connects, it copies the existing `inkwell` store over, still encrypted, and leaves the old folder in place. Update every Mac that syncs: Macs on an older version keep syncing with the old `inkwell` folder only. Once all of them are updated, you can delete the `inkwell` folder and the `.inkwell-lock` file.
@@ -86,7 +88,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Folders kept in sync by another tool, such as iCloud Drive or Dropbox, and S3 services without conditional writes only get best-effort protection when two Macs write at the same time.
 - The full list is in [Known limitations](https://github.com/rutbergphilip/noteit/blob/main/docs/known-limitations.md).
 
-[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rutbergphilip/noteit/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rutbergphilip/noteit/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rutbergphilip/noteit/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rutbergphilip/noteit/releases/tag/v0.1.0
