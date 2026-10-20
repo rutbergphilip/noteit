@@ -162,12 +162,25 @@ struct DocExporter {
             }
             let marks = marks(attrs, kind: kind, checked: checked)
             let pieces = ns.substring(with: run).components(separatedBy: "\u{2028}")
+            var location = run.location
             for (index, piece) in pieces.enumerated() {
-                if index > 0 { content.append(attrs[.noteItSoftBreak] != nil ? .softBreak : .hardBreak) }
+                if index > 0 {
+                    content.append(isSoftBreak(at: location) ? .softBreak : .hardBreak)
+                    location += 1
+                }
                 appendText(piece, marks: marks)
+                location += (piece as NSString).length
             }
         }
         return content
+    }
+
+    /// Only a U+2028 whose `noteItSoftBreak` run is that one character: text typed next to it may have inherited it.
+    private func isSoftBreak(at location: Int) -> Bool {
+        var run = NSRange()
+        guard text.attribute(.noteItSoftBreak, at: location, longestEffectiveRange: &run,
+                             in: NSRange(location: 0, length: text.length)) != nil else { return false }
+        return run == NSRange(location: location, length: 1)
     }
 
     private func marks(_ attrs: [NSAttributedString.Key: Any], kind: BlockKind, checked: Bool) -> [Mark] {

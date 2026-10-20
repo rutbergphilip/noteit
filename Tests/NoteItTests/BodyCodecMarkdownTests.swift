@@ -97,6 +97,23 @@ final class BodyCodecMarkdownTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "One 2\nx\\\nthree four\n")
     }
 
+    func testTypingOverASoftBreakWritesAHardBreak() throws {
+        let url = dir.appendingPathComponent("note.md")
+        try Data("One two\nthree four\n".utf8).write(to: url)
+        let (_, view) = NoteItTextView.make()
+        view.storage.setAttributedString(try BodyCodec.markdown.read(at: url).text)
+        view.normalizePendingEdits()
+        view.setSelectedRange(NSRange(location: 7, length: 3))
+        XCTAssertNil(view.typingAttributes[.noteItSoftBreak])
+        view.insertText("x", replacementRange: NSRange(location: NSNotFound, length: 0))
+        view.insertLineBreak(nil)
+        XCTAssertEqual(view.string, "One twox\u{2028}ree four\n")
+        XCTAssertNil(view.storage.attribute(.noteItSoftBreak, at: 7, effectiveRange: nil))
+        XCTAssertNil(view.storage.attribute(.noteItSoftBreak, at: 8, effectiveRange: nil))
+        try BodyCodec.markdown.write(view.attributedString(), to: url)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "One twox\\\nree four\n")
+    }
+
     func testFrontMatterSurvivesEdit() throws {
         let url = dir.appendingPathComponent("note.md")
         let known = "id: 6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11\ncreated: 2026-10-19T09:12:44Z\npinned: true"

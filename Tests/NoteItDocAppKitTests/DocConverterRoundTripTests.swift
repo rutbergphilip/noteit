@@ -21,6 +21,16 @@ final class DocConverterRoundTripTests: XCTestCase {
         XCTAssertEqual(failures, 0)
     }
 
+    func testOnlyALoneMarkedLineSeparatorIsASoftBreak() throws {
+        let doc = BodyContainer(doc: .doc([.paragraph(align: nil, indent: nil, content: [.text("a", marks: []), .softBreak, .text("b", marks: [])])]))
+        let text = NSMutableAttributedString(attributedString: try DocConverter.importDocument(doc, styles: TestStyles()))
+        XCTAssertEqual(try DocConverter.export(text, styles: TestStyles()).doc, doc.doc)
+        text.insert(NSAttributedString(string: "x\u{2028}", attributes: text.attributes(at: 1, effectiveRange: nil)), at: 2)
+        XCTAssertEqual(try DocConverter.export(text, styles: TestStyles()).doc,
+                       .doc([.paragraph(align: nil, indent: nil, content: [.text("a", marks: []), .hardBreak,
+                                                                        .text("x", marks: []), .hardBreak, .text("b", marks: [])])]))
+    }
+
     private static func firstDifference(_ a: BodyContainer, _ b: BodyContainer) -> String {
         guard case .doc(let x) = a.doc, case .doc(let y) = b.doc else { return "root" }
         for i in 0..<max(x.count, y.count) {
