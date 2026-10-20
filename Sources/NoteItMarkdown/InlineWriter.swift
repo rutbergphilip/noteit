@@ -108,6 +108,9 @@ struct InlineWriter {
             case .hardBreak:
                 closeAll()
                 out += context == .block ? "\\\n" : "<br>"
+            case .softBreak:
+                closeAll()
+                out += context == .block ? "\n" : "<br>"
             case .image(let sha, let name, _, let width):
                 closeAll()
                 out += "![" + escapeName(name) + (width.map { "|" + Self.number($0) } ?? "") + "](" + Self.destination(path: attachmentPath(sha)) + ")"
@@ -127,7 +130,7 @@ struct InlineWriter {
             switch inline {
             case .text(let text, _): text
             case .image(_, let name, _, _), .attachment(_, let name, _): " " + name + " "
-            case .hardBreak: separator
+            case .hardBreak, .softBreak: separator
             }
         }.joined()
     }
@@ -224,6 +227,7 @@ struct InlineWriter {
             switch items[index + 1] {
             case .text(let next, let marks): bareEnd = marks.isEmpty && next.first?.isWhitespace == true
             case .hardBreak: bareEnd = context != .block
+            case .softBreak: bareEnd = true
             default: bareEnd = false
             }
         }

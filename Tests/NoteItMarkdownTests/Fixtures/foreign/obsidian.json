@@ -77,6 +77,9 @@
                 "type": "text"
               },
               {
+                "attrs": {
+                  "soft": true
+                },
                 "type": "hardBreak"
               },
               {

@@ -19,6 +19,42 @@ struct InlineParser {
         refs += scanner.refs
         return scanner.flattened()
     }
+
+    /// The lines of a paragraph or list item. A line ending in two spaces makes a hard break, a plain newline a soft one.
+    mutating func parse(lines: [String]) -> [Inline] {
+        var source: [Character] = []
+        var hardNewlines = Set<Int>()
+        for (index, line) in lines.enumerated() {
+            if index > 0 {
+                if !BlockParser.hardBreakSpaces(lines[index - 1]).isEmpty { hardNewlines.insert(source.count) }
+                source.append("\n")
+            }
+            source += BlockParser.trimmed(line)
+        }
+        var scanner = InlineScanner(chars: source, resolveNoteLink: resolveNoteLink)
+        scanner.hardNewlines = hardNewlines
+        scanner.scan()
+        refs += scanner.refs
+        return scanner.flattened().resolvingSoftBreaks()
+    }
+}
+
+extension Array where Element == Inline {
+    /// A soft break only stays soft between other content: one at an end or next to another break would make a
+    /// blank line, so it becomes hard.
+    func resolvingSoftBreaks() -> [Inline] {
+        var result = self
+        for index in indices where self[index] == .softBreak {
+            let isBreak = { (i: Int) in self[i] == .softBreak || self[i] == .hardBreak }
+            if index == 0 || index == count - 1 || isBreak(index - 1) || isBreak(index + 1) { result[index] = .hardBreak }
+        }
+        return result
+    }
+
+    /// Every break hard: headings, code and table cells have no soft form.
+    func hardeningSoftBreaks() -> [Inline] {
+        map { $0 == .softBreak ? .hardBreak : $0 }
+    }
 }
 
 // MARK: - Mark order
@@ -108,6 +144,7 @@ private struct InlineScanner {
     var openImages = 0
     var backtickRuns: [Int: [Int]]?
     var bareURLBlockedUntil = 0
+    var hardNewlines = Set<Int>()
     var buffer = ""
     var i = 0
 
@@ -134,7 +171,7 @@ private struct InlineScanner {
                     i += 1
                 }
             case "\n":
-                appendAtom(.hardBreak)
+                appendAtom(hardNewlines.contains(i) ? .hardBreak : .softBreak)
                 i += 1
             case "`":
                 scanCodeSpan()
@@ -487,7 +524,7 @@ private struct InlineScanner {
         nodes.map { node -> String in
             if case .image(_, let name, _, _)? = node.atom { return name }
             if case .attachment(_, let name, _)? = node.atom { return name }
-            if node.atom == .hardBreak { return " " }
+            if node.atom == .hardBreak || node.atom == .softBreak { return " " }
             if let delimiter = node.delimiter { return String(repeating: delimiter.char, count: delimiter.count) }
             return node.text
         }.joined()

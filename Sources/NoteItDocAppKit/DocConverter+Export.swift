@@ -163,7 +163,7 @@ struct DocExporter {
             let marks = marks(attrs, kind: kind, checked: checked)
             let pieces = ns.substring(with: run).components(separatedBy: "\u{2028}")
             for (index, piece) in pieces.enumerated() {
-                if index > 0 { content.append(.hardBreak) }
+                if index > 0 { content.append(attrs[.noteItSoftBreak] != nil ? .softBreak : .hardBreak) }
                 appendText(piece, marks: marks)
             }
         }

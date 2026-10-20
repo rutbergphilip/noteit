@@ -153,7 +153,7 @@ public enum MarkdownCodec {
                     guard let sha = shas[path], let bytes = data[sha] else { return nil }
                     if attachments[sha] == nil { attachments[sha] = Attachment(mime: mime, name: name, data: bytes) }
                     return .attachment(sha: sha, name: name, mime: mime)
-                case .text, .hardBreak:
+                case .text, .hardBreak, .softBreak:
                     return inline
                 }
             }

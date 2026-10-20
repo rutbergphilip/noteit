@@ -82,6 +82,21 @@ final class BodyCodecMarkdownTests: XCTestCase {
         XCTAssertTrue(BodyCodec.semanticallyEqual(try BodyCodec.markdown.read(at: url).text, text))
     }
 
+    func testHardWrappedParagraphEditAddsNoBackslashes() throws {
+        let url = dir.appendingPathComponent("note.md")
+        try Data("One two\nthree four\n".utf8).write(to: url)
+        let (_, view) = NoteItTextView.make()
+        view.storage.setAttributedString(try BodyCodec.markdown.read(at: url).text)
+        view.normalizePendingEdits()
+        XCTAssertEqual(view.string, "One two\u{2028}three four\n")
+        view.insertText("2", replacementRange: NSRange(location: 4, length: 3))
+        view.setSelectedRange(NSRange(location: 6, length: 0))
+        view.insertText("x", replacementRange: view.selectedRange())
+        view.insertLineBreak(nil)
+        try BodyCodec.markdown.write(view.attributedString(), to: url)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "One 2\nx\\\nthree four\n")
+    }
+
     func testFrontMatterExtrasSurviveEdit() throws {
         let url = dir.appendingPathComponent("note.md")
         try Data("---\naliases:\n  - Weekly\ncssclasses: [wide]\n---\n# Notes\n\nBody\n".utf8).write(to: url)

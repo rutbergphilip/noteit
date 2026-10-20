@@ -140,7 +140,7 @@ Base: **CommonMark 0.31 + GitHub Flavored Markdown** (tables, task lists, `~~str
 |---|---|
 | Title / Heading / Subheading | `# `, `## `, `### `. `####`–`######` read as Subheading. |
 | Body paragraph | plain text; paragraphs separated by one blank line |
-| Line break inside a paragraph | `\` at end of line |
+| Line break inside a paragraph | `\` at end of line; a soft break read from a file stays a plain newline (below) |
 | Bold, italic, strikethrough, inline code | `**…**`, `*…*`, `~~…~~`, `` `…` `` |
 | Underline | `<u>…</u>` |
 | Highlight, default yellow | `==…==` (as Obsidian, iA Writer, Typora) |
@@ -157,6 +157,8 @@ Base: **CommonMark 0.31 + GitHub Flavored Markdown** (tables, task lists, `~~str
 | Table | GFM pipe table; column widths in a block comment (below) |
 | Image | `![photo.jpg|480](_attachments/3f9a1c2b7d10-photo.jpg)`; `|480` is the display width in points, omitted at natural size |
 | Other attachment | `[report.pdf](_attachments/9b01e4aa52c7-report.pdf)` |
+
+**Line breaks.** CommonMark has two: a hard break (`\` or two spaces at the end of a line) and a soft break (a plain newline inside a paragraph, which renderers show as a space). NoteIt shows a soft break as a line break, as Obsidian does, but keeps it apart: the reader makes a plain newline a `softBreak` inline (stored in `noteit-doc` as `{"type": "hardBreak", "attrs": {"soft": true}}`, so a reader that doesn't know the attribute sees a hard break), and the editor carries it as U+2028 with the `noteItSoftBreak` attribute. The writer writes a soft break back as a plain newline and a hard break as `\` + newline, so editing a hard-wrapped paragraph adds no backslashes. A line break the user types has no soft mark and is written as `\`. Where a plain newline can't stand — at the start or end of a paragraph or list item, next to another break, or in a heading, code block or table cell — a soft break is read and written as a hard one.
 
 Colours are written as uppercase `#RRGGBB` sRGB. The editor's palettes (`EditorStyle.textColors`, `EditorStyle.highlightColors`) map to their exact hex values, so a Yellow highlight is always `==…==` and other highlights always use the same hex.
 

@@ -141,7 +141,7 @@ struct BlockParser {
                                  range: start..<lines[lastCode].range.upperBound)]
                 i = lastCode + 1
             } else {
-                var text = [Self.trimmed(line.text)]
+                var text = [line.text]
                 var j = i + 1
                 var setext: Int?
                 while j < lines.count, !lines[j].isBlank {
@@ -150,12 +150,13 @@ struct BlockParser {
                         break
                     }
                     if Self.startsBlock(lines[j].text, interruptingParagraph: true) { break }
-                    text.append(Self.trimmed(lines[j].text))
+                    text.append(lines[j].text)
                     j += 1
                 }
-                let content = inline.parse(text.joined(separator: "\n"))
+                let content = inline.parse(lines: text)
                 if let setext {
-                    produced = [Unit(nodes: [.heading(level: setext, align: attrs.align, indent: attrs.indent, content: content)],
+                    produced = [Unit(nodes: [.heading(level: setext, align: attrs.align, indent: attrs.indent,
+                                                      content: content.hardeningSoftBreaks())],
                                      range: start..<lines[j].range.upperBound)]
                     i = j + 1
                 } else {
@@ -211,7 +212,7 @@ struct BlockParser {
         var items: [Item] = []
         let firstLine = ListItemLine(lines[first].text)!
         items.append(Item(line: firstLine, attrs: firstAttrs, start: firstStart, end: lines[first].range.upperBound,
-                          text: [firstLine.content], blanksBefore: []))
+                          text: [firstLine.content + Self.hardBreakSpaces(lines[first].text)], blanksBefore: []))
         var j = first + 1
         while j < lines.count {
             var k = j
@@ -231,12 +232,12 @@ struct BlockParser {
             if let next = ListItemLine(lines[itemIndex].text), !Self.isThematicBreak(lines[itemIndex].text) {
                 start = itemIndex == k ? start : lines[k].range.lowerBound
                 items.append(Item(line: next, attrs: attrs, start: start, end: lines[itemIndex].range.upperBound,
-                                  text: [next.content], blanksBefore: gap))
+                                  text: [next.content + Self.hardBreakSpaces(lines[itemIndex].text)], blanksBefore: gap))
                 j = itemIndex + 1
                 continue
             }
             guard gap.isEmpty, !Self.startsBlock(lines[k].text, interruptingParagraph: true) else { break }
-            items[items.count - 1].text.append(Self.trimmed(lines[k].text))
+            items[items.count - 1].text.append(lines[k].text)
             items[items.count - 1].end = lines[k].range.upperBound
             j = k + 1
         }
@@ -261,7 +262,7 @@ struct BlockParser {
         var gaps: [[Range<String.Index>]] = []
         for (index, item) in items.enumerated() {
             let level = min(8, max(0, levels[index]))
-            let content = inline.parse(item.text.joined(separator: "\n"))
+            let content = inline.parse(lines: item.text)
             let node: DocNode
             switch item.line.kind {
             case .task(let checked):
@@ -410,6 +411,11 @@ struct BlockParser {
             index = line.index(after: index)
         }
         return String(line[index...])
+    }
+
+    /// Two spaces when `line` ends in a hard break's spaces, for `InlineParser.parse(lines:)`.
+    static func hardBreakSpaces(_ line: String) -> String {
+        line.reversed().prefix(while: { $0 == " " }).count >= 2 ? "  " : ""
     }
 
     static func trimmed(_ line: String) -> String {
@@ -610,7 +616,7 @@ enum RichBlock {
                 switch inline {
                 case .text(let text, _): words.append(text)
                 case .image(_, let name, _, _), .attachment(_, let name, _): words.append(" " + name + " ")
-                case .hardBreak: words.append(" ")
+                case .hardBreak, .softBreak: words.append(" ")
                 }
             }
             words.append(" ")
@@ -642,7 +648,7 @@ enum RichBlock {
                     refs.append(AttachmentRef(path: path, displayName: name, width: width.map { Int($0.rounded()) }))
                 case .attachment(let path, let name, _):
                     refs.append(AttachmentRef(path: path, displayName: name, width: nil))
-                case .text, .hardBreak:
+                case .text, .hardBreak, .softBreak:
                     break
                 }
             }

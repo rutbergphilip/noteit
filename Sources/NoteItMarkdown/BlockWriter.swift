@@ -439,7 +439,7 @@ struct MarkdownWriter {
             switch inline {
             case .text(let text, _): strictEscaper.escape(text, inLinkText: false)
             case .image(_, let name, _, _), .attachment(_, let name, _): " " + strictEscaper.escape(name, inLinkText: false) + " "
-            case .hardBreak: " "
+            case .hardBreak, .softBreak: " "
             }
         }.joined()
         return InlineWriter.protectLine(text, lineStart: context == .block)
@@ -499,7 +499,8 @@ struct MarkdownWriter {
     }
 
     /// The doc as the reader gives it back: images and attachments by path, marks in canonical order, no empty
-    /// or mergeable text runs; `portable` drops font sizes and unknown blocks.
+    /// or mergeable text runs, soft breaks only where a plain newline can stand; `portable` drops font sizes and
+    /// unknown blocks.
     static func readable(_ node: DocNode, attachmentPath: (String) -> String, profile: MarkdownProfile) -> DocNode {
         if profile == .portable, case .doc(let blocks) = node {
             let known = blocks.filter { if case .unknown = $0 { false } else { true } }
@@ -513,14 +514,41 @@ struct MarkdownWriter {
                     result.append(.image(sha: attachmentPath(sha), name: name, mime: mime, width: width))
                 case .attachment(let sha, let name, let mime):
                     result.append(.attachment(sha: attachmentPath(sha), name: name, mime: mime))
-                case .hardBreak:
-                    result.append(.hardBreak)
+                case .hardBreak, .softBreak:
+                    result.append(inline)
                 case .text(let text, var marks):
                     if profile == .portable { marks.removeAll { if case .fontSize = $0 { true } else { false } } }
                     result.append(.text(text, marks: MarkOrder.canonical(marks)))
                 }
             }
             return result.mergingTextRuns()
+        }.withWritableBreaks()
+    }
+}
+
+private extension DocNode {
+    /// Soft breaks where the writer can keep them: inside paragraphs and list items, never at an end or next to
+    /// another break; elsewhere they become hard.
+    func withWritableBreaks(inCell: Bool = false) -> DocNode {
+        switch self {
+        case .doc(let content):
+            .doc(content.map { $0.withWritableBreaks() })
+        case .paragraph(let align, let indent, let content):
+            .paragraph(align: align, indent: indent, content: inCell ? content.hardeningSoftBreaks() : content.resolvingSoftBreaks())
+        case .listItem(let kind, let level, let number, let checked, let align, let content):
+            .listItem(kind: kind, level: level, number: number, checked: checked, align: align, content: content.resolvingSoftBreaks())
+        case .heading(let level, let align, let indent, let content):
+            .heading(level: level, align: align, indent: indent, content: content.hardeningSoftBreaks())
+        case .codeBlock(let align, let language, let content):
+            .codeBlock(align: align, language: language, content: content.hardeningSoftBreaks())
+        case .blockquote(let indent, let content):
+            .blockquote(indent: indent, content: content.map { $0.withWritableBreaks() })
+        case .table(let widths, let rows):
+            .table(columnWidths: widths, rows: rows.map { row in
+                row.map { TableCell(header: $0.header, content: $0.content.map { $0.withWritableBreaks(inCell: true) }) }
+            })
+        case .horizontalRule, .unknown:
+            self
         }
     }
 }

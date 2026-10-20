@@ -274,4 +274,6 @@ extension NSAttributedString.Key {
     /// A code paragraph's `codeBlock.language` identifier as written, known to `CodeLanguage` or not (foundations
     /// Task 2.3). Value: String. The only paragraph attribute NoteItDocAppKit adds.
     public static let noteItCodeLanguageID = NSAttributedString.Key("NoteItCodeLanguageID")
+    /// On a U+2028 that came from a `softBreak`, so it is written back as one; a typed line break has none. Value: true.
+    public static let noteItSoftBreak = NSAttributedString.Key("NoteItSoftBreak")
 }

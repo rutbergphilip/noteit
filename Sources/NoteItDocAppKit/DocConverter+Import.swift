@@ -108,6 +108,10 @@ struct DocImporter {
                 out.append(NSAttributedString(string: string, attributes: attributes(for: marks, kind: kind, base: baseAttrs)))
             case .hardBreak:
                 out.append(NSAttributedString(string: "\u{2028}", attributes: baseAttrs))
+            case .softBreak:
+                var attrs = baseAttrs
+                attrs[.noteItSoftBreak] = true
+                out.append(NSAttributedString(string: "\u{2028}", attributes: attrs))
             case .image(let sha, let name, let mime, let width):
                 out.append(try attachmentString(sha: sha, name: Self.fileName(name, mime: mime, fallback: "image"), width: width,
                                                 attributes: baseAttrs))
