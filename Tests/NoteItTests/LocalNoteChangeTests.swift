@@ -10,7 +10,14 @@ final class LocalNoteChangeTests: XCTestCase {
     private var root: URL!
     private let fm = FileManager.default
     private typealias S = RawMetaSupport
-    private var posted: [(UUID, LocalNoteChangeKind)] = []
+    private final class Recorder: @unchecked Sendable {
+        var posted: [(UUID, LocalNoteChangeKind)] = []
+    }
+    private let recorder = Recorder()
+    private var posted: [(UUID, LocalNoteChangeKind)] {
+        get { recorder.posted }
+        set { recorder.posted = newValue }
+    }
     private var token: NSObjectProtocol?
 
     override func setUpWithError() throws {
@@ -24,10 +31,11 @@ final class LocalNoteChangeTests: XCTestCase {
 
     private func makeStore() -> NoteStore {
         let store = NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false))
-        token = NotificationCenter.default.addObserver(forName: .localNoteChange, object: store, queue: nil) { [weak self] note in
+        let recorder = recorder
+        token = NotificationCenter.default.addObserver(forName: .localNoteChange, object: store, queue: nil) { note in
             guard let id = note.userInfo?["noteID"] as? UUID, let kind = note.userInfo?["kind"] as? LocalNoteChangeKind
             else { return XCTFail("malformed userInfo") }
-            MainActor.assumeIsolated { self?.posted.append((id, kind)) }
+            recorder.posted.append((id, kind))
         }
         return store
     }
