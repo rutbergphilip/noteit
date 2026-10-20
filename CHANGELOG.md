@@ -15,6 +15,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Paste and Match Style is now ⇧⌘V, and ⌥⇧⌘V still works. It pastes just the text, in the style where you paste it. If you've bound ⇧⌘V yourself, your shortcut keeps it and Paste and Match Style stays on ⌥⇧⌘V.
 
+### Fixed
+
+- A code block at the top of a note is no longer cut off.
+
 ## [0.4.0] - 2026-10-20
 
 ### Changed
