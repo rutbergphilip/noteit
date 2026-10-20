@@ -38,6 +38,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
   - Bulleted, numbered and checklist lists, tables, code blocks, quotes, dividers, links and images.
   - Text colors and highlights.
   - Markdown as you type: `#`, `-`, `1.`, `[ ]`, `>`, ```` ``` ````, `---`, `**bold**`, `*italic*`, `` `code` `` and `~~strike~~`.
+  - Paste Markdown and it comes in formatted. ⇧⌘V pastes just the text.
   - About 30 keyboard shortcuts. See the [shortcut reference](docs/keyboard-shortcuts.md).
   - Menu shortcuts such as New Note, Find… and Print… can be changed in Settings › Shortcuts.
 - **Native and local-first**

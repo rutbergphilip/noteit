@@ -7,6 +7,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Paste Markdown. Copy Markdown from a code editor, a terminal or a `.md` file and ⌘V adds it as formatted text: headings, lists, checklists, code, links, quotes and more. Text copied from web pages and other apps keeps its formatting as before.
+
+### Changed
+
+- Paste and Match Style is now ⇧⌘V, and ⌥⇧⌘V still works. It pastes just the text, in the style where you paste it.
+
 ## [0.3.0] - 2026-10-19
 
 ### Added
