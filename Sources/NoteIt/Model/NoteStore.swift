@@ -28,7 +28,7 @@ final class NoteStore: ObservableObject {
     static var syncJournalEnabled = false
 
     /// Window during which notes count as "Recent".
-    static let recentInterval: TimeInterval = 7 * 24 * 60 * 60
+    static let recentInterval: TimeInterval = LibraryQuery.recentInterval
     nonisolated static let previewLength = 140
     nonisolated static let titleLength = 120
     /// Max clean (non-dirty, non-selected) bodies kept in memory.
@@ -167,50 +167,11 @@ final class NoteStore: ObservableObject {
 
     /// Pinned first, then most recently updated.
     func notes(for selection: SidebarSelection?, search: String) -> [NoteMeta] {
-        let filtered: [NoteMeta]
-        let active = activeNotes
-        switch selection ?? .allNotes {
-        case .allNotes:
-            filtered = active
-        case .pinned:
-            filtered = active.filter(\.isPinned)
-        case .recent:
-            let cutoff = Date().addingTimeInterval(-Self.recentInterval)
-            filtered = active.filter { $0.updatedAt >= cutoff }
-        case .conflicts:
-            filtered = active.filter { $0.conflictSource != nil }
-        case .recentlyDeleted:
-            filtered = deletedNotes
-        case .notebook(let id):
-            filtered = active.filter { $0.notebookID == id }
-        case .tag(let tag):
-            filtered = active.filter { $0.tags.contains(tag) }
-        case .today, .tasks, .smartFolder:
-            filtered = []
-        }
-
-        let terms = Self.fold(search).split(whereSeparator: \.isWhitespace)
-        let searched: [NoteMeta]
-        if terms.isEmpty {
-            searched = filtered
-        } else {
-            searched = filtered.filter { note in
-                let haystack = searchIndex[note.id] ?? Self.fold(note.title + "\n" + note.preview)
-                return terms.allSatisfy { haystack.contains($0) }
-            }
-        }
-
-        if selection == .recentlyDeleted {
-            return searched.sorted { ($0.deletedAt ?? .distantPast) > ($1.deletedAt ?? .distantPast) }
-        }
-        return searched.sorted { a, b in
-            if a.isPinned != b.isPinned { return a.isPinned }
-            return a.updatedAt > b.updatedAt
-        }
+        LibraryQuery.notes(notes, for: selection, search: search, now: Date(), indexedText: { searchIndex[$0] })
     }
 
     func count(for selection: SidebarSelection) -> Int {
-        notes(for: selection, search: "").count
+        LibraryQuery.count(notes, for: selection, now: Date())
     }
 
     /// Unique tags (lowercased, without `#`) across notes not in Recently Deleted, sorted.
