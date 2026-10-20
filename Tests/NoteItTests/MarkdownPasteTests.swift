@@ -178,7 +178,8 @@ final class MarkdownPasteTests: XCTestCase {
         rows += [("--- \ntitle: x\n...\(body)", "--- \ntitle: x\n..."), ("---\r\ntitle: x\r\n---\r\n## Notes\r\n- a\r\n- b\r\n", "---\ntitle: x\n---")]
         let no = ["## Action items\nNext steps:\n- Email Ann\n- Book room", "We agreed on three things: budget, hiring, travel.",
                   "See https://example.com for details", "**Note:** x", "1. Install: run brew\n2. Configure: edit file",
-                  "# Hugo archetype\ntitle: x"]
+                  "# Hugo archetype\ntitle: x", "See https://example.com: y", "Wait, really?: yes",
+                  "Mr. Smith: hi", "a) b: c"]
         rows += no.map { ("---\n\($0)\n---\(body)", nil) }
         rows += [("---\ntitle: x\(body)", nil), ("\n---\ntitle: x\n---\(body)", nil), (" ---\ntitle: x\n---\(body)", nil)]
 
