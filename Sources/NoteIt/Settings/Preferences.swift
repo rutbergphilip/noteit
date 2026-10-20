@@ -14,6 +14,10 @@ enum PrefKey {
     static let codeBlockTheme = "codeBlockTheme"
     static let syntaxHighlighting = "syntaxHighlighting"
     static let captureIncludesBrowserLinks = "captureIncludesBrowserLinks"
+    /// The "Daily Notes" notebook's UUID string (foundations Task 4.6; linking owns it).
+    static let dailyNotesNotebookID = "dailyNotesNotebookID"
+    /// A `DailyTitleFormat` raw value for new daily notes; unset means `iso`.
+    static let dailyNoteTitleFormat = "dailyNoteTitleFormat"
 }
 
 enum PrefDefault {

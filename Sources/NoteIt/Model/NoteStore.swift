@@ -108,6 +108,8 @@ final class NoteStore: ObservableObject {
     var failsBodyExtrasFinish = false
     /// Test hook: when set, `editBody` calls it instead of `history.record` to keep the current body.
     var recordVersionOverride: ((NSAttributedString, UUID) -> NoteVersion?)?
+    /// Where the daily-note preferences live (foundations Task 4.6); tests pass their own suite.
+    var preferences: UserDefaults = .standard
     /// Called with every body-extras problem that is logged while reading a sidecar.
     var bodyExtrasNoticeHandler: ((UUID, BodyExtrasNotice) -> Void)?
     /// Set when library.json was unreadable and could not be backed up: never overwrite it.
