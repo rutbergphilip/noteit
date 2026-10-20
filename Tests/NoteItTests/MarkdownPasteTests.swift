@@ -167,80 +167,56 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertFalse(view.string.contains("**"))
     }
 
-    func testFrontMatterStaysVerbatimAboveConvertedBody() throws {
-        let frontMatter = "---\ntitle: Trip\ntags: travel\ncreated: 2026-10-01\n---"
-        let note = frontMatter + "\n## Packing\n- passport\n- charger\n\nBook the **train** early.\n"
-        XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(note))
-        XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(frontMatter + "\nJust a sentence.\n"))
-        let view = editor(body(""))
-        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: note)))
-        XCTAssertTrue(view.string.hasPrefix(frontMatter + "\n"), view.string)
-        for line in ["title: Trip", "tags: travel", "created: 2026-10-01"] {
-            XCTAssertEqual(kind(view, of: line), .body, line)
-        }
-        let ns = view.string as NSString
-        XCTAssertEqual(view.blockKind(ofParagraph: view.paragraphRange(at: 0)), .body)
-        XCTAssertEqual(view.blockKind(ofParagraph: view.paragraphRange(at: ns.range(of: "---\n## ").location)), .body)
-        XCTAssertEqual(kind(view, of: "Packing"), .heading)
-        XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: ns.range(of: "charger").location)))
-        XCTAssertTrue(EditorStyle.isBold(try XCTUnwrap(font(view, at: "train"))))
-        XCTAssertFalse(view.string.contains("**"))
-    }
+    func testFrontMatterDetection() throws {
+        let body = "\n## Notes\n- a\n- b\n"
+        // (pasted text, the front matter kept verbatim or nil)
+        let yes = ["title: x", "tags: [a, b]", "aliases:\n  - y", "tags:\n- a\n- b", "Date created: 2024-01-01", "ämne: möte",
+                   "Time: 10:30", "title: Meeting\ndue date:", "title: x\n# comment\ndraft: true", "params:\n  # comment\n  a: b",
+                   "title: x\nnotes: |\n  #1 priority", "layout: post\ndate: 2024-01-01 10:00:00 +0100\ncategories: [a]",
+                   "description: >\n  folded text\n  more", "\"quoted key\": v", "_build: x"]
+        var rows: [(String, String?)] = yes.map { "---\n\($0)\n---" }.map { ($0 + body, $0) }
+        rows += [("--- \ntitle: x\n...\(body)", "--- \ntitle: x\n..."), ("---\r\ntitle: x\r\n---\r\n## Notes\r\n- a\r\n- b\r\n", "---\ntitle: x\n---")]
+        let no = ["## Action items\nNext steps:\n- Email Ann\n- Book room", "We agreed on three things: budget, hiring, travel.",
+                  "See https://example.com for details", "**Note:** x", "1. Install: run brew\n2. Configure: edit file",
+                  "# Hugo archetype\ntitle: x"]
+        rows += no.map { ("---\n\($0)\n---\(body)", nil) }
+        rows += [("---\ntitle: x\(body)", nil), ("\n---\ntitle: x\n---\(body)", nil), (" ---\ntitle: x\n---\(body)", nil)]
 
-    func testFrontMatterKeysMayHaveSpacesAccentsAndQuotes() {
-        func count(_ text: String) -> Int { MarkdownPasteDetector.frontMatterLineCount(MarkdownReader.lines(of: text)) }
-        for line in ["Date created: 2024-01-01", "ämne: möte", "Time: 10:30", "\"x y\": z", "'x': z", "done:"] {
-            XCTAssertEqual(count("---\n\(line)\n---\nBody\n"), 3, line)
-        }
-        for line in ["_x: y", "[link]: y", "> quote: y", "See https://example.com: y"] {
-            XCTAssertEqual(count("---\n\(line)\n---\nBody\n"), 0, line)
-        }
-
-        let frontMatter = "---\nDate created: 2024-01-01\nämne: möte\nTime: 10:30\n---"
-        let view = editor(body(""))
-        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: frontMatter + "\n## Notes\n- a\n- b\n")))
-        XCTAssertTrue(view.string.hasPrefix(frontMatter + "\n"), view.string)
-        XCTAssertEqual(kind(view, of: "ämne: möte"), .body)
-        XCTAssertEqual(kind(view, of: "Notes"), .heading)
-    }
-
-    func testFrontMatterNeedsYAMLKeyLines() {
-        func count(_ text: String) -> Int { MarkdownPasteDetector.frontMatterLineCount(MarkdownReader.lines(of: text)) }
-        for line in ["See https://example.com for details", "**Note:** x", "  indented: first", "- item"] {
-            XCTAssertEqual(count("---\n\(line)\n---\nBody\n"), 0, line)
-        }
-        XCTAssertEqual(count("---\ntitle: x\ntags: [a, b]\n\naliases:\n  - y\n- z\n---\nBody\n"), 8)
-        XCTAssertEqual(count("---\ntitle: x\n# comment\n---\nBody\n"), 0)
-        for line in ["Next steps:", "Some long label here: x", "We agreed on three things: budget, hiring, travel.", "Wait, really?: yes", "Tags:"] {
-            XCTAssertEqual(count("---\n\(line)\n---\nBody\n"), 0, line)
-        }
-
-        let note = "---\nSee https://example.com for details\n---\n## Next\n- a\n- b\n"
-        XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(note))
-        let view = editor(body(""))
-        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: note)))
-        XCTAssertEqual(kind(view, of: "Next"), .heading)
-        XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: (view.string as NSString).range(of: "b", options: .backwards).location)))
-    }
-
-    func testMarkdownSectionsBetweenDividersAreNotFrontMatter() {
-        let notes = [
-            "---\n## Action items\nNext steps:\n- Email Ann\n- Book room\n---\n## Notes\n- x\n",
-            "---\nWe agreed on three things: budget, hiring, travel.\n---\n## Notes\n- x\n- y\n",
-        ]
-        for note in notes {
-            XCTAssertEqual(MarkdownPasteDetector.frontMatterLineCount(MarkdownReader.lines(of: note)), 0, note)
-            XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(note), note)
-            let view = editor(body(""))
-            XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: note)), note)
+        for (text, frontMatter) in rows {
+            let expected = frontMatter.map { MarkdownReader.lines(of: $0).count } ?? 0
+            XCTAssertEqual(MarkdownPasteDetector.frontMatterLineCount(MarkdownReader.lines(of: text)), expected, text)
+            XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(text), text)
+            let view = editor(self.body(""))
+            XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: text)), text)
+            let ns = view.string as NSString
+            if let frontMatter {
+                XCTAssertTrue(view.string.hasPrefix(frontMatter + "\n"), view.string)
+                for line in MarkdownReader.lines(of: frontMatter) where !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                    XCTAssertEqual(view.blockKind(ofParagraph: view.paragraphRange(at: ns.range(of: line).location)), .body, line)
+                }
+            }
             XCTAssertEqual(kind(view, of: "Notes"), .heading, view.string)
             XCTAssertFalse(view.string.contains("## "), view.string)
-            XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: (view.string as NSString).range(of: "x", options: .backwards).location)), view.string)
+            XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: ns.range(of: "b", options: .backwards).location)), view.string)
         }
-        let view = editor(body(""))
-        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: notes[0])))
-        XCTAssertEqual(kind(view, of: "Action items"), .heading, view.string)
-        XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: (view.string as NSString).range(of: "Book room").location)), view.string)
+
+        let actionItems = editor(self.body(""))
+        XCTAssertTrue(actionItems.pasteMarkdown(from: pasteboard(plain: rows[yes.count + 2].0)))
+        XCTAssertEqual(kind(actionItems, of: "Action items"), .heading, actionItems.string)
+        XCTAssertNotNil(actionItems.marker(ofParagraph: actionItems.paragraphRange(at: (actionItems.string as NSString).range(of: "Book room").location)))
+        let hugo = editor(self.body(""))
+        XCTAssertTrue(hugo.pasteMarkdown(from: pasteboard(plain: rows[yes.count + 7].0)))
+        XCTAssertTrue([.title, .heading].contains(kind(hugo, of: "Hugo archetype")), hugo.string)
+        let install = editor(self.body(""))
+        XCTAssertTrue(install.pasteMarkdown(from: pasteboard(plain: rows[yes.count + 6].0)))
+        XCTAssertNotNil(install.marker(ofParagraph: install.paragraphRange(at: (install.string as NSString).range(of: "Configure").location)))
+
+        let note = "---\ntitle: Trip\n---\nBook the **train** early.\n"
+        XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown("---\ntitle: Trip\n---\nJust a sentence.\n"))
+        let view = editor(self.body(""))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: note)))
+        XCTAssertTrue(EditorStyle.isBold(try XCTUnwrap(font(view, at: "train"))))
+        XCTAssertFalse(view.string.contains("**"))
     }
 
     func testPathologicalInputsAreFast() {

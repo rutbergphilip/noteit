@@ -77,60 +77,52 @@ enum MarkdownPasteDetector {
         return false
     }
 
-    /// The lines of a leading `---` YAML block such as an Obsidian note's front matter, or 0.
+    /// The lines of a leading `---` YAML block such as an Obsidian note's front matter, through its closing `---` or `...`, or 0.
     static func frontMatterLineCount(_ lines: [String]) -> Int {
-        func isEnd(_ line: String, _ marks: [String]) -> Bool { marks.contains(line.trimmingCharacters(in: .whitespaces)) }
-        guard let first = lines.first, isEnd(first, ["---"]),
-              let end = lines.dropFirst().firstIndex(where: { isEnd($0, ["---", "..."]) }) else { return 0 }
+        func trailingTrimmed(_ line: String) -> Substring {
+            line[..<(line.lastIndex { $0 != " " && $0 != "\t" }.map(line.index(after:)) ?? line.startIndex)]
+        }
+        guard let first = lines.first, trailingTrimmed(first) == "---",
+              let close = lines.dropFirst().firstIndex(where: { ["---", "..."].contains(trailingTrimmed($0)) }) else { return 0 }
         var hasKey = false
-        var hasValue = false
-        for line in lines[1..<end] {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty { continue }
-            // Markdown headings look like YAML comments, so a `#` line means this is a section, not front matter.
-            if trimmed.hasPrefix("#") { return 0 }
-            if trimmed.hasPrefix("- ") || line.first == " " || line.first == "\t" {
-                guard hasKey else { return 0 }
+        for line in lines[1..<close] where !line.allSatisfy({ $0 == " " || $0 == "\t" }) {
+            if isFrontMatterKey(line) {
+                hasKey = true
                 continue
             }
-            guard let valued = frontMatterKey(line) else { return 0 }
-            hasKey = true
-            hasValue = hasValue || valued
+            let other = line.first == " " || line.first == "\t" || line.hasPrefix("- ") || line == "#" || line.hasPrefix("# ")
+            guard hasKey, other else { return 0 }
         }
-        return hasValue ? end + 1 : 0
+        return hasKey ? close + 1 : 0
     }
 
-    /// A quoted key, or text before the first `: ` or a trailing `:` that reads like a short label rather than prose.
-    /// Nil for any other line; otherwise whether the key has a value or is a bare lowercase name such as `tags:` above a list.
-    private static func frontMatterKey(_ line: String) -> Bool? {
-        func hasValue(after colon: String.Index) -> Bool {
-            !line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces).isEmpty
+    private static let orderedListMarker = regex("^\\d{1,9}[.)] ")
+
+    /// A column-0 quoted key, or a short label before the first `: ` or a trailing `:` that doesn't read like prose.
+    private static func isFrontMatterKey(_ line: String) -> Bool {
+        func endsKey(_ rest: Substring) -> Bool {
+            rest == ":" || rest.hasPrefix(": ") || rest.hasPrefix(":\t")
         }
         if let quote = line.first, quote == "\"" || quote == "'" {
-            guard let close = line.dropFirst().firstIndex(of: quote) else { return nil }
-            let after = line[line.index(after: close)...]
-            guard after == ":" || after.hasPrefix(": ") || after.hasPrefix(":\t") else { return nil }
-            return hasValue(after: line.index(after: close))
+            guard let close = line.dropFirst().firstIndex(of: quote) else { return false }
+            return endsKey(line[line.index(after: close)...])
         }
-        guard let first = line.first, first.isLetter || first.isNumber else { return nil }
-        var found: String.Index?
+        guard let first = line.first, first.isLetter || first.isNumber || first == "_" else { return false }
+        var colon: String.Index?
         var index = line.startIndex
-        while let colon = line[index...].firstIndex(of: ":") {
-            let next = line.index(after: colon)
-            if next == line.endIndex || line[next] == " " || line[next] == "\t" {
-                found = colon
+        while let found = line[index...].firstIndex(of: ":") {
+            if endsKey(line[found...]) {
+                colon = found
                 break
             }
-            index = next
+            index = line.index(after: found)
         }
-        guard let colon = found else { return nil }
+        guard let colon else { return false }
         let key = line[..<colon]
-        let valued = hasValue(after: colon)
-        let hasSpace = key.contains { $0 == " " || $0 == "\t" }
-        guard !key.contains("://"), key.split(whereSeparator: { $0 == " " || $0 == "\t" }).count <= 3,
-              let last = key.last, !".!?,;".contains(last), valued || !hasSpace else { return nil }
-        let bareName = key.allSatisfy { ($0.isLetter && $0.isLowercase) || $0.isNumber || $0 == "_" || $0 == "-" }
-        return valued || bareName
+        guard !matches(orderedListMarker, line), !key.contains("://"), !key.contains(". "), !key.contains(") "),
+              key.split(whereSeparator: { $0 == " " || $0 == "\t" }).count <= 4,
+              let last = key.last, !".!?,;".contains(last) else { return false }
+        return true
     }
 
     /// Diffs, and text where many lines read like a programming language.
