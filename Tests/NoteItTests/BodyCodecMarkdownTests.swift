@@ -221,6 +221,36 @@ final class BodyCodecMarkdownTests: XCTestCase {
         XCTAssertTrue(written.contains("\nupdated: 2026-10-20T08:00:00Z\n\(unknown)\n---\n"), written)
     }
 
+    func testConflictAndLockKeysComeFromTheNote() throws {
+        let url = dir.appendingPathComponent("note.md")
+        let original = UUID()
+        var note = meta(UUID())
+        note.conflictOriginalID = original
+        note.conflictSource = "Work \"Mac\""
+        note.lock = NoteLock(keyID: "k1", sealedID: UUID())
+        try BodyCodec.markdown.write(NSAttributedString(string: "Body"), extras: ContainerExtras(frontMatter: "aliases: [A]"),
+                                     meta: note, to: url)
+        let written = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(written.contains("""
+            \nconflict-of: \(original.uuidString)
+            conflict-source: "Work \\"Mac\\""
+            locked: true
+            aliases: [A]
+            ---\n
+            """), written)
+        let read = try BodyCodec.markdown.read(at: url)
+        XCTAssertEqual(read.frontMatter?.conflictOf, original)
+        XCTAssertEqual(read.frontMatter?.conflictSource, "Work \"Mac\"")
+        XCTAssertEqual(read.extras.frontMatter, "aliases: [A]")
+
+        note.conflictOriginalID = nil
+        note.conflictSource = nil
+        note.lock = nil
+        try BodyCodec.markdown.write(read.text, extras: read.extras, meta: note, to: url)
+        let rewritten = try String(contentsOf: url, encoding: .utf8)
+        for key in ["conflict-of:", "conflict-source:", "locked:"] { XCTAssertFalse(rewritten.contains(key), rewritten) }
+    }
+
     private func png(_ color: NSColor) throws -> Data {
         try XCTUnwrap(NSImage(size: NSSize(width: 2, height: 2), flipped: false) { rect in
             color.setFill()
