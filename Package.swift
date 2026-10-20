@@ -60,6 +60,7 @@ let package = Package(
                 "NoteItCore",
                 "NoteItDoc",
                 "NoteItDocAppKit",
+                "NoteItMarkdown",
                 "NoteItSync",
                 "NoteItAPI",
                 .product(name: "Sparkle", package: "Sparkle")
@@ -95,7 +96,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NoteItTests",
-            dependencies: ["NoteIt", "NoteItCore", "NoteItDoc", "NoteItDocAppKit", "NoteItSync"],
+            dependencies: ["NoteIt", "NoteItCore", "NoteItDoc", "NoteItDocAppKit", "NoteItMarkdown", "NoteItSync"],
             path: "Tests/NoteItTests"
         ),
         .testTarget(

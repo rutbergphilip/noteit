@@ -1,9 +1,13 @@
 import AppKit
 import Foundation
+import NoteItDoc
+import NoteItDocAppKit
+import NoteItMarkdown
 
 /// The one body codec type, with no registry. Owned by the foundations plan (Task 4.2; program §6).
 /// `rtfd` is the editor's NSAttributedString as RTFD libraries store it (an `.rtfd` package); `noteItDoc` is a
-/// self-contained `.noteitdoc` file. markdown-storage adds `case markdown` in wave 1 with a branch in each switch.
+/// self-contained `.noteitdoc` file. `markdown` is a standalone `.md` file in the library flavour, with its images and
+/// attachments in `_attachments/` beside it (markdown-storage Task 2.4).
 ///
 /// Sync's body encoding: a `noteit-doc` body is built with `noteItDoc(of: text, extras: bodyExtras[id] ?? .empty)`
 /// before sealing, and an incoming one is applied with `attributedString(from:)`, writing with the returned extras
@@ -11,26 +15,38 @@ import Foundation
 enum BodyCodec: String, CaseIterable, Sendable {
     case rtfd
     case noteItDoc
+    case markdown
 
     var fileExtension: String {
         switch self {
         case .rtfd: "rtfd"
         case .noteItDoc: "noteitdoc"
+        case .markdown: "md"
         }
     }
 
-    /// `.rtfd` reads `extras` as `.empty`.
+    /// `.rtfd` reads `extras` as `.empty`. `.markdown` reads either flavour, takes relative image and attachment
+    /// paths from beside the file, and returns the unknown front matter keys as `extras.frontMatter`.
     func read(at url: URL) throws -> StoredBody {
         switch self {
         case .rtfd:
             return StoredBody(text: try RTFDBodyStorage.readBody(at: url))
         case .noteItDoc:
             return try Self.attributedString(from: BodyContainer.decode(Data(contentsOf: url)))
+        case .markdown:
+            guard let text = String(data: try Data(contentsOf: url), encoding: .utf8) else { throw MarkdownError.notUTF8 }
+            let folder = url.deletingLastPathComponent()
+            let imported = MarkdownCodec.resolvingAttachments(try MarkdownCodec.parse(text)) { path in
+                guard !path.contains(":"), !path.hasPrefix("/") else { return nil }
+                return try? Data(contentsOf: folder.appendingPathComponent(path))
+            }
+            return try Self.attributedString(from: imported.body)
         }
     }
 
     /// Replaces `url` atomically. `.rtfd` ignores `extras`; `.noteItDoc` writes one file with the attachments and
-    /// `extras` inside.
+    /// `extras` inside; `.markdown` writes `extras.frontMatter` back as front matter and the attachments to
+    /// `_attachments/` beside the file.
     func write(_ text: NSAttributedString, extras: ContainerExtras = .empty, to url: URL) throws {
         switch self {
         case .rtfd:
@@ -38,6 +54,16 @@ enum BodyCodec: String, CaseIterable, Sendable {
             try RTFDBodyStorage.installBody(temp, at: url)
         case .noteItDoc:
             try data(of: text, extras: extras).write(to: url, options: .atomic)
+        case .markdown:
+            let container = try Self.noteItDoc(of: text, extras: extras)
+            let folder = url.deletingLastPathComponent().appendingPathComponent(AttachmentPaths.folder, isDirectory: true)
+            for (sha, attachment) in container.attachments {
+                let file = folder.appendingPathComponent(AttachmentPaths.fileName(sha256: sha, originalName: attachment.name))
+                guard !FileManager.default.fileExists(atPath: file.path) else { continue }
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try attachment.data.write(to: file, options: .atomic)
+            }
+            try Data(Self.markdown(of: container, profile: .library).utf8).write(to: url, options: .atomic)
         }
     }
 
@@ -52,6 +78,8 @@ enum BodyCodec: String, CaseIterable, Sendable {
             return data
         case .noteItDoc:
             return try Self.noteItDoc(of: text, extras: extras).encoded()
+        case .markdown:
+            return Data(Self.markdown(of: try Self.noteItDoc(of: text, extras: extras), profile: .library).utf8)
         }
     }
 
@@ -115,5 +143,28 @@ enum BodyCodec: String, CaseIterable, Sendable {
     static func semanticallyEqual(_ a: NSAttributedString, _ b: NSAttributedString) -> Bool {
         guard let left = try? noteItDoc(of: a).encoded(), let right = try? noteItDoc(of: b).encoded() else { return false }
         return left == right
+    }
+}
+
+// MARK: Markdown
+
+extension BodyCodec {
+    /// `text` as a standalone Markdown file; images and attachments point into `_attachments/`.
+    static func markdown(of text: NSAttributedString, profile: MarkdownProfile) throws -> String {
+        markdown(of: try noteItDoc(of: text), profile: profile)
+    }
+
+    /// Markdown from outside the library (automation, plugins, the web clipper).
+    static func attributedString(fromMarkdown text: String, options: MarkdownImportOptions) async throws
+        -> (NSAttributedString, unresolvedImages: [AttachmentRef]) {
+        let imported = try await MarkdownCodec.importDocument(text, options: options)
+        return (try DocConverter.importDocument(imported.body, styles: AppDocStyleProvider.shared), imported.unresolvedImages)
+    }
+
+    fileprivate static func markdown(of container: BodyContainer, profile: MarkdownProfile) -> String {
+        MarkdownCodec.serialize(container, frontMatter: .empty, profile: profile, attachmentPath: { sha in
+            let name = container.attachments[sha]?.name ?? ""
+            return AttachmentPaths.folder + "/" + AttachmentPaths.fileName(sha256: sha, originalName: name)
+        }, previous: nil)
     }
 }

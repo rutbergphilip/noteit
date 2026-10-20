@@ -156,6 +156,8 @@ public enum MarkdownCodec {
                                  previous: ParsedMarkdown?) -> String
     public static func importDocument(_ text: String, options: MarkdownImportOptions)
                                       async throws -> ImportedMarkdown          // parse, then fetch each image once
+    public static func resolvingAttachments(_ parsed: ParsedMarkdown, read: (String) -> Data?)
+                                            -> ImportedMarkdown                 // the synchronous step, for BodyCodec.read
 }
 
 public enum MarkdownError: Error, Equatable { case invalidFrontMatter(line: Int), notUTF8 }
@@ -487,11 +489,11 @@ The writer writes one blank line after front matter, which the parser reads as t
 
 **Files:** `Sources/NoteItMarkdown/MarkdownCodec.swift`, foundations' `BodyCodec` file, `Tests/NoteItMarkdownTests/ImportOptionsTests.swift`, `Tests/NoteItTests/BodyCodecMarkdownTests.swift`
 
-- [ ] `ImportOptionsTests`: `importDocument` calls `resolveImage` once per distinct image URL, relative paths resolved against `baseURL`; the returned bytes become an attachment keyed by SHA-256 and the image node points at it; nil and data over `AttachmentLimit.maxBytes` drop the image and list it in `unresolvedImages`; the same URL twice is fetched once; wiki links go through `resolveNoteLink`.
-- [ ] `BodyCodecMarkdownTests`: `BodyCodec.markdown(of:profile:)` then `attributedString(fromMarkdown:options:)` is `semanticallyEqual` to the input for the seeded sample notes with the `library` flavour; the `portable` flavour has no `<!-- noteit` comments.
+- [ ] `ImportOptionsTests`: `importDocument` calls `resolveImage` once per distinct image URL, relative paths resolved against `baseURL`; the returned bytes become an attachment keyed by SHA-256 and the image node points at it; nil, empty data and data over `AttachmentLimit.maxBytes` drop the image and list it in `unresolvedImages`; the same URL twice is fetched once; wiki links go through `resolveNoteLink`. Non-image attachment links are resolved the same way. `importDocument` is `parse`, the fetches, then the public `resolvingAttachments(_:read:)`, which `BodyCodec.read(at:)` calls with file reads (it can't await).
+- [ ] `BodyCodecMarkdownTests`: `BodyCodec.markdown(of:profile:)` then `attributedString(fromMarkdown:options:)` is `semanticallyEqual` to the input for the seeded sample notes (`SeedData.welcomeBody()`, the one seeded note) with the `library` flavour, and at most 1% of their blocks need the rich-block fallback; the `portable` flavour has no `<!-- noteit` comments; the editor's Yellow highlight is written as `==…==`; images are written to `_attachments/` beside the file and read back. `NoteItTests` depends on `NoteItMarkdown`.
 - [ ] `BodyCodecMarkdownTests`: `BodyCodec.markdown.fileExtension` is `md`; `data(of:extras:)` equals the bytes of the file `write(_:extras:to:)` stores; `testFrontMatterExtrasSurviveEdit`: a `.md` file with an unknown front matter key (`aliases:`) → `read(at:)` → change the text → `write(_:extras:to:)` with the read `extras` keeps the key verbatim, also when the edit empties the document; foundations' `allCases` round-trip loop in `BodyCodecTests` now covers `.markdown` and passes.
 - [ ] Add `case markdown` inside the `BodyCodec` enum body in foundations' file (not in an extension: Swift can't add a case there) and a `.markdown` branch to each switch: `fileExtension`, `read(at:)`, `write(_:extras:to:)` and `data(of:extras:)`. The switches keep no `default:` branch. No registry and no second codec type (program §6).
-- [ ] Add the two library-free static functions to an extension of `BodyCodec` in the same file. They and the `.markdown` branches use `DocConverter` and `MarkdownCodec` only.
+- [ ] Add the two library-free static functions to an extension of `BodyCodec` in the same file. They and the `.markdown` branches use `DocConverter` and `MarkdownCodec` only. `read(at:)` reads relative paths only; a missing image file is dropped from the body, so a later write loses that reference (Markdown libraries use Task 3.2's `attributedString(from:attachments:)` instead).
 - [ ] Verify: `swift test --filter "ImportOptionsTests|BodyCodecMarkdownTests|BodyCodecTests"` → 0 failures.
 
 Task 2.1 must land first; 2.2, 2.3 and 2.4 are sequential. Milestone 2 can run in parallel with Milestone 1. Once 2.4 lands (early in wave 1), `NoteItMarkdown` and `BodyCodec.markdown` are usable by automation, plugins, the web clipper and mobile (program §6).

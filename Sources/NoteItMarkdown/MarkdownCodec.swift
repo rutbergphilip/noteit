@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import NoteItDoc
 
@@ -109,6 +110,73 @@ public enum MarkdownCodec {
                                  previous: ParsedMarkdown?) -> String {
         write(body, frontMatter: frontMatter, profile: profile, attachmentPath: attachmentPath, noteLinkName: noteLinkName,
               previous: previous).text
+    }
+
+    /// Parses Markdown from outside the library and fetches each distinct image or attachment URL once.
+    public static func importDocument(_ text: String, options: MarkdownImportOptions) async throws -> ImportedMarkdown {
+        let parsed = try parse(text, resolveNoteLink: options.resolveNoteLink)
+        var fetched: [URL: Data] = [:]
+        for ref in parsed.attachmentRefs {
+            guard let url = url(of: ref.path, baseURL: options.baseURL), fetched[url] == nil else { continue }
+            fetched[url] = await options.resolveImage(url) ?? Data()
+        }
+        return resolvingAttachments(parsed) { path in
+            url(of: path, baseURL: options.baseURL).flatMap { fetched[$0] }
+        }
+    }
+
+    /// `parsed` with each image and attachment path replaced by the data `read` gives for it, keyed by SHA-256.
+    /// A path with no data, empty data or data over `AttachmentLimit` is dropped and listed in `unresolvedImages`.
+    public static func resolvingAttachments(_ parsed: ParsedMarkdown, read: (String) -> Data?) -> ImportedMarkdown {
+        var shas: [String: String] = [:]
+        var data: [String: Data] = [:]
+        var unresolved: [AttachmentRef] = []
+        for ref in parsed.attachmentRefs where shas[ref.path] == nil {
+            guard let bytes = read(ref.path), !bytes.isEmpty, AttachmentLimit.allows(byteCount: bytes.count) else {
+                if !unresolved.contains(where: { $0.path == ref.path }) { unresolved.append(ref) }
+                continue
+            }
+            let sha = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+            shas[ref.path] = sha
+            data[sha] = bytes
+        }
+        var attachments: [String: Attachment] = [:]
+        let doc = MarkdownWriter.mapContent(parsed.body.doc) { content in
+            let kept: [Inline] = content.compactMap { inline in
+                switch inline {
+                case .image(let path, let name, let mime, let width):
+                    guard let sha = shas[path], let bytes = data[sha] else { return nil }
+                    if attachments[sha] == nil { attachments[sha] = Attachment(mime: mime, name: name, data: bytes) }
+                    return .image(sha: sha, name: name, mime: mime, width: width)
+                case .attachment(let path, let name, let mime):
+                    guard let sha = shas[path], let bytes = data[sha] else { return nil }
+                    if attachments[sha] == nil { attachments[sha] = Attachment(mime: mime, name: name, data: bytes) }
+                    return .attachment(sha: sha, name: name, mime: mime)
+                case .text, .hardBreak:
+                    return inline
+                }
+            }
+            var merged: [Inline] = []
+            for inline in kept {
+                if case .text(let text, let marks) = inline, case .text(let previous, marks)? = merged.last {
+                    merged[merged.count - 1] = .text(previous + text, marks: marks)
+                } else {
+                    merged.append(inline)
+                }
+            }
+            return merged
+        }
+        var body = parsed.body
+        body.doc = doc
+        body.attachments = attachments
+        return ImportedMarkdown(frontMatter: parsed.frontMatter, body: body, unresolvedImages: unresolved)
+    }
+
+    private static func url(of path: String, baseURL: URL?) -> URL? {
+        var allowed = CharacterSet.urlFragmentAllowed
+        allowed.remove(charactersIn: "#")
+        guard let encoded = path.addingPercentEncoding(withAllowedCharacters: allowed) else { return nil }
+        return URL(string: encoded, relativeTo: baseURL)?.absoluteURL
     }
 
     static func write(_ body: BodyContainer, frontMatter: FrontMatter, profile: MarkdownProfile,
