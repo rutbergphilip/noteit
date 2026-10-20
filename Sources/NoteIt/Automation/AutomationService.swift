@@ -282,7 +282,7 @@ final class AutomationService {
     }
 
     /// `NoteStore.defaultNotebookIDForNewNotes`, read from this service's defaults.
-    private var defaultNotebookID: UUID? {
+    var defaultNotebookID: UUID? {
         let stored = defaults.string(forKey: PrefKey.defaultNotebookID)
         if stored == PrefDefault.noNotebook { return nil }
         if let stored, let id = UUID(uuidString: stored), store.notebook(with: id) != nil { return id }
