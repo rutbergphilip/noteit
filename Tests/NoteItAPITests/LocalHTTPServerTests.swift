@@ -248,6 +248,77 @@ final class LocalHTTPServerTests: XCTestCase {
         }
     }
 
+    /// The client reads the early reject but neither sends its body nor closes: the linger must still end and free
+    /// the slot (the FIN the client sees comes from the half-close, so EOF alone doesn't prove that).
+    func testLingerTimeoutReleasesTheSlot() async throws {
+        let harness = try await start()
+        harness.server.lingerTimeout = 0.2
+        let client = try XCTUnwrap(RawHTTPClient(port: harness.port))
+        client.send("POST /v1/notes HTTP/1.1\r\nHost: 127.0.0.1:\(harness.port)\r\nContent-Type: application/json\r\n"
+                    + "Content-Length: 1000000\r\n\r\n")
+        XCTAssertTrue(client.readResponse().hasPrefix("HTTP/1.1 401"))
+        try await waitFor("the lingering connection is released") { harness.server.connectionCounts == (0, 0) }
+        XCTAssertTrue(client.isResetOnWrite(), "the connection was torn down")
+    }
+
+    func testOverCapacityConnectionGets503ThenSlotsAreReleased() async throws {
+        var rules = RateLimiter.defaults
+        rules[.unauthenticated] = RateLimiter.Rule(perSecond: 1, burst: 100)
+        let harness = try await start(rules: rules)
+        harness.server.lingerTimeout = 0.2
+        var open = try (0..<LocalHTTPServer.maxConnections).map { _ in try XCTUnwrap(RawHTTPClient(port: harness.port)) }
+        try await waitFor("every slot is taken") { harness.server.connectionCounts.open == LocalHTTPServer.maxConnections }
+
+        let extra = try XCTUnwrap(RawHTTPClient(port: harness.port))
+        let response = extra.readResponse()
+        XCTAssertTrue(response.hasPrefix("HTTP/1.1 503"), response)
+        XCTAssertTrue(response.contains("\"rate_limited\""), response)
+        XCTAssertTrue(response.contains("Retry-After: 1\r\n"), response)
+        XCTAssertTrue(response.lowercased().contains("connection: close"), response)
+        try await waitFor("the rejected connection's linger ends") { harness.server.connectionCounts.rejected == 0 }
+
+        open.removeAll()
+        try await waitFor("closed clients free their slots") { harness.server.connectionCounts == (0, 0) }
+        let fresh = try (0..<LocalHTTPServer.maxConnections).map { _ in try XCTUnwrap(RawHTTPClient(port: harness.port)) }
+        for client in fresh {
+            client.send("GET /v1/ping HTTP/1.1\r\nHost: 127.0.0.1:\(harness.port)\r\n\r\n")
+            let reply = client.readResponse()
+            XCTAssertTrue(reply.hasPrefix("HTTP/1.1 200"), reply)
+        }
+    }
+
+    /// `stop()` must tear down lingering early rejects and over-capacity `503`s at once, not after `lingerTimeout`.
+    func testStopClosesLingeringAndRejectedConnections() async throws {
+        let harness = try await start()
+        harness.server.lingerTimeout = 60
+        let open = try (0..<LocalHTTPServer.maxConnections).map { _ in try XCTUnwrap(RawHTTPClient(port: harness.port)) }
+        try await waitFor("every slot is taken") { harness.server.connectionCounts.open == LocalHTTPServer.maxConnections }
+
+        let lingering = open[0]
+        lingering.send("POST /v1/notes HTTP/1.1\r\nHost: 127.0.0.1:\(harness.port)\r\nContent-Type: application/json\r\n"
+                       + "Content-Length: 1000000\r\n\r\n")
+        XCTAssertTrue(lingering.readResponse().hasPrefix("HTTP/1.1 401"))
+        XCTAssertTrue(lingering.isClosedByPeer(), "the write side is shut down")
+        let rejected = try XCTUnwrap(RawHTTPClient(port: harness.port))
+        XCTAssertTrue(rejected.readResponse().hasPrefix("HTTP/1.1 503"))
+        XCTAssertTrue(rejected.isClosedByPeer(), "the write side is shut down")
+        XCTAssertFalse(lingering.isResetOnWrite(timeout: 0.2), "still lingering before stop")
+        XCTAssertTrue(harness.server.connectionCounts == (LocalHTTPServer.maxConnections, 1))
+
+        harness.server.stop()
+        XCTAssertTrue(harness.server.connectionCounts == (0, 0))
+        XCTAssertTrue(lingering.isResetOnWrite(), "the lingering connection was torn down")
+        XCTAssertTrue(rejected.isResetOnWrite(), "the rejected connection was torn down")
+    }
+
+    private func waitFor(_ what: String, timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail("timed out waiting: \(what)") }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
     func testAdmittedHeadThenBodyIsHandledOnce() async throws {
         let harness = try await start(rules: [.general: .init(perSecond: 0.001, burst: 1),
                                               .write: .init(perSecond: 0.001, burst: 1)])

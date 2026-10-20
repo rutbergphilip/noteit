@@ -90,6 +90,9 @@ public final class LocalHTTPServer: @unchecked Sendable {
         set { hooksLock.withLock { lastUsedProvider = newValue } }
     }
 
+    /// Tests: connections holding a slot, and over-capacity ones being answered `503`.
+    var connectionCounts: (open: Int, rejected: Int) { onQueue { (connections.count, rejected.count) } }
+
     /// Tries each port in order and returns the bound one. Port 0 = ephemeral (tests). Throws `.portInUse(port)`
     /// when the last port tried was taken.
     /// Throws `.alreadyRunning` while running or while another start is pending, and `.stopped` when `stop()` is

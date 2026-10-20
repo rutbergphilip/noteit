@@ -90,6 +90,18 @@ final class RawHTTPClient {
         }
     }
 
+    /// Keeps writing a byte every 10 ms until a write fails, which happens once the server has torn the connection
+    /// down (a lingering server still reads and discards them). False when writes still succeed after `timeout`.
+    func isResetOnWrite(timeout: TimeInterval = 2) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        var byte: UInt8 = 0x61
+        while Date() < deadline {
+            if Darwin.send(fd, &byte, 1, 0) < 0, errno != EINTR { return true }
+            usleep(10_000)
+        }
+        return false
+    }
+
     /// True when the server closed the connection (EOF) before the timeout.
     func isClosedByPeer() -> Bool {
         var byte: UInt8 = 0
