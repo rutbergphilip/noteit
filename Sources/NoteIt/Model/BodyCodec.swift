@@ -26,7 +26,8 @@ enum BodyCodec: String, CaseIterable, Sendable {
     }
 
     /// `.rtfd` reads `extras` as `.empty`. `.markdown` reads either flavour, takes relative image and attachment
-    /// paths from beside the file, and returns the unknown front matter keys as `extras.frontMatter`.
+    /// paths from inside the file's folder, and returns the unknown front matter keys as `extras.frontMatter` and the
+    /// known ones under `markdownFrontMatterKey`.
     func read(at url: URL) throws -> StoredBody {
         switch self {
         case .rtfd:
@@ -37,10 +38,11 @@ enum BodyCodec: String, CaseIterable, Sendable {
             guard let text = String(data: try Data(contentsOf: url), encoding: .utf8) else { throw MarkdownError.notUTF8 }
             let folder = url.deletingLastPathComponent()
             let imported = MarkdownCodec.resolvingAttachments(try MarkdownCodec.parse(text)) { path in
-                guard !path.contains(":"), !path.hasPrefix("/") else { return nil }
-                return try? Data(contentsOf: folder.appendingPathComponent(path))
+                Self.fileInside(folder, path: path).flatMap { try? Data(contentsOf: $0) }
             }
-            return try Self.attributedString(from: imported.body)
+            var stored = try Self.attributedString(from: imported.body)
+            stored.extras.extra[Self.markdownFrontMatterKey] = Self.knownFrontMatter(imported.frontMatter)
+            return stored
         }
     }
 
@@ -63,7 +65,8 @@ enum BodyCodec: String, CaseIterable, Sendable {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 try attachment.data.write(to: file, options: .atomic)
             }
-            try Data(Self.markdown(of: container, profile: .library).utf8).write(to: url, options: .atomic)
+            try Data(Self.markdown(of: container, frontMatter: Self.frontMatter(from: extras), profile: .library).utf8)
+                .write(to: url, options: .atomic)
         }
     }
 
@@ -79,7 +82,8 @@ enum BodyCodec: String, CaseIterable, Sendable {
         case .noteItDoc:
             return try Self.noteItDoc(of: text, extras: extras).encoded()
         case .markdown:
-            return Data(Self.markdown(of: try Self.noteItDoc(of: text, extras: extras), profile: .library).utf8)
+            return Data(Self.markdown(of: try Self.noteItDoc(of: text, extras: extras), frontMatter: Self.frontMatter(from: extras),
+                                      profile: .library).utf8)
         }
     }
 
@@ -125,11 +129,12 @@ enum BodyCodec: String, CaseIterable, Sendable {
 
     // MARK: noteit-doc container
 
-    /// The container's `extras` are `extras`.
+    /// The container's `extras` are `extras`, without `markdownFrontMatterKey`.
     static func noteItDoc(of text: NSAttributedString, extras: ContainerExtras = .empty,
                           imagePolicy: ImagePolicy = .normalize) throws -> BodyContainer {
         var container = try DocConverter.export(text, styles: AppDocStyleProvider.shared, imagePolicy: imagePolicy)
         container.extras = extras
+        container.extra[markdownFrontMatterKey] = nil
         return container
     }
 
@@ -161,8 +166,38 @@ extension BodyCodec {
         return (try DocConverter.importDocument(imported.body, styles: AppDocStyleProvider.shared), imported.unresolvedImages)
     }
 
-    fileprivate static func markdown(of container: BodyContainer, profile: MarkdownProfile) -> String {
-        MarkdownCodec.serialize(container, frontMatter: .empty, profile: profile, attachmentPath: { sha in
+    /// Extras key for the known front matter lines of a `.markdown` file (`id:`, `created:`, `pinned:`…), so they
+    /// survive read → edit → write. Never written into a noteit-doc container.
+    static let markdownFrontMatterKey = "markdownFrontMatter"
+
+    private static func knownFrontMatter(_ frontMatter: FrontMatter) -> JSONValue? {
+        var known = frontMatter
+        known.extra = ""
+        let text = known.written()
+        guard !text.isEmpty else { return nil }
+        return .string(String(text.dropFirst("---\n".count).dropLast("\n---\n".count)))
+    }
+
+    private static func frontMatter(from extras: ContainerExtras) -> FrontMatter {
+        var frontMatter = FrontMatter.empty
+        if case .string(let known)? = extras.extra[markdownFrontMatterKey],
+           let (read, _) = try? FrontMatter.read("---\n" + known + "\n---\n") {
+            frontMatter = read
+        }
+        frontMatter.extra = extras.frontMatter ?? ""
+        return frontMatter
+    }
+
+    /// `path` from a note in `folder`, or nil when it leaves the folder, also through a symbolic link.
+    static func fileInside(_ folder: URL, path: String) -> URL? {
+        guard let relative = AttachmentPaths.resolve(path, fromNoteAt: "note.md") else { return nil }
+        let root = folder.standardizedFileURL.resolvingSymlinksInPath()
+        let file = folder.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
+        return file.path.hasPrefix(root.path + "/") ? file : nil
+    }
+
+    fileprivate static func markdown(of container: BodyContainer, frontMatter: FrontMatter = .empty, profile: MarkdownProfile) -> String {
+        MarkdownCodec.serialize(container, frontMatter: frontMatter, profile: profile, attachmentPath: { sha in
             let name = container.attachments[sha]?.name ?? ""
             return AttachmentPaths.folder + "/" + AttachmentPaths.fileName(sha256: sha, originalName: name)
         }, previous: nil)

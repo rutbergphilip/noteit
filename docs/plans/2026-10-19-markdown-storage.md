@@ -215,12 +215,14 @@ enum BodyCodec: String, CaseIterable, Sendable {
     var fileExtension: String { get }               // .markdown: "md"
     func read(at url: URL) throws -> StoredBody                     // .markdown: MarkdownCodec.parse (either flavour),
                                                                     // then DocConverter.importDocument; relative image
-                                                                    // paths are read from beside the file; extras.frontMatter
-                                                                    // is the unknown front matter keys (FrontMatter.extra)
+                                                                    // paths are read only when they stay inside the file's
+                                                                    // folder after resolving symlinks; extras.frontMatter
+                                                                    // is the unknown front matter keys (FrontMatter.extra),
+                                                                    // extras.extra["markdownFrontMatter"] the known ones
     func write(_ text: NSAttributedString, extras: ContainerExtras = .empty, to url: URL) throws
                                                                     // .markdown: library flavour, UTF-8, images written
                                                                     // to _attachments/ beside the file; extras.frontMatter
-                                                                    // written back as the unknown front matter keys
+                                                                    // and the known keys written back as front matter
     func data(of text: NSAttributedString, extras: ContainerExtras = .empty) throws -> Data
                                                                     // .markdown: the UTF-8 bytes of the .md file
                                                                     // write(_:extras:to:) stores

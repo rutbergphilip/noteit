@@ -97,16 +97,42 @@ final class BodyCodecMarkdownTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "One 2\nx\\\nthree four\n")
     }
 
-    func testFrontMatterExtrasSurviveEdit() throws {
+    func testFrontMatterSurvivesEdit() throws {
         let url = dir.appendingPathComponent("note.md")
-        try Data("---\naliases:\n  - Weekly\ncssclasses: [wide]\n---\n# Notes\n\nBody\n".utf8).write(to: url)
+        let known = "id: 6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11\ncreated: 2026-10-19T09:12:44Z\npinned: true"
+        let unknown = "aliases:\n  - Weekly\ncssclasses: [wide]"
+        try Data("---\n\(known)\n\(unknown)\n---\n# Notes\n\nBody\n".utf8).write(to: url)
         for edit in ["Edited body", ""] {
             let read = try BodyCodec.markdown.read(at: url)
-            XCTAssertEqual(read.extras, ContainerExtras(frontMatter: "aliases:\n  - Weekly\ncssclasses: [wide]"))
+            XCTAssertEqual(read.extras.frontMatter, unknown)
+            XCTAssertNil(try BodyCodec.noteItDoc(of: read.text, extras: read.extras).extra[BodyCodec.markdownFrontMatterKey])
             try BodyCodec.markdown.write(NSAttributedString(string: edit), extras: read.extras, to: url)
             let written = try String(contentsOf: url, encoding: .utf8)
-            XCTAssertTrue(written.hasPrefix("---\naliases:\n  - Weekly\ncssclasses: [wide]\n---\n"), written)
+            XCTAssertTrue(written.hasPrefix("---\n\(known)\n\(unknown)\n---\n"), written)
             XCTAssertEqual(try BodyCodec.markdown.read(at: url).text.string.trimmingCharacters(in: .newlines), edit)
         }
+    }
+
+    private func png(_ color: NSColor) throws -> Data {
+        try XCTUnwrap(NSImage(size: NSSize(width: 2, height: 2), flipped: false) { rect in
+            color.setFill()
+            rect.fill()
+            return true
+        }.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) })
+    }
+
+    func testImagesOutsideTheNoteFolderAreNotRead() throws {
+        let notes = dir.appendingPathComponent("notes", isDirectory: true)
+        let attachments = notes.appendingPathComponent("_attachments", isDirectory: true)
+        try fm.createDirectory(at: attachments, withIntermediateDirectories: true)
+        try png(.red).write(to: dir.appendingPathComponent("secret.png"))
+        try png(.blue).write(to: dir.appendingPathComponent("linked.png"))
+        try fm.createSymbolicLink(at: attachments.appendingPathComponent("link.png"), withDestinationURL: dir.appendingPathComponent("linked.png"))
+        try png(.green).write(to: attachments.appendingPathComponent("ok.png"))
+        let url = notes.appendingPathComponent("note.md")
+        try Data("![a](../secret.png) ![b](_attachments/link.png) ![c](_attachments/../../secret.png) ![d](_attachments/ok.png)\n".utf8)
+            .write(to: url)
+        let container = try BodyCodec.noteItDoc(of: try BodyCodec.markdown.read(at: url).text)
+        XCTAssertEqual(container.attachments.values.map(\.data), [try png(.green)])
     }
 }
