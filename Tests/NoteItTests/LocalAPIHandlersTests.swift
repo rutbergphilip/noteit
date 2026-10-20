@@ -651,6 +651,41 @@ final class LocalAPIHandlersTests: XCTestCase {
         secrets.failsReads = false
         XCTAssertEqual(KeychainClientStore(secrets: secrets, service: "s").load(), [record])
     }
+
+    func testKeychainClientStoreSetsAsideAListItCannotDecode() throws {
+        let secrets = MemorySecrets()
+        let corrupt = #"{"not":"a list"}"#
+        secrets.values["s/clients"] = corrupt
+        let registry = ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+        XCTAssertEqual(registry.clients, [])
+        XCTAssertEqual(secrets.values["s/clients.unreadable"], corrupt)
+        XCTAssertEqual(secrets.labels["s/clients.unreadable"], "NoteIt Local API")
+
+        let (record, _) = try registry.issue(name: "CLI", kind: .cli, scopes: [.read], origin: nil)
+        XCTAssertEqual(KeychainClientStore(secrets: secrets, service: "s").load(), [record])
+        try registry.revokeAll()
+        XCTAssertNil(secrets.values["s/clients"])
+        XCTAssertEqual(secrets.values["s/clients.unreadable"], corrupt)
+    }
+
+    func testKeychainClientStoreSkipsOnlyRecordsItCannotDecode() throws {
+        let secrets = MemorySecrets()
+        let (record, _) = try ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+            .issue(name: "CLI", kind: .cli, scopes: [.read], origin: nil)
+        var list = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(secrets.values["s/clients"]!.utf8)) as? [[String: Any]])
+        var newer = list[0]
+        newer["id"] = UUID().uuidString
+        newer["kind"] = "robot"
+        list.append(newer)
+        let mixed = String(decoding: try JSONSerialization.data(withJSONObject: list), as: UTF8.self)
+        secrets.values["s/clients"] = mixed
+
+        let registry = ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+        XCTAssertEqual(registry.clients, [record])
+        XCTAssertEqual(secrets.values["s/clients.unreadable"], mixed)
+        try registry.revoke(record.id)
+        XCTAssertNil(secrets.values["s/clients"])
+    }
 }
 
 private final class MemorySecrets: LabeledSecretStore {
