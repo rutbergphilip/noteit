@@ -139,6 +139,10 @@ final class SyncController: ObservableObject {
         store.rootURL.appendingPathComponent("sync-state-\(config.storeKey).json")
     }
 
+    private func migrationRecord(for config: SyncConfiguration) -> FileMigrationTombstoneRecord {
+        FileMigrationTombstoneRecord(url: store.rootURL.appendingPathComponent("sync-migration-\(config.storeKey).json"))
+    }
+
     private var legacyStateURL: URL { store.rootURL.appendingPathComponent("sync-state.json") }
 
     /// `sync-state.json` from older builds belonged to the configured store.
@@ -170,12 +174,14 @@ final class SyncController: ObservableObject {
         let destination = try makeDestination(config, accessKey: accessKey, secret: secret)
         let encryptNew = config.encrypted
         let deviceName = config.deviceName
+        let migrationRecord = migrationRecord(for: config)
         let (storeSession, created) = try await withAccess(destination) {
             try await Self.offMain {
                 try await destination.backend.probe()
                 return try await SyncEngine.connectSession(backend: destination.backend, kind: .library,
                                                            credential: passphrase.map(StoreCredential.passphrase),
-                                                           deviceName: deviceName, createIfMissing: true, encrypted: encryptNew)
+                                                           deviceName: deviceName, createIfMissing: true, encrypted: encryptNew,
+                                                           migrationRecord: migrationRecord)
             }
         }
         config.encrypted = storeSession.keyID != nil
@@ -226,11 +232,12 @@ final class SyncController: ObservableObject {
     func unlock(passphrase: String) async throws {
         guard let config = configuration else { return }
         let destination = try makeDestination(config, accessKey: secrets.accessKey, secret: secrets.secret)
+        let migrationRecord = migrationRecord(for: config)
         let storeSession = try await withAccess(destination) {
             try await Self.offMain {
                 try await SyncEngine.connectSession(backend: destination.backend, kind: .library, credential: .passphrase(passphrase),
                                                     deviceName: config.deviceName, createIfMissing: false,
-                                                    encrypted: config.encrypted).session
+                                                    encrypted: config.encrypted, migrationRecord: migrationRecord).session
             }
         }
         let dataKey = Self.encoded(storeSession.dataKey)
@@ -304,6 +311,7 @@ final class SyncController: ObservableObject {
     /// Stops syncing and forgets the destination. Notes on this Mac are never touched.
     func disconnect() async {
         let oldStateURL = configuration.map { stateURL(for: $0) }
+        let oldMigrationRecord = configuration.map { migrationRecord(for: $0).url }
         deactivate()
         configuration = nil
         status = .notConfigured
@@ -324,6 +332,9 @@ final class SyncController: ObservableObject {
         let fm = FileManager.default
         if let oldStateURL, configuration.map({ stateURL(for: $0) }) != oldStateURL {
             try? fm.removeItem(at: oldStateURL)
+        }
+        if let oldMigrationRecord, configuration.map({ migrationRecord(for: $0).url }) != oldMigrationRecord {
+            try? fm.removeItem(at: oldMigrationRecord)
         }
         if configuration == nil {
             try? fm.removeItem(at: legacyStateURL)
@@ -621,10 +632,11 @@ final class SyncController: ObservableObject {
         if config.encrypted, dataKey == nil, passphrase == nil { throw SyncError.passphraseRequired }
         let destination = try makeDestination(config, accessKey: secrets.accessKey, secret: secrets.secret)
         let deviceName = config.deviceName
+        let migrationRecord = migrationRecord(for: config)
         let storeSession = try await withAccess(destination) {
             try await Self.offMain { () async throws -> StoreSession in
                 // A store still under Inkwell's prefix is copied first, or it would look vanished below.
-                try await RemoteMigration.migrateLegacyStoreIfNeeded(destination.backend)
+                try await RemoteMigration.migrateLegacyStoreIfNeeded(destination.backend, record: migrationRecord)
                 // Never recreate a vanished store: syncing against an empty remote would delete every note here.
                 do {
                     _ = try await destination.backend.get(RemoteLayout.manifest())
@@ -634,7 +646,7 @@ final class SyncController: ObservableObject {
                 func open(_ credential: StoreCredential?) async throws -> StoreSession {
                     try await SyncEngine.connectSession(backend: destination.backend, kind: .library, credential: credential,
                                                         deviceName: deviceName, createIfMissing: false,
-                                                        encrypted: config.encrypted).session
+                                                        encrypted: config.encrypted, migrationRecord: migrationRecord).session
                 }
                 if let dataKey {
                     do {

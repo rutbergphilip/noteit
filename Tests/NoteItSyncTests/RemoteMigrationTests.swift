@@ -258,21 +258,23 @@ final class RemoteMigrationTests: XCTestCase {
         let id = UUID().uuidString
         try await inner.put("inkwell/v1/manifest.json", data: try legacyManifest(passphrase: "pw"), ifMatch: nil, ifNoneMatch: true)
         try await inner.put("inkwell/v1/tombstones/\(id).json", data: Data("deleted".utf8), ifMatch: nil, ifNoneMatch: true)
+        let record = InMemoryMigrationTombstoneRecord()
         let flaky = FaultyBackend(inner)
         await flaky.failPuts(after: 1)
         do {
-            try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, log: { _ in })
+            try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, record: record, log: { _ in })
             XCTFail("expected the copy to be interrupted")
         } catch StorageError.network {}
-        let partial = try await inner.list(prefix: RemoteLayout.root).map(\.key)
-        XCTAssertEqual(partial, ["noteit/v1/tombstones/\(id).json"])
+        let partial = try await inner.list(prefix: RemoteLayout.root)
+        XCTAssertEqual(partial.map(\.key), ["noteit/v1/tombstones/\(id).json"])
+        XCTAssertEqual(record.load(), ["noteit/v1/tombstones/\(id).json": partial[0].etag])
 
         // An Inkwell device restores the note before the next attempt.
         try await inner.delete("inkwell/v1/tombstones/\(id).json")
         try await inner.put("inkwell/v1/notes/\(id).meta", data: Data("meta".utf8), ifMatch: nil, ifNoneMatch: true)
         try await inner.put("inkwell/v1/notes/\(id).body", data: Data("body".utf8), ifMatch: nil, ifNoneMatch: true)
 
-        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, record: record, log: { _ in })
         XCTAssertTrue(migrated)
         let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
         XCTAssertFalse(keys.contains("noteit/v1/tombstones/\(id).json"))
@@ -280,6 +282,54 @@ final class RemoteMigrationTests: XCTestCase {
         let body = try await inner.get("noteit/v1/notes/\(id).body").data
         XCTAssertEqual(meta, Data("meta".utf8))
         XCTAssertEqual(body, Data("body".utf8))
+        XCTAssertEqual(record.load(), [:], "the record outlived the migration")
+    }
+
+    func testTombstoneSyncedBeforeTheManifestHidesTheNote() async throws {
+        let inner = InMemoryBackend()
+        _ = try await seedLegacyStore(inner, notes: 3)
+        let id = Self.noteID(1)
+        try await inner.put("inkwell/v1/notes/\(id).body", data: Data("body".utf8), ifMatch: nil, ifNoneMatch: true)
+        // A finished migrating and deleted the note; the sync tool delivered the tombstone here but not the manifest.
+        let tombstone = "noteit/v1/tombstones/\(id).json"
+        try await inner.put(tombstone, data: Data("deleted on A".utf8), ifMatch: nil, ifNoneMatch: true)
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
+        XCTAssertTrue(migrated)
+        let kept = try await inner.get(tombstone).data
+        XCTAssertEqual(kept, Data("deleted on A".utf8))
+        let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
+        XCTAssertFalse(keys.contains("noteit/v1/notes/\(id).meta"), "a deleted note came back")
+        XCTAssertFalse(keys.contains("noteit/v1/notes/\(id).body"), "a deleted note came back")
+        XCTAssertTrue(keys.contains("noteit/v1/notes/\(Self.noteID(2)).meta"))
+    }
+
+    func testRecordedTombstoneRewrittenByAnotherDeviceIsKept() async throws {
+        let inner = InMemoryBackend()
+        let id = Self.noteID(4)
+        let tombstone = "noteit/v1/tombstones/\(id).json"
+        try await inner.put("inkwell/v1/manifest.json", data: try legacyManifest(passphrase: "pw"), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put("inkwell/v1/tombstones/\(id).json", data: Data("deleted".utf8), ifMatch: nil, ifNoneMatch: true)
+        let record = InMemoryMigrationTombstoneRecord()
+        let flaky = FaultyBackend(inner)
+        await flaky.failPuts(after: 1)
+        do {
+            try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, record: record, log: { _ in })
+            XCTFail("expected the copy to be interrupted")
+        } catch StorageError.network {}
+        XCTAssertEqual(Array(record.load().keys), [tombstone])
+
+        // The note is restored under the legacy root, and another device deletes it again under the new one.
+        try await inner.delete("inkwell/v1/tombstones/\(id).json")
+        try await inner.put("inkwell/v1/notes/\(id).meta", data: Data("meta".utf8), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put(tombstone, data: Data("deleted on A".utf8), ifMatch: nil, ifNoneMatch: false)
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, record: record, log: { _ in })
+        XCTAssertTrue(migrated)
+        let kept = try await inner.get(tombstone).data
+        XCTAssertEqual(kept, Data("deleted on A".utf8))
+        let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
+        XCTAssertFalse(keys.contains("noteit/v1/notes/\(id).meta"), "a deleted note came back")
     }
 
     func testRollbackCoversSyncToolDuplicatesOfADeletedNote() async throws {

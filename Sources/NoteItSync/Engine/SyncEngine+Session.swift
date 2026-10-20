@@ -7,20 +7,26 @@ extension SyncEngine {
     /// initialFeatures: written into the first manifest only when this call creates the store.
     /// supported: the features this session accepts, kept as `StoreSession.supported`.
     /// cipher: when non-nil, the session uses it instead of building a cipher (sharing passes its space cipher).
+    /// migrationRecord: kept next to this device's sync state for `RemoteMigration`.
     public static func connectSession(backend: StorageBackend, kind: StoreSessionKind, credential: StoreCredential?,
                                       deviceName: String, createIfMissing: Bool, encrypted: Bool,
                                       initialFeatures: Set<StoreFeature> = [],
                                       supported: Set<StoreFeature> = StoreFeature.supported,
-                                      cipher: (any SyncCipher)? = nil) async throws -> (session: StoreSession, created: Bool) {
+                                      cipher: (any SyncCipher)? = nil,
+                                      migrationRecord: MigrationTombstoneRecord = InMemoryMigrationTombstoneRecord())
+        async throws -> (session: StoreSession, created: Bool) {
         try await connectSession(backend: backend, kind: kind, credential: credential, deviceName: deviceName,
                                  createIfMissing: createIfMissing, encrypted: encrypted, initialFeatures: initialFeatures,
-                                 supported: supported, cipher: cipher, makeCipher: defaultCipherFactory, now: Date())
+                                 supported: supported, cipher: cipher, migrationRecord: migrationRecord,
+                                 makeCipher: defaultCipherFactory, now: Date())
     }
 
     static func connectSession(backend: StorageBackend, kind: StoreSessionKind, credential: StoreCredential?,
                                deviceName: String, createIfMissing: Bool, encrypted: Bool,
                                initialFeatures: Set<StoreFeature> = [], supported: Set<StoreFeature> = StoreFeature.supported,
-                               cipher: (any SyncCipher)? = nil, makeCipher: CipherFactory, now: Date) async throws
+                               cipher: (any SyncCipher)? = nil,
+                               migrationRecord: MigrationTombstoneRecord = InMemoryMigrationTombstoneRecord(),
+                               makeCipher: CipherFactory, now: Date) async throws
         -> (session: StoreSession, created: Bool) {
         if cipher != nil, !encrypted { throw SyncError.invalidManifest("a passed cipher needs an encrypted store") }
         func open(_ manifest: Manifest, _ etag: String) throws -> StoreSession {
@@ -28,7 +34,7 @@ extension SyncEngine {
                             supported: supported, passedCipher: cipher, makeCipher: makeCipher)
         }
         // A store still under Inkwell's prefix is copied to `RemoteLayout.root` first, so it isn't read as missing.
-        try await RemoteMigration.migrateLegacyStoreIfNeeded(backend)
+        try await RemoteMigration.migrateLegacyStoreIfNeeded(backend, record: migrationRecord)
         if let (manifest, etag) = try await readManifestAndETag(backend) {
             return (try open(manifest, etag), false)
         }

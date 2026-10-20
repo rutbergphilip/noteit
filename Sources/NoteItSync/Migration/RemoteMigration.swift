@@ -8,24 +8,37 @@ import Foundation
 /// Several devices may migrate at once, and once one of them writes the manifest it starts syncing under
 /// the new root. So objects are only created, never blindly replaced, and the manifest is checked before
 /// every create. Once it appears the copy stops. A note or notebook deleted under the new root keeps its
-/// tombstone (written before its meta and body are deleted), so its objects created since the last check that
-/// saw no manifest are deleted again (unless changed since). Other copies are kept: they are identical to what
-/// the finishing device copied or skipped. Before the manifest exists nothing syncs under the new root, so
-/// tombstones there that differ from the legacy ones are left over from an interrupted copy and are removed.
+/// tombstone (written before its meta and body are deleted), so its objects are not created while one exists,
+/// and those created since the last check that saw no manifest are deleted again (unless changed since).
+/// Other copies are kept: they are identical to what the finishing device copied or skipped. A sync tool may
+/// deliver another device's tombstones before the manifest, so the only tombstones removed before copying are
+/// ones this device's earlier attempt created (per `record`, unchanged since) that no longer match the legacy ones.
 public enum RemoteMigration {
     /// Returns whether a legacy store was copied, by this device or another one during the copy.
     /// Does nothing when `noteit/v1/` already has a manifest.
+    /// record: the tombstones this device's attempts created; cleared once the store is migrated.
     @discardableResult
-    public static func migrateLegacyStoreIfNeeded(_ backend: StorageBackend, log: (String) -> Void = { NSLog("%@", $0) }) async throws -> Bool {
-        if try await exists(RemoteLayout.manifest(), in: backend) { return false }
+    public static func migrateLegacyStoreIfNeeded(_ backend: StorageBackend,
+                                                  record: MigrationTombstoneRecord = InMemoryMigrationTombstoneRecord(),
+                                                  log: (String) -> Void = { NSLog("%@", $0) }) async throws -> Bool {
+        if try await exists(RemoteLayout.manifest(), in: backend) {
+            if !record.load().isEmpty { try? record.save([:]) }
+            return false
+        }
         let legacyManifest = RemoteLayout.legacyRoot + "manifest.json"
         let objects = try await backend.list(prefix: RemoteLayout.legacyRoot)
         guard objects.contains(where: { $0.key == legacyManifest }) else { return false }
 
-        if try await removeStaleTombstones(in: backend) {
-            log("NoteItSync: another device finished copying \(RemoteLayout.legacyRoot) first")
+        var recorded = record.load()
+        func finished() -> Bool {
+            try? record.save([:])
             return true
         }
+        if try await removeStaleTombstones(&recorded, in: backend) {
+            log("NoteItSync: another device finished copying \(RemoteLayout.legacyRoot) first")
+            return finished()
+        }
+        try record.save(recorded)
 
         var copied = 0
         var unconfirmed: [(key: String, etag: String, tombstone: String)] = []
@@ -54,28 +67,33 @@ public enum RemoteMigration {
             } catch StorageError.notFound {
                 continue  // Deleted by another device since the listing.
             }
-            if try await manifestAppeared() { return true }
+            if try await manifestAppeared() { return finished() }
             let tombstone = tombstoneKey(for: key)
+            if let tombstone, try await foreignTombstone(tombstone, recorded: recorded, in: backend) { continue }
             switch try await copy(data, to: key, in: backend) {
             case .created(let etag):
                 if let tombstone { unconfirmed.append((key, etag, tombstone)) }
+                if key.hasPrefix(RemoteLayout.root + "tombstones/") {
+                    recorded[key] = etag
+                    try record.save(recorded)
+                }
                 copied += 1
             case .replaced: copied += 1
             case .skipped: break
             case .storeMigrated:
                 log("NoteItSync: another device finished copying \(RemoteLayout.legacyRoot) first")
-                return true
+                return finished()
             }
         }
-        if try await manifestAppeared() { return true }
+        if try await manifestAppeared() { return finished() }
         do {
             let manifest = try await backend.get(legacyManifest).data
             try await backend.put(RemoteLayout.manifest(), data: manifest, ifMatch: nil, ifNoneMatch: true)
         } catch StorageError.preconditionFailed {
-            return true  // Another device finished the same copy first.
+            return finished()  // Another device finished the same copy first.
         }
         log("NoteItSync: copied \(copied) object(s) from \(RemoteLayout.legacyRoot) to \(RemoteLayout.root)")
-        return true
+        return finished()
     }
 
     /// The tombstone of the note or notebook `key` belongs to; nil for objects that are not per record.
@@ -88,26 +106,43 @@ public enum RemoteMigration {
         return nil
     }
 
-    /// Returns whether the manifest appeared, which ends the cleanup.
-    private static func removeStaleTombstones(in backend: StorageBackend) async throws -> Bool {
-        for object in try await backend.list(prefix: RemoteLayout.root + "tombstones/") {
-            let current: (data: Data, etag: String)
+    /// Deletes this device's recorded tombstones that no longer match their legacy copy, and drops those gone or
+    /// rewritten by another device from `recorded`. Returns whether the manifest appeared, which ends the cleanup.
+    private static func removeStaleTombstones(_ recorded: inout [String: String], in backend: StorageBackend) async throws -> Bool {
+        for (key, etag) in recorded.sorted(by: { $0.key < $1.key }) {
+            let current: Data
             do {
-                current = try await backend.get(object.key)
+                let object = try await backend.get(key)
+                guard object.etag == etag else {
+                    recorded[key] = nil
+                    continue
+                }
+                current = object.data
             } catch StorageError.notFound {
+                recorded[key] = nil
                 continue
             }
-            let legacy = RemoteLayout.legacyRoot + object.key.dropFirst(RemoteLayout.root.count)
+            let legacy = RemoteLayout.legacyRoot + key.dropFirst(RemoteLayout.root.count)
             do {
-                if try await backend.get(legacy).data == current.data { continue }
+                if try await backend.get(legacy).data == current { continue }
             } catch StorageError.notFound {}
             if try await exists(RemoteLayout.manifest(), in: backend) { return true }
             do {
-                try await backend.delete(object.key, ifMatch: current.etag)
+                try await backend.delete(key, ifMatch: etag)
             } catch StorageError.notFound {
             } catch StorageError.preconditionFailed {}
+            recorded[key] = nil
         }
         return false
+    }
+
+    /// Whether `tombstone` exists and isn't this device's own unchanged copy, which hides the record from the copy.
+    private static func foreignTombstone(_ tombstone: String, recorded: [String: String], in backend: StorageBackend) async throws -> Bool {
+        do {
+            return try await backend.get(tombstone).etag != recorded[tombstone]
+        } catch StorageError.notFound {
+            return false
+        }
     }
 
     private static func tombstoneDeleted(_ tombstone: String, in backend: StorageBackend) async throws -> Bool {
