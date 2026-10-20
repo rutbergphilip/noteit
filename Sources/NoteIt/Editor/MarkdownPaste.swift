@@ -76,8 +76,9 @@ extension NoteItTextView {
         if let inline = inlineFragment(plain, converted) {
             return insertPasted(inline, in: sel, actionName: "Paste")
         }
-        guard tableBlock(at: sel.location) == nil else { return false }
-        return insertBlocks(converted, endsWithNewline: plain.hasSuffix("\n") || plain.hasSuffix("\r"), in: sel)
+        guard tableBlock(at: sel.location) == nil, tableBlock(at: NSMaxRange(sel)) == nil,
+              !paragraphRanges(for: sel).contains(where: { tableBlock(at: $0.location) != nil }) else { return false }
+        return insertBlocks(converted, endsWithNewline: plain.last?.isNewline == true, in: sel)
     }
 
     /// ⇧⌘V: the clipboard's plain text in the style at the insertion point.
@@ -150,7 +151,10 @@ extension NoteItTextView {
             }
         }
         let blocks = NSMutableAttributedString(attributedString: converted)
-        let keepNewline = endsWithNewline || hasTextAfter
+        // A table needs the line after it, or there is no way to type below it.
+        let endsWithTable = blocks.length > 1
+            && ((blocks.attribute(.paragraphStyle, at: blocks.length - 2, effectiveRange: nil) as? NSParagraphStyle)?.textBlocks.isEmpty == false)
+        let keepNewline = endsWithNewline || hasTextAfter || endsWithTable
         if !keepNewline, blocks.string.hasSuffix("\n") {
             blocks.deleteCharacters(in: NSRange(location: blocks.length - 1, length: 1))
         }

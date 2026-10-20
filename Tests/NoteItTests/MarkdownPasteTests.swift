@@ -157,6 +157,25 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertTrue(view.string.hasSuffix("\n"))
     }
 
+    func testWindowsLineEndingsAndTablesKeepTheLineAfter() {
+        let view = editor(body("Intro"))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "# Title\r\n")))
+        XCTAssertTrue(view.string.hasSuffix("Title\n"))
+
+        let table = editor(body(""))
+        XCTAssertTrue(table.pasteMarkdown(from: pasteboard(plain: "| a | b |\n|---|---|\n| 1 | 2 |")))
+        XCTAssertNil(table.tableBlock(at: table.storage.length))
+        XCTAssertNotNil(table.tableBlock(at: (table.string as NSString).range(of: "2").location))
+    }
+
+    func testSelectionEndingInATableUsesTheNormalPaste() {
+        let text = NSMutableAttributedString(attributedString: body("Intro\n"))
+        text.append(MarkdownReader.attributedString(from: "| a | b |\n|---|---|\n| 1 | 2 |\n"))
+        let view = editor(text)
+        view.setSelectedRange(NSRange(location: 2, length: (view.string as NSString).range(of: "a").location + 1 - 2))
+        XCTAssertFalse(view.pasteMarkdown(from: pasteboard(plain: "- x\n")))
+    }
+
     func testOwnCopyRoundTrips() throws {
         let original = NSMutableAttributedString(attributedString: body("Use **stars** and "))
         original.append(NSAttributedString(string: "bold", attributes: [.font: NSFontManager.shared.convert(EditorStyle.bodyFont, toHaveTrait: .boldFontMask)]))
