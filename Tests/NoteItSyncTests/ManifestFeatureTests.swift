@@ -82,7 +82,7 @@ final class ManifestFeatureTests: XCTestCase {
         assertThrows(.unsupportedFeature("rekey")) {
             try SyncEngine.checkOpenable(Manifest(formatVersion: 2, features: ["rekey"]), supported: Set(StoreFeature.allCases))
         }
-        let decoded = try manifest(#"{"createdAt":0,"formatVersion":1,"rekey":{}}"#)
+        let decoded = try manifest(#"{"createdAt":0,"formatVersion":1,"rekey":{"deviceID":"D","deviceName":"Mac","startedAt":0,"toKeyID":"abc","updatedAt":0}}"#)
         XCTAssertNotNil(decoded.rekey)
     }
 

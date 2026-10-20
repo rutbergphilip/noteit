@@ -52,9 +52,3 @@ public struct Manifest: Codable, Sendable, Equatable {
         try c.encode(createdAt, forKey: .createdAt)
     }
 }
-
-/// Filled in by foundations Task 3.2.
-public struct Keyring: Codable, Equatable, Sendable {}
-
-/// Filled in by foundations Task 3.2.
-public struct Rekey: Codable, Equatable, Sendable {}

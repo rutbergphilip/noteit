@@ -156,7 +156,58 @@ final class GoldenVectorTests: XCTestCase {
         }
         XCTAssertEqual(cases.map(\.expect), ["ok", "ok", "ok", "wrongPassphrase", "ok", "wrongPassphrase", "unsupportedFormat",
                                              "unsupportedFormat", "invalidManifest", "invalidManifest", "invalidManifest"])
+
+        // Keyring stores (Task 3.2). `expect` describes the manifest and its unwrapped key, not what this build opens.
+        func keyring(_ label: String, passphrase: String) throws -> Manifest {
+            let dataKey = SymmetricKey(data: VectorIO.bytes("keyring-data-key-\(label)", count: 32))
+            let ring = try Keyring.make(dataKey: dataKey, passphrase: passphrase, deviceName: "Vector Mac", now: VectorIO.epoch,
+                                        iterations: 100_000, salt: VectorIO.bytes("keyring-salt-\(label)", count: 16),
+                                        nonce: try AES.GCM.Nonce(data: VectorIO.bytes("keyring-nonce-\(label)", count: 12)))
+            return Manifest(formatVersion: 2, createdAt: VectorIO.epoch, features: ["keyring"], keyring: ring)
+        }
+        let ascii = try keyring("ascii", passphrase: passphrase)
+        let madeNFC = try keyring("nfc", passphrase: nfc)
+        let madeNFD = try keyring("nfd", passphrase: nfd)
+        let keyringInputs: [(String, String?, Manifest)] = [
+            ("keyring", passphrase, ascii),
+            ("keyring-wrong-passphrase", "correct horse battery stapler", ascii),
+            ("keyring-nfc-made-nfc-opened", nfc, madeNFC),
+            ("keyring-nfc-made-nfd-opened", nfd, madeNFC),
+            ("keyring-nfd-made-nfc-opened", nfc, madeNFD),
+            ("keyring-nfd-made-nfd-opened", nfd, madeNFD),
+        ]
+        var keyringCases: [ManifestCase] = []
+        for (name, phrase, manifest) in keyringInputs {
+            let json = String(decoding: try SyncEngine.encode(manifest), as: UTF8.self)
+            let (expect, keyID) = keyringOutcome(json, phrase)
+            keyringCases.append(ManifestCase(name: name, passphrase: phrase, manifestJSON: json, expect: expect, keyID: keyID))
+        }
+        XCTAssertEqual(keyringCases.map(\.expect), ["ok", "wrongPassphrase", "ok", "ok", "ok", "ok"])
+        XCTAssertEqual(keyringCases[0].keyID, KeyIdentity.keyID(for: SymmetricKey(data: VectorIO.bytes("keyring-data-key-ascii", count: 32))))
+        cases += keyringCases
         try VectorIO.check("manifest.json", cases)
+
+        for stored in try VectorIO.load("manifest.json", as: ManifestCase.self) where stored.name.hasPrefix("keyring") {
+            let (expect, keyID) = keyringOutcome(stored.manifestJSON, stored.passphrase)
+            XCTAssertEqual(expect, stored.expect, stored.name)
+            XCTAssertEqual(keyID, stored.keyID, stored.name)
+        }
+    }
+
+    private func keyringOutcome(_ manifestJSON: String, _ passphrase: String?) -> (String, String?) {
+        do {
+            let manifest = try SyncEngine.decode(Manifest.self, from: Data(manifestJSON.utf8))
+            try SyncEngine.checkOpenable(manifest, supported: [.keyring])
+            guard let ring = manifest.keyring else { return ("error: no keyring", nil) }
+            let key = try ring.unwrap(passphrase: passphrase ?? "")
+            return ("ok", KeyIdentity.keyID(for: key))
+        } catch SyncError.wrongPassphrase {
+            return ("wrongPassphrase", nil)
+        } catch SyncError.invalidManifest {
+            return ("invalidManifest", nil)
+        } catch {
+            return ("error: \(error)", nil)
+        }
     }
 
     private func connectOutcome(_ manifestJSON: String, _ passphrase: String?) async -> String {

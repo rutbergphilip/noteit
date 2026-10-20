@@ -55,3 +55,11 @@ public enum KeyDerivation {
         return Data(out)
     }
 }
+
+extension KeyDerivation {
+    /// NFC (program §4 rule 12). Used only for keyring and lock keys; the v1 key path keeps the raw UTF-8 bytes so
+    /// existing stores still open.
+    public static func normalized(_ passphrase: String) -> String {
+        passphrase.precomposedStringWithCanonicalMapping
+    }
+}

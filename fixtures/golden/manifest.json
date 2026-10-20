@@ -63,6 +63,47 @@
       "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":1}",
       "name" : "empty-key-check",
       "passphrase" : "correct horse battery staple"
+    },
+    {
+      "expect" : "ok",
+      "keyID" : "deef0181b24f0fce",
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"keyring\"],\"formatVersion\":2,\"keyring\":{\"changedAt\":788918400,\"changedBy\":\"Vector Mac\",\"iterations\":100000,\"kdf\":\"pbkdf2-sha256\",\"keyID\":\"deef0181b24f0fce\",\"salt\":\"wsycAE4N8ZnftJV3nNpY3w==\",\"wrappedKey\":\"cC9dJ0eH3w1Z8d\\/zCZuCoVGJlzpsB7A9bRbO1DttA88qw8J1IxZOvVSxMmxMBDHTxHDm06zZF6jWh4lZ\"}}",
+      "name" : "keyring",
+      "passphrase" : "correct horse battery staple"
+    },
+    {
+      "expect" : "wrongPassphrase",
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"keyring\"],\"formatVersion\":2,\"keyring\":{\"changedAt\":788918400,\"changedBy\":\"Vector Mac\",\"iterations\":100000,\"kdf\":\"pbkdf2-sha256\",\"keyID\":\"deef0181b24f0fce\",\"salt\":\"wsycAE4N8ZnftJV3nNpY3w==\",\"wrappedKey\":\"cC9dJ0eH3w1Z8d\\/zCZuCoVGJlzpsB7A9bRbO1DttA88qw8J1IxZOvVSxMmxMBDHTxHDm06zZF6jWh4lZ\"}}",
+      "name" : "keyring-wrong-passphrase",
+      "passphrase" : "correct horse battery stapler"
+    },
+    {
+      "expect" : "ok",
+      "keyID" : "0dfe45e75259de4d",
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"keyring\"],\"formatVersion\":2,\"keyring\":{\"changedAt\":788918400,\"changedBy\":\"Vector Mac\",\"iterations\":100000,\"kdf\":\"pbkdf2-sha256\",\"keyID\":\"0dfe45e75259de4d\",\"salt\":\"B\\/GCyHSgcUQpm33p8nOsHQ==\",\"wrappedKey\":\"CzybO0Leqwl3i9mrTehU8W0t0+utgfT06STrMmN1QF\\/gPkxevySvpVzj77+oMe1mFG92C1RkKaUDkXKJ\"}}",
+      "name" : "keyring-nfc-made-nfc-opened",
+      "passphrase" : "café"
+    },
+    {
+      "expect" : "ok",
+      "keyID" : "0dfe45e75259de4d",
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"keyring\"],\"formatVersion\":2,\"keyring\":{\"changedAt\":788918400,\"changedBy\":\"Vector Mac\",\"iterations\":100000,\"kdf\":\"pbkdf2-sha256\",\"keyID\":\"0dfe45e75259de4d\",\"salt\":\"B\\/GCyHSgcUQpm33p8nOsHQ==\",\"wrappedKey\":\"CzybO0Leqwl3i9mrTehU8W0t0+utgfT06STrMmN1QF\\/gPkxevySvpVzj77+oMe1mFG92C1RkKaUDkXKJ\"}}",
+      "name" : "keyring-nfc-made-nfd-opened",
+      "passphrase" : "café"
+    },
+    {
+      "expect" : "ok",
+      "keyID" : "419b335a847b5e1f",
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"keyring\"],\"formatVersion\":2,\"keyring\":{\"changedAt\":788918400,\"changedBy\":\"Vector Mac\",\"iterations\":100000,\"kdf\":\"pbkdf2-sha256\",\"keyID\":\"419b335a847b5e1f\",\"salt\":\"pIQt+fGrlBY\\/eNmvODYZmg==\",\"wrappedKey\":\"cIZaAWtxEIga9bTcEJJCC6YEjPNT35knHQdm2SAyH41wYbViDxE3G+0OgBlT0TXZdZnaGyNW2FA1sCVU\"}}",
+      "name" : "keyring-nfd-made-nfc-opened",
+      "passphrase" : "café"
+    },
+    {
+      "expect" : "ok",
+      "keyID" : "419b335a847b5e1f",
+      "manifestJSON" : "{\"createdAt\":788918400,\"features\":[\"keyring\"],\"formatVersion\":2,\"keyring\":{\"changedAt\":788918400,\"changedBy\":\"Vector Mac\",\"iterations\":100000,\"kdf\":\"pbkdf2-sha256\",\"keyID\":\"419b335a847b5e1f\",\"salt\":\"pIQt+fGrlBY\\/eNmvODYZmg==\",\"wrappedKey\":\"cIZaAWtxEIga9bTcEJJCC6YEjPNT35knHQdm2SAyH41wYbViDxE3G+0OgBlT0TXZdZnaGyNW2FA1sCVU\"}}",
+      "name" : "keyring-nfd-made-nfd-opened",
+      "passphrase" : "café"
     }
   ],
   "generator" : "swift",
