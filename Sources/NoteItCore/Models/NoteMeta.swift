@@ -21,7 +21,7 @@ public struct NoteMeta: Identifiable, Codable, Hashable, Sendable {
 
     public init(
         id: UUID,
-        notebookID: UUID?,
+        notebookID: UUID? = nil,
         title: String,
         preview: String,
         isPinned: Bool,

@@ -48,6 +48,7 @@ final class ImportHygieneTests: XCTestCase {
         XCTAssertTrue(isViolation("import AppKit"))
         XCTAssertTrue(isViolation("@testable import SwiftUI"))
         XCTAssertTrue(isViolation("@preconcurrency import UIKit"))
+        XCTAssertTrue(isViolation("import struct AppKit.NSColor"))
         XCTAssertTrue(isViolation("#if canImport(AppKit)"))
         XCTAssertTrue(isViolation("#elseif os(macOS)"))
         XCTAssertFalse(isViolation("import Foundation"))
@@ -59,8 +60,10 @@ final class ImportHygieneTests: XCTestCase {
         if trimmed.hasPrefix("//") { return false }
         if Self.forbiddenConditions.contains(where: { trimmed.contains($0) }) { return true }
         let words = trimmed.split(whereSeparator: \.isWhitespace).map(String.init)
-        guard let importIndex = words.firstIndex(of: "import"), importIndex + 1 < words.count else { return false }
-        let module = words[importIndex + 1].split(separator: ".").first.map(String.init) ?? ""
+        guard let importIndex = words.firstIndex(of: "import") else { return false }
+        let kinds: Set<String> = ["struct", "class", "enum", "protocol", "typealias", "func", "var", "let"]
+        guard let path = words[(importIndex + 1)...].first(where: { !kinds.contains($0) }) else { return false }
+        let module = path.split(separator: ".").first.map(String.init) ?? ""
         return Self.forbiddenModules.contains(module)
     }
 

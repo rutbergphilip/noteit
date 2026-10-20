@@ -42,13 +42,19 @@ final class LibraryCodingTests: XCTestCase {
         XCTAssertEqual(String(decoding: encoded, as: UTF8.self), library)
     }
 
-    func testTruncatedLibrarySalvagesNotebooks() throws {
-        let cut = library.range(of: "\"title\" : \"Groceries\"")!.lowerBound
-        let truncated = Data(library[..<cut].utf8)
-        XCTAssertThrowsError(try LibraryCoding.decode(truncated))
+    func testDamagedLibrarySalvagesNotebooks() throws {
+        XCTAssertThrowsError(try LibraryCoding.decode(Data(salvageable.utf8)))
         let partial = try XCTUnwrap(LibraryCoding.salvage(Data(salvageable.utf8)))
         XCTAssertEqual(partial.notebooks?.map(\.name), ["Inbox"])
         XCTAssertNil(partial.notes)
+    }
+
+    // Salvage only rescues what still parses as JSON; a file cut off mid-way leaves bodies to rebuild from.
+    func testTruncatedLibraryHasNothingToSalvage() {
+        let cut = library.range(of: "\"title\" : \"Groceries\"")!.lowerBound
+        let truncated = Data(library[..<cut].utf8)
+        XCTAssertThrowsError(try LibraryCoding.decode(truncated))
+        XCTAssertNil(LibraryCoding.salvage(truncated))
     }
 
     func testUnknownTopLevelKeysDoNotStopDecoding() throws {
