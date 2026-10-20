@@ -32,7 +32,15 @@ final class AutomationService {
         self.now = now
         self.dailyNotesAvailable = dailyNotesAvailable
         self.isLoading = isLoading ?? { [unowned store] in store.isLoading }
-        store.assignMissingRevisions()
+    }
+
+    /// Gives notes and notebooks from before sync a revision, hashing their bodies off the main actor. The Local API
+    /// calls this when it starts, so every note it returns has a revision.
+    func assignMissingRevisionsForLocalAPI() async {
+        let inputs = store.missingRevisionInputs()
+        guard !inputs.isEmpty else { return }
+        let revisions = await Task.detached { NoteStore.contentRevisions(for: inputs) }.value
+        store.assignRevisions(revisions, inputs: inputs)
     }
 
     static func link(for id: UUID) -> URL {
@@ -283,8 +291,16 @@ final class AutomationService {
         return (ordered.first { $0.name.caseInsensitiveCompare("Inbox") == .orderedSame } ?? ordered.first)?.id
     }
 
+    /// Compares against the note's revision, first giving a note from before sync its revision.
     private func checkRevision(_ meta: NoteMeta, _ ifRevision: UUID?) throws(AutomationError) {
-        if let ifRevision, ifRevision != meta.revision { throw .revisionMismatch(current: meta.revision) }
+        guard let ifRevision else { return }
+        var current = meta.revision
+        if current == nil {
+            let inputs = store.missingRevisionInputs().filter { $0.id == meta.id }
+            store.assignRevisions(NoteStore.contentRevisions(for: inputs), inputs: inputs)
+            current = store.note(with: meta.id)?.revision
+        }
+        if ifRevision != current { throw .revisionMismatch(current: current) }
     }
 
     private func matchingNotes(notebook: NotebookRef?, tag: String?, query: String,

@@ -169,6 +169,27 @@ final class AutomationServiceTests: XCTestCase {
         XCTAssertNotEqual(patched.revision, meta.revision)
     }
 
+    func testMissingRevisionsAreAssignedOnlyWhenNeeded() async throws {
+        let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
+        let first = store.createNote(in: nil, initial: NSAttributedString(string: "One")).id
+        let second = store.createNote(in: nil, initial: NSAttributedString(string: "Two")).id
+        let third = store.createNote(in: nil, initial: NSAttributedString(string: "Three")).id
+        for id in [first, second, third] { store.notes[store.noteIndex(id)!].revision = nil }
+        let service = AutomationService(store: store, defaults: defaults, staged: StagedUploads(directory: root.appendingPathComponent("staged")),
+                                        isLoading: { false })
+        XCTAssertNil(store.note(with: first)?.revision, "creating the service assigns nothing")
+
+        XCTAssertThrowsError(try service.append(first, text: "x", format: .text, position: .end, timestamp: false, ifRevision: UUID())) {
+            guard case .revisionMismatch(let current) = $0 as? AutomationError else { return XCTFail("\($0)") }
+            XCTAssertNotNil(current)
+        }
+        XCTAssertNil(store.note(with: second)?.revision)
+
+        await service.assignMissingRevisionsForLocalAPI()
+        XCTAssertNotNil(store.note(with: second)?.revision)
+        XCTAssertNotNil(store.note(with: third)?.revision)
+    }
+
     func testWritesToRecentlyDeletedNoteThrow() throws {
         let (service, _) = makeService()
         let id = try service.create(title: "A", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
