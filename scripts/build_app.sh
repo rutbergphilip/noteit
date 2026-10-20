@@ -3,7 +3,9 @@
 # ~/Applications (override with NOTEIT_INSTALL_DIR=/some/dir).
 #
 # NOTEIT_SIGN_IDENTITY  codesign identity; "-" (default) signs ad-hoc, anything else signs for
-#                       distribution (hardened runtime, secure timestamp, inside-out).
+#                       distribution (hardened runtime, secure timestamp, inside-out). Ad-hoc builds give the
+#                       app a designated requirement on its bundle id instead of the default cdhash, so
+#                       privacy grants such as Accessibility keep applying after a rebuild.
 # NOTEIT_UNIVERSAL=1    builds arm64 + x86_64 instead of the host architecture only.
 set -euo pipefail
 
@@ -163,8 +165,15 @@ sign_inside_out() {
         depth="$(tr -cd '/' <<< "${entry%%|*}" | wc -c | tr -d ' ')"
         printf '%s\t%s\n' "$depth" "$entry"
     done | sort -t $'\t' -k1,1nr)
-    codesign "${flags[@]}" --entitlements "$ENTITLEMENTS" "$APP"
+    codesign "${flags[@]}" ${APP_SIGN_FLAGS[@]+"${APP_SIGN_FLAGS[@]}"} --entitlements "$ENTITLEMENTS" "$APP"
 }
+
+# An ad-hoc signature's default designated requirement is its cdhash, which changes on every build, and
+# TCC then stops honouring grants such as Accessibility. Pin it to the bundle id instead.
+APP_SIGN_FLAGS=()
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    APP_SIGN_FLAGS=(--requirements "=designated => identifier \"$BUNDLE_ID\"")
+fi
 
 if [[ "$DISTRIBUTION_SIGNING" == "1" ]]; then
     echo "==> Codesigning for distribution ($SIGN_IDENTITY, hardened runtime)"

@@ -23,7 +23,7 @@ swift run NoteIt            # run unbundled; launch at login and updates are una
 - embeds `Sparkle.framework` in `Contents/Frameworks`;
 - writes `Info.plist` with the bundle ID from `AppIdentity.swift`, a minimum macOS version of 14.0, App Transport Security's `NSAllowsLocalNetworking` (so plain `http://` MinIO or NAS servers on your local network work), and Sparkle's feed URL and public key;
 - builds `AppIcon.icns` from `Resources/AppIcon.iconset` with `iconutil`;
-- signs the app (ad-hoc by default, or with a Developer ID and the hardened runtime for releases) and installs it atomically: it stages a copy, verifies it, swaps it in, and restores the previous version if anything fails.
+- signs the app (ad-hoc by default, or with a Developer ID and the hardened runtime for releases) and installs it atomically: it stages a copy, verifies it, swaps it in, and restores the previous version if anything fails. Ad-hoc builds give the app a designated requirement on its bundle ID (`identifier "…"`) instead of the default cdhash, so permissions such as Accessibility keep working after you rebuild; `codesign -dr - NoteIt.app` shows it.
 
 | Variable | Default | Effect |
 |---|---|---|
