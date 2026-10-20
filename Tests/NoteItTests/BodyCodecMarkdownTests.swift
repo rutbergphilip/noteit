@@ -148,6 +148,26 @@ final class BodyCodecMarkdownTests: XCTestCase {
         XCTAssertEqual(last.filter { $0 == .softBreak }.count, 100)
     }
 
+    func testEnterAfterASoftBreakInAListItemKeepsItSoft() throws {
+        let url = dir.appendingPathComponent("note.md")
+        try Data("- one\n  two\n".utf8).write(to: url)
+        let (_, view) = NoteItTextView.make()
+        view.storage.setAttributedString(try BodyCodec.markdown.read(at: url).text)
+        view.normalizePendingEdits()
+        let lineBreak = (view.string as NSString).range(of: "\u{2028}")
+        XCTAssertNotEqual(lineBreak.location, NSNotFound, view.string)
+        view.setSelectedRange(NSRange(location: NSMaxRange(lineBreak), length: 0))
+        view.insertNewline(nil)
+        XCTAssertNil(view.storage.attribute(.noteItSoftBreak, at: NSMaxRange(lineBreak), effectiveRange: nil))
+        guard case .doc(let blocks) = try BodyCodec.noteItDoc(of: view.attributedString()).doc else { return XCTFail() }
+        let items = blocks.compactMap { block -> [Inline]? in
+            guard case .listItem(_, _, _, _, _, let content) = block else { return nil }
+            return content
+        }
+        XCTAssertEqual(items.count, 2, view.string)
+        XCTAssertEqual(items.flatMap { $0.filter { $0 == .softBreak || $0 == .hardBreak } }, [.softBreak], view.string)
+    }
+
     private func meta(_ id: UUID, created: String = "2026-10-19T09:12:44Z", updated: String = "2026-10-19T10:03:02Z",
                       pinned: Bool = false, deleted: String? = nil) -> NoteMeta {
         let iso = ISO8601DateFormatter()

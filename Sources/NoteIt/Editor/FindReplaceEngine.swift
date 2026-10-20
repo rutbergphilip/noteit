@@ -126,7 +126,7 @@ enum FindReplaceApplier {
     static let batchThreshold = 200
 
     private static func replacement(_ string: String, at range: NSRange, in storage: NSTextStorage) -> NSAttributedString {
-        var attributes = storage.attributes(at: range.location, effectiveRange: nil)
+        var attributes = EditorStyle.forInsertion(storage.attributes(at: range.location, effectiveRange: nil))
         attributes[.attachment] = nil
         return NSAttributedString(string: string, attributes: attributes)
     }

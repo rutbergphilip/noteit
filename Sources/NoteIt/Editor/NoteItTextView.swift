@@ -227,16 +227,8 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
 
     /// Never carries `noteItSoftBreak`: text and line breaks the user types are not soft breaks read from a file.
     override var typingAttributes: [NSAttributedString.Key: Any] {
-        get {
-            var attrs = super.typingAttributes
-            attrs[.noteItSoftBreak] = nil
-            return attrs
-        }
-        set {
-            var attrs = newValue
-            attrs[.noteItSoftBreak] = nil
-            super.typingAttributes = attrs
-        }
+        get { EditorStyle.forInsertion(super.typingAttributes) }
+        set { super.typingAttributes = EditorStyle.forInsertion(newValue) }
     }
 
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {

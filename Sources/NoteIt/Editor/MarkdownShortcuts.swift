@@ -241,7 +241,8 @@ extension NoteItTextView {
             case .numbered(let n): nextKind = .numbered(n + 1)
             case .checkbox: nextKind = .checkbox(checked: false)
             }
-            var contentAttrs = sel.location > para.location ? storage.attributes(at: sel.location - 1, effectiveRange: nil) : typingAttributes
+            var contentAttrs = sel.location > para.location
+                ? EditorStyle.forInsertion(storage.attributes(at: sel.location - 1, effectiveRange: nil)) : typingAttributes
             contentAttrs[.link] = nil
             contentAttrs[.attachment] = nil
             if case .checkbox = m.kind {
@@ -274,7 +275,7 @@ extension NoteItTextView {
         }
 
         if EditorStyle.isHeading(kind), caretAtEnd, !inTable {
-            let headingAttrs = attributes(ofParagraph: para)
+            let headingAttrs = EditorStyle.forInsertion(attributes(ofParagraph: para))
             let hasNewline = para.length > textLength
             let bodyAttrs = EditorStyle.attributes(for: .body, existing: existingPS)
             let s = NSMutableAttributedString(string: "\n", attributes: headingAttrs)
