@@ -167,6 +167,17 @@ public struct Page<T: Codable & Sendable & Equatable>: Codable, Sendable, Equata
         self.items = items
         self.nextCursor = nextCursor
     }
+
+    // Explicit null (not an omitted key) at the end, as the OpenAPI document and spec §6.8 say.
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(items, forKey: .items)
+        if let nextCursor {
+            try container.encode(nextCursor, forKey: .nextCursor)
+        } else {
+            try container.encodeNil(forKey: .nextCursor)
+        }
+    }
 }
 
 public struct ClientDTO: Codable, Sendable, Equatable {
@@ -343,6 +354,16 @@ public struct NotebooksResponseDTO: Codable, Sendable, Equatable {
     public init(notebooks: [NotebookDTO], defaultNotebookID: UUID?) {
         self.notebooks = notebooks
         self.defaultNotebookID = defaultNotebookID
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(notebooks, forKey: .notebooks)
+        if let defaultNotebookID {
+            try container.encode(defaultNotebookID, forKey: .defaultNotebookID)
+        } else {
+            try container.encodeNil(forKey: .defaultNotebookID)
+        }
     }
 }
 
