@@ -268,7 +268,8 @@ final class RemoteMigrationTests: XCTestCase {
         } catch StorageError.network {}
         let partial = try await inner.list(prefix: RemoteLayout.root)
         XCTAssertEqual(partial.map(\.key), ["noteit/v1/tombstones/\(id).json"])
-        XCTAssertEqual(record.load(), ["noteit/v1/tombstones/\(id).json": Self.sha256(Data("deleted".utf8))])
+        let created = try await inner.get("noteit/v1/tombstones/\(id).json").etag
+        XCTAssertEqual(record.load(), ["noteit/v1/tombstones/\(id).json": .confirmed(etag: created)])
 
         // An Inkwell device restores the note before the next attempt.
         try await inner.delete("inkwell/v1/tombstones/\(id).json")
@@ -296,7 +297,7 @@ final class RemoteMigrationTests: XCTestCase {
         try await backend.put("inkwell/v1/notes/\(id).meta", data: Data("meta".utf8), ifMatch: nil, ifNoneMatch: true)
     }
 
-    func testTombstonePutRightBeforeACrashIsStillCleanedUp() async throws {
+    func testTombstonePutRightBeforeACrashCountsAsForeign() async throws {
         let inner = InMemoryBackend()
         let id = Self.noteID(5)
         let tombstone = "noteit/v1/tombstones/\(id).json"
@@ -312,14 +313,85 @@ final class RemoteMigrationTests: XCTestCase {
         } catch StorageError.network {}
         let leftover = try await inner.get(tombstone).data
         XCTAssertEqual(leftover, Data("deleted".utf8))
+        XCTAssertEqual(record.load(), [tombstone: .pending(hash: Self.sha256(Data("deleted".utf8)))])
+
+        // Nothing tells this put from another device's identical copy, so the tombstone is kept.
+        try await reviveLegacyNote(id, in: inner)
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, record: record, log: { _ in })
+        XCTAssertTrue(migrated)
+        let kept = try await inner.get(tombstone).data
+        XCTAssertEqual(kept, Data("deleted".utf8))
+        let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
+        XCTAssertFalse(keys.contains("noteit/v1/notes/\(id).meta"), "a deleted note came back")
+    }
+
+    func testFailedTombstonePutDoesNotClaimAnotherDevicesIdenticalCopy() async throws {
+        let inner = InMemoryBackend()
+        let id = Self.noteID(7)
+        let tombstone = "noteit/v1/tombstones/\(id).json"
+        try await inner.put("inkwell/v1/manifest.json", data: try legacyManifest(passphrase: "pw"), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put("inkwell/v1/tombstones/\(id).json", data: Data("deleted".utf8), ifMatch: nil, ifNoneMatch: true)
+        let record = InMemoryMigrationTombstoneRecord()
+        let flaky = FaultyBackend(inner)
+        await flaky.onNextPut(keyContaining: "tombstones/", .failBefore)
+        do {
+            try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, record: record, log: { _ in })
+            XCTFail("expected the copy to be interrupted")
+        } catch StorageError.network {}
+        XCTAssertFalse(record.load().isEmpty)
+
+        // Another device copies the same tombstone and finishes; the sync tool delivers it but not the manifest.
+        try await inner.put(tombstone, data: Data("deleted".utf8), ifMatch: nil, ifNoneMatch: true)
+        try await reviveLegacyNote(id, in: inner)
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, record: record, log: { _ in })
+        XCTAssertTrue(migrated)
+        let kept = try await inner.get(tombstone).data
+        XCTAssertEqual(kept, Data("deleted".utf8))
+        let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
+        XCTAssertFalse(keys.contains("noteit/v1/notes/\(id).meta"), "a deleted note came back")
+    }
+
+    func testCreatedTombstoneIsCleanedUpAfterRepeatedInterruptions() async throws {
+        let inner = InMemoryBackend()
+        let id = Self.noteID(8)
+        let other = Self.noteID(9)
+        let tombstone = "noteit/v1/tombstones/\(id).json"
+        try await inner.put("inkwell/v1/manifest.json", data: try legacyManifest(passphrase: "pw"), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put("inkwell/v1/tombstones/\(id).json", data: Data("deleted".utf8), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put("inkwell/v1/tombstones/\(other).json", data: Data("other".utf8), ifMatch: nil, ifNoneMatch: true)
+        let record = InMemoryMigrationTombstoneRecord()
+        for _ in 0..<2 {
+            let flaky = FaultyBackend(inner)
+            await flaky.onNextPut(keyContaining: other, .failBefore)
+            do {
+                try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, record: record, log: { _ in })
+                XCTFail("expected the copy to be interrupted")
+            } catch StorageError.network {}
+            let created = try await inner.get(tombstone).etag
+            XCTAssertEqual(record.load()[tombstone], .confirmed(etag: created))
+        }
 
         try await reviveLegacyNote(id, in: inner)
         let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, record: record, log: { _ in })
         XCTAssertTrue(migrated)
         let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
         XCTAssertFalse(keys.contains(tombstone), "the leftover tombstone was kept")
-        let meta = try await inner.get("noteit/v1/notes/\(id).meta").data
-        XCTAssertEqual(meta, Data("meta".utf8))
+        XCTAssertTrue(keys.contains("noteit/v1/notes/\(id).meta"))
+        XCTAssertEqual(record.load(), [:], "the record outlived the migration")
+    }
+
+    func testRecordInTheOldFormatReadsAsPending() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("sync-migration-store.json")
+        try Data(#"{"noteit/v1/tombstones/a.json":"abc"}"#.utf8).write(to: url)
+        let record = FileMigrationTombstoneRecord(url: url)
+        XCTAssertEqual(record.load(), ["noteit/v1/tombstones/a.json": .pending(hash: "abc")])
+
+        try record.save(["k": .confirmed(etag: "e"), "p": .pending(hash: "h")])
+        XCTAssertEqual(FileMigrationTombstoneRecord(url: url).load(), ["k": .confirmed(etag: "e"), "p": .pending(hash: "h")])
     }
 
     func testFileRecordOutlivesAnInterruptedCopyAcrossReconnects() async throws {

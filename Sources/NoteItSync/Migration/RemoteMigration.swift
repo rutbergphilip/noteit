@@ -13,8 +13,8 @@ import Foundation
 /// and those created since the last check that saw no manifest are deleted again (unless changed since).
 /// Other copies are kept: they are identical to what the finishing device copied or skipped. A sync tool may
 /// deliver another device's tombstones before the manifest, so the only tombstones removed before copying are
-/// ones this device's earlier attempt put (per `record`, still holding the recorded bytes) that no longer match the
-/// legacy ones. The record is saved before each tombstone put, so a crash right after the put can't orphan it.
+/// ones this device's earlier attempt created (per `record`, still holding the etag that create returned) that no
+/// longer match the legacy ones. A crash between such a create and saving its etag leaves a tombstone treated as foreign.
 public enum RemoteMigration {
     /// Returns whether a legacy store was copied, by this device or another one during the copy.
     /// Does nothing when `noteit/v1/` already has a manifest.
@@ -72,14 +72,26 @@ public enum RemoteMigration {
             if try await manifestAppeared() { return finished() }
             let tombstone = tombstoneKey(for: key)
             if let tombstone, try await foreignTombstone(tombstone, recorded: recorded, in: backend) { continue }
-            if key.hasPrefix(RemoteLayout.root + "tombstones/") {
-                let digest = sha256(data)
-                if recorded[key] != digest {
-                    recorded[key] = digest
+            let isTombstone = key.hasPrefix(RemoteLayout.root + "tombstones/")
+            if isTombstone {
+                // Checked against the legacy copy by `removeStaleTombstones` this run.
+                if case .confirmed = recorded[key] { continue }
+                let pending = MigrationTombstoneEntry.pending(hash: sha256(data))
+                if recorded[key] != pending {
+                    recorded[key] = pending
                     try record.save(recorded)
                 }
             }
-            switch try await copy(data, to: key, in: backend) {
+            let result = try await copy(data, to: key, in: backend)
+            if isTombstone {
+                if case .created(let etag) = result {
+                    recorded[key] = .confirmed(etag: etag)
+                } else {
+                    recorded[key] = nil
+                }
+                try record.save(recorded)
+            }
+            switch result {
             case .created(let etag):
                 if let tombstone { unconfirmed.append((key, etag, tombstone)) }
                 copied += 1
@@ -111,19 +123,23 @@ public enum RemoteMigration {
         return nil
     }
 
-    /// Deletes this device's recorded tombstones that no longer match their legacy copy, and drops those never put,
-    /// gone or rewritten by another device from `recorded`. Returns whether the manifest appeared, which ends the cleanup.
-    private static func removeStaleTombstones(_ recorded: inout [String: String], in backend: StorageBackend) async throws -> Bool {
-        for (key, digest) in recorded.sorted(by: { $0.key < $1.key }) {
+    /// Deletes this device's owned tombstones that no longer match their legacy copy, and drops pending entries and
+    /// those gone or rewritten since from `recorded`. Returns whether the manifest appeared, which ends the cleanup.
+    private static func removeStaleTombstones(_ recorded: inout [String: MigrationTombstoneEntry],
+                                              in backend: StorageBackend) async throws -> Bool {
+        for (key, entry) in recorded.sorted(by: { $0.key < $1.key }) {
+            guard case .confirmed(let etag) = entry else {
+                recorded[key] = nil
+                continue
+            }
             let current: Data
-            let etag: String
             do {
                 let object = try await backend.get(key)
-                guard sha256(object.data) == digest else {
+                guard object.etag == etag else {
                     recorded[key] = nil
                     continue
                 }
-                (current, etag) = object
+                current = object.data
             } catch StorageError.notFound {
                 recorded[key] = nil
                 continue
@@ -142,11 +158,12 @@ public enum RemoteMigration {
         return false
     }
 
-    /// Whether `tombstone` exists and isn't this device's own unchanged copy, which hides the record from the copy.
-    private static func foreignTombstone(_ tombstone: String, recorded: [String: String], in backend: StorageBackend) async throws -> Bool {
+    /// Whether `tombstone` exists and isn't one this device created and nobody rewrote since, which hides the record.
+    private static func foreignTombstone(_ tombstone: String, recorded: [String: MigrationTombstoneEntry],
+                                         in backend: StorageBackend) async throws -> Bool {
         do {
-            let current = try await backend.get(tombstone).data
-            return recorded[tombstone].map { $0 != sha256(current) } ?? true
+            let current = try await backend.get(tombstone).etag
+            return recorded[tombstone] != .confirmed(etag: current)
         } catch StorageError.notFound {
             return false
         }
