@@ -293,7 +293,7 @@ There are several unrelated iOS apps called "noteit" or "Noteit Widget" (couples
 Options:
 
 1. **Keep NoteIt, add a descriptor.** Use "NoteIt for Mac" or "NoteIt notes" in titles, the site title and store-like listings. Cost: nothing. Risk: search confusion stays.
-2. **Rename before launch.** The Inkwell → NoteIt migration code (`Sources/NoteItSync/Migration/`) shows a rename is doable, and it's cheapest now, with no stars and few installs. Cost: a second migration, new bundle ID, new tap token, new brand assets, and a second "formerly called" note. The sync prefix `inkwell/v1/` is unaffected.
+2. **Rename before launch.** The Inkwell → NoteIt migration code (`Sources/NoteItSync/Migration/`) shows a rename is doable, and it's cheapest now, with no stars and few installs. Cost: a second migration, new bundle ID, new tap token, new brand assets, and a second "formerly called" note. The sync prefix `noteit/v1/` is unaffected.
 3. **Keep the name, prepare a rename only if challenged.** Cost: nothing now; a forced rename after launch would cost the launch's search traffic.
 
 Recommendation: before L − 21, search the USPTO, EUIPO and WIPO Global Brand Database for "NOTEIT" in Nice classes 9 and 42. If a live registration covers software, take option 2 before launch. Otherwise take option 1, and re-check yearly. The decision belongs to the maintainer; this spec doesn't rename anything.

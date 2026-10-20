@@ -6,7 +6,7 @@ Status: proposed · Date: 2026-10-19 · Companion plan: docs/plans/2026-10-19-ma
 
 Let people keep their NoteIt library as a folder of plain Markdown files they can read, edit, grep and back up with any tool, without losing NoteIt's formatting and without giving up encrypted sync. Make it obvious where the data lives and that it can be restored: a "Your Data" settings tab, a one-click backup ZIP, automatic backups, and restore drills that prove a backup or the sync storage really contains every note. Make switching to NoteIt easy with importers for Evernote `.enex` files and Notion exports.
 
-The Markdown library is an alternative **local** format. The remote sync format, the `inkwell/v1/` prefix and the encryption don't change, so a Mac with a Markdown library and a Mac with the default RTFD library sync with each other through the same store.
+The Markdown library is an alternative **local** format. The remote sync format, the `noteit/v1/` prefix and the encryption don't change, so a Mac with a Markdown library and a Mac with the default RTFD library sync with each other through the same store.
 
 ## What the user gets
 
@@ -359,7 +359,7 @@ The result sheet: "This backup is complete. All 1,284 notes and 9 notebooks can 
 
 **Check Sync Storage…** proves the remote store can rebuild the library on a new Mac. It uses the current store session (`StoreSession`, through `SyncController.ensureSession`) and a new read-only `RemoteRestoreDrill` in `NoteItSync`:
 
-- lists `inkwell/v1/`, opens the manifest, decrypts every note and notebook envelope, downloads every body, checks `bodySHA256`, and decodes the body (flattened RTFD, or the `noteit-doc` container when the manifest `features` contains `noteit-doc`);
+- lists `noteit/v1/`, opens the manifest, decrypts every note and notebook envelope, downloads every body, checks `bodySHA256`, and decodes the body (flattened RTFD, or the `noteit-doc` container when the manifest `features` contains `noteit-doc`);
 - a body with `bodyFormat: "noteit-locked/1"` is checked by `bodySHA256` only and never opened; the drill also checks that the lock keyring (`keys/`) is present when any note is locked;
 - prefixes registered by other sub-projects in `RemoteLayout` are listed but not decoded;
 - compares the result with the local library by id and revision;

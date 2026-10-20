@@ -623,8 +623,8 @@ extension SyncEngine {
 /// unsealed: signed logs, HPKE key files and the canary; RekeyRunner never re-seals them.
 public enum RecordSealing: Sendable, Equatable { case storeKey, spaceKey, unsealed }
 public struct RemotePrefix: Sendable, Equatable {
-    public let path: String                       // full key prefix, e.g. "inkwell/v1/notes/"
-    public let depth: Int                         // segments after `path`; "inkwell/v1/notes/<UUID>.meta" is 1
+    public let path: String                       // full key prefix, e.g. "noteit/v1/notes/"
+    public let depth: Int                         // segments after `path`; "noteit/v1/notes/<UUID>.meta" is 1
     public let sealing: RecordSealing
     public let owner: String                      // sub-project slug
 }
@@ -632,7 +632,7 @@ extension RemoteLayout {
     public static let prefixes: [RemotePrefix]    // one literal list; wave 0: notebooks/, notes/, tombstones/, devices/
     public static func prefix(for key: String) -> RemotePrefix?   // longest matching row whose depth equals the key's
     public static let manifestKey: String         // manifest(); excluded from rekey
-    // canaryPrefix ("inkwell/.canary/") already exists; keys under it are "inkwell/.canary/<UUID>", depth 1,
+    // canaryPrefix ("noteit/.canary/") already exists; keys under it are "noteit/.canary/<UUID>", depth 1,
     // and are treated as .unsealed.
     /// Program §4 rule 8: every segment matches [A-Za-z0-9._-]+ and is not "." or ".."; a segment whose
     /// part before the first "." is a UUID must be the uppercase canonical form; the key is manifestKey, a
@@ -640,8 +640,9 @@ extension RemoteLayout {
     /// may share a path with different depths).
     public static func isValidKey(_ key: String) -> Bool
     /// True for a registered prefix path, canaryPrefix, or a parent root of either (every shorter prefix that
-    /// ends at a "/", such as "inkwell/v1/" and "inkwell/"), so legacy clients (the 0.2.x engine, rclone) keep
-    /// listing. The web server refuses other list requests, including "".
+    /// ends at a "/", such as "noteit/v1/" and "noteit/"), so clients that list the whole root (the sync
+    /// engine, rclone) keep listing; also legacyRoot ("inkwell/v1/") and "inkwell/", which RemoteMigration
+    /// lists. The web server refuses other list requests, including "".
     public static func isListablePrefix(_ prefix: String) -> Bool
 }
 ```
@@ -1344,7 +1345,7 @@ sync-security's M0 lists the tests this step must include. They are named below 
 - [ ] `SyncState` gains `pendingBodyVersions: [UUID: PendingBody]`, with the `PendingBody` type next to it in `SyncState.swift`, both exactly as in Frozen interfaces (moved from web-app Task 0.4). `RemoteEnvelope` gains `Equatable`, because `PendingBody` stores one and `SyncState` is `Equatable`.
   - `CodingKeys` gains `pendingBodyVersions`, the memberwise `init` gains it with a `[:]` default, and `init(from:)` decodes it with `decodeIfPresent … ?? [:]` like the other keys, so a state file from an older build decodes with an empty map and keeps its other fields. `save(to:)` writes it.
   - Nothing reads or writes an entry in wave 0, and no `PendingBodies/` file is created. web-app Task 0.4 writes entries and the sealed bytes; sync-security Task 4.3 passes `pendingBodyVersions.count` to `RekeyRunner` as its `pendingBodyVersions` precondition.
-- [ ] `RemoteIndex` ignores keys under `inkwell/v1/keys/`. They are not notes, notebooks, tombstones or devices.
+- [ ] `RemoteIndex` ignores keys under `noteit/v1/keys/`. They are not notes, notebooks, tombstones or devices.
 - [ ] Tests:
   - `testV1ManifestRoundTripsUnchanged` (bytes of a stored v1 fixture from `fixtures/golden/manifest.json`);
   - `testRefusesVersion3`;
@@ -1560,12 +1561,12 @@ Moved from sync-security Task 0.2 and the session half of web-app Task 0.4.
 
   | Prefix | Depth | Sealing | Example key |
   |---|---|---|---|
-  | `inkwell/v1/notebooks/` | 1 | `.storeKey` | `inkwell/v1/notebooks/<UUID>.json` |
-  | `inkwell/v1/notes/` | 1 | `.storeKey` | `inkwell/v1/notes/<UUID>.meta`, `inkwell/v1/notes/<UUID>.body` |
-  | `inkwell/v1/tombstones/` | 1 | `.storeKey` | `inkwell/v1/tombstones/<UUID>.json` |
-  | `inkwell/v1/devices/` | 1 | `.storeKey` | `inkwell/v1/devices/<UUID>.json` |
+  | `noteit/v1/notebooks/` | 1 | `.storeKey` | `noteit/v1/notebooks/<UUID>.json` |
+  | `noteit/v1/notes/` | 1 | `.storeKey` | `noteit/v1/notes/<UUID>.meta`, `noteit/v1/notes/<UUID>.body` |
+  | `noteit/v1/tombstones/` | 1 | `.storeKey` | `noteit/v1/tombstones/<UUID>.json` |
+  | `noteit/v1/devices/` | 1 | `.storeKey` | `noteit/v1/devices/<UUID>.json` |
 
-  Outside the table: `manifestKey` (`manifest()`, never sealed) and `inkwell/.canary/<UUID>` (depth 1 under `canaryPrefix`, treated as `.unsealed`). Each sub-project that adds a prefix adds its row with depth and sealing, plus vectors in `layout-keys.json`.
+  Outside the table: `manifestKey` (`manifest()`, never sealed) and `noteit/.canary/<UUID>` (depth 1 under `canaryPrefix`, treated as `.unsealed`). Each sub-project that adds a prefix adds its row with depth and sealing, plus vectors in `layout-keys.json`.
   - The three sealing kinds follow program §4 rule 6. `.storeKey` means sealed with the session's key: the personal store key, or the space key in a space session. `.spaceKey` is for space-key objects inside a personal store. `.unsealed` is for signed logs, HPKE key files and the canary; they are never re-sealed. Wave 0 has no `.spaceKey` or `.unsealed` rows.
   - `prefix(for:)` returns the longest matching row whose depth equals the key's.
   - `prefix(for:)` and `isValidKey(_:)` take an internal `prefixes:` parameter defaulting to `RemoteLayout.prefixes`, as `RekeyScope` does, so tests can add rows.
@@ -1574,7 +1575,7 @@ Moved from sync-security Task 0.2 and the session half of web-app Task 0.4.
   - every segment matches `[A-Za-z0-9._-]+` and is not `.` or `..`;
   - a segment whose part before the first `.` parses as a UUID must be the uppercase canonical form;
   - the key is `manifestKey`, a canary key, or sits under a registered prefix at exactly the depth of a row with that path (two rows may share a path with different depths);
-  - a list request must name a registered prefix path, `canaryPrefix`, or a parent root of one: any shorter prefix that ends at a `/`, such as `inkwell/v1/` and `inkwell/`. Legacy clients (the 0.2.x engine, rclone) list from those roots and keep working. `""` and prefixes that don't end in `/` are refused.
+  - a list request must name a registered prefix path, `canaryPrefix`, or a parent root of one: any shorter prefix that ends at a `/`, such as `noteit/v1/` and `noteit/`. Clients that list the whole root (the sync engine, rclone) list from those and keep working. `RemoteLayout.legacyRoot` (`inkwell/v1/`) and `inkwell/` are also allowed, because `RemoteMigration` lists them; keys under them are not valid. `""` and prefixes that don't end in `/` are refused.
 
   The builders already produce uppercase `uuidString`, and device IDs are uppercase UUIDs (`SyncConfiguration.stableDeviceID`). In space stores the device ID is `<member-id>/<UUID>` (sharing spec §4.1). Nothing in foundations parses a device ID as a UUID: `deviceID`, `currentDeviceID` and `FeatureBlocker` treat it as an opaque string, so space sessions accept that form.
 - [ ] `RekeyScope.action(for:rekeying:prefixes:)`, with `rekeying` defaulting to `.storeKey` and `prefixes` to `RemoteLayout.prefixes`, returns:
@@ -1582,18 +1583,18 @@ Moved from sync-security Task 0.2 and the session half of web-app Task 0.4.
   - `.skip` for any `.unsealed` row, whatever is being rekeyed;
   - `.reseal` for a row whose sealing equals `rekeying`;
   - `.skip` for a row with the other key sealing (`.spaceKey` rows during a `.storeKey` rekey, and the reverse);
-  - `.block` for any other key in the store, under `inkwell/` or not.
+  - `.block` for any other key, under `noteit/` or not (including keys under `inkwell/`).
 
   `rekeying: .unsealed` is a programming error (`preconditionFailure`). Its doc comment states the program §4 rule 7 scope rule. `RekeyRunner`, the `rekeyAck` fence and the runner's tests stay in sync-security.
 - [ ] `layout-keys.json` (`generator: "spec"`) is the web server's test vector file. It has two lists:
   - `keys`: `{key, valid, prefix, action}` cases: one valid key per row and for the manifest and canary; a lowercase UUID; a `.` and a `..` segment; an empty segment (`//`); a character outside the set (space, `%`, `+`); a key one level too deep (not under `devices/`, where sharing adds a depth-2 row on the same path) and one too shallow; an unregistered prefix (`valid: false`, `action: "block"`).
-  - `listPrefixes`: `{prefix, allowed}` cases: each registered prefix and `canaryPrefix` allowed; the parent roots `inkwell/v1/` and `inkwell/` allowed; `""`, `inkwell/v2/`, `inkwell/v1/notes` (no trailing `/`) and `other/` refused.
+  - `listPrefixes`: `{prefix, allowed}` cases: each registered prefix and `canaryPrefix` allowed; the parent roots `noteit/v1/` and `noteit/` allowed; the legacy roots `inkwell/v1/` and `inkwell/` allowed; `""`, `noteit/v2/`, `noteit/v1/notes` (no trailing `/`), `inkwell/v1/notes/` and `other/` refused.
 - [ ] `RemoteLayoutRegistryTests`:
   - `testEveryListedPrefixIsRegistered`: every key the builders produce has a row and is valid;
   - `testKeyGrammar` and `testListPrefixes`: the `layout-keys.json` vectors pass;
   - `testRekeyScope`: an unknown prefix is `.block`; manifest and canary are `.skip`; a `.spaceKey` row passed through `prefixes` is `.skip` for a `.storeKey` rekey and `.reseal` for a `.spaceKey` rekey; an `.unsealed` row passed through `prefixes` is `.skip` for both;
-  - `testSamePathDifferentDepthRows`: with the sharing row `inkwell/v1/devices/` (depth 2) passed through `prefixes` beside the wave 0 depth-1 row, the personal key `inkwell/v1/devices/<UUID>.json` and the space key `inkwell/v1/devices/<member-id>/<UUID>.json` are both valid, and `prefix(for:)` returns the depth-1 row for the first and the depth-2 row for the second;
-  - `testLegacyListRootsAllowed`: `isListablePrefix("inkwell/v1/")` and `isListablePrefix("inkwell/")` are true, and `""` is false.
+  - `testSamePathDifferentDepthRows`: with the sharing row `noteit/v1/devices/` (depth 2) passed through `prefixes` beside the wave 0 depth-1 row, the personal key `noteit/v1/devices/<UUID>.json` and the space key `noteit/v1/devices/<member-id>/<UUID>.json` are both valid, and `prefix(for:)` returns the depth-1 row for the first and the depth-2 row for the second;
+  - `testLegacyListRootsAllowed`: `isListablePrefix("noteit/v1/")`, `isListablePrefix("noteit/")`, `isListablePrefix("inkwell/v1/")` and `isListablePrefix("inkwell/")` are true, `isValidKey("inkwell/v1/manifest.json")` and `isListablePrefix("")` are false.
 - [ ] `RawMetaOverlay.merged(with:ownedKeys:)` produces:
   - keys in `ownedKeys` from `encoded` (absent when absent there, so a cleared optional is removed);
   - all other keys from `lastDecrypted`;

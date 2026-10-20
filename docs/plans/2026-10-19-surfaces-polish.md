@@ -132,7 +132,7 @@ Tests/NoteItSyncTests/
   UnsyncedCountTests.swift  BoardSyncTests.swift  RemoteLayoutTests.swift (modify, from foundations)
 Tests/NoteItCoreTests/
   NoteMetaChecklistFieldTests.swift
-fixtures/golden/layout-keys.json          modify: inkwell/v1/boards/<UUID>.json key cases and the boards/ list prefix
+fixtures/golden/layout-keys.json          modify: noteit/v1/boards/<UUID>.json key cases and the boards/ list prefix
 scripts/bench.sh                           new
 scripts/bench_report.py                    new
 .gitignore                                 modify: .bench/
@@ -219,7 +219,7 @@ extension BoardLayout { public static let ownedCodingKeys: Set<String> }
 extension RecordKind { /* case board; usesLastWriterWins == true; hasBody == false */ }
 extension RemoteLayout {
     public static let boardsPrefix = root + "boards/"   // registered in the prefix registry, sealed
-    public static func board(_ notebookID: UUID) -> String   // "inkwell/v1/boards/<UUID>.json"
+    public static func board(_ notebookID: UUID) -> String   // "noteit/v1/boards/<UUID>.json"
 }
 public struct SyncState { /* existing */ public var boardBases: [UUID: Base] }   // decodeIfPresent, default [:]
 
@@ -816,8 +816,8 @@ Steps:
 - [ ] Add `BoardLayout`/`BoardPosition` to `NoteItCore` as frozen, and `BoardLayout.ownedCodingKeys` to `Models/CodingKeyNames.swift` with its `ModelCodingTests` check (the set equals the encoded keys with every optional set).
 - [ ] `NoteItSync`:
   - Add `RecordKind.board`: no body, `usesLastWriterWins == true` (organise's flag), so a concurrent change never makes a conflict copy.
-  - Add `RemotePrefix(path: "inkwell/v1/boards/", depth: 1, sealing: .storeKey, owner: "surfaces-polish")` to `RemoteLayout.prefixes`, and add `board(_:)`. `RekeyRunner` then re-seals board records with no change here.
-  - Add to `fixtures/golden/layout-keys.json`: a valid `inkwell/v1/boards/<UUID>.json` key with prefix `boards/` and action `reseal`, invalid keys (`boards/<UUID>/x.json`, a non-UUID name), and `boards/` in `listPrefixes`. Foundations' `RemoteLayoutRegistryTests` and the web server's tests read the same file.
+  - Add `RemotePrefix(path: "noteit/v1/boards/", depth: 1, sealing: .storeKey, owner: "surfaces-polish")` to `RemoteLayout.prefixes`, and add `board(_:)`. `RekeyRunner` then re-seals board records with no change here.
+  - Add to `fixtures/golden/layout-keys.json`: a valid `noteit/v1/boards/<UUID>.json` key with prefix `boards/` and action `reseal`, invalid keys (`boards/<UUID>/x.json`, a non-UUID name), and `boards/` in `listPrefixes`. Foundations' `RemoteLayoutRegistryTests` and the web server's tests read the same file.
   - Add `SyncState.boardBases`, decoded with `decodeIfPresent`. The engine keeps board bases there and never in `bases`, because a board's ID is its notebook's ID.
   - Boards have no tombstones (program §4 rule 14). When a notebook is deleted locally, the adapter reports its board as a board deletion and the engine deletes the remote object (best effort) and drops the board base. A remote board whose notebook is missing locally and remotely, or has a tombstone, is ignored and deleted by the Mac. The phone and the web app never delete it (program §4 rule 9), so this is how boards of notebooks deleted there are removed.
 - [ ] `NoteStore+Board`:

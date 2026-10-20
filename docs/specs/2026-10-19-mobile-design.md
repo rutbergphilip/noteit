@@ -212,7 +212,7 @@ The app turns each item into a note: `CaptureTitle` picks the title when none is
 
 ### 5. Sync
 
-**Principle.** The phone is one more device on the existing store. No NoteIt server, no push notifications, no relay. The wire prefix `inkwell/v1/` is unchanged.
+**Principle.** The phone is one more device on the existing store. No NoteIt server, no push notifications, no relay. The wire prefix `noteit/v1/` is unchanged.
 
 #### 5.1 Store format
 

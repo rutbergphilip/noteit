@@ -16,7 +16,7 @@ Make NoteIt sync safer to trust and easier to self-host. Five pieces:
 
 Pieces 2 to 5 ship in wave 2. Locked notes need the `noteit-doc` store feature, which the web app's Tasks 0.4–0.5 bring in wave 3, so locked notes ship in wave 3 after those tasks (program §1, §8).
 
-Everything stays local-first. There is no NoteIt server. The wire prefix `inkwell/v1/` is unchanged; every remote addition in this document is additive and gated by a manifest feature.
+Everything stays local-first. There is no NoteIt server. The wire prefix `noteit/v1/` is unchanged; every remote addition in this document is additive and gated by a manifest feature.
 
 The store-session groundwork this sub-project used to start with (store sessions, manifest features, keyring types) is built in wave 0 as foundations step 3 (program §2). The foundations plan freezes those types. This spec still describes their behaviour, and the sync-security plan repeats the shapes for reference; the web app and the phone consume them.
 
@@ -41,36 +41,36 @@ Built in foundations step 3 under the rules of program §4. The types are frozen
 - **Manifest writes keep everything.** Every manifest change reads the manifest, changes only its own keys in the raw JSON (so keys this build doesn't know survive) and writes it back with `If-Match` on its ETag. A 412 re-reads the manifest and checks again, before re-applying the change, that `rekey` is not set and that the key ID, the session kind, the current features and the requirement rules still allow it; if not, it stops with `rekeyInProgress`, `keyChanged` or `manifestChangedConcurrently` instead of replaying the change. `upgradeToV2` adds `noteit-doc` and keeps `keyring`, `encryption` and every other feature; it refuses while the `rekey` field is set.
 - **One way to add a feature.** `SyncEngine.ensureFeature(_:backend:session:currentDeviceID:confirm:)` (foundations task 3.4) is the only path that adds a feature older apps can't read. Each device record in `devices/` carries `platform` (`mac`, `ios` or `web`), `appVersion`, `supportedFeatures` and `rekeyAck`. The check uses `supportedFeatures`; a record without it counts as supporting no features. If a listed device doesn't support the feature, the user sees the Macs and devices that will stop syncing, with their last sync time, and confirms first. Declining writes nothing (`SyncError.featureDeclined`). The check is a warning, not a lock (program §4): a device can register between the check and the write, so after a successful write `ensureFeature` lists devices again and reports any new blocker, which the app shows once as a notice. Every feature this spec adds goes through it, including a passphrase change that introduces `keyring`. A feature's requirements are added first in the same manifest write: `locked-notes` requires `noteit-doc`, so `ensureFeature(.lockedNotes)` adds `noteit-doc` when the store doesn't have it yet.
 - **Unknown keys survive.** Every writer keeps the last decrypted note and notebook JSON and patches only the keys it owns (`RawMetaOverlay`, in `NoteItSync`). `NoteMeta.lock` and `NoteMeta.conflictTitleSuffix` go into the revision fields only when they aren't nil, so existing revisions don't change.
-- **One list of remote record kinds.** `RemoteLayout` keeps a registry of every prefix, its owner, its key depth and how it's sealed. There are three sealing kinds: `.storeKey` (sealed with the session's key: the library's data key, or the space key in a space session), `.spaceKey` (objects sealed with a space key inside a personal store) and `.unsealed` (signed logs, HPKE key files and the canary, which `RekeyRunner` never re-seals). This sub-project registers `inkwell/v1/keys/` with `.storeKey` and depth 1, and adds its key test vectors to `layout-keys.json` for the web server.
+- **One list of remote record kinds.** `RemoteLayout` keeps a registry of every prefix, its owner, its key depth and how it's sealed. There are three sealing kinds: `.storeKey` (sealed with the session's key: the library's data key, or the space key in a space session), `.spaceKey` (objects sealed with a space key inside a personal store) and `.unsealed` (signed logs, HPKE key files and the canary, which `RekeyRunner` never re-seals). This sub-project registers `noteit/v1/keys/` with `.storeKey` and depth 1, and adds its key test vectors to `layout-keys.json` for the web server.
 - **WebDAV ETags** are stored without quotes, like every other backend.
 
 **Remote keys.** This spec owns the key grammar and the depth table (program §4 rule 8). `RemoteLayout.isValidKey(_:)` and `isListablePrefix(_:)` (foundations task 3.5) implement them, and the web server accepts only keys that fit.
 
 - Every segment matches `[A-Za-z0-9._-]+` and is not `.` or `..`. Empty segments are refused.
 - A segment whose part before the first `.` parses as a UUID must be the uppercase canonical form.
-- A key is the manifest, a canary key, or sits under a registered prefix at exactly the depth of a row with that path (the number of segments after the prefix). Two rows may share a path with different depths (`inkwell/v1/devices/` below); `prefix(for:)` returns the longest matching row whose depth equals the key's.
-- A list request must name a registered prefix, a parent root of one (for example `inkwell/v1/`), or `inkwell/.canary/`. `isListablePrefix(_:)` allows the parent roots so legacy clients (the 0.2.x engine, rclone) keep working.
+- A key is the manifest, a canary key, or sits under a registered prefix at exactly the depth of a row with that path (the number of segments after the prefix). Two rows may share a path with different depths (`noteit/v1/devices/` below); `prefix(for:)` returns the longest matching row whose depth equals the key's.
+- A list request must name a registered prefix, a parent root of one (for example `noteit/v1/`), or `noteit/.canary/`. `isListablePrefix(_:)` allows the parent roots so clients that list the whole root (the sync engine, rclone) keep working, and Inkwell's `inkwell/v1/` and `inkwell/` so `RemoteMigration` can look for a store from before 0.4.0. Keys under `inkwell/` are not valid.
 
 | Prefix | Depth | Sealing | Example key | Owner |
 |---|---|---|---|---|
-| `inkwell/v1/manifest.json` | — | never sealed | `inkwell/v1/manifest.json` | core |
-| `inkwell/.canary/` | 1 | `.unsealed` | `inkwell/.canary/<UUID>` | core |
-| `inkwell/v1/notebooks/` | 1 | `.storeKey` | `inkwell/v1/notebooks/<UUID>.json` | core |
-| `inkwell/v1/notes/` | 1 | `.storeKey` | `inkwell/v1/notes/<UUID>.meta`, `inkwell/v1/notes/<UUID>.body` | core |
-| `inkwell/v1/tombstones/` | 1 | `.storeKey` | `inkwell/v1/tombstones/<UUID>.json` | core |
-| `inkwell/v1/devices/` | 1 | `.storeKey` | `inkwell/v1/devices/<UUID>.json` | core |
-| `inkwell/v1/devices/` | 2 (space stores) | `.storeKey` (the space key in a space session) | `inkwell/v1/devices/<member-id>/<UUID>.json` | sharing |
-| `inkwell/v1/bodies/` | 1 | `.storeKey` | `inkwell/v1/bodies/<UUID>.<VERSION>.<TAG>.body` | web-app |
-| `inkwell/v1/smart-folders/` | 1 | `.storeKey` | `inkwell/v1/smart-folders/<UUID>.json` | organise |
-| `inkwell/v1/claims/reminders/` | 1 | `.storeKey` | `inkwell/v1/claims/reminders/<UUID>.json` | organise |
-| `inkwell/v1/keys/` | 1 | `.storeKey` | `inkwell/v1/keys/locked-notes.json` | sync-security |
-| `inkwell/v1/boards/` | 1 | `.storeKey` | `inkwell/v1/boards/<UUID>.json` | surfaces-polish |
+| `noteit/v1/manifest.json` | — | never sealed | `noteit/v1/manifest.json` | core |
+| `noteit/.canary/` | 1 | `.unsealed` | `noteit/.canary/<UUID>` | core |
+| `noteit/v1/notebooks/` | 1 | `.storeKey` | `noteit/v1/notebooks/<UUID>.json` | core |
+| `noteit/v1/notes/` | 1 | `.storeKey` | `noteit/v1/notes/<UUID>.meta`, `noteit/v1/notes/<UUID>.body` | core |
+| `noteit/v1/tombstones/` | 1 | `.storeKey` | `noteit/v1/tombstones/<UUID>.json` | core |
+| `noteit/v1/devices/` | 1 | `.storeKey` | `noteit/v1/devices/<UUID>.json` | core |
+| `noteit/v1/devices/` | 2 (space stores) | `.storeKey` (the space key in a space session) | `noteit/v1/devices/<member-id>/<UUID>.json` | sharing |
+| `noteit/v1/bodies/` | 1 | `.storeKey` | `noteit/v1/bodies/<UUID>.<VERSION>.<TAG>.body` | web-app |
+| `noteit/v1/smart-folders/` | 1 | `.storeKey` | `noteit/v1/smart-folders/<UUID>.json` | organise |
+| `noteit/v1/claims/reminders/` | 1 | `.storeKey` | `noteit/v1/claims/reminders/<UUID>.json` | organise |
+| `noteit/v1/keys/` | 1 | `.storeKey` | `noteit/v1/keys/locked-notes.json` | sync-security |
+| `noteit/v1/boards/` | 1 | `.storeKey` | `noteit/v1/boards/<UUID>.json` | surfaces-polish |
 | `noteit/identity/v1/` | 1 | `.storeKey` | `noteit/identity/v1/identity.sealed` | sharing |
 | `noteit/space/v1/log/` | 1 | `.unsealed` (signed) | `noteit/space/v1/log/0000000042.json` | sharing |
 | `noteit/space/v1/keys/` | 2 | `.unsealed` (HPKE-wrapped) | `noteit/space/v1/keys/3/<member-id>.key` | sharing |
 | `noteit/space/v1/profiles/` | 1 | `.storeKey` (the space key in a space session) | `noteit/space/v1/profiles/<member-id>.json` | sharing |
 
-Locked bodies use the normal body path with `.locked` in place of the body suffix (program §4 rule 13), so they need no row of their own: `inkwell/v1/bodies/<UUID>.<VERSION>.<TAG>.locked`. Each owner adds its row and its vectors in the task that adds the prefix. The rows owned by other sub-projects are listed here so the table stays complete; their specs define what the records contain.
+Locked bodies use the normal body path with `.locked` in place of the body suffix (program §4 rule 13), so they need no row of their own: `noteit/v1/bodies/<UUID>.<VERSION>.<TAG>.locked`. Each owner adds its row and its vectors in the task that adds the prefix. The rows owned by other sub-projects are listed here so the table stays complete; their specs define what the records contain.
 
 Features this sub-project adds:
 
@@ -143,7 +143,7 @@ The runner is created with this Mac's device ID (the one it gives `SyncEngine`),
 3. Generate a new DEK, wrap it, and write the manifest (read-modify-write): new `keyring`, the `rekey` field `{fromKeyID (nil when the store was plain), toKeyID, ..., previousKeyring or previousEncryption}` holding the keyring or v1 `encryption` block being replaced, feature `keyring` added through `ensureFeature` (skipped for a keyring-pending store, which already has it), `formatVersion = 2`. Keychain gets `syncDataKey` = new key and `previousDataKey` = old key (when there was one).
 
    **Fence.** The runner then waits on every backend, whether or not it reports `atomicConditionalWrites()`. Each other device that sees the `rekey` field pauses and writes its device record once with `rekeyAck` = the rekey id (`toKeyID`). A device is identified by its record's key (the part after `devices/` without `.json`), never by the `deviceID` field inside it, so a record can only acknowledge for the device at its own key; in a space store that key includes the owning member (sharing spec §4.4). The runner goes ahead when every device that hasn't been removed has acknowledged. If one hasn't after the sheet's wait, the sheet lists them: "Encryption can't be changed until every Mac has synced: <names>. Open NoteIt on them, or remove them." **Remove and Continue** removes those device records (they must then reconnect with the passphrase) and the runner goes ahead; otherwise the rekey stops with `SyncError.rekeyBlocked(.devicesNotSynced)`. The manifest keeps the `rekey` field, and **Finish Encryption Change** continues later.
-4. List everything under the store root (`inkwell/` and `noteit/`). For each key `RekeyScope.action(for:rekeying: .storeKey)` decides:
+4. List everything under the store root (`noteit/`). A copy left under `inkwell/v1/` by the 0.4.0 store move is outside the store root: the rekey never lists or re-seals it, so it still opens with the old key until the user deletes it, as the 0.4.0 release notes suggest once every Mac is updated. For each key `RekeyScope.action(for:rekeying: .storeKey)` decides:
    - `.reseal` (a `.storeKey` prefix): try to open with the new cipher and skip it if that works (resume case); otherwise open it with the old cipher (passthrough when the store was plain) and seal it with the new cipher in the same context; `put` with `ifMatch` on the listed ETag. On `preconditionFailed`, re-get and retry, up to 3 times, then fail the rekey with a resumable error;
    - `.skip`: `manifest.json`, `.unsealed` rows (`.canary/` keys and sharing's signed log and wrapped key files) and `.spaceKey` prefixes. A personal store rekey leaves `.spaceKey` objects alone; sharing runs the same runner on a space session, where `.storeKey` means the space key, when a space key changes;
    - `.block`: a key under no registered prefix. The runner stops before touching anything (`unknownPrefix`).
@@ -174,7 +174,7 @@ Old builds (0.2 and earlier) refuse `formatVersion 2` on their next connect. A c
 | Network drops during rekey | Status shows "Encryption change paused — 1,240 of 3,100 items"; resumes on the next pass. |
 | Keychain lost `previousDataKey` (or both keys) mid-rekey | Ask for the previous passphrase, and the new one if `syncDataKey` is also gone: "Enter the previous passphrase to finish". The old key is recovered from `rekey.previousKeyring` (or `previousEncryption` for a v1 store), the new key from the manifest keyring. A wrong passphrase writes nothing. For a plain-to-encrypted rekey no old key is needed. |
 | Store over 10,000 objects | Allowed; progress shown; heartbeat keeps other devices waiting rather than racing. |
-| Folder backend | `FolderBackend.atomicConditionalWrites()` is false: its `.inkwell-lock` flock only serializes writers on one Mac, and synced folders (iCloud Drive, Dropbox) don't share locks between Macs. The fence in step 3 is the same as on every other backend. |
+| Folder backend | `FolderBackend.atomicConditionalWrites()` is false: its `.noteit-lock` flock only serializes writers on one Mac, and synced folders (iCloud Drive, Dropbox) don't share locks between Macs. The fence in step 3 is the same as on every other backend. |
 | A listed device never acknowledges | The rekey stops before touching objects with `SyncError.rekeyBlocked(.devicesNotSynced)`; the message names the device. The user can remove it and continue. |
 | Unknown prefix in the store | Refused before anything is written (`rekeyBlocked(.unknownPrefix)`). |
 | Body versions waiting to upload | Refused until the queue is empty. |
@@ -205,7 +205,7 @@ Program §8 is the contract; this section adds the details.
 - One notes password per library, separate from the sync passphrase (a note can be locked without sync).
 - A random 256-bit lock key (LK) encrypts bodies. LK is wrapped with KEK = PBKDF2-SHA256(NFC(password), salt, 600,000) using AES-GCM, AAD `noteit-lock-key/<keyID>`. `keyID` is the hex of the first 8 bytes of SHA256("noteit-lock-key-id" || LK).
 - The lock keyring is a list of entries `{keyID, salt, iterations, wrappedKey, wrappedAt}` so that a password change, or two Macs setting a password independently before syncing, never orphans a note. The current entry is the one with the latest `wrappedAt`. Changing the notes password re-wraps every LK the user can unwrap with the old password under the new one.
-- Stored locally at `lock-keys.json` in the data folder (`NoteStore.rootURL`, program §7) and, when synced, at `inkwell/v1/keys/locked-notes.json` sealed with the store cipher (context `keys/locked-notes`). Remote updates merge as a union by keyID with `If-Match`; for the same keyID the later `wrappedAt` wins.
+- Stored locally at `lock-keys.json` in the data folder (`NoteStore.rootURL`, program §7) and, when synced, at `noteit/v1/keys/locked-notes.json` sealed with the store cipher (context `keys/locked-notes`). Remote updates merge as a union by keyID with `If-Match`; for the same keyID the later `wrappedAt` wins.
 
 **Sealed file.** The plaintext inside the lock is always a `noteit-doc` body container (`BodyContainer` from `NoteItDoc`, foundations step 2, produced by `DocConverter.export`), so the same sealed bytes work in RTFD libraries, Markdown libraries, the web app and the phone. The file is:
 
@@ -247,7 +247,7 @@ Converting a library moves sealed files as they are (markdown-storage).
 
 **Sync.**
 
-- The remote body of a locked note is the sealed file as is, with `bodyFormat: "noteit-locked/1"`, then sealed again by the store cipher (two layers when the store is encrypted, one when it is not). `bodySHA256` is over the sealed file. It sits at the same path as the note's normal body for that store format, with `.locked` replacing the body suffix (program §4 rule 13). Because `locked-notes` requires `noteit-doc`, that is the versioned body path: `inkwell/v1/bodies/<UUID>.<VERSION>.<TAG>.locked`. `bodyVersion` increments as usual.
+- The remote body of a locked note is the sealed file as is, with `bodyFormat: "noteit-locked/1"`, then sealed again by the store cipher (two layers when the store is encrypted, one when it is not). `bodySHA256` is over the sealed file. It sits at the same path as the note's normal body for that store format, with `.locked` replacing the body suffix (program §4 rule 13). Because `locked-notes` requires `noteit-doc`, that is the versioned body path: `noteit/v1/bodies/<UUID>.<VERSION>.<TAG>.locked`. `bodyVersion` increments as usual.
 - `noteit-locked/1` is allowed only when the store has `locked-notes`. Before the first locked note is pushed the user confirms "Locked notes need NoteIt 0.3 or later on every Mac", through `ensureFeature(.lockedNotes)` with this Mac's device ID as `currentDeviceID`; if the store doesn't have `noteit-doc` yet, `ensureFeature` adds it first in the same manifest write, under the same confirmation. Until then locked notes are held back from push. An already-connected library with locked notes asks the same on connect. If `ensureFeature` reports a Mac that appeared after the confirmation, the same one-time notice as for a passphrase change names it.
 - The conversion sweep (web-app) skips `noteit-locked/1` bodies.
 - The remote meta carries `lock`, written through `RawMetaOverlay`, so writers that don't know it keep it.
@@ -286,11 +286,11 @@ URL templates: Nextcloud `https://<host>/remote.php/dav/files/<user>/NoteIt/`, o
 
 | Backend call | WebDAV |
 |---|---|
-| `list(prefix:)` | `PROPFIND Depth: 1` on each collection under the prefix, walking subcollections (about 6 requests per pass for the `inkwell/v1/` layout). `Depth: infinity` is not used; most servers disable it. Requests `getetag`, `getcontentlength`, `resourcetype`. |
+| `list(prefix:)` | `PROPFIND Depth: 1` on each collection under the prefix, walking subcollections (about 6 requests per pass for the `noteit/v1/` layout). `Depth: infinity` is not used; most servers disable it. Requests `getetag`, `getcontentlength`, `resourcetype`. |
 | `get` | `GET`; ETag from the response (`ETag`, or `OC-ETag` on Nextcloud/ownCloud). |
 | `put(ifMatch:ifNoneMatch:)` | `PUT` with `If-Match: "<etag>"` or `If-None-Match: *`. Parent collections are created lazily with `MKCOL` (405 means it exists; 409 means create the parent first), cached per session. If the response has no ETag, `PROPFIND Depth: 0` fetches it. |
 | `delete(ifMatch:)` | `DELETE` with `If-Match`. 404 counts as success for unconditional deletes, as on S3. |
-| `probe()` | `PROPFIND Depth: 0` on the base URL, then the conditional canary under `inkwell/.canary/`. |
+| `probe()` | `PROPFIND Depth: 0` on the base URL, then the conditional canary under `noteit/.canary/`. |
 | `atomicConditionalWrites()`, `atomicConditionalDelete()` | Answered from the canary of this session, like `S3Backend`. This sub-project owns both capabilities (below). |
 
 `MOVE` is not used. PUT is atomic on Sabre (Nextcloud, ownCloud) and Apache mod_dav, and MOVE has no portable precondition on the destination, so write-then-move would lose the conditional guarantee.

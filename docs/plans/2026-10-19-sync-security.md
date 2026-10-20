@@ -1,6 +1,6 @@
 # NoteIt Sync Security Implementation Plan
 
-**Goal:** Add locked notes (password and Touch ID), a WebDAV sync backend, a side-by-side conflict compare sheet, change passphrase and turn on encryption for existing sync stores, and an enforced no-telemetry network inventory. No NoteIt server; the wire prefix `inkwell/v1/` stays; every remote addition is gated by a manifest feature.
+**Goal:** Add locked notes (password and Touch ID), a WebDAV sync backend, a side-by-side conflict compare sheet, change passphrase and turn on encryption for existing sync stores, and an enforced no-telemetry network inventory. No NoteIt server; the wire prefix `noteit/v1/` stays; every remote addition is gated by a manifest feature.
 
 **Architecture:**
 - `NoteItSync` gains a `WebDAVBackend` conforming to `StorageBackend`, a resumable `RekeyRunner` with the `rekeyAck` fence, and the lock-key crypto for locked notes (`NoteLockKeyring`, `LockedBody`). The store-session layer (`StoreSession`, manifest features, `ensureFeature`, `RawMetaOverlay`, the `RemoteLayout` registry, `RekeyScope`, `RekeyBlocker`, `Keyring`) is built and owned by foundations step 3; the shapes are repeated below for reference.
@@ -216,8 +216,8 @@ public enum RecordSealing: Sendable, Equatable {
     case unsealed                                 // signed logs, HPKE key files, the canary; never re-sealed
 }
 public struct RemotePrefix: Sendable, Equatable {
-    public let path: String                       // full key prefix, e.g. "inkwell/v1/keys/"
-    public let depth: Int                         // segments after `path`; "inkwell/v1/keys/locked-notes.json" is 1
+    public let path: String                       // full key prefix, e.g. "noteit/v1/keys/"
+    public let depth: Int                         // segments after `path`; "noteit/v1/keys/locked-notes.json" is 1
     public let sealing: RecordSealing
     public let owner: String                      // sub-project slug
 }
@@ -226,7 +226,7 @@ extension RemoteLayout {
     public static let prefixes: [RemotePrefix]
     public static func prefix(for key: String) -> RemotePrefix?   // longest matching row whose depth equals the key's
     public static let manifestKey: String         // skipped by rekey
-    public static let canaryPrefix: String        // "inkwell/.canary/", keys "inkwell/.canary/<UUID>", skipped by rekey
+    public static let canaryPrefix: String        // "noteit/.canary/", keys "noteit/.canary/<UUID>", skipped by rekey
     public static func isValidKey(_ key: String) -> Bool
     public static func isListablePrefix(_ prefix: String) -> Bool
 }
@@ -325,7 +325,7 @@ extension SyncEngine {
 // Storage/StorageBackend.swift (capabilities added and owned by this plan, Task 3.0; defaults false; web-app Task 0.4 uses them)
 //   func atomicConditionalWrites() async -> Bool
 //   func atomicConditionalDelete() async -> Bool
-// FolderBackend returns false for both: the .inkwell-lock flock serializes writers on one Mac only.
+// FolderBackend returns false for both: the .noteit-lock flock serializes writers on one Mac only.
 ```
 
 ### NoteItCore: lock data (foundations step 4, data only)
@@ -424,10 +424,10 @@ public actor RekeyRunner {
 }
 
 // Engine/RemoteLayout.swift
-//   prefixes gains RemotePrefix(path: "inkwell/v1/keys/", depth: 1, sealing: .storeKey, owner: "sync-security")
+//   prefixes gains RemotePrefix(path: "noteit/v1/keys/", depth: 1, sealing: .storeKey, owner: "sync-security")
 extension RemoteLayout {
     public static let keysPrefix = root + "keys/"
-    public static func lockKeyring() -> String     // "inkwell/v1/keys/locked-notes.json"
+    public static func lockKeyring() -> String     // "noteit/v1/keys/locked-notes.json"
 }
 
 // Storage/StorageBackend.swift
@@ -686,7 +686,7 @@ Steps:
 - [ ] `StorageBackend` gains `func atomicConditionalWrites() async -> Bool` and `func atomicConditionalDelete() async -> Bool`; the protocol extension defaults both to false. `StorageError` gains `conditionalDeleteUnsupported(String)`, never fatal.
 - [ ] `S3Backend`: `send` skips `retryDelays` when `conditional` is set (every request with `If-Match`/`If-None-Match`), so a transport error or 5xx on it throws `.network` after one attempt; unconditional requests keep `retryDelays`. `verifyUnconditionalWrite` throws `.network("unverified conditional write")` instead of `preconditionFailed`; only `checkPreconditions` gives a definite 412.
 - [ ] `S3Backend.runConditionalCanary` adds the two ETag steps (an `If-Match` overwrite with the first ETag must succeed with a different ETag; the same `If-Match` again must get 412) and the delete steps (after the bogus `If-Match` `DELETE` got 412, `HEAD` still finds the canary; the final `DELETE` with the current ETag succeeds, then `HEAD` gets 404). It records `writePassed` and `deletePassed`. `atomicConditionalWrites()` awaits `ensureConditionalsVerified()` and returns `writePassed && conditionalWritesSupported`; `atomicConditionalDelete()` returns `deletePassed && conditionalDeletesSupported`. `delete(_:ifMatch:)` loses its `HEAD` fallback and throws `conditionalDeleteUnsupported` when conditional deletes are unsupported, including after a 501 mid-session.
-- [ ] `FolderBackend` returns false for both explicitly: the `.inkwell-lock` flock serializes writers on one Mac only.
+- [ ] `FolderBackend` returns false for both explicitly: the `.noteit-lock` flock serializes writers on one Mac only.
 - [ ] The test `InMemoryBackend` gains `atomic:` and `atomicDelete:` init flags (both default true); with `atomicDelete: false`, `delete(_:ifMatch:)` throws `conditionalDeleteUnsupported`.
 - [ ] Run `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter 'S3BackendConditionalTests|FolderBackendTests|S3BackendTests|SyncEngineTests' 2>&1 | tail -20`; expect `0 failures`. Commit `feat(sync): report atomic conditional writes and deletes per backend`.
 
@@ -805,7 +805,7 @@ Depends on foundations step 3 and markdown-storage Task 7.2 (`RemoteRestoreDrill
 **Files:** create `Sources/NoteItSync/Engine/SyncEngine+Rekey.swift`, `Tests/NoteItSyncTests/RekeyTests.swift`; modify `Engine/SyncEngine.swift` (`rebaseline`, bases update from `rewrittenETags`, `rekeyAck`), `Engine/RemoteLayout.swift` (register `keys/`), `fixtures/golden/layout-keys.json` (`keys/` vectors).
 
 Steps:
-- [ ] Register `RemotePrefix(path: "inkwell/v1/keys/", depth: 1, sealing: .storeKey, owner: "sync-security")` and add `keysPrefix`/`lockKeyring()`. Add `layout-keys.json` vectors: `inkwell/v1/keys/locked-notes.json` valid with action `reseal`, `inkwell/v1/keys/a/b.json` (too deep) and `inkwell/v1/keys/` listable. Keep the spec §1 depth table in step with the registry.
+- [ ] Register `RemotePrefix(path: "noteit/v1/keys/", depth: 1, sealing: .storeKey, owner: "sync-security")` and add `keysPrefix`/`lockKeyring()`. Add `layout-keys.json` vectors: `noteit/v1/keys/locked-notes.json` valid with action `reseal`, `noteit/v1/keys/a/b.json` (too deep) and `noteit/v1/keys/` listable. Keep the spec §1 depth table in step with the registry.
 - [ ] Preconditions in `start`, checked in this order, each throwing `rekeyBlocked` and writing nothing:
   - a sync pass just finished without error (`notIdle` otherwise);
   - `pendingBodyVersions()` is 0 (`pendingBodyVersions(n)`); the controller counts `SyncState.pendingBodyVersions` (foundations Task 3.1), which stays empty until web-app Task 0.4 writes it;
@@ -816,11 +816,11 @@ Steps:
   - `.spaceEpoch(newCipher:newKeyID:)` (sharing's rotation): one `updateManifest` sets only the `rekey` field, with `fromKeyID` = the session's key ID and `toKeyID = newKeyID`. It never calls `ensureFeature` or `confirm`, and writes no keyring, passphrase, `encryption` block or feature. `previousKeyring` and `previousEncryption` stay nil. The key check is replaced only at finish (below).
   - Any other combination of mode, session kind and `sealing` is a programming error (precondition). `rekey` is a manifest field, not a feature, so it never goes through `ensureFeature`. While the field is set no device adds a feature or upgrades the store (`testUpgradeToV2RefusedDuringRekey`).
 - [ ] Fence (program §4 rule 7), on every backend. Wait for every device record in `devices/`, other than this one and those in `plan.excludedDevices`, to write `rekeyAck == toKeyID` (the engine does this once and stops pushing when it sees a fresh foreign `rekey` field). Devices are identified by record key (the part after `devices/` without `.json`, `<member-id>/<UUID>` in a space store), never by the record's `deviceID` field, and `excludedDevices` and `removeStale` use the same IDs. Poll every 10 s up to `ackWait`. On timeout call `removeStale(names)`: true deletes those device records and goes ahead; false leaves the `rekey` field in place (so **Finish Encryption Change** can continue) and throws `rekeyBlocked(.devicesNotSynced(names))`. The sheet offers **Wait Longer**, **Remove and Continue** and **Cancel**. A removed device's next pass finds no device record, re-registers and must unlock with the new passphrase.
-- [ ] Re-seal pass (shared by `start` and `resume`): list everything under the store root (`inkwell/` and `noteit/`). For each key `RekeyScope.action(for:rekeying: sealing)` decides: `.reseal` is re-sealed; `.skip` (manifest, `.unsealed` rows such as canary keys and sharing's log and key files, and rows with the other sealing such as `.spaceKey` during a library rekey) is counted as done; `.block` stops with `unknownPrefix`. Only contents change; keys and body paths stay the same. The new cipher is the keyring cipher for `newKey` (`.personal`) or `newCipher` (`.spaceEpoch`); nothing else in the pass depends on the mode. Per re-sealed object: `get`; try `newCipher.open(data, context:)`; on success skip; else `oldCipher.open`, `newCipher.seal(_, context:)`, `put(ifMatch: etag)`. Use the engine's own AAD context helper for the key. On `preconditionFailed` re-get and retry up to 3 times, then throw `rekeyIncomplete(done:total:)`.
+- [ ] Re-seal pass (shared by `start` and `resume`): list everything under the store root (`noteit/`; a leftover `inkwell/v1/` copy from the 0.4.0 store move is outside it and never re-sealed). For each key `RekeyScope.action(for:rekeying: sealing)` decides: `.reseal` is re-sealed; `.skip` (manifest, `.unsealed` rows such as canary keys and sharing's log and key files, and rows with the other sealing such as `.spaceKey` during a library rekey) is counted as done; `.block` stops with `unknownPrefix`. Only contents change; keys and body paths stay the same. The new cipher is the keyring cipher for `newKey` (`.personal`) or `newCipher` (`.spaceEpoch`); nothing else in the pass depends on the mode. Per re-sealed object: `get`; try `newCipher.open(data, context:)`; on success skip; else `oldCipher.open`, `newCipher.seal(_, context:)`, `put(ifMatch: etag)`. Use the engine's own AAD context helper for the key. On `preconditionFailed` re-get and retry up to 3 times, then throw `rekeyIncomplete(done:total:)`.
 - [ ] Heartbeat after every `heartbeatEvery` objects or `heartbeatInterval` seconds: `updateRekey(backend:session:expectedRekeyToKeyID: toKeyID, _:)` sets `rekey.updatedAt`. `updateManifest` refuses while the `rekey` field is set, so the heartbeat and finish never use it; only the opening write that sets the field does.
 - [ ] Finish: run a second full listing and re-seal anything still under the old key; run `storageCheck` with the new key; then one `updateRekey(backend:session:expectedRekeyToKeyID: toKeyID, _:)` clears the `rekey` field, and with it `previousKeyring` and `previousEncryption` (`formatVersion` stays 2 while features remain). For `.spaceEpoch` on a space session, that same `updateRekey` write replaces the `encryption` block's key check with one sealed by `newCipher` (foundations Task 3.3: a passed-cipher open must open it), so the key check and the cleared field change together; a `.spaceKey` run on a library session leaves the library manifest's key material alone. Return the new session with the input session's `supported`: for `.personal` its cipher is the keyring cipher for `newKey` and its `dataKey` is `newKey`; for `.spaceEpoch` its cipher is `newCipher`, its key ID `newKeyID` and its `dataKey` nil (a passed-cipher session).
 - [ ] `resume(session:oldCipher:key:sealing:excludedDevices:removeStale:progress:)` requires the `rekey` field to be set and `key`'s key ID to equal `rekey.toKeyID` (else `keyChanged`, nothing written). It runs the fence again, then the same re-seal pass and finish as `start`. `recoverPersonalKeys(session:oldPassphrase:newPassphrase:)` rebuilds `(oldCipher, newKey)` from the manifest alone, for a device whose Keychain lost `previousDataKey` or `syncDataKey`; the caller then resumes with `resume(session:oldCipher: oldCipher, key: RekeyResumeKey.personal(newKey: newKey), …)`.
-- [ ] Sharing runs the same runner on a space session: `RekeyPlan(oldCipher: <old-epoch SpaceCipher>, mode: .spaceEpoch(newCipher: <new-epoch SpaceCipher>, newKeyID: SpaceSession.keyID(epochKey:)), sealing: .storeKey, excludedDevices: <removed members' device IDs>)`. One pass re-seals the space store's `inkwell/v1/` records and its profile rows (sealed by the session cipher, which is the space key). The log and key files are `.unsealed` and skipped. The space manifest gets the `rekey` field at the start, and at finish the key check sealed by the new cipher in the write that clears it. No second re-encryption path exists.
+- [ ] Sharing runs the same runner on a space session: `RekeyPlan(oldCipher: <old-epoch SpaceCipher>, mode: .spaceEpoch(newCipher: <new-epoch SpaceCipher>, newKeyID: SpaceSession.keyID(epochKey:)), sealing: .storeKey, excludedDevices: <removed members' device IDs>)`. One pass re-seals the space store's `noteit/v1/` records and its profile rows (sealed by the session cipher, which is the space key). The log and key files are `.unsealed` and skipped. The space manifest gets the `rekey` field at the start, and at finish the key check sealed by the new cipher in the write that clears it. No second re-encryption path exists.
 - [ ] Engine: after a local rekey, set bases' `remoteMetaETag`/`bodyETag` from `rewrittenETags` and `SyncState.keyID`. `rebaseline(newKeyID:)` for other devices: for each base whose listed meta ETag differs, get and open the meta; same revision → adopt the meta ETag and the listed body ETag without a body download; different revision → leave for the normal pass. Pending body versions recorded against old ETags are none, by the precondition.
 - [ ] Tests (InMemoryBackend, `FaultyBackend`, `FolderBackend` on a temp directory):
   - `testPlainStoreBecomesEncrypted` (every object then fails to open with `PassthroughCipher` and opens with the new key);
@@ -967,7 +967,7 @@ Depends on 5.2 and foundations step 3.
 **Files:** modify `Sources/NoteIt/Model/NoteStore+Sync.swift`, `Sync/NoteStoreSyncAdapter.swift`, `Sync/SyncController.swift`, `Sources/NoteItSync/Engine/StoreSession.swift` (`StoreFeature.supported` gains `.lockedNotes`); extend `Tests/NoteItTests/NoteLockingTests.swift` and `Tests/NoteItSyncTests/StoreSessionTests.swift`.
 
 Steps:
-- [ ] `exportBodySource` for a locked note returns the sealed file bytes with `bodyFormat: "noteit-locked/1"`; `bodySHA256` is over the sealed file. The body sits at the note's normal body path for the store format with `.locked` replacing the body suffix (program §4 rule 13); since `locked-notes` requires `noteit-doc`, that is `inkwell/v1/bodies/<UUID>.<VERSION>.<TAG>.locked`. `bodyVersion` increments as usual. The engine never decodes it, and the conversion sweep skips it.
+- [ ] `exportBodySource` for a locked note returns the sealed file bytes with `bodyFormat: "noteit-locked/1"`; `bodySHA256` is over the sealed file. The body sits at the note's normal body path for the store format with `.locked` replacing the body suffix (program §4 rule 13); since `locked-notes` requires `noteit-doc`, that is `noteit/v1/bodies/<UUID>.<VERSION>.<TAG>.locked`. `bodyVersion` increments as usual. The engine never decodes it, and the conversion sweep skips it.
 - [ ] Add `.lockedNotes` to `StoreFeature.supported` in this task, which ships the reader (program §4 rule 2).
 - [ ] Feature gate: before the first locked note is pushed (or on connect with locked notes), if the session lacks `lockedNotes`, call `ensureFeature(.lockedNotes, backend:session:currentDeviceID:confirm:)` with `currentDeviceID` set to the device ID `SyncController` gives `SyncEngine.init` and `SyncController.confirmFeature` and the text "Locked notes need NoteIt 0.3 or later on every Mac". `ensureFeature` adds `noteit-doc` first, in the same manifest write, when the store doesn't have it (`StoreFeature.requires`). Until both are set, locked notes are held back from push (`pendingPushes`); declining leaves them local. Its `lateBlockers` go to `noteLateFeatureBlockers` (Task 4.2).
 - [ ] Meta writes use `RawMetaOverlay` with `lock` in the owned keys, so a writer that doesn't know `lock` keeps it.
@@ -1038,7 +1038,7 @@ Steps:
   - §12: Planned rows in `docs/network.md` (1.1); ownership of `atomicConditionalWrites()`/`atomicConditionalDelete()` and the baseline backend behaviour (3.0), used by web-app Task 0.4.
   - §1 and §8 waves: M1–M4 in wave 2; M5 in wave 3 after web-app Tasks 0.4–0.5.
 - **Types:** `StoreSession`, `StoreCredential`, `Keyring`, `KeyIdentity`, `RawMetaOverlay`, `RemotePrefix`, `RekeyScope` and `RekeyBlocker` are defined and built by foundations, repeated in Frozen interfaces, and used by 4.2, 4.3 and 5.6. `NoteLock` and `NoteMeta.lock` come from foundations step 4 and are used by 5.2–5.7. `PendingBody` and `SyncState.pendingBodyVersions` are declared by foundations Task 3.1 (written by web-app Task 0.4) and only counted here, in 4.3 and 4.4. `SealedNoteHeader` and `LockedBody` are defined in 5.1 and used by 5.2, 5.6 and markdown-storage Task 10.1 (Milestone 10). `DiffRow` is defined in 2.1 and used by 2.3. `RemoteLayout.lockKeyring()` is defined in 4.3 and used by 5.6.
-- **Wire format:** only additive. New optional manifest fields kept by read-modify-write, a new `keys/` prefix in the registry, and `formatVersion 2` plus features, so old builds refuse instead of misreading. The `inkwell/v1/` prefix is unchanged.
+- **Wire format:** only additive. New optional manifest fields kept by read-modify-write, a new `keys/` prefix in the registry, and `formatVersion 2` plus features, so old builds refuse instead of misreading. The `noteit/v1/` prefix is unchanged.
 - **Crash safety:** lock (verified sealed file before any plain body is deleted; reconciliation never deletes a sealed file), Remove Lock (plain body written before the sealed file is removed), rekey (resume, objects open with exactly one key, storage check before and after), manifest writes (If-Match everywhere).
 - **Known gaps:** a pre-0.3 build that is already running during a rekey writes no `rekeyAck` and isn't fenced beyond If-Match; the user removes it or waits (documented). Touch ID itself is verified manually; the availability trial has an injected test and a real one that skips where unsupported.
 - **Placeholders:** none. Every task names files, tests, a command and the expected result.

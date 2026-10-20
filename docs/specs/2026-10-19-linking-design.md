@@ -74,7 +74,7 @@ Turn a pile of notes into a connected notebook without giving up speed: type `[[
 
 ### 1. How a link is stored
 
-**Decision: a standard link attribute with a `noteit:` URL, not a custom attribute.** RTFD drops custom attributes (that's why block kinds are stored as paragraph-style sentinels, see `EditorStyles.swift`), but it keeps `.link` exactly. A note link is therefore an ordinary `.link` run whose value is a `URL`, and its text is what's shown. This also flows through copy/paste, version history, sync (`inkwell/v1/` bodies are flattened RTFD, unchanged) and the `noteit-doc` `link{href}` mark without schema changes.
+**Decision: a standard link attribute with a `noteit:` URL, not a custom attribute.** RTFD drops custom attributes (that's why block kinds are stored as paragraph-style sentinels, see `EditorStyles.swift`), but it keeps `.link` exactly. A note link is therefore an ordinary `.link` run whose value is a `URL`, and its text is what's shown. This also flows through copy/paste, version history, sync (`noteit/v1/` bodies are flattened RTFD, unchanged) and the `noteit-doc` `link{href}` mark without schema changes.
 
 URL grammar (`NoteItCore.NoteLink`, in `Sources/NoteItCore/NoteLink.swift`, so `automation`'s `URLCommand` parser, the phone and the Mac app share one definition), parsed case-insensitively, written in canonical form. Linking owns this format; foundations Task 5.3 builds `NoteLink` in wave 0 and linking uses it without creating it:
 

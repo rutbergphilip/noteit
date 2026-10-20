@@ -229,7 +229,7 @@ Board layouts are their own record kind, not a field on `Notebook` (program §4 
   - `BoardLayout { version: Int = 1, notebookID: UUID, revision: String, modifiedAt: Date, positions: [String: BoardPosition] }` (position keys are note UUID strings);
   - `BoardPosition { x: Double, y: Double }` in board points at 100% zoom.
   - Unknown keys in a board record are kept through `RawMetaOverlay` when this build rewrites it, like note and notebook records.
-- **Remote:** `inkwell/v1/boards/<notebookID>.json`, sealed with the store key like every other record. The `boards/` prefix is registered in `RemoteLayout.prefixes` as `RemotePrefix(path: "inkwell/v1/boards/", depth: 1, sealing: .storeKey, owner: "surfaces-polish")`, so `RekeyRunner` re-seals it, and the web server's key vectors in `fixtures/golden/layout-keys.json` gain a valid `inkwell/v1/boards/<UUID>.json` key and the `boards/` list prefix. The wire prefix `inkwell/v1/` doesn't change.
+- **Remote:** `noteit/v1/boards/<notebookID>.json`, sealed with the store key like every other record. The `boards/` prefix is registered in `RemoteLayout.prefixes` as `RemotePrefix(path: "noteit/v1/boards/", depth: 1, sealing: .storeKey, owner: "surfaces-polish")`, so `RekeyRunner` re-seals it, and the web server's key vectors in `fixtures/golden/layout-keys.json` gain a valid `noteit/v1/boards/<UUID>.json` key and the `boards/` list prefix. The wire prefix `noteit/v1/` doesn't change.
 - **Local:** `boards/<notebookID>.json` in `NoteStore.rootURL` (the data folder), written atomically. The file also holds the remote revision last applied to that board (local only, never synced). Unknown keys in board records survive through foundations' per-kind raw-meta lifecycle as kind `boards`: the raw copy in `sync-meta-raw/boards/<notebookID>.json` is written before the board is applied, merged on export only when its source revision matches the applied one, deleted only after the board file is gone, and still merged after a relaunch. Like `library-settings.json`, it is never in a Markdown library's content folder, so Markdown libraries need nothing extra.
 - **Engine:** `RecordKind.board`, no body, `usesLastWriterWins` (the flag organise adds for notebooks and smart folders).
   - A board's ID is its notebook's ID, so board bases are kept in their own map in `SyncState` (`boardBases`, decoded with `decodeIfPresent`) and never share an entry with the notebook.
@@ -567,7 +567,7 @@ Checklists already exist: `☐`/`☑` list markers, click or ⇧⌘U to check, T
 - **08 `sync-security`:** locked notes can't be cheat sheets or floats. The sync status popover links to its conflict compare when it exists.
 - **11 `mobile` and `web-app` (store format v2):** ignore `boards/` records without error and never delete them until they show boards; a Mac removes boards orphaned by notebook deletions there. They keep `checkedItemsToBottom` through their `RawMetaOverlay`.
 - **13 `growth`:** may publish `docs/performance.md` numbers on the website. Onboarding copy matches the site's wording.
-- **Sync (existing):** one new record kind under `inkwell/v1/boards/`. The notebook and note records gain no board data.
+- **Sync (existing):** one new record kind under `noteit/v1/boards/`. The notebook and note records gain no board data.
 
 ## Non-goals
 

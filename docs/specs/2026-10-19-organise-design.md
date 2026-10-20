@@ -333,9 +333,9 @@ public struct SmartFolder: Identifiable, Codable, Hashable, Sendable {
 
 #### 4.2 Sync
 
-- New `RecordKind.smartFolder`, stored at `inkwell/v1/smart-folders/<id>.json` (sealed like other records). The prefix stays `inkwell/v1/`; the object is additive.
-- `inkwell/v1/smart-folders/` and `inkwell/v1/claims/reminders/` (see 7.3) are rows in `RemoteLayout.prefixes` (`RemotePrefix.path` is the full key prefix), each with `depth: 1` and `sealing: .storeKey`, with key vectors in `fixtures/golden/layout-keys.json` for the web server (`inkwell/v1/smart-folders/<UUID>.json`, `inkwell/v1/claims/reminders/<UUID>.json`). Both fit the web server's key rule (segments of `[A-Za-z0-9._-]`, at most 4 deep).
-- Smart folders behave like notebooks in the engine: no body, last-writer-wins on conflict (`RecordKind.usesLastWriterWins`), deletions as tombstones in `inkwell/v1/tombstones/`.
+- New `RecordKind.smartFolder`, stored at `noteit/v1/smart-folders/<id>.json` (sealed like other records). The prefix stays `noteit/v1/`; the object is additive.
+- `noteit/v1/smart-folders/` and `noteit/v1/claims/reminders/` (see 7.3) are rows in `RemoteLayout.prefixes` (`RemotePrefix.path` is the full key prefix), each with `depth: 1` and `sealing: .storeKey`, with key vectors in `fixtures/golden/layout-keys.json` for the web server (`noteit/v1/smart-folders/<UUID>.json`, `noteit/v1/claims/reminders/<UUID>.json`). Both fit the web server's key rule (segments of `[A-Za-z0-9._-]`, at most 4 deep).
+- Smart folders behave like notebooks in the engine: no body, last-writer-wins on conflict (`RecordKind.usesLastWriterWins`), deletions as tombstones in `noteit/v1/tombstones/`.
 - Smart folder records keep unknown keys through `RawMetaOverlay`, like notebooks, using foundations' per-kind raw-meta lifecycle as kind `smartFolders` (`sync-meta-raw/smart-folders/<UUID>.json`): the raw copy is written before the record is applied, merged on export only when its source revision equals the folder's applied revision, deleted only after the save that removes the folder has succeeded, and still merged after a relaunch.
 - `RekeyRunner` re-seals smart folder records and their tombstones with everything else under the store root.
 - **Older versions.** NoteIt 0.2's `RemoteIndex` skips folders it doesn't know, so it never lists `smart-folders/`. It reads a tombstone's contents only for IDs it holds locally or sees a meta for, which never happens for a smart folder ID, so a tombstone with the unknown kind `smartFolder` is never decoded there. The tombstone sweep only deletes tombstones it has read. A manual check against the 0.2.0 release build is part of the plan.
@@ -430,7 +430,7 @@ Queries with only filters keep the existing order. Notes in Recently Deleted kee
 
 With sync on, a Mac claims a reminder before showing it:
 
-- **Claim:** a conditional create (`If-None-Match`) of `inkwell/v1/claims/reminders/<reminderID>.json`, sealed like other objects, holding `{ id, deviceID, deliveredAt }`. Success means show it; "already exists" means another Mac did, so don't.
+- **Claim:** a conditional create (`If-None-Match`) of `noteit/v1/claims/reminders/<reminderID>.json`, sealed like other objects, holding `{ id, deviceID, deliveredAt }`. Success means show it; "already exists" means another Mac did, so don't.
 - **Who goes first:** a Mac where the user was active in the last 2 minutes (`CGEventSource.secondsSinceLastEventType`) claims at the reminder time. Other Macs wait 20 seconds, then try. So the Mac you're using rings, and an idle Mac only rings if nothing else did.
 - **Failures:** without sync, offline, or on any storage error, the Mac shows the reminder. A duplicate is better than a missed reminder. Stores where conditional writes are best effort (some S3 providers, see the sync spec) can rarely show both.
 - **Cleanup:** when a reminder is handled on one Mac, the token changes and syncs; the other Mac removes its delivered notification with that ID (`removeDeliveredNotifications`) on the next index change. Claims older than 7 days are deleted by the Mac that wrote them, once a day.
@@ -508,7 +508,7 @@ With sync on, a Mac claims a reminder before showing it:
 - Hiding token syntax in the editor.
 - Fuzzy (typo-tolerant) full-text search, stemming, or semantic search (`private-ai`).
 - Sorting smart folders by anything other than their saved order; per-smart-folder sort settings.
-- Changing the note record, the manifest, or `inkwell/v1/` in any incompatible way.
+- Changing the note record, the manifest, or `noteit/v1/` in any incompatible way.
 
 ## Open questions
 

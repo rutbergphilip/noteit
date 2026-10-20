@@ -54,26 +54,29 @@ implementer must be able to interoperate from this section alone. "Double2001" m
 seconds since 2001-01-01T00:00:00Z (Apple reference date; `Date.timeIntervalSinceReferenceDate`), i.e.
 `unixSeconds - 978307200`.
 
-**Legacy protocol identifiers.** The `inkwell/v1/` key prefix, the `inkwell/.canary/` canary prefix, the
-manifest field names, the AAD contexts and the KDF and key-check parameters (including the
-`inkwell-key-check` plaintext) are legacy protocol identifiers from the working name; they already shipped
-and are kept unchanged for compatibility, and are never shown to users. Everything that has not shipped,
+**Protocol identifiers.** The `noteit/v1/` key prefix and the `noteit/.canary/` canary prefix (NoteIt 0.4.0
+and later), the manifest field names, the AAD contexts and the KDF and key-check parameters are frozen.
+Stores created before 0.4.0 live under Inkwell's `inkwell/v1/`; on connect, a store found only there is
+copied byte for byte to `noteit/v1/`, manifest last, and the old copy is left in place
+(`Sources/NoteItSync/Migration/RemoteMigration.swift`). The web engine's `connect` does the same copy. New
+stores seal the `noteit-key-check` plaintext; manifests sealing Inkwell's `inkwell-key-check` still verify.
+`RemoteLayout.revisionHashSeed` keeps its `inkwell-revision-v1` value. Everything that has not shipped,
 including the portable body format `noteit-doc` (§3), uses the NoteIt name.
 
 ### 2.1 Key layout
 
-`RemoteLayout.root = "inkwell/v1/"` (`Sources/NoteItSync/Engine/RemoteLayout.swift:4`).
+`RemoteLayout.root = "noteit/v1/"` (`Sources/NoteItSync/Engine/RemoteLayout.swift:4`).
 
 | Key (relative to the backend root) | Content | Encrypted? |
 |---|---|---|
-| `inkwell/v1/manifest.json` | `Manifest` | **No** (plaintext JSON) |
-| `inkwell/v1/notebooks/<UUID>.json` | sealed `RemoteEnvelope` (kind `notebook`) | yes |
-| `inkwell/v1/notes/<UUID>.meta` | sealed `RemoteEnvelope` (kind `note`) | yes |
-| `inkwell/v1/notes/<UUID>.body` | sealed note body (legacy RTFD) | yes |
-| `inkwell/v1/bodies/<UUID>.<VERSION>.<TAG>.body` | **new in format v2:** sealed noteit-doc body, one immutable object per publish; `<TAG>` names the base meta the commit is conditional on (§3.4 item 9) | yes |
-| `inkwell/v1/bodies/<UUID>.<VERSION>.<TAG>.locked` | a locked note's body (`locked-notes`, sync-security): the same path with `.locked` replacing `.body` (program spec §4 rule 13) | yes |
-| `inkwell/v1/tombstones/<UUID>.json` | sealed `Tombstone` | yes |
-| `inkwell/v1/devices/<deviceID>.json` | sealed `DeviceInfo` | yes |
+| `noteit/v1/manifest.json` | `Manifest` | **No** (plaintext JSON) |
+| `noteit/v1/notebooks/<UUID>.json` | sealed `RemoteEnvelope` (kind `notebook`) | yes |
+| `noteit/v1/notes/<UUID>.meta` | sealed `RemoteEnvelope` (kind `note`) | yes |
+| `noteit/v1/notes/<UUID>.body` | sealed note body (legacy RTFD) | yes |
+| `noteit/v1/bodies/<UUID>.<VERSION>.<TAG>.body` | **new in format v2:** sealed noteit-doc body, one immutable object per publish; `<TAG>` names the base meta the commit is conditional on (§3.4 item 9) | yes |
+| `noteit/v1/bodies/<UUID>.<VERSION>.<TAG>.locked` | a locked note's body (`locked-notes`, sync-security): the same path with `.locked` replacing `.body` (program spec §4 rule 13) | yes |
+| `noteit/v1/tombstones/<UUID>.json` | sealed `Tombstone` | yes |
+| `noteit/v1/devices/<deviceID>.json` | sealed `DeviceInfo` | yes |
 
 Notes:
 
@@ -83,11 +86,11 @@ Notes:
   always *rebuilt* from the parsed UUID in uppercase. A web client that wrote lowercase keys would create
   objects that native clients never address directly (they'd delete/overwrite the uppercase twin).
   **Rule: TS always writes uppercase UUIDs, in keys and in JSON.**
-- S3 backends may add a user prefix: `prefix + "/"` before `inkwell/` (`Storage/S3Backend.swift:72-73`).
-  The S3 connectivity canary writes and deletes `inkwell/.canary/<UUID>` (`S3Backend.swift:166`).
+- S3 backends may add a user prefix: `prefix + "/"` before `noteit/` (`Storage/S3Backend.swift:72-73`).
+  The S3 connectivity canary writes and deletes `noteit/.canary/<UUID>` (`S3Backend.swift:166`).
 - Device IDs appear in cleartext key names (`devices/<deviceID>.json`).
 - Every remote prefix is registered in `RemoteLayout` (foundations task 3.5) with its depth and sealing
-  (program spec §4 rule 6). This project registers `inkwell/v1/bodies/` with depth 1, `sealing: .storeKey`
+  (program spec §4 rule 6). This project registers `noteit/v1/bodies/` with depth 1, `sealing: .storeKey`
   and owner `web-app`, and adds its keys to `fixtures/golden/layout-keys.json`. The key grammar is program
   spec §4 rule 8 (§6.3).
 
@@ -129,12 +132,14 @@ Because inner dates are second-precision, a note's `updatedAt` round-trips with 
   `combined` = `nonce(12) ‖ ciphertext ‖ tag(16)` (a 1-byte plaintext seals to 29 bytes, verified).
   WebCrypto's `encrypt` returns `ciphertext ‖ tag` with a 128-bit tag, so
   `sealed = nonce ‖ webcryptoOutput`.
-- **AAD = context** = UTF-8 of the object key with the `inkwell/v1/` prefix stripped
+- **AAD = context** = UTF-8 of the object key with the `noteit/v1/` prefix stripped
   (`SyncEngine.context`, `SyncEngine.swift:761`), e.g. `notes/0A0B…01.meta`, `notebooks/<UUID>.json`,
   `tombstones/<UUID>.json`, `devices/<id>.json`. This binds each ciphertext to its key: swapping objects
   fails to open. The S3 user prefix is **not** part of the context.
-- **Key check**: `seal("inkwell-key-check", context: "manifest")` (`SyncEngine.swift:64`), base64 into
-  `manifest.encryption.keyCheck`. Opening it with the wrong key fails → "wrong passphrase".
+- **Key check**: `seal("noteit-key-check", context: "manifest")` (`SyncEngine.keyCheckPlaintext`), base64 into
+  `manifest.encryption.keyCheck`. Stores created by Inkwell seal `"inkwell-key-check"`
+  (`SyncEngine.legacyKeyCheckPlaintext`), which is still accepted. Opening it with the wrong key fails → "wrong
+  passphrase".
 - **Plaintext stores**: a manifest without `encryption` means objects are stored as plain bytes (the
   "identity cipher"). The web app supports joining them with a warning but never creates them.
 
@@ -243,7 +248,7 @@ The web must implement identical derivations (golden vectors, §9) so that list 
 ### 2.10 Engine pass (pseudo-code of `SyncEngine.runPass`, `SyncEngine.swift:217-700`)
 
 ```
-list(prefix "inkwell/v1/") → RemoteIndex; if no manifest → abort ("store missing")
+list(prefix "noteit/v1/") → RemoteIndex; if no manifest → abort ("store missing")
 state ← loadState(); records ← localRecords(); deletions ← localDeletions()
 ids ← union(local ids, remote meta ids, tombstone ids, base ids, deletion ids)
 for id in ordered(ids)  # notebooks first, then by uuidString (SyncEngine.swift:254)
@@ -705,7 +710,7 @@ Decisions:
    body, and noteit-doc bytes aren't canonical (§3.2), so nobody but the writer can produce matching bytes.
    For RTFD that window is tolerated by existing clients; for every noteit-doc publish (edits, new notes,
    conflict copies and conversions, native and web alike) v2 removes it:
-   - **Layout.** A noteit-doc body lives at `inkwell/v1/bodies/<NOTE-UUID>.<VERSION>.<TAG>.body`, sealed
+   - **Layout.** A noteit-doc body lives at `noteit/v1/bodies/<NOTE-UUID>.<VERSION>.<TAG>.body`, sealed
      with the usual key-bound context `bodies/<NOTE-UUID>.<VERSION>.<TAG>.body` (§2.3).
      - `<VERSION>` is a fresh random uppercase UUID per publish, recorded in the envelope's `bodyVersion`.
      - `<TAG>` names the meta the publish was built against, the one its commit is conditional on:
@@ -740,7 +745,7 @@ Decisions:
    - **Why a new directory, not body-first at the legacy key.**
      - A v1 binary that is still running (§2.12 fact 1) classifies any unknown name under `notes/` as a
        sync-tool sidecar and deletes it after 30 days (`RemoteIndex`, `SyncEngine.swift:820-833`;
-       `resolveSidecars`, `:521-559`). It ignores every other directory under `inkwell/v1/` (the
+       `resolveSidecars`, `:521-559`). It ignores every other directory under `noteit/v1/` (the
        `default: break` branch), so `bodies/` is invisible to it.
      - Writing the new body first at `notes/<UUID>.body` isn't safe either: until the meta switches, the
        old meta points at a body with a different hash, and the meta owner's `repushBody` (`:511-519`),
@@ -1481,7 +1486,7 @@ for exactly one authenticated user and reaches a driver only through one choke p
 2. The namespace comes only from the user's immutable id (an uppercase UUID assigned at creation), never
    from the username, the display name or any request input:
    - disk: `/data/store/users/<USER-UUID>/<key>`, for example
-     `/data/store/users/<USER-UUID>/inkwell/v1/manifest.json`;
+     `/data/store/users/<USER-UUID>/noteit/v1/manifest.json`;
    - upstream S3: `<NOTEIT_S3_PREFIX>/users/<USER-UUID>/<key>` in `NOTEIT_S3_BUCKET` (an empty prefix gives
      `users/<USER-UUID>/<key>`).
 3. Drivers have no un-namespaced entry point. List results are returned with the namespace stripped and
@@ -1681,7 +1686,7 @@ relative to the signed-in user's namespace (§6.2):
 
 | Method & path | Request | Response |
 |---|---|---|
-| `GET /api/storage/list?prefix=inkwell/v1/notes/&continuationToken=` | — | `200 {objects:[{key,etag,size,lastModified}], nextContinuationToken?}` (etags unquoted, `lastModified` in ms since the epoch, ≤1000/page) |
+| `GET /api/storage/list?prefix=noteit/v1/notes/&continuationToken=` | — | `200 {objects:[{key,etag,size,lastModified}], nextContinuationToken?}` (etags unquoted, `lastModified` in ms since the epoch, ≤1000/page) |
 | `GET /api/storage/object/<key>` | — | `200` bytes, header `ETag: "<etag>"` (quoted on the wire); `404` |
 | `PUT /api/storage/object/<key>` | bytes; `If-Match: "<etag>"` (bare accepted) or `If-None-Match: *` | `200 {etag}` (JSON, unquoted) + header `ETag: "<etag>"`; `412` precondition failed; `507` quotaExceeded; `429` busy; `502` storeUnavailable (ambiguous: the write may have landed) |
 | `DELETE /api/storage/object/<key>` | optional `If-Match` | `204`; `404`; `412`; `502` storeUnavailable (ambiguous) |
@@ -1692,13 +1697,15 @@ relative to the signed-in user's namespace (§6.2):
 - every segment matches `[A-Za-z0-9._-]+` (at most 128 characters) and is not `.` or `..`;
 - a segment whose part before the first `.` is a UUID must be the uppercase canonical form, for reads and
   writes;
-- the key is `inkwell/v1/manifest.json`, a canary key `inkwell/.canary/<UUID>`, or sits under a registered
+- the key is `noteit/v1/manifest.json`, a canary key `noteit/.canary/<UUID>`, or sits under a registered
   prefix (program spec §4 rule 6, including sharing's `noteit/identity/v1/` and `noteit/space/v1/`) at
   exactly that prefix's depth.
 
 Keys are checked after percent-decoding; an empty segment (`//`), a trailing `/`, a NUL or a `\` is
-rejected. A list request must name a registered prefix, a parent root of one (for example `inkwell/` or
-`inkwell/v1/`, so legacy clients such as the 0.2.x engine and rclone keep working), or `inkwell/.canary/`.
+rejected. A list request must name a registered prefix, a parent root of one (for example `noteit/` or
+`noteit/v1/`, so clients that list the whole root, such as the sync engine and rclone, keep working), or
+`noteit/.canary/`. Inkwell's `inkwell/v1/` and `inkwell/` are listable too, so the 0.4.0 store copy can look for
+an old store; keys under them are rejected.
 A key or prefix that fails is 400 `badRequest`
 before a driver is called. A prefix registered later needs a server update that carries the new table.
 
@@ -1707,22 +1714,22 @@ Key test vectors: the server tests and `@noteit/core` run foundations' `fixtures
 
 | Key | Result |
 |---|---|
-| `inkwell/v1/manifest.json` | accepted |
-| `inkwell/v1/notes/<UUID>.meta`, `inkwell/v1/bodies/<UUID>.<UUID>.<TAG>.body` | accepted |
-| `inkwell/v1/notes/<uuid lowercase>.meta` | rejected |
-| `inkwell/v1/bodies/<UUID>.<UUID>.<TAG>.locked` | accepted (sync-security) |
-| `inkwell/v1/smart-folders/<UUID>.json` | accepted (organise) |
-| `inkwell/v1/claims/reminders/<UUID>.json` | accepted (organise) |
-| `inkwell/v1/keys/locked-notes.json` | accepted (sync-security) |
-| `inkwell/v1/boards/<UUID>.json` | accepted (surfaces-polish) |
+| `noteit/v1/manifest.json` | accepted |
+| `noteit/v1/notes/<UUID>.meta`, `noteit/v1/bodies/<UUID>.<UUID>.<TAG>.body` | accepted |
+| `noteit/v1/notes/<uuid lowercase>.meta` | rejected |
+| `noteit/v1/bodies/<UUID>.<UUID>.<TAG>.locked` | accepted (sync-security) |
+| `noteit/v1/smart-folders/<UUID>.json` | accepted (organise) |
+| `noteit/v1/claims/reminders/<UUID>.json` | accepted (organise) |
+| `noteit/v1/keys/locked-notes.json` | accepted (sync-security) |
+| `noteit/v1/boards/<UUID>.json` | accepted (surfaces-polish) |
 | `noteit/identity/v1/identity.sealed`, `noteit/identity/v1/spaces.sealed` | accepted (sharing) |
 | `noteit/space/v1/log/0000000001.json`, `noteit/space/v1/keys/3/<member-id>.key`, `noteit/space/v1/profiles/<member-id>.json` | accepted (sharing) |
-| `inkwell/.canary/<UUID>` | accepted |
-| `inkwell/v1/a/b/c/d/e`, `inkwell/v1/unknown/x.json` (no registered prefix) | rejected |
-| `inkwell/v1/notes/<UUID>.meta/x` (deeper than the prefix's depth) | rejected |
-| `inkwell/v1/../manifest.json`, `inkwell/v1/./x`, `inkwell/v1/notes//x` | rejected |
-| `inkwell/v2/manifest.json`, `noteit/other/v1/x`, `noteit/space/v2/x` | rejected |
-| `inkwell/v1/notes/<UUID>/x.meta`, `inkwell/v1/notes/x.meta` | rejected |
+| `noteit/.canary/<UUID>` | accepted |
+| `noteit/v1/a/b/c/d/e`, `noteit/v1/unknown/x.json` (no registered prefix) | rejected |
+| `noteit/v1/notes/<UUID>.meta/x` (deeper than the prefix's depth) | rejected |
+| `noteit/v1/../manifest.json`, `noteit/v1/./x`, `noteit/v1/notes//x` | rejected |
+| `noteit/v2/manifest.json`, `noteit/other/v1/x`, `noteit/space/v2/x` | rejected |
+| `noteit/v1/notes/<UUID>/x.meta`, `noteit/v1/notes/x.meta` | rejected |
 | a segment of 129 characters, or containing a space, `%`, `:` or non-ASCII | rejected |
 
 Body limit `NOTEIT_MAX_OBJECT_MB` (default 50).
@@ -1762,7 +1769,7 @@ Account and their own sync passphrase, so every Mac in a family syncs with its o
   `Last-Modified`, `Content-Length` and the quoted `ETag`.
 - **rclone (supported).** The documented remote: `type = s3`, `provider = Other`,
   `endpoint = https://<server>/s3`, `force_path_style = true`, `region = us-east-1`, `list_version = 2`,
-  `no_check_bucket = true`, plus the user's access key and secret; the path is `noteit:noteit/inkwell/`. Use
+  `no_check_bucket = true`, plus the user's access key and secret; the path is `noteit:noteit/noteit/`. Use
   `rclone copy --checksum` and `rclone check`: the disk ETag is the MD5 of the bytes, as rclone expects,
   and upstream-S3 ETags are passed through. If the upstream provider's ETags aren't MD5s (for example
   SSE-KMS on AWS), use `--size-only` with `rclone check --download` instead. A backup restored with rclone must be copied back as-is into an
@@ -1790,7 +1797,7 @@ Account and their own sync passphrase, so every Mac in a family syncs with its o
     who both use bucket `noteit` see disjoint stores. No request parameter can name another namespace.
   - Over quota: `400 QuotaExceeded`; busy: `503 SlowDown`; an ambiguous driver result: `500 InternalError`,
     never 412 (§6.2).
-- Must accept the canary (`inkwell/.canary/<UUID>` PUT/DELETE).
+- Must accept the canary (`noteit/.canary/<UUID>` PUT/DELETE).
 - **Per-user keys.** Each user manages their own keys in Settings → Account → S3 Access Keys (up to 10):
   - Create: `POST /api/account/s3-keys {label}` returns `{accessKeyId, secretAccessKey}` once. The id is
     `NIK` plus 17 random base32 characters; the secret is 40 base64url characters (30 random bytes).
@@ -1842,7 +1849,7 @@ prefix of a bucket). Families use one bucket or prefix per person, with separate
 in native), the access key id and secret, then the sync passphrase. The wizard runs a **CORS check** before
 saving anything:
 1. `ListObjectsV2` on the prefix: proves the origin is allowed and the credentials work.
-2. `PUT inkwell/.canary/<UUID>` with `If-None-Match: *`, then read the `ETag` response header: proves PUT,
+2. `PUT noteit/.canary/<UUID>` with `If-None-Match: *`, then read the `ETag` response header: proves PUT,
    the allowed request headers and the exposed `ETag`.
 3. The rest of the canary sequence (below), ending with its DELETE.
 
@@ -1853,8 +1860,8 @@ runs as in server mode: an empty bucket gets a new v2 store; a v1 store shows th
 **Conditional writes in the browser.** Direct mode uses the same `S3Backend` as the server's upstream
 driver, which ports the native one:
 - Before the first conditional request of a session it runs the native canary once
-  (`S3Backend.swift:160-190`) on `inkwell/.canary/<UUID>`: a `PUT If-None-Match: *`; a second one, which must
-  get 412; a `PUT` with the bogus `If-Match: "inkwell-canary-mismatch"`, which must get 412; and a `DELETE`
+  (`S3Backend.swift:160-190`) on `noteit/.canary/<UUID>`: a `PUT If-None-Match: *`; a second one, which must
+  get 412; a `PUT` with the bogus `If-Match: "noteit-canary-mismatch"`, which must get 412; and a `DELETE`
   with the same bogus `If-Match`, which must get 412. v2 extends it with two steps that check the ETag
   requirement of §3.4 item 9 ("different bytes never get a previously issued ETag"): a `PUT` of different
   bytes with `If-Match: <first ETag>`, which must succeed with a **different** ETag, and then a `PUT` with
@@ -1862,7 +1869,7 @@ driver, which ports the native one:
   `If-Match` `DELETE` got 412, a `HEAD` must still find the canary, and the final `DELETE` carries
   `If-Match: <current ETag>` and must succeed (a following `HEAD` gets 404). That final `DELETE` removes
   the canary; the client also deletes any
-  other `inkwell/.canary/` object whose `LastModified` is more than 10 minutes old (left by a crashed
+  other `noteit/.canary/` object whose `LastModified` is more than 10 minutes old (left by a crashed
   client), so canaries never accumulate in a bucket without a server. A provider that ignores
   the write preconditions (or answers `501`/`400 NotImplemented`) is marked "conditional writes
   unsupported"; so is one that fails either ETag step (the same ETag twice, or the old ETag still

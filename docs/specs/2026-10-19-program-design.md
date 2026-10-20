@@ -197,7 +197,7 @@ These apply to the native app, the web app and the phone.
    - organise: `smart-folders/`, `claims/reminders/`
    - sync-security: `keys/`
    - surfaces-polish: `boards/`
-   - sharing: `noteit/identity/v1/`, `noteit/space/v1/`, and a depth-2 `inkwell/v1/devices/` row for space device records (`<member-id>/<UUID>.json`)
+   - sharing: `noteit/identity/v1/`, `noteit/space/v1/`, and a depth-2 `noteit/v1/devices/` row for space device records (`<member-id>/<UUID>.json`)
 
    Every sub-project that adds a prefix registers it there and adds a key test vector for the web server.
 7. **One re-encryption runner.** `RekeyRunner` (sync-security) re-seals every key under the store root whose `RemoteLayout` prefix has `sealing: .storeKey`, except `manifest.json`, `.canary/` and `.unsealed` rows. Wave 0 writes this rule down as `RekeyScope` (task 3.5).
@@ -210,11 +210,11 @@ These apply to the native app, the web app and the phone.
 8. **Remote keys.** The sync-security spec owns the key grammar and a per-prefix depth table.
    - Every segment matches `[A-Za-z0-9._-]+` and is not `.` or `..`.
    - UUID segments are uppercase canonical UUIDs.
-   - The depth table lists every prefix, including `inkwell/.canary/<UUID>`. A key is valid when it sits under a registered prefix at exactly the depth of a row with that path (two rows may share a path with different depths).
-   - The web server accepts only keys that fit the table. List requests must use a registered prefix or one of its parent roots, such as `inkwell/v1/`, so that older clients (the 0.2.x engine, rclone) keep working. `RemoteLayout.isListablePrefix` allows both.
+   - The depth table lists every prefix, including `noteit/.canary/<UUID>`. A key is valid when it sits under a registered prefix at exactly the depth of a row with that path (two rows may share a path with different depths).
+   - The web server accepts only keys that fit the table. List requests must use a registered prefix or one of its parent roots, such as `noteit/v1/`, so that clients that list the whole root (the sync engine, rclone) keep working. `RemoteLayout.isListablePrefix` allows both, plus Inkwell's `inkwell/v1/` and `inkwell/` so the 0.4.0 store copy (`RemoteMigration`) can look for an old store. Keys under `inkwell/` are not valid.
 9. **Unknown record kinds are left alone.** The web and phone engines ignore any record kind or prefix they don't know, without per-record errors, and never delete it. This covers `smart-folders/`, `boards/`, `claims/`, `keys/`, `noteit/identity/`, `noteit/space/` and any later kind.
 10. **WebDAV ETags** are stored without quotes, like every other backend.
-11. The wire prefix `inkwell/v1/` stays frozen.
+11. The wire prefix `noteit/v1/` stays frozen. NoteIt 0.4.0 moved it from Inkwell's `inkwell/v1/`: on connect, `RemoteMigration` copies a store found only there to `noteit/v1/`, byte for byte with the manifest last, and leaves the old copy in place. Nothing else reads or writes under `inkwell/`, so every remote addition in these specs goes under `noteit/`.
 12. **Passphrases.** Keyring stores use NFC-normalised passphrases. v1 stores keep the raw bytes.
 13. **Locked bodies.** A locked note's remote body sits at the same path as its normal body for that store format, with `.locked` replacing the body suffix. `bodyVersion` increments as usual. §8 has the rest.
 14. **Boards.** `boards/<notebookID>.json` is its own record kind: last writer wins, no tombstones. It is deleted when the notebook is deleted. A board whose notebook no longer exists, for example because the notebook was deleted on the phone or the web, is deleted by the next Mac that syncs. The notebook record has no board fields.
