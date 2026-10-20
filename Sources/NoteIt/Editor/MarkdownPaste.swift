@@ -90,10 +90,32 @@ enum MarkdownPasteDetector {
                 guard hasKey else { return 0 }
                 continue
             }
-            guard yamlKey(line) != nil else { return 0 }
+            guard isFrontMatterKey(line) else { return 0 }
             hasKey = true
         }
         return hasKey ? end + 1 : 0
+    }
+
+    /// A quoted key, or text before the first `: ` or a trailing `:` that starts with a letter or digit and isn't a URL.
+    private static func isFrontMatterKey(_ line: String) -> Bool {
+        if let quote = line.first, quote == "\"" || quote == "'" {
+            guard let close = line.dropFirst().firstIndex(of: quote) else { return false }
+            let after = line[line.index(after: close)...]
+            return after == ":" || after.hasPrefix(": ") || after.hasPrefix(":\t")
+        }
+        guard let first = line.first, first.isLetter || first.isNumber else { return false }
+        var key: Substring?
+        var index = line.startIndex
+        while let colon = line[index...].firstIndex(of: ":") {
+            let next = line.index(after: colon)
+            if next == line.endIndex || line[next] == " " || line[next] == "\t" {
+                key = line[..<colon]
+                break
+            }
+            index = next
+        }
+        guard let key else { return false }
+        return !key.contains("://")
     }
 
     /// Diffs, and text where many lines read like a programming language.
@@ -108,8 +130,9 @@ enum MarkdownPasteDetector {
         let inComment = lines.contains { $0.contains("/*") || $0.contains("*/") }
         let nonBlank = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !nonBlank.isEmpty else { return false }
-        // Less-indented lines before the current one, each with whether it opens a YAML map: a bare `key:` or a `- key:` item.
-        var outer: [(indent: Int, opensMap: Bool)] = []
+        // Less-indented lines before the current one, each with whether it opens a YAML map (a bare `key:` or a `- key:` item)
+        // and whether it can hold a YAML list (a `key:` or `- key:` with an empty value).
+        var outer: [(indent: Int, opensMap: Bool, opensList: Bool)] = []
         var codeLike = 0
         for line in nonBlank {
             let indent = line.prefix { $0 == " " || $0 == "\t" }.count
@@ -117,18 +140,23 @@ enum MarkdownPasteDetector {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             let config: Bool
             let opensMap: Bool
+            let opensList: Bool
             if trimmed.hasPrefix("- ") {
-                // `- key: value` starts a map in a YAML list; the item counts as config only under a YAML parent.
-                opensMap = yamlKey(String(trimmed.dropFirst(2)))?.lowercase == true
-                config = opensMap && outer.last?.opensMap == true
+                // `- key: value` starts a map in a YAML list; the item counts as config only under a parent holding a list.
+                let key = yamlKey(String(trimmed.dropFirst(2)))
+                opensMap = key?.lowercase == true
+                opensList = opensMap && key?.opensMap == true
+                config = opensMap && outer.last?.opensList == true
             } else if let key = yamlKey(line) {
                 config = indent == 0 ? key.lowercase : outer.last?.opensMap == true
                 opensMap = key.opensMap
+                opensList = key.opensMap
             } else {
                 config = matches(envLine, line)
                 opensMap = false
+                opensList = false
             }
-            outer.append((indent, opensMap))
+            outer.append((indent, opensMap, opensList))
             if config || ["{", "}", ";", "):"].contains(where: trimmed.hasSuffix) || codeStarts.contains(where: trimmed.hasPrefix)
                 || (inComment && matches(commentStar, line)) || isPathOrGlob(trimmed) {
                 codeLike += 1

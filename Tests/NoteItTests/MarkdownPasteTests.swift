@@ -130,13 +130,17 @@ final class MarkdownPasteTests: XCTestCase {
     func testYAMLListsOfMapsStayPlain() {
         let actions = "steps:\n  - uses: actions/checkout@v4\n  - name: Build\n    run: make\n"
         let ansible = "- name: Install\n  apt: name=nginx\n- name: Start\n  service: name=nginx state=started\n"
-        for text in [actions, ansible] {
+        let containers = "containers:\n  - name: x\n    image: y\n"
+        let env = "env:\n  - name: A\n    value: b\n"
+        for text in [actions, ansible, containers, env] {
             XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(text), text)
         }
         let meeting = "Attendees: Ann, Bo\n- Agenda item one\n- Agenda item two\n"
         let shopping = "- Milk: 2 litres\n- Bread: one loaf\n- Eggs\n"
         let lowercase = "- milk: 2 litres\n- bread: one loaf\n- eggs\n"
-        for text in [meeting, shopping, lowercase] {
+        let changelog = "- fix: login bug\n  - repro: open app\n  - cause: token expiry\n- feat: dark mode\n  - note: needs design\n"
+        let todo = "- todo: groceries\n  - milk: 2 litres\n  - bread: one loaf\n"
+        for text in [meeting, shopping, lowercase, changelog, todo] {
             XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(text), text)
         }
     }
@@ -181,6 +185,23 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: ns.range(of: "charger").location)))
         XCTAssertTrue(EditorStyle.isBold(try XCTUnwrap(font(view, at: "train"))))
         XCTAssertFalse(view.string.contains("**"))
+    }
+
+    func testFrontMatterKeysMayHaveSpacesAccentsAndQuotes() {
+        func count(_ text: String) -> Int { MarkdownPasteDetector.frontMatterLineCount(MarkdownReader.lines(of: text)) }
+        for line in ["Date created: 2024-01-01", "ämne: möte", "Time: 10:30", "\"x y\": z", "'x': z", "done:"] {
+            XCTAssertEqual(count("---\n\(line)\n---\nBody\n"), 3, line)
+        }
+        for line in ["_x: y", "[link]: y", "> quote: y", "See https://example.com: y"] {
+            XCTAssertEqual(count("---\n\(line)\n---\nBody\n"), 0, line)
+        }
+
+        let frontMatter = "---\nDate created: 2024-01-01\nämne: möte\nTime: 10:30\n---"
+        let view = editor(body(""))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: frontMatter + "\n## Notes\n- a\n- b\n")))
+        XCTAssertTrue(view.string.hasPrefix(frontMatter + "\n"), view.string)
+        XCTAssertEqual(kind(view, of: "ämne: möte"), .body)
+        XCTAssertEqual(kind(view, of: "Notes"), .heading)
     }
 
     func testFrontMatterNeedsYAMLKeyLines() {
