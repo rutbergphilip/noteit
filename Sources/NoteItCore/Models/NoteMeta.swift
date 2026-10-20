@@ -18,6 +18,9 @@ public struct NoteMeta: Identifiable, Codable, Hashable, Sendable {
     public var conflictOriginalID: UUID? = nil
     /// Set while the note is in Recently Deleted.
     public var deletedAt: Date? = nil
+    /// Set while the note is locked. Data only; owned by sync-security (foundations Task 4.3). Omitted from the
+    /// JSON when nil.
+    public var lock: NoteLock? = nil
 
     public init(
         id: UUID,
@@ -31,7 +34,8 @@ public struct NoteMeta: Identifiable, Codable, Hashable, Sendable {
         revision: UUID? = nil,
         conflictSource: String? = nil,
         conflictOriginalID: UUID? = nil,
-        deletedAt: Date? = nil
+        deletedAt: Date? = nil,
+        lock: NoteLock? = nil
     ) {
         self.id = id
         self.notebookID = notebookID
@@ -45,9 +49,11 @@ public struct NoteMeta: Identifiable, Codable, Hashable, Sendable {
         self.conflictSource = conflictSource
         self.conflictOriginalID = conflictOriginalID
         self.deletedAt = deletedAt
+        self.lock = lock
     }
 }
 
 extension NoteMeta {
     public var displayTitle: String { title.isEmpty ? "New Note" : title }
+    public var isLocked: Bool { lock != nil }
 }

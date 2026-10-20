@@ -20,7 +20,8 @@ final class ModelCodingTests: XCTestCase {
      "title":"Groceries","preview":"Milk","isPinned":true,"createdAt":"2026-01-02T03:04:05Z",
      "updatedAt":"2026-01-03T03:04:05Z","tags":["home"],"revision":"1B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F",
      "conflictSource":"Laptop","conflictOriginalID":"2B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F",
-     "deletedAt":"2026-01-04T03:04:05Z"}
+     "deletedAt":"2026-01-04T03:04:05Z",
+     "lock":{"keyID":"key-1","sealedID":"3B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F"}}
     """
 
     private let minimalNote = """
@@ -42,6 +43,7 @@ final class ModelCodingTests: XCTestCase {
         XCTAssertEqual(full.title, "Groceries")
         XCTAssertEqual(full.conflictSource, "Laptop")
         XCTAssertNotNil(full.deletedAt)
+        XCTAssertTrue(full.isLocked)
         try assertSameKeys(fullNote, try encoder.encode(full))
 
         let minimal = try decoder.decode(NoteMeta.self, from: Data(minimalNote.utf8))

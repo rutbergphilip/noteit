@@ -5,7 +5,7 @@ import Foundation
 extension NoteMeta {
     public static let ownedCodingKeys: Set<String> = [
         "id", "notebookID", "title", "preview", "isPinned", "createdAt", "updatedAt", "tags", "revision",
-        "conflictSource", "conflictOriginalID", "deletedAt",
+        "conflictSource", "conflictOriginalID", "deletedAt", "lock",
     ]
 }
 

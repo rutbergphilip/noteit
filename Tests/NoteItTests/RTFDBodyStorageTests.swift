@@ -78,6 +78,26 @@ final class RTFDBodyStorageTests: XCTestCase {
         }
     }
 
+    /// foundations Task 4.3: the lock joins the revision fields only when set.
+    func testLockChangesContentRevisionOnlyWhenSet() throws {
+        let storage = RTFDBodyStorage(rootURL: root)
+        let date = Date(timeIntervalSince1970: 1_767_225_600)
+        var meta = NoteMeta(id: UUID(), title: "Locked", preview: "", isPinned: false, createdAt: date, updatedAt: date,
+                            tags: [])
+        try storage.write(NSAttributedString(string: "Locked"), extras: .empty, for: meta, notebook: nil)
+        func revision(_ meta: NoteMeta) throws -> UUID? {
+            try LibraryCoding.encoder.encode(LibraryFile(version: 1, notebooks: [], notes: [meta]))
+                .write(to: root.appendingPathComponent("library.json"))
+            let store = NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false))
+            return NoteStore.contentRevisions(for: store.missingRevisionInputs())[meta.id]
+        }
+        let unlocked = try revision(meta)
+        XCTAssertNotNil(unlocked)
+        XCTAssertEqual(try revision(meta), unlocked)
+        meta.lock = NoteLock(keyID: "key-1", sealedID: UUID())
+        XCTAssertNotEqual(try revision(meta), unlocked)
+    }
+
     private func packageFiles(_ url: URL) throws -> [String: Data] {
         var result: [String: Data] = [:]
         for path in try fm.subpathsOfDirectory(atPath: url.path) {

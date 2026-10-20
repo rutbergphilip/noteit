@@ -1275,6 +1275,7 @@ final class NoteStore: ObservableObject {
         var fields = ["note", meta.title, meta.notebookID?.uuidString ?? "", meta.isPinned ? "pinned" : ""]
         // Appended only when set, so revisions derived before Recently Deleted existed stay the same.
         if let deletedAt = meta.deletedAt { fields.append("deleted \(deletedAt.timeIntervalSince1970)") }
+        if let lock = meta.lock { fields.append("lock \(lock.keyID) \(lock.sealedID.uuidString)") }
         return fields
     }
 
