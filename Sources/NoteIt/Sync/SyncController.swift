@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import CryptoKit
 import NoteItSync
 
 enum SyncStatus: Equatable {
@@ -101,20 +102,22 @@ final class SyncController: ObservableObject {
         var accessKey: String?
         var secret: String?
         var passphrase: String?
+        /// The keyring data key, base64 (foundations step 3).
+        var dataKey: String?
     }
 
     private final class Session: @unchecked Sendable {
         let engine: SyncEngine
         let backend: StorageBackend
-        let cipher: SyncCipher
+        let store: StoreSessionRef
         let adapter: NoteStoreSyncAdapter
         let folder: URL?
         let scoped: Bool
 
-        init(engine: SyncEngine, backend: StorageBackend, cipher: SyncCipher, adapter: NoteStoreSyncAdapter, folder: URL?, scoped: Bool) {
+        init(engine: SyncEngine, backend: StorageBackend, store: StoreSessionRef, adapter: NoteStoreSyncAdapter, folder: URL?, scoped: Bool) {
             self.engine = engine
             self.backend = backend
-            self.cipher = cipher
+            self.store = store
             self.adapter = adapter
             self.folder = folder
             self.scoped = scoped
@@ -166,17 +169,21 @@ final class SyncController: ObservableObject {
         var config = config
         let destination = try makeDestination(config, accessKey: accessKey, secret: secret)
         let encryptNew = config.encrypted
-        let (manifest, cipher, created) = try await withAccess(destination) {
+        let deviceName = config.deviceName
+        let (storeSession, created) = try await withAccess(destination) {
             try await Self.offMain {
                 try await destination.backend.probe()
-                return try await SyncEngine.connectReportingCreation(backend: destination.backend, passphrase: passphrase, encryptNew: encryptNew)
+                return try await SyncEngine.connectSession(backend: destination.backend, kind: .library,
+                                                           credential: passphrase.map(StoreCredential.passphrase),
+                                                           deviceName: deviceName, createIfMissing: true, encrypted: encryptNew)
             }
         }
-        config.encrypted = manifest.encryption != nil
+        config.encrypted = storeSession.keyID != nil
 
         let secrets = Secrets(accessKey: config.provider.isS3 ? accessKey : nil,
                               secret: config.provider.isS3 ? secret : nil,
-                              passphrase: config.encrypted ? passphrase : nil)
+                              passphrase: config.encrypted ? passphrase : nil,
+                              dataKey: Self.encoded(storeSession.dataKey))
         if ephemeralSecrets != nil {
             ephemeralSecrets = secrets
         } else {
@@ -184,6 +191,7 @@ final class SyncController: ObservableObject {
                 try Keychain.set(secrets.accessKey, for: .s3AccessKey)
                 try Keychain.set(secrets.secret, for: .s3Secret)
                 try Keychain.set(secrets.passphrase, for: .passphrase)
+                try Keychain.set(secrets.dataKey, for: .syncDataKey)
             } catch {
                 Keychain.deleteAll()
                 throw SyncSetupError.keychain("Couldn't save your credentials to the keychain. \(error.localizedDescription)")
@@ -204,9 +212,10 @@ final class SyncController: ObservableObject {
             if removed != (0, 0) { NSLog("NoteItSync: removed \(removed.notes) unedited sample notes and \(removed.notebooks) sample notebooks before joining") }
         }
         let adapter = NoteStoreSyncAdapter(store: store, deviceID: config.deviceID)
-        let engine = SyncEngine(backend: destination.backend, cipher: cipher, local: adapter, stateURL: stateURL,
-                                deviceID: config.deviceID, deviceName: config.deviceName)
-        let session = Session(engine: engine, backend: destination.backend, cipher: cipher, adapter: adapter,
+        let ref = StoreSessionRef(storeSession)
+        let engine = SyncEngine(backend: destination.backend, session: ref, local: adapter, stateURL: stateURL,
+                                deviceID: config.deviceID, deviceName: config.deviceName, appVersion: Self.appVersion)
+        let session = Session(engine: engine, backend: destination.backend, store: ref, adapter: adapter,
                               folder: destination.folder, scoped: destination.scoped)
         lastSync = nil
         UserDefaults.standard.removeObject(forKey: Self.lastSyncKey)
@@ -217,16 +226,21 @@ final class SyncController: ObservableObject {
     func unlock(passphrase: String) async throws {
         guard let config = configuration else { return }
         let destination = try makeDestination(config, accessKey: secrets.accessKey, secret: secrets.secret)
-        _ = try await withAccess(destination) {
+        let storeSession = try await withAccess(destination) {
             try await Self.offMain {
-                try await SyncEngine.connect(backend: destination.backend, passphrase: passphrase, encryptNew: config.encrypted)
+                try await SyncEngine.connectSession(backend: destination.backend, kind: .library, credential: .passphrase(passphrase),
+                                                    deviceName: config.deviceName, createIfMissing: false,
+                                                    encrypted: config.encrypted).session
             }
         }
+        let dataKey = Self.encoded(storeSession.dataKey)
         if ephemeralSecrets != nil {
             ephemeralSecrets?.passphrase = passphrase
+            ephemeralSecrets?.dataKey = dataKey
         } else {
             do {
                 try Keychain.set(passphrase, for: .passphrase)
+                try Keychain.set(dataKey, for: .syncDataKey)
             } catch {
                 throw SyncSetupError.keychain("Couldn't save the passphrase to the keychain. \(error.localizedDescription)")
             }
@@ -593,40 +607,79 @@ final class SyncController: ObservableObject {
             var state = SyncState.load(from: stateURL(for: config))
             state.lastDeviceWrite = nil
             try? state.save(to: stateURL(for: config))
-            let engine = SyncEngine(backend: session.backend, cipher: session.cipher, local: session.adapter, stateURL: stateURL(for: config),
-                                    deviceID: config.deviceID, deviceName: config.deviceName)
-            let renewed = Session(engine: engine, backend: session.backend, cipher: session.cipher, adapter: session.adapter,
+            let engine = SyncEngine(backend: session.backend, session: session.store, local: session.adapter, stateURL: stateURL(for: config),
+                                    deviceID: config.deviceID, deviceName: config.deviceName, appVersion: Self.appVersion)
+            let renewed = Session(engine: engine, backend: session.backend, store: session.store, adapter: session.adapter,
                                   folder: session.folder, scoped: session.scoped)
             self.session = renewed
             return renewed
         }
         pendingDeviceRename = false
         let secrets = secrets
-        if config.encrypted, (secrets.passphrase ?? "").isEmpty { throw SyncError.passphraseRequired }
+        let dataKey = secrets.dataKey.flatMap { Data(base64Encoded: $0) }.map { SymmetricKey(data: $0) }
+        let passphrase = secrets.passphrase.flatMap { $0.isEmpty ? nil : $0 }
+        if config.encrypted, dataKey == nil, passphrase == nil { throw SyncError.passphraseRequired }
         let destination = try makeDestination(config, accessKey: secrets.accessKey, secret: secrets.secret)
-        let cipher = try await withAccess(destination) {
-            try await Self.offMain { () async throws -> SyncCipher in
+        let deviceName = config.deviceName
+        let storeSession = try await withAccess(destination) {
+            try await Self.offMain { () async throws -> StoreSession in
                 // Never recreate a vanished store: syncing against an empty remote would delete every note here.
                 do {
                     _ = try await destination.backend.get(RemoteLayout.manifest())
                 } catch StorageError.notFound {
                     throw SyncSetupError.storageReset
                 }
-                return try await SyncEngine.connect(backend: destination.backend, passphrase: secrets.passphrase, encryptNew: config.encrypted).1
+                func open(_ credential: StoreCredential?) async throws -> StoreSession {
+                    try await SyncEngine.connectSession(backend: destination.backend, kind: .library, credential: credential,
+                                                        deviceName: deviceName, createIfMissing: false,
+                                                        encrypted: config.encrypted).session
+                }
+                if let dataKey {
+                    do {
+                        return try await open(.dataKey(dataKey))
+                    } catch SyncError.wrongPassphrase where passphrase != nil {
+                        // The saved key no longer opens the store (a v1 store, or the key changed); the passphrase decides.
+                    }
+                }
+                return try await open(passphrase.map(StoreCredential.passphrase))
             }
         }
+        if Self.encoded(storeSession.dataKey) != secrets.dataKey {
+            saveDataKey(storeSession.dataKey)
+        }
         let adapter = NoteStoreSyncAdapter(store: store, deviceID: config.deviceID)
-        let engine = SyncEngine(backend: destination.backend, cipher: cipher, local: adapter, stateURL: stateURL(for: config),
-                                deviceID: config.deviceID, deviceName: config.deviceName)
-        let session = Session(engine: engine, backend: destination.backend, cipher: cipher, adapter: adapter,
+        let ref = StoreSessionRef(storeSession)
+        let engine = SyncEngine(backend: destination.backend, session: ref, local: adapter, stateURL: stateURL(for: config),
+                                deviceID: config.deviceID, deviceName: config.deviceName, appVersion: Self.appVersion)
+        let session = Session(engine: engine, backend: destination.backend, store: ref, adapter: adapter,
                               folder: destination.folder, scoped: destination.scoped)
         self.session = session
         return session
     }
 
+    /// After a passphrase connect: the keyring data key, or nothing for a v1 or plain store. A failed save only
+    /// means the next connect uses the passphrase again.
+    private func saveDataKey(_ key: SymmetricKey?) {
+        let encoded = Self.encoded(key)
+        if ephemeralSecrets != nil {
+            ephemeralSecrets?.dataKey = encoded
+        } else {
+            try? Keychain.set(encoded, for: .syncDataKey)
+        }
+    }
+
+    private static func encoded(_ key: SymmetricKey?) -> String? {
+        key.map { $0.withUnsafeBytes { Data($0) }.base64EncodedString() }
+    }
+
+    private static var appVersion: String? {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    }
+
     private var secrets: Secrets {
         if let ephemeralSecrets { return ephemeralSecrets }
-        return Secrets(accessKey: Keychain.get(.s3AccessKey), secret: Keychain.get(.s3Secret), passphrase: Keychain.get(.passphrase))
+        return Secrets(accessKey: Keychain.get(.s3AccessKey), secret: Keychain.get(.s3Secret), passphrase: Keychain.get(.passphrase),
+                       dataKey: Keychain.get(.syncDataKey))
     }
 
     // MARK: - Backends

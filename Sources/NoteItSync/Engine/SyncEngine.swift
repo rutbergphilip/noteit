@@ -96,30 +96,48 @@ public actor SyncEngine {
     public static let maxFormatVersion = 2
 
     private let backend: StorageBackend
-    private let cipher: SyncCipher
+    private let session: StoreSessionRef
     private let local: SyncLocalStore
     private let stateURL: URL
     private let deviceID: String
     private let deviceName: String
     private let appVersion: String?
+    private let platform: DevicePlatform
     private let now: @Sendable () -> Date
 
     private var state = SyncState()
     private var tail: Task<Void, Never>?
 
+    /// The engine reads `session.current` for every seal and open, and replaces it when the manifest changes.
+    public init(backend: StorageBackend, session: StoreSessionRef, local: SyncLocalStore, stateURL: URL,
+                deviceID: String, deviceName: String, appVersion: String? = nil, platform: DevicePlatform = .mac) {
+        self.init(backend: backend, session: session, local: local, stateURL: stateURL, deviceID: deviceID, deviceName: deviceName,
+                  appVersion: appVersion, platform: platform, now: { Date() })
+    }
+
+    /// Wraps `cipher` in a v1 session; the first pass adopts the store's manifest without checking its key.
     public init(backend: StorageBackend, cipher: SyncCipher, local: SyncLocalStore, stateURL: URL, deviceID: String, deviceName: String) {
         self.init(backend: backend, cipher: cipher, local: local, stateURL: stateURL, deviceID: deviceID, deviceName: deviceName, now: { Date() })
     }
 
     init(backend: StorageBackend, cipher: SyncCipher, local: SyncLocalStore, stateURL: URL, deviceID: String, deviceName: String,
          appVersion: String? = nil, now: @escaping @Sendable () -> Date) {
+        let wrapped = StoreSession(kind: .library, manifest: Manifest(), manifestETag: "", cipher: cipher, keyID: nil, features: [],
+                                   supported: StoreFeature.supported, dataKey: nil)
+        self.init(backend: backend, session: StoreSessionRef(wrapped), local: local, stateURL: stateURL, deviceID: deviceID,
+                  deviceName: deviceName, appVersion: appVersion, platform: .mac, now: now)
+    }
+
+    init(backend: StorageBackend, session: StoreSessionRef, local: SyncLocalStore, stateURL: URL, deviceID: String,
+         deviceName: String, appVersion: String? = nil, platform: DevicePlatform = .mac, now: @escaping @Sendable () -> Date) {
         self.backend = backend
-        self.cipher = cipher
+        self.session = session
         self.local = local
         self.stateURL = stateURL
         self.deviceID = deviceID
         self.deviceName = deviceName
         self.appVersion = appVersion
+        self.platform = platform
         self.now = now
     }
 
@@ -166,44 +184,13 @@ public actor SyncEngine {
         return (result.manifest, result.cipher)
     }
 
+    /// `connectSession` for a library store; never creates a keyring store, so it passes no device name.
     static func connectReportingCreation(backend: StorageBackend, passphrase: String?, encryptNew: Bool, makeCipher: CipherFactory) async throws
         -> (manifest: Manifest, cipher: SyncCipher, created: Bool) {
-        if let existing = try await readManifest(backend) {
-            return (existing, try openExisting(existing, passphrase: passphrase, encryptNew: encryptNew, makeCipher: makeCipher), false)
-        }
-        let manifest: Manifest
-        let cipher: SyncCipher
-        if encryptNew {
-            guard let passphrase, !passphrase.isEmpty else { throw SyncError.passphraseRequired }
-            let salt = makeSalt()
-            cipher = try makeCipher(passphrase, salt, defaultIterations)
-            let check = try cipher.seal(keyCheckPlaintext, context: keyCheckContext)
-            manifest = Manifest(encryption: .init(salt: salt, iterations: defaultIterations, keyCheck: check))
-        } else {
-            cipher = plaintextCipher()
-            manifest = Manifest()
-        }
-        do {
-            try await backend.put(RemoteLayout.manifest(), data: try encode(manifest), ifMatch: nil, ifNoneMatch: true)
-            return (manifest, cipher, true)
-        } catch StorageError.preconditionFailed {
-            // Another device created the store first; join theirs.
-            guard let existing = try await readManifest(backend) else { throw StorageError.notFound(RemoteLayout.manifest()) }
-            return (existing, try openExisting(existing, passphrase: passphrase, encryptNew: encryptNew, makeCipher: makeCipher), false)
-        }
-    }
-
-    private static func readManifest(_ backend: StorageBackend) async throws -> Manifest? {
-        let data: Data
-        do {
-            data = try await backend.get(RemoteLayout.manifest()).data
-        } catch StorageError.notFound {
-            return nil
-        }
-        guard let manifest = try? decode(Manifest.self, from: data) else {
-            throw StorageError.invalidResponse("Unreadable manifest")
-        }
-        return manifest
+        let result = try await connectSession(backend: backend, kind: .library, credential: passphrase.map(StoreCredential.passphrase),
+                                              deviceName: "", createIfMissing: true, encrypted: encryptNew,
+                                              makeCipher: makeCipher, now: Date())
+        return (result.session.manifest, result.session.cipher, result.created)
     }
 
     /// The one gate for opening a store (program §4), shared by the engine and the app's inspection.
@@ -225,24 +212,6 @@ public actor SyncEngine {
                 throw SyncError.invalidManifest("\(feature.rawValue) without \(required.rawValue)")
             }
         }
-    }
-
-    private static func openExisting(_ manifest: Manifest, passphrase: String?, encryptNew: Bool, makeCipher: CipherFactory) throws -> SyncCipher {
-        try checkOpenable(manifest)
-        guard let encryption = manifest.encryption else {
-            // Never silently downgrade a user who asked for encryption to a plaintext store.
-            if encryptNew { throw SyncError.encryptionMismatch }
-            return plaintextCipher()
-        }
-        guard iterationRange.contains(encryption.iterations) else {
-            throw SyncError.invalidManifest("iterations \(encryption.iterations) outside \(iterationRange)")
-        }
-        guard encryption.salt.count == 16 else { throw SyncError.invalidManifest("salt is \(encryption.salt.count) bytes, expected 16") }
-        guard !encryption.keyCheck.isEmpty else { throw SyncError.invalidManifest("missing key check") }
-        guard let passphrase, !passphrase.isEmpty else { throw SyncError.passphraseRequired }
-        let cipher = try makeCipher(passphrase, encryption.salt, encryption.iterations)
-        guard (try? cipher.open(encryption.keyCheck, context: keyCheckContext)) == keyCheckPlaintext else { throw SyncError.wrongPassphrase }
-        return cipher
     }
 
     // MARK: - Pass
@@ -267,9 +236,11 @@ public actor SyncEngine {
     private func runPass() async throws -> SyncReport {
         let index = RemoteIndex(try await backend.list(prefix: RemoteLayout.root))
         // A missing manifest means the store was wiped; syncing against it would delete everything.
-        guard index.hasManifest else { throw StorageError.notFound(RemoteLayout.manifest()) }
+        guard let manifestETag = index.manifestETag else { throw StorageError.notFound(RemoteLayout.manifest()) }
+        try await refreshSession(listedETag: manifestETag)
 
         state = SyncState.load(from: stateURL)
+        state.keyID = session.current.keyID
         let records = await local.records()
         let pass = Pass(
             index: index,
@@ -299,6 +270,27 @@ public actor SyncEngine {
         try await guarded(pass) { try await self.sweepTombstones(pass) }
         try await guarded(pass) { try await self.writeDeviceRecordIfDue() }
         return pass.report
+    }
+
+    /// Replaces the session when the manifest changed since it was read (foundations step 3). The listing's
+    /// ETag decides, so an unchanged pass still makes one request.
+    private func refreshSession(listedETag: String) async throws {
+        let current = session.current
+        guard Self.unquoted(listedETag) != current.manifestETag else { return }
+        let (data, rawETag) = try await backend.get(RemoteLayout.manifest())
+        let etag = Self.unquoted(rawETag)
+        if current.manifestETag.isEmpty {
+            // A session wrapped around a caller's cipher: adopt the manifest; the caller already checked the key.
+            guard let manifest = try? Self.decode(Manifest.self, from: data) else {
+                throw StorageError.invalidResponse("Unreadable manifest")
+            }
+            try Self.checkOpenable(manifest, supported: current.supported)
+            session.replace(StoreSession(kind: current.kind, manifest: manifest, manifestETag: etag, cipher: current.cipher,
+                                         keyID: try Self.keyID(of: manifest), features: StoreSession.features(of: manifest),
+                                         supported: current.supported, dataKey: current.dataKey, passedCipher: current.passedCipher))
+            return
+        }
+        session.replace(try Self.refreshedSession(current: current, manifestData: data, etag: etag, currentDeviceID: deviceID, now: now()))
     }
 
     private func ordered(_ ids: Set<UUID>, _ pass: Pass) -> [UUID] {
@@ -721,7 +713,7 @@ public actor SyncEngine {
         let date = now()
         if let last = state.lastDeviceWrite, date.timeIntervalSince(last) < Self.deviceWriteInterval, date >= last { return }
         let supported = StoreFeature.supported.map(\.rawValue).sorted()
-        let info = DeviceInfo(deviceID: deviceID, name: deviceName, lastSync: date, platform: DevicePlatform.mac.rawValue,
+        let info = DeviceInfo(deviceID: deviceID, name: deviceName, lastSync: date, platform: platform.rawValue,
                               appVersion: appVersion, supportedFeatures: supported.isEmpty ? nil : supported)
         try await backend.put(RemoteLayout.device(deviceID), data: try seal(try Self.encode(info), key: RemoteLayout.device(deviceID)), ifMatch: nil, ifNoneMatch: false)
         state.lastDeviceWrite = date
@@ -802,11 +794,11 @@ public actor SyncEngine {
     }
 
     private func seal(_ plain: Data, key: String) throws -> Data {
-        try cipher.seal(plain, context: Self.context(key))
+        try session.current.cipher.seal(plain, context: Self.context(key))
     }
 
     private func open(_ sealed: Data, key: String) throws -> Data {
-        try cipher.open(sealed, context: Self.context(key))
+        try session.current.cipher.open(sealed, context: Self.context(key))
     }
 
     /// The cipher context for an object: its key relative to the remote root.
@@ -849,14 +841,15 @@ struct RemoteIndex {
     var bodies: [UUID: String] = [:]
     var tombstones: [UUID: String] = [:]
     var sidecars: [Sidecar] = []
-    var hasManifest = false
+    var manifestETag: String?
+    var hasManifest: Bool { manifestETag != nil }
 
     init(_ objects: [RemoteObject]) {
         for object in objects {
             guard object.key.hasPrefix(RemoteLayout.root) else { continue }
             let path = String(object.key.dropFirst(RemoteLayout.root.count))
             if path == "manifest.json" {
-                hasManifest = true
+                manifestETag = object.etag
                 continue
             }
             let parts = path.split(separator: "/", maxSplits: 1).map(String.init)

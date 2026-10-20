@@ -10,6 +10,8 @@ enum Keychain {
         case s3AccessKey = "s3-access-key"
         case s3Secret = "s3-secret"
         case passphrase = "passphrase"
+        /// The keyring data key, base64 (foundations step 3).
+        case syncDataKey = "sync-data-key"
     }
 
     struct Failure: Error, LocalizedError {
