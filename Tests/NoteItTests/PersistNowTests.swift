@@ -46,6 +46,18 @@ final class PersistNowTests: XCTestCase {
         XCTAssertNil(sidecar.previous)
     }
 
+    func testPersistNowSavesMetadataAnEarlierLibrarySaveHeldBack() throws {
+        let store = makeStore()
+        let a = store.createNote(in: nil, initial: NSAttributedString(string: "Old title\nbody")).id
+        let b = store.createNote(in: nil, initial: NSAttributedString(string: "Other\nbody")).id
+        try store.persistNow(a)
+        try store.persistNow(b)
+        store.updateBody(a, NSAttributedString(string: "New title\nbody"))
+        try store.persistNow(b)
+        try store.persistNow(a)
+        XCTAssertEqual(makeStore().note(with: a)?.title, "New title")
+    }
+
     func testPersistNowCommitsStagedSnapshot() throws {
         let store = makeStore()
         let id = store.createNote(in: nil, initial: NSAttributedString(string: "First")).id

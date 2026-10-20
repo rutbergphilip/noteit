@@ -1061,6 +1061,8 @@ final class NoteStore: ObservableObject {
                 libraryDirty = true
                 searchIndexDirty = true
             }
+            // A library save while the body was dirty wrote this note's old metadata.
+            if persistedMeta[id] != meta { libraryDirty = true }
             return true
         } catch {
             let episodeStart = failedBodies.insert(id).inserted
