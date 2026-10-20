@@ -444,6 +444,7 @@ Moved to foundations (docs/plans/2026-10-19-foundations.md), program §2 step 4.
 
 - [ ] Tests (extend `LibraryLauncherTests`): missing file → `.rtfd` at the data dir (today's decision unchanged); a valid Markdown file → `format == .markdown` and `contentRootURL` set; a bookmark that resolves to a moved folder updates `path`; a content folder that doesn't exist → decision `.contentRootMissing(URL)`; a corrupt file → `.rtfd` plus a logged error, and the corrupt file is renamed `library-location.json.bad`.
 - [ ] `LibraryLocation.url` stays the data folder (`NoteStore.rootURL`); the Markdown folder is `contentRootURL`. `renameFilesOnTitleChange` defaults to `true` when missing.
+- [ ] `LibraryLauncher.launch` handles `.contentRootMissing(URL)`: it shows "NoteIt can't find your library folder" with the path and a **Quit** button, then quits; it never creates or opens an empty library in its place. **Locate…** is added with the watcher in Task 4.2. A Markdown library is never seeded (`seedsFreshLibrary` is false).
 - [ ] Implement; `LibraryLauncher` calls `LibraryConverter.finishInterrupted(dataDir:)` (stub returning immediately until Task 5.1).
 - [ ] Verify: `swift test --filter LibraryLauncherTests` → 0 failures; `swift build` → `Build complete!`.
 

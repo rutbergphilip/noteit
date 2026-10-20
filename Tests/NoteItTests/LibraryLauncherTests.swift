@@ -9,11 +9,13 @@ final class LibraryLauncherTests: XCTestCase {
     private var base: URL!
     private let fm = FileManager.default
     private var logged: [String] = []
+    private var missingAlerts: [URL] = []
 
     override func setUpWithError() throws {
         base = fm.temporaryDirectory.appendingPathComponent("noteit-launch-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
         logged = []
+        missingAlerts = []
     }
 
     override func tearDownWithError() throws {
@@ -35,7 +37,8 @@ final class LibraryLauncherTests: XCTestCase {
             baseDirectory: { base },
             isLegacyAppRunning: running,
             quitLegacyApp: quit,
-            log: { [weak self] in self?.logged.append($0) }
+            log: { [weak self] in self?.logged.append($0) },
+            showContentRootMissing: { [weak self] in self?.missingAlerts.append($0) }
         )
     }
 
@@ -187,6 +190,84 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertEqual(again?.rootURL, current)
         XCTAssertNotNil(again?.note(with: id))
         XCTAssertEqual(titles(again), expected, "nothing seeded on top")
+    }
+
+    // MARK: - library-location.json
+
+    private var dataDir: URL { base.appendingPathComponent("data", isDirectory: true) }
+
+    private func writeLocationFile(_ file: LibraryLocationFile) throws {
+        try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        try file.write(dataDir: dataDir)
+    }
+
+    private func markdownFile(at folder: URL, bookmark: Data? = nil) -> LibraryLocationFile {
+        LibraryLocationFile(format: .markdown, path: LibraryLocationFile.displayPath(folder), bookmark: bookmark,
+                            libraryID: UUID())
+    }
+
+    func testMissingLocationFileOpensRTFDInDataFolder() {
+        XCTAssertEqual(launcher(override: dataDir.path).decide(),
+                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: true, format: .rtfd, contentRootURL: nil)))
+        XCTAssertTrue(logged.isEmpty)
+    }
+
+    func testMarkdownLocationFileOpensContentFolder() throws {
+        let content = base.appendingPathComponent("Markdown Notes", isDirectory: true)
+        try fm.createDirectory(at: content, withIntermediateDirectories: true)
+        try writeLocationFile(markdownFile(at: content))
+        XCTAssertEqual(launcher(override: dataDir.path).decide(),
+                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: false, format: .markdown, contentRootURL: content)))
+    }
+
+    func testRenameFilesOnTitleChangeDefaultsToTrue() throws {
+        let json = #"{"version":1,"format":"markdown","path":"~/Documents/NoteIt","libraryID":"6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11"}"#
+        let file = try JSONDecoder().decode(LibraryLocationFile.self, from: Data(json.utf8))
+        XCTAssertTrue(file.renameFilesOnTitleChange)
+        XCTAssertNil(file.bookmark)
+        XCTAssertEqual(file.contentRootURL.path, NSHomeDirectory() + "/Documents/NoteIt")
+    }
+
+    func testBookmarkFollowsMovedFolderAndUpdatesPath() throws {
+        let original = base.appendingPathComponent("Notes", isDirectory: true)
+        try fm.createDirectory(at: original, withIntermediateDirectories: true)
+        let bookmark = try original.bookmarkData()
+        try writeLocationFile(markdownFile(at: original, bookmark: bookmark))
+        let moved = base.appendingPathComponent("Renamed Notes", isDirectory: true)
+        try fm.moveItem(at: original, to: moved)
+
+        guard case .open(let location) = launcher(override: dataDir.path).decide() else { return XCTFail("not opened") }
+        XCTAssertEqual(location.format, .markdown)
+        XCTAssertEqual(location.contentRootURL?.resolvingSymlinksInPath().path, moved.resolvingSymlinksInPath().path)
+        let saved = try XCTUnwrap(LibraryLocationFile.load(dataDir: dataDir))
+        XCTAssertEqual(saved.contentRootURL.resolvingSymlinksInPath().path, moved.resolvingSymlinksInPath().path)
+    }
+
+    func testMissingContentFolderIsReportedAndNothingIsOpened() throws {
+        let content = base.appendingPathComponent("Gone", isDirectory: true)
+        try writeLocationFile(markdownFile(at: content))
+        let launcher = launcher(override: dataDir.path)
+        XCTAssertEqual(launcher.decide(), .contentRootMissing(content))
+
+        let before = try snapshot()
+        var quitCalled = 0, opened = 0
+        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore(location: $0) }, quit: { quitCalled += 1 })
+        XCTAssertNil(store)
+        XCTAssertEqual(opened, 0)
+        XCTAssertEqual(quitCalled, 1)
+        XCTAssertEqual(missingAlerts, [content])
+        XCTAssertEqual(try snapshot(), before, "no library created in its place")
+    }
+
+    func testCorruptLocationFileOpensRTFDAndIsSetAside() throws {
+        try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let url = dataDir.appendingPathComponent(LibraryLocationFile.fileName)
+        try Data("{ not json".utf8).write(to: url)
+        XCTAssertEqual(launcher(override: dataDir.path).decide(),
+                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: true)))
+        XCTAssertEqual(logged.count, 1)
+        XCTAssertFalse(fm.fileExists(atPath: url.path))
+        XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("bad")), Data("{ not json".utf8))
     }
 
     // MARK: - Store seed decision
