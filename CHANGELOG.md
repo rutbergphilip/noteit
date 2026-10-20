@@ -7,6 +7,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+- Synced notes are now stored in a `noteit` folder in your sync folder or bucket instead of `inkwell`. The first time a Mac on this version connects, it copies the existing `inkwell` store over, still encrypted, and leaves the old folder in place. Update every Mac that syncs: Macs on an older version keep syncing with the old `inkwell` folder only. Once all of them are updated, you can delete the `inkwell` folder and the `.inkwell-lock` file.
+
+### Fixed
+
+- Notes in the list no longer show up squashed to a single clipped line after sync changes them.
+- Note previews no longer show invisible control characters from pasted text.
+
 ## [0.3.0] - 2026-10-19
 
 ### Added

@@ -137,10 +137,10 @@ The full design, including the decision table, remote format and the reasoning b
   - `NoteStoreSyncAdapter` connects the engine to the store. It does the heavy file work off the main thread, and it refuses to apply a remote change to a note you've edited since the pass started, so the next pass turns it into a conflict copy instead.
   - `SyncController` owns scheduling and status. Nothing runs until sync is set up. After that it syncs every 60 s while NoteIt is in use, every 10 minutes in the background, 2 s after a local edit (at most 10 s), shortly after waking from sleep, and on **Sync Now**. Failures back off from 15 s up to 10 minutes.
 - **Secrets** are stored in the Keychain under the service `io.github.rutbergphilip.noteit.sync`, with the accounts `s3-access-key`, `s3-secret` and `passphrase`. Folders are remembered as security-scoped bookmarks.
-- **Remote layout.** Everything goes under `inkwell/v1/` in the chosen folder or bucket. `inkwell` is the protocol name from before the rename, and it must stay that way.
+- **Remote layout.** Everything goes under `noteit/v1/` in the chosen folder or bucket. Stores created before the rename live under `inkwell/v1/`. The first time a device connects to one of those, `RemoteMigration` copies it byte for byte to `noteit/v1/`, with the manifest last, and leaves the old folder in place. From then on, Macs still running Inkwell or NoteIt 0.3.0 or earlier sync with the old folder only.
 
   ```text
-  inkwell/v1/
+  noteit/v1/
   ├── manifest.json            format version and encryption parameters; never encrypted
   ├── notebooks/<id>.json      notebook record
   ├── notes/<id>.meta          note metadata, including the hash of the body it expects

@@ -1,13 +1,13 @@
 import Foundation
 
 public enum RemoteLayout {
-    // "inkwell" is the legacy protocol name (from before NoteIt); it is part of the wire format and must stay.
-    public static let folder = "inkwell"
+    public static let folder = "noteit"
     public static let root = folder + "/v1/"
+    /// Where Inkwell (NoteIt's former name) kept the store. Read only to migrate it (see `RemoteMigration`).
+    public static let legacyRoot = "inkwell/v1/"
     /// Throwaway objects written to probe conditional-write support (S3 only).
     public static let canaryPrefix = folder + "/.canary/"
-    // Legacy bytes, kept so the probe stays identical for remote stores shared with Inkwell.
-    public static let canaryMismatchETag = "inkwell-canary-mismatch"
+    public static let canaryMismatchETag = "noteit-canary-mismatch"
     // Legacy bytes: seeds every note's content revision, which is synced. Changing it forces a full re-sync.
     public static let revisionHashSeed = "inkwell-revision-v1"
 

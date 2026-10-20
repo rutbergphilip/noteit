@@ -390,29 +390,32 @@ final class AppEnvironmentTests: XCTestCase {
 
 }
 
-/// Frozen sync wire identifiers from before the rename. Remote stores written by Inkwell must keep working.
+/// Sync wire identifiers. Stores created by Inkwell use `inkwell/v1/` and are copied over (see `RemoteMigrationTests`).
 final class WireIdentifierTests: XCTestCase {
-    func testFrozenWireIdentifiers() async throws {
-        XCTAssertEqual(RemoteLayout.folder, "inkwell")
-        XCTAssertEqual(RemoteLayout.root, "inkwell/v1/")
-        XCTAssertEqual(RemoteLayout.manifest(), "inkwell/v1/manifest.json")
-        XCTAssertEqual(RemoteLayout.canaryPrefix, "inkwell/.canary/")
-        XCTAssertEqual(RemoteLayout.canaryMismatchETag, "inkwell-canary-mismatch")
-        XCTAssertEqual(SyncEngine.keyCheckPlaintext, Data("inkwell-key-check".utf8))
-        XCTAssertEqual(FolderBackend.lockFileName, ".inkwell-lock")
+    func testWireIdentifiers() async throws {
+        XCTAssertEqual(RemoteLayout.folder, "noteit")
+        XCTAssertEqual(RemoteLayout.root, "noteit/v1/")
+        XCTAssertEqual(RemoteLayout.legacyRoot, "inkwell/v1/")
+        XCTAssertEqual(RemoteLayout.manifest(), "noteit/v1/manifest.json")
+        XCTAssertEqual(RemoteLayout.canaryPrefix, "noteit/.canary/")
+        XCTAssertEqual(RemoteLayout.canaryMismatchETag, "noteit-canary-mismatch")
+        XCTAssertEqual(SyncEngine.keyCheckPlaintext, Data("noteit-key-check".utf8))
+        XCTAssertEqual(SyncEngine.legacyKeyCheckPlaintext, Data("inkwell-key-check".utf8))
+        XCTAssertEqual(FolderBackend.lockFileName, ".noteit-lock")
+        // Seeds every synced revision; changing it would make every note look edited on every device.
         XCTAssertEqual(RemoteLayout.revisionHashSeed, "inkwell-revision-v1")
 
-        // On disk: the folder backend locks `.inkwell-lock` and skips Finder's `inkwell/.Trash`.
+        // On disk: the folder backend locks `.noteit-lock` and skips Finder's `noteit/.Trash`.
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("noteit-wire-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let backend = FolderBackend(root: root)
-        try await backend.put("inkwell/v1/notes/a.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".inkwell-lock").path))
-        let trash = root.appendingPathComponent("inkwell/.Trash", isDirectory: true)
+        try await backend.put("noteit/v1/notes/a.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(".noteit-lock").path))
+        let trash = root.appendingPathComponent("noteit/.Trash", isDirectory: true)
         try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
         try Data([1]).write(to: trash.appendingPathComponent("x"))
         let keys = try await backend.list(prefix: "").map(\.key)
-        XCTAssertEqual(keys, ["inkwell/v1/notes/a.meta"])
+        XCTAssertEqual(keys, ["noteit/v1/notes/a.meta"])
     }
 }

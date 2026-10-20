@@ -9,8 +9,8 @@ public struct Manifest: Codable, Sendable, Equatable {
     public struct Encryption: Codable, Sendable, Equatable {
         public var salt: Data
         public var iterations: Int
-        /// `seal("inkwell-key-check", context: "manifest")` with the derived key; used to verify a passphrase.
-        /// The plaintext keeps the legacy protocol name so existing manifests still verify.
+        /// `seal("noteit-key-check", context: "manifest")` with the derived key; used to verify a passphrase.
+        /// Stores created by Inkwell seal `"inkwell-key-check"` instead, which is still accepted.
         public var keyCheck: Data
 
         public init(salt: Data, iterations: Int, keyCheck: Data) {

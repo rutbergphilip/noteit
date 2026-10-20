@@ -61,7 +61,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter Liv
 
 ## Pull requests
 
-- **Sync, crypto or storage changes need tests.** Add or update cases in `Tests/NoteItSyncTests/`. Planner changes need a row in the decision-table tests. Changes to the on-disk or remote format must stay readable by existing libraries, or bump the format version deliberately and explain why. The `inkwell` in remote names (`inkwell/v1/`, `inkwell/.canary/`, `.inkwell-lock`, the key-check plaintext) is the protocol name from before the rename to NoteIt; don't change it.
+- **Sync, crypto or storage changes need tests.** Add or update cases in `Tests/NoteItSyncTests/`. Planner changes need a row in the decision-table tests. Changes to the on-disk or remote format must stay readable by existing libraries, or bump the format version deliberately and explain why. Stores written before the rename to NoteIt live under `inkwell/v1/` and are copied to `noteit/v1/` on connect (`RemoteMigration`), and manifests sealing the `inkwell-key-check` plaintext still verify. `RemoteLayout.revisionHashSeed` keeps its `inkwell` value on purpose: changing it would give every note a new revision on every device.
 - **UI changes need screenshots.** Include light and dark mode where relevant, and before and after shots if it's a change.
 - **Check the build and tests:** `swift build` and `swift test` must pass.
 - **Add user-facing changes to the changelog** as a bullet under `## [Unreleased]` in [CHANGELOG.md](CHANGELOG.md).

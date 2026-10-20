@@ -61,8 +61,9 @@ public enum SyncError: Error, Equatable, Sendable {
 ///   which every device resolves as "finish the deletion".
 /// - resurrectPush: delete the tombstone first, then push.
 public actor SyncEngine {
-    // Legacy protocol name: existing manifests seal exactly these bytes, so it must stay.
-    static let keyCheckPlaintext = Data("inkwell-key-check".utf8)
+    static let keyCheckPlaintext = Data("noteit-key-check".utf8)
+    /// What stores created by Inkwell (NoteIt's former name) sealed; still accepted when verifying a passphrase.
+    static let legacyKeyCheckPlaintext = Data("inkwell-key-check".utf8)
     static let keyCheckContext = "manifest"
     static let iterationRange = 100_000...10_000_000
     static let defaultIterations = 210_000
@@ -140,6 +141,7 @@ public actor SyncEngine {
 
     static func connectReportingCreation(backend: StorageBackend, passphrase: String?, encryptNew: Bool, makeCipher: CipherFactory) async throws
         -> (manifest: Manifest, cipher: SyncCipher, created: Bool) {
+        try await RemoteMigration.migrateLegacyStoreIfNeeded(backend)
         if let existing = try await readManifest(backend) {
             return (existing, try openExisting(existing, passphrase: passphrase, encryptNew: encryptNew, makeCipher: makeCipher), false)
         }
@@ -192,7 +194,8 @@ public actor SyncEngine {
         guard !encryption.keyCheck.isEmpty else { throw SyncError.invalidManifest("missing key check") }
         guard let passphrase, !passphrase.isEmpty else { throw SyncError.passphraseRequired }
         let cipher = try makeCipher(passphrase, encryption.salt, encryption.iterations)
-        guard (try? cipher.open(encryption.keyCheck, context: keyCheckContext)) == keyCheckPlaintext else { throw SyncError.wrongPassphrase }
+        let check = try? cipher.open(encryption.keyCheck, context: keyCheckContext)
+        guard check == keyCheckPlaintext || check == legacyKeyCheckPlaintext else { throw SyncError.wrongPassphrase }
         return cipher
     }
 
@@ -465,6 +468,13 @@ public actor SyncEngine {
             state.bases[id] = .init(revision: envelope.revision, remoteMetaETag: remote.etag, bodyETag: owned ? bodyETag : nil)
             state.pendingPushes[id] = nil
             try saveState()
+            return
+        }
+
+        // Same revision as our base under a new etag (the store was copied, e.g. from `inkwell/v1/`):
+        // the remote never changed, so this is a plain push.
+        if let base = state.bases[id], base.revision == envelope.revision {
+            try await push(id, kind: kind, remoteETag: remote.etag, pass)
             return
         }
 
