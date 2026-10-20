@@ -23,6 +23,9 @@ struct NoteListView: View {
         case .recentlyDeleted: return "Recently Deleted"
         case .notebook(let id): return store.notebook(with: id)?.name ?? "Notebook"
         case .tag(let tag): return "#\(tag)"
+        case .today: return "Today"
+        case .tasks: return "Tasks"
+        case .smartFolder: return "Smart Folder"
         }
     }
 

@@ -185,6 +185,8 @@ final class NoteStore: ObservableObject {
             filtered = active.filter { $0.notebookID == id }
         case .tag(let tag):
             filtered = active.filter { $0.tags.contains(tag) }
+        case .today, .tasks, .smartFolder:
+            filtered = []
         }
 
         let terms = Self.fold(search).split(whereSeparator: \.isWhitespace)
@@ -500,7 +502,7 @@ final class NoteStore: ObservableObject {
             notebookID = id
         case .pinned, .conflicts, .recentlyDeleted, .tag, .none:
             selection = .allNotes
-        case .allNotes, .recent:
+        case .allNotes, .recent, .today, .tasks, .smartFolder:
             break
         }
         searchText = ""

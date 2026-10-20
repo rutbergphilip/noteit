@@ -1,44 +1,8 @@
 import AppKit
 import SwiftUI
 
-struct Notebook: Identifiable, Codable, Hashable {
-    var id: UUID
-    var name: String
-    var symbol: String
-    var colorHex: String
-    var sortIndex: Int
-    var revision: UUID? = nil
-    var modifiedAt: Date? = nil
-}
-
-struct NoteMeta: Identifiable, Codable, Hashable {
-    var id: UUID
-    var notebookID: UUID?
-    var title: String
-    var preview: String
-    var isPinned: Bool
-    var createdAt: Date
-    var updatedAt: Date
-    var tags: [String]
-    var revision: UUID? = nil
-    /// Device name when this note is a sync conflict copy.
-    var conflictSource: String? = nil
-    /// The note this conflict copy was made from.
-    var conflictOriginalID: UUID? = nil
-    /// Set while the note is in Recently Deleted.
-    var deletedAt: Date? = nil
-}
-
-enum SidebarSelection: Hashable {
-    case allNotes, pinned, recent, conflicts, recentlyDeleted, notebook(UUID), tag(String)
-}
-
 extension Notebook {
     var color: Color { Color(hex: colorHex) }
-}
-
-extension NoteMeta {
-    var displayTitle: String { title.isEmpty ? "New Note" : title }
 }
 
 extension Color {
@@ -69,18 +33,4 @@ extension NSColor {
         }
         self.init(srgbRed: r, green: g, blue: b, alpha: a)
     }
-}
-
-/// Curated palette and symbols used by the notebook editor.
-enum NotebookPalette {
-    static let colors: [String] = Tokens.Hex.notebookPalette
-
-    static let symbols: [String] = [
-        "tray", "command", "lightbulb", "book", "bookmark", "folder",
-        "doc.text", "pencil", "star", "heart", "flag", "tag",
-        "briefcase", "house", "cart", "graduationcap", "hammer", "wrench.and.screwdriver",
-        "paintbrush", "music.note", "film", "camera", "airplane", "globe",
-        "leaf", "flame", "bolt", "brain.head.profile", "terminal", "chevron.left.forwardslash.chevron.right",
-        "person.2", "calendar",
-    ]
 }

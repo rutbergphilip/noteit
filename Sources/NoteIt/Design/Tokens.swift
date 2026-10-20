@@ -81,10 +81,7 @@ enum Tokens {
         static let notebookGray = "#8E8E93"
 
         /// The 10 notebook swatches, in picker order.
-        static let notebookPalette: [String] = [
-            notebookBlue, notebookIndigo, notebookPurple, notebookPink, notebookRed,
-            notebookOrange, notebookYellow, notebookGreen, notebookTeal, notebookGray,
-        ]
+        static let notebookPalette: [String] = NotebookPalette.colors
 
         static let brandViolet = "#6E5BFF"
         static let brandDeep = "#1E2470"
