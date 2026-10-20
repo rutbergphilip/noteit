@@ -47,6 +47,16 @@ final class AutomationServiceTests: XCTestCase {
         }
     }
 
+    private func assertThrows<T>(_ expected: AutomationError, _ body: () async throws -> T, file: StaticString = #filePath,
+                                 line: UInt = #line) async {
+        do {
+            _ = try await body()
+            XCTFail("No error thrown", file: file, line: line)
+        } catch {
+            XCTAssertEqual(error as? AutomationError, expected, file: file, line: line)
+        }
+    }
+
     private func lock(_ store: NoteStore, _ id: UUID) {
         store.notes[store.noteIndex(id)!].lock = NoteLock(keyID: "k1", sealedID: UUID())
     }
@@ -96,28 +106,28 @@ final class AutomationServiceTests: XCTestCase {
 
     // MARK: Append and replace
 
-    func testAppendEndAndStart() throws {
+    func testAppendEndAndStart() async throws {
         let (service, store) = makeService()
         let id = try service.create(title: "Log", body: "first", format: .text, notebook: nil, tags: [], pinned: false).id
-        _ = try service.append(id, text: "last", format: .text, position: .end, timestamp: false, ifRevision: nil)
-        _ = try service.append(id, text: "top", format: .text, position: .start, timestamp: false, ifRevision: nil)
+        _ = try await service.append(id, text: "last", format: .text, position: .end, timestamp: false, ifRevision: nil)
+        _ = try await service.append(id, text: "top", format: .text, position: .start, timestamp: false, ifRevision: nil)
         XCTAssertEqual(store.body(for: id).string, "Log\ntop\nfirst\nlast")
     }
 
-    func testAppendTimestampIs24HourPOSIX() throws {
+    func testAppendTimestampIs24HourPOSIX() async throws {
         let (service, store) = makeService()
         clock = try XCTUnwrap(Calendar.current.date(from: DateComponents(year: 2026, month: 10, day: 19, hour: 21, minute: 5)))
         let id = try service.create(title: "Log", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
-        _ = try service.append(id, text: "late", format: .text, position: .end, timestamp: true, ifRevision: nil)
+        _ = try await service.append(id, text: "late", format: .text, position: .end, timestamp: true, ifRevision: nil)
         XCTAssertEqual(store.body(for: id).string, "Log\n21:05 late")
     }
 
-    func testReplaceRecordsVersionHistory() throws {
+    func testReplaceRecordsVersionHistory() async throws {
         let (service, store) = makeService()
         let closed = try service.create(title: "Closed", body: "old", format: .text, notebook: nil, tags: [], pinned: false).id
         store.flush()
         let before = store.versions(of: closed).count
-        _ = try service.patch(closed, title: nil, body: ("new", .text), notebookID: nil, pinned: nil, ifRevision: nil)
+        _ = try await service.patch(closed, title: nil, body: ("new", .text), notebookID: nil, pinned: nil, ifRevision: nil)
         XCTAssertEqual(store.versions(of: closed).count, before + 1)
         XCTAssertEqual(store.body(for: closed).string, "new")
 
@@ -125,29 +135,29 @@ final class AutomationServiceTests: XCTestCase {
         store.flush()
         let editor = harness.open(store, open)
         let openBefore = store.versions(of: open).count
-        _ = try service.patch(open, title: nil, body: ("fresh", .text), notebookID: nil, pinned: nil, ifRevision: nil)
+        _ = try await service.patch(open, title: nil, body: ("fresh", .text), notebookID: nil, pinned: nil, ifRevision: nil)
         EditorHarness.settle(editor.view.undoManager)
         XCTAssertEqual(store.versions(of: open).count, openBefore + 1)
         XCTAssertEqual(editor.view.string, "fresh")
     }
 
-    func testAppendRecordsNoVersion() throws {
+    func testAppendRecordsNoVersion() async throws {
         let (service, store) = makeService()
         let id = try service.create(title: "Log", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
         store.flush()
         var recorded = 0
         store.recordVersionOverride = { _, _ in recorded += 1; return nil }
-        _ = try service.append(id, text: "line", format: .text, position: .end, timestamp: false, ifRevision: nil)
+        _ = try await service.append(id, text: "line", format: .text, position: .end, timestamp: false, ifRevision: nil)
         XCTAssertEqual(recorded, 0)
     }
 
-    func testEditsGoThroughEditBody() throws {
+    func testEditsGoThroughEditBody() async throws {
         let (service, store) = makeService()
         let id = try service.create(title: "Title", body: "body", format: .text, notebook: nil, tags: [], pinned: false).id
         store.flush()
         let editor = harness.open(store, id)
         let undo = try XCTUnwrap(editor.view.undoManager)
-        _ = try service.append(id, text: "more", format: .text, position: .end, timestamp: false, ifRevision: nil)
+        _ = try await service.append(id, text: "more", format: .text, position: .end, timestamp: false, ifRevision: nil)
         EditorHarness.settle(undo)
         XCTAssertEqual(editor.view.string, "Title\nbody\nmore")
         XCTAssertEqual(undo.undoActionName, "Append Text")
@@ -155,16 +165,16 @@ final class AutomationServiceTests: XCTestCase {
         XCTAssertEqual(editor.view.string, "Title\nbody")
     }
 
-    func testPatchRevisionMismatch() throws {
+    func testPatchRevisionMismatch() async throws {
         let (service, _) = makeService()
         let meta = try service.create(title: "A", body: "", format: .text, notebook: nil, tags: [], pinned: false)
-        assertThrows(.revisionMismatch(current: meta.revision)) {
-            try service.patch(meta.id, title: "B", body: nil, notebookID: nil, pinned: nil, ifRevision: UUID())
+        await assertThrows(.revisionMismatch(current: meta.revision)) {
+            try await service.patch(meta.id, title: "B", body: nil, notebookID: nil, pinned: nil, ifRevision: UUID())
         }
-        assertThrows(.revisionMismatch(current: meta.revision)) {
-            try service.append(meta.id, text: "x", format: .text, position: .end, timestamp: false, ifRevision: UUID())
+        await assertThrows(.revisionMismatch(current: meta.revision)) {
+            try await service.append(meta.id, text: "x", format: .text, position: .end, timestamp: false, ifRevision: UUID())
         }
-        let patched = try service.patch(meta.id, title: "B", body: nil, notebookID: nil, pinned: nil, ifRevision: meta.revision)
+        let patched = try await service.patch(meta.id, title: "B", body: nil, notebookID: nil, pinned: nil, ifRevision: meta.revision)
         XCTAssertEqual(patched.title, "B")
         XCTAssertNotEqual(patched.revision, meta.revision)
     }
@@ -179,8 +189,11 @@ final class AutomationServiceTests: XCTestCase {
                                         isLoading: { false })
         XCTAssertNil(store.note(with: first)?.revision, "creating the service assigns nothing")
 
-        XCTAssertThrowsError(try service.append(first, text: "x", format: .text, position: .end, timestamp: false, ifRevision: UUID())) {
-            guard case .revisionMismatch(let current) = $0 as? AutomationError else { return XCTFail("\($0)") }
+        do {
+            _ = try await service.append(first, text: "x", format: .text, position: .end, timestamp: false, ifRevision: UUID())
+            XCTFail("No error thrown")
+        } catch {
+            guard case .revisionMismatch(let current) = error as? AutomationError else { return XCTFail("\(error)") }
             XCTAssertNotNil(current)
         }
         XCTAssertNil(store.note(with: second)?.revision)
@@ -190,17 +203,43 @@ final class AutomationServiceTests: XCTestCase {
         XCTAssertNotNil(store.note(with: third)?.revision)
     }
 
-    func testWritesToRecentlyDeletedNoteThrow() throws {
+    /// The lazy revision is hashed off the main actor; a note changed meanwhile keeps no revision and doesn't match.
+    func testLazyRevisionSkipsNoteChangedWhileHashing() async throws {
+        let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
+        let id = store.createNote(in: nil, initial: NSAttributedString(string: "One")).id
+        store.notes[store.noteIndex(id)!].revision = nil
+        let other = store.createNote(in: nil, initial: NSAttributedString(string: "Two")).id
+        store.notes[store.noteIndex(other)!].revision = nil
+        let service = AutomationService(store: store, defaults: defaults, staged: StagedUploads(directory: root.appendingPathComponent("staged")),
+                                        isLoading: { false })
+        let input = try XCTUnwrap(store.missingRevisionInput(forNote: id))
+        let expected = try XCTUnwrap(NoteStore.contentRevisions(for: [input])[id])
+
+        let append = Task { try await service.append(id, text: "x", format: .text, position: .end, timestamp: false, ifRevision: expected) }
+        await Task.yield()
+        store.notes[store.noteIndex(id)!].title = "Changed"
+        do {
+            _ = try await append.value
+            XCTFail("appended to a note changed while its revision was hashed")
+        } catch {
+            XCTAssertEqual(error as? AutomationError, .revisionMismatch(current: nil))
+        }
+        XCTAssertNil(store.note(with: id)?.revision)
+        XCTAssertNil(store.note(with: other)?.revision, "only the compared note is hashed")
+        XCTAssertEqual(store.body(for: id).string, "One")
+    }
+
+    func testWritesToRecentlyDeletedNoteThrow() async throws {
         let (service, _) = makeService()
         let id = try service.create(title: "A", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
         try service.moveToRecentlyDeleted(id)
-        assertThrows(.noteDeleted) { try service.append(id, text: "x", format: .text, position: .end, timestamp: false, ifRevision: nil) }
-        assertThrows(.noteDeleted) { try service.patch(id, title: "B", body: nil, notebookID: nil, pinned: nil, ifRevision: nil) }
+        await assertThrows(.noteDeleted) { try await service.append(id, text: "x", format: .text, position: .end, timestamp: false, ifRevision: nil) }
+        await assertThrows(.noteDeleted) { try await service.patch(id, title: "B", body: nil, notebookID: nil, pinned: nil, ifRevision: nil) }
         assertThrows(.noteDeleted) { try service.addAttachment(to: id, data: Data([1]), filename: "a.bin", contentType: "") }
         XCTAssertNil(try service.restore(id).deletedAt)
     }
 
-    func testLockedNoteBodyThrowsAndPreviewIsEmpty() throws {
+    func testLockedNoteBodyThrowsAndPreviewIsEmpty() async throws {
         let (service, store) = makeService()
         let id = try service.create(title: "Secret plans", body: "hidden words", format: .text, notebook: nil, tags: [], pinned: false).id
         lock(store, id)
@@ -210,8 +249,8 @@ final class AutomationServiceTests: XCTestCase {
         for format in [BodyFormatDTO.text, .markdown, .html, .noteitDoc] {
             assertThrows(.noteLocked) { try service.body(id, format: format) }
         }
-        assertThrows(.noteLocked) { try service.append(id, text: "x", format: .text, position: .end, timestamp: false, ifRevision: nil) }
-        assertThrows(.noteLocked) { try service.patch(id, title: "New", body: nil, notebookID: nil, pinned: nil, ifRevision: nil) }
+        await assertThrows(.noteLocked) { try await service.append(id, text: "x", format: .text, position: .end, timestamp: false, ifRevision: nil) }
+        await assertThrows(.noteLocked) { try await service.patch(id, title: "New", body: nil, notebookID: nil, pinned: nil, ifRevision: nil) }
         assertThrows(.noteLocked) { try service.attachments(of: id) }
         assertThrows(.noteLocked) { try service.addAttachment(to: id, data: Data([1]), filename: "a", contentType: "") }
         XCTAssertTrue(try service.search("hidden", notebook: nil, tag: nil, limit: 10).isEmpty)
@@ -245,11 +284,11 @@ final class AutomationServiceTests: XCTestCase {
         XCTAssertNil(service.findByTitle("New Note"), "an untitled note never matches")
     }
 
-    func testSetTitleKeepsAttributes() throws {
+    func testSetTitleKeepsAttributes() async throws {
         let (service, store) = makeService()
         let id = try service.create(title: "Old title", body: "body", format: .text, notebook: nil, tags: [], pinned: false).id
         let font = store.body(for: id).attribute(.font, at: 0, effectiveRange: nil) as? NSFont
-        let meta = try service.patch(id, title: "New", body: nil, notebookID: nil, pinned: nil, ifRevision: nil)
+        let meta = try await service.patch(id, title: "New", body: nil, notebookID: nil, pinned: nil, ifRevision: nil)
         XCTAssertEqual(meta.title, "New")
         let body = store.body(for: id)
         XCTAssertEqual(body.string, "New\nbody")
@@ -387,18 +426,18 @@ final class AutomationServiceTests: XCTestCase {
         }
     }
 
-    func testTextLimitIsEnforced() throws {
+    func testTextLimitIsEnforced() async throws {
         let (service, _) = makeService()
         let big = String(repeating: "a", count: AutomationService.maxTextBytes + 1)
         assertThrows(.tooLarge) { try service.create(title: nil, body: big, format: .text, notebook: nil, tags: [], pinned: false) }
         assertThrows(.tooLarge) { try service.create(title: nil, body: big, format: .markdown, notebook: nil, tags: [], pinned: false) }
         let id = try service.create(title: "A", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
-        assertThrows(.tooLarge) { try service.append(id, text: big, format: .text, position: .end, timestamp: false, ifRevision: nil) }
+        await assertThrows(.tooLarge) { try await service.append(id, text: big, format: .text, position: .end, timestamp: false, ifRevision: nil) }
         XCTAssertNoThrow(try service.create(title: nil, body: String(big.dropFirst()), format: .text, notebook: nil, tags: [],
                                             pinned: false))
     }
 
-    func testTextLimitCountsTitleBodyAndTagsTogether() throws {
+    func testTextLimitCountsTitleBodyAndTagsTogether() async throws {
         let (service, _) = makeService()
         let half = String(repeating: "a", count: AutomationService.maxTextBytes / 2 + 1)
         assertThrows(.tooLarge) { try service.create(title: half, body: half, format: .text, notebook: nil, tags: [], pinned: false) }
@@ -406,10 +445,10 @@ final class AutomationServiceTests: XCTestCase {
         assertThrows(.tooLarge) { try service.create(title: half, body: half, format: .markdown, notebook: .name("Nope"), tags: [],
                                                      pinned: false) }
         let id = try service.create(title: "A", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
-        assertThrows(.tooLarge) { try service.patch(id, title: half, body: (half, .text), notebookID: nil, pinned: nil, ifRevision: nil) }
+        await assertThrows(.tooLarge) { try await service.patch(id, title: half, body: (half, .text), notebookID: nil, pinned: nil, ifRevision: nil) }
     }
 
-    func testMarkdownRoundTripThroughNoteItMarkdown() throws {
+    func testMarkdownRoundTripThroughNoteItMarkdown() async throws {
         let (service, store) = makeService()
         let staged = try service.staged.stage(pngData())
         let markdown = "# Plan\n\nSome **bold** text\n\n- one\n- two\n\n![pic.png](noteit-attachment:\(staged.id))\n"
@@ -422,7 +461,7 @@ final class AutomationServiceTests: XCTestCase {
 
         service.staged.removeAll()
         let text = store.body(for: id).string
-        _ = try service.patch(id, title: nil, body: (exported, .markdown), notebookID: nil, pinned: nil, ifRevision: nil)
+        _ = try await service.patch(id, title: nil, body: (exported, .markdown), notebookID: nil, pinned: nil, ifRevision: nil)
         XCTAssertEqual(store.body(for: id).string, text)
         XCTAssertEqual(try service.attachments(of: id).map(\.name), ["pic.png"])
         XCTAssertEqual(try service.body(id, format: .markdown), exported)

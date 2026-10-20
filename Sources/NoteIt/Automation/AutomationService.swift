@@ -84,12 +84,12 @@ final class AutomationService {
     }
 
     func patch(_ id: UUID, title: String?, body: (String, BodyFormatDTO)?, notebookID: UUID??, pinned: Bool?,
-               ifRevision: UUID?) throws(AutomationError) -> NoteMeta {
+               ifRevision: UUID?) async throws(AutomationError) -> NoteMeta {
         try ensureReady()
         try Self.checkSize([title ?? "", body?.0 ?? ""])
-        let meta = try existing(id)
+        if try existing(id).deletedAt != nil { throw .noteDeleted }
+        let meta = try await checkRevision(try existing(id), ifRevision)
         if meta.deletedAt != nil { throw .noteDeleted }
-        try checkRevision(meta, ifRevision)
         if let notebookID, let target = notebookID, store.notebook(with: target) == nil { throw .notebookNotFound }
         if title != nil || body != nil {
             if meta.isLocked { throw .noteLocked }
@@ -109,10 +109,9 @@ final class AutomationService {
     }
 
     func append(_ id: UUID, text: String, format: BodyFormatDTO, position: AppendPosition, timestamp: Bool,
-                ifRevision: UUID?) throws(AutomationError) -> NoteMeta {
+                ifRevision: UUID?) async throws(AutomationError) -> NoteMeta {
         try ensureReady()
-        let meta = try existing(id)
-        try checkRevision(meta, ifRevision)
+        _ = try await checkRevision(try existing(id), ifRevision)
         let stamped = timestamp ? Self.timestamp(now()) + " " + text : text
         let addition = try attributedBody(from: stamped, format: format, sameNote: id)
         try edit(id, actionName: "Append Text", versioning: .none) { storage in
@@ -291,16 +290,17 @@ final class AutomationService {
         return (ordered.first { $0.name.caseInsensitiveCompare("Inbox") == .orderedSame } ?? ordered.first)?.id
     }
 
-    /// Compares against the note's revision, first giving a note from before sync its revision.
-    private func checkRevision(_ meta: NoteMeta, _ ifRevision: UUID?) throws(AutomationError) {
-        guard let ifRevision else { return }
-        var current = meta.revision
-        if current == nil {
-            let inputs = store.missingRevisionInputs().filter { $0.id == meta.id }
-            store.assignRevisions(NoteStore.contentRevisions(for: inputs), inputs: inputs)
-            current = store.note(with: meta.id)?.revision
+    /// Compares against the note's revision, first giving a note from before sync its revision (hashing only
+    /// that note's body, off the main actor). Returns the note as it is now, since it may change meanwhile.
+    private func checkRevision(_ meta: NoteMeta, _ ifRevision: UUID?) async throws(AutomationError) -> NoteMeta {
+        guard let ifRevision else { return meta }
+        if meta.revision == nil, let input = store.missingRevisionInput(forNote: meta.id) {
+            let revisions = await Task.detached { NoteStore.contentRevisions(for: [input]) }.value
+            store.assignRevisions(revisions, inputs: [input])
         }
-        if ifRevision != current { throw .revisionMismatch(current: current) }
+        let now = try existing(meta.id)
+        if ifRevision != now.revision { throw .revisionMismatch(current: now.revision) }
+        return now
     }
 
     private func matchingNotes(notebook: NotebookRef?, tag: String?, query: String,

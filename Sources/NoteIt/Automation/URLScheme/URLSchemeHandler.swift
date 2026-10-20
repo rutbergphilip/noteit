@@ -68,13 +68,13 @@ final class URLSchemeHandler: NSObject {
     @objc private func handleGetURL(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
         guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: string) else { return }
-        handle(url)
+        Task { await handle(url) }
     }
 
-    func handle(_ url: URL) {
+    func handle(_ url: URL) async {
         switch URLCommand.parse(url) {
         case .success(let (command, callback)):
-            run(command, callback: callback)
+            await run(command, callback: callback)
         case .failure(let error):
             let failure: AutomationError
             switch error {
@@ -87,7 +87,7 @@ final class URLSchemeHandler: NSObject {
 
     // MARK: Commands
 
-    private func run(_ command: URLCommand, callback: XCallback) {
+    private func run(_ command: URLCommand, callback: XCallback) async {
         do {
             switch command {
             case let .note(id, heading):
@@ -121,7 +121,7 @@ final class URLSchemeHandler: NSObject {
             case let .new(title, text, notebook, tags, open):
                 try create(title: title, text: text, notebook: notebook, tags: tags, open: open, callback: callback)
             case let .append(target, text, position, timestamp):
-                try append(to: target, text: text, position: position, timestamp: timestamp, callback: callback)
+                try await append(to: target, text: text, position: position, timestamp: timestamp, callback: callback)
             case .shareInbox:
                 // Never asks: the user pressed Save in the Share sheet. Importing comes with automation Task 24.
                 throw AutomationError.invalidInput(Self.unknownLinkMessage)
@@ -175,7 +175,7 @@ final class URLSchemeHandler: NSObject {
     }
 
     private func append(to target: URLCommand.AppendTarget, text: String, position: AppendPosition, timestamp: Bool,
-                        callback: XCallback) throws {
+                        callback: XCallback) async throws {
         let meta: NoteMeta
         do {
             meta = try appendTarget(target)
@@ -188,7 +188,7 @@ final class URLSchemeHandler: NSObject {
             try concealFromWeb(error, callback: callback, question: question)
         }
         try askFirst("A link wants to add text to “\(meta.displayTitle)”.")
-        let result = try service.append(meta.id, text: text, format: .text, position: position, timestamp: timestamp,
+        let result = try await service.append(meta.id, text: text, format: .text, position: position, timestamp: timestamp,
                                         ifRevision: nil)
         succeed(callback, note: result)
     }

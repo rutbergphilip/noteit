@@ -47,84 +47,84 @@ final class URLSchemeHandlerTests: XCTestCase {
         return (URLSchemeHandler(service: service, registry: registry ?? URLRouteRegistry(), defaults: defaults, environment: environment), store)
     }
 
-    private func open(_ handler: URLSchemeHandler, _ string: String) {
-        handler.handle(URL(string: string)!)
+    private func open(_ handler: URLSchemeHandler, _ string: String) async {
+        await handler.handle(URL(string: string)!)
     }
 
     private func text(of id: UUID, in store: NoteStore) -> String {
         store.body(for: id).string
     }
 
-    func testNewAsksUnlessSettingOn() {
+    func testNewAsksUnlessSettingOn() async {
         let (handler, store) = makeHandler()
         _ = store.createNotebook(name: "Inbox", symbol: "tray", colorHex: "#0A84FF")
-        open(handler, "noteit://new?title=Hi&text=There")
+        await open(handler, "noteit://new?title=Hi&text=There")
         XCTAssertEqual(questions, ["A link wants to create a note in “Inbox”."])
         XCTAssertEqual(store.notes.filter { $0.title == "Hi" }.count, 1)
         XCTAssertEqual(saved, ["Inbox"])
 
         defaults.set(true, forKey: PrefKey.urlSchemeChangesWithoutAsking)
-        open(handler, "noteit://new?title=Again&open=1")
+        await open(handler, "noteit://new?title=Again&open=1")
         XCTAssertEqual(questions.count, 1)
         XCTAssertEqual(shown.count, 1)
         XCTAssertEqual(saved.count, 1)
     }
 
-    func testAppendAsksUnlessSettingOn() throws {
+    func testAppendAsksUnlessSettingOn() async throws {
         let (handler, store) = makeHandler()
         let id = store.createNote(in: nil, initial: NSAttributedString(string: "Plan\nfirst")).id
-        open(handler, "noteit://append?title=plan&text=second")
+        await open(handler, "noteit://append?title=plan&text=second")
         XCTAssertEqual(questions, ["A link wants to add text to “Plan”."])
         XCTAssertTrue(text(of: id, in: store).hasSuffix("second"))
 
         defaults.set(true, forKey: PrefKey.urlSchemeChangesWithoutAsking)
-        open(handler, "noteit://append?id=\(id.uuidString)&text=third")
+        await open(handler, "noteit://append?id=\(id.uuidString)&text=third")
         XCTAssertEqual(questions.count, 1)
         XCTAssertTrue(text(of: id, in: store).hasSuffix("third"))
     }
 
-    func testDontAllowCallsXCancel() {
+    func testDontAllowCallsXCancel() async {
         let (handler, store) = makeHandler()
         answer = false
-        open(handler, "noteit://x-callback-url/new?text=x&x-success=app://ok&x-cancel=app://cancel")
+        await open(handler, "noteit://x-callback-url/new?text=x&x-success=app://ok&x-cancel=app://cancel")
         XCTAssertEqual(callbacks, [URL(string: "app://cancel")!])
         XCTAssertTrue(store.notes.isEmpty)
     }
 
-    func testShareInboxNeverAsks() {
+    func testShareInboxNeverAsks() async {
         let (handler, _) = makeHandler()
-        open(handler, "noteit://new?inbox=\(UUID().uuidString)")
+        await open(handler, "noteit://new?inbox=\(UUID().uuidString)")
         XCTAssertTrue(questions.isEmpty)
     }
 
-    func testOpenAndSearchNeverAsk() {
+    func testOpenAndSearchNeverAsk() async {
         let (handler, store) = makeHandler()
         let id = store.createNote(in: nil, initial: NSAttributedString(string: "Plan")).id
-        open(handler, "noteit://open?id=\(id.uuidString)")
-        open(handler, "noteit://note/\(id.uuidString)?heading=Later")
-        open(handler, "noteit://open?title=Nothing%20here")
-        open(handler, "noteit://search?q=milk")
-        open(handler, "noteit://settings?tab=integrations")
+        await open(handler, "noteit://open?id=\(id.uuidString)")
+        await open(handler, "noteit://note/\(id.uuidString)?heading=Later")
+        await open(handler, "noteit://open?title=Nothing%20here")
+        await open(handler, "noteit://search?q=milk")
+        await open(handler, "noteit://settings?tab=integrations")
         XCTAssertTrue(questions.isEmpty)
         XCTAssertEqual(shown, [id, id])
         XCTAssertEqual(searches, ["Nothing here", "milk"])
     }
 
-    func testDailyHostsUnavailableWhileGateOff() {
+    func testDailyHostsUnavailableWhileGateOff() async {
         let (handler, _) = makeHandler()
-        open(handler, "noteit://daily")
-        open(handler, "noteit://x-callback-url/append?daily=today&text=x&x-error=app://err")
+        await open(handler, "noteit://daily")
+        await open(handler, "noteit://x-callback-url/append?daily=today&text=x&x-error=app://err")
         XCTAssertEqual(notices, ["Daily notes aren't available in this version."])
         XCTAssertTrue(questions.isEmpty)
         let error = URLComponents(url: try! XCTUnwrap(callbacks.first), resolvingAgainstBaseURL: false)
         XCTAssertEqual(error?.queryItems?.first { $0.name == "errorCode" }?.value, "not_implemented")
     }
 
-    func testHTTPSuccessCallbackHasNoIdOrTitle() {
+    func testHTTPSuccessCallbackHasNoIdOrTitle() async {
         let (handler, _) = makeHandler()
         defaults.set(true, forKey: PrefKey.urlSchemeChangesWithoutAsking)
-        open(handler, "noteit://x-callback-url/new?text=x&x-success=https://example.com/ok")
-        open(handler, "noteit://x-callback-url/new?title=T&x-success=app://ok")
+        await open(handler, "noteit://x-callback-url/new?text=x&x-success=https://example.com/ok")
+        await open(handler, "noteit://x-callback-url/new?title=T&x-success=app://ok")
         XCTAssertEqual(callbacks.count, 2)
         XCTAssertEqual(callbacks[0], URL(string: "https://example.com/ok"))
         let items = URLComponents(url: callbacks[1], resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -132,12 +132,12 @@ final class URLSchemeHandlerTests: XCTestCase {
         XCTAssertEqual(items[1].value, "T")
     }
 
-    func testHTTPErrorCallbackHasNoMessage() {
+    func testHTTPErrorCallbackHasNoMessage() async {
         let (handler, _) = makeHandler()
-        open(handler, "noteit://x-callback-url/open?id=\(UUID().uuidString)&x-error=https://example.com/err")
-        open(handler, "noteit://x-callback-url/open?id=\(UUID().uuidString)&x-error=app://err")
-        open(handler, "noteit://x-callback-url/append?id=\(UUID().uuidString)&text=x&x-error=https://example.com/err")
-        open(handler, "noteit://x-callback-url/append?id=\(UUID().uuidString)&text=x&x-error=app://err")
+        await open(handler, "noteit://x-callback-url/open?id=\(UUID().uuidString)&x-error=https://example.com/err")
+        await open(handler, "noteit://x-callback-url/open?id=\(UUID().uuidString)&x-error=app://err")
+        await open(handler, "noteit://x-callback-url/append?id=\(UUID().uuidString)&text=x&x-error=https://example.com/err")
+        await open(handler, "noteit://x-callback-url/append?id=\(UUID().uuidString)&text=x&x-error=app://err")
         XCTAssertEqual(callbacks.map { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems ?? [] },
                        [[URLQueryItem(name: "errorCode", value: "not_found")],
                         [URLQueryItem(name: "errorCode", value: "not_found"), URLQueryItem(name: "errorMessage", value: "No note with that id.")],
@@ -147,32 +147,32 @@ final class URLSchemeHandlerTests: XCTestCase {
         XCTAssertTrue(notices.isEmpty)
     }
 
-    func testAppendToMissingTitleSaysTitle() {
+    func testAppendToMissingTitleSaysTitle() async {
         let (handler, _) = makeHandler()
-        open(handler, "noteit://x-callback-url/append?title=Nothing&text=x&x-error=app://err")
+        await open(handler, "noteit://x-callback-url/append?title=Nothing&text=x&x-error=app://err")
         let items = URLComponents(url: callbacks[0], resolvingAgainstBaseURL: false)?.queryItems ?? []
         XCTAssertEqual(items.first { $0.name == "errorCode" }?.value, "not_found")
         XCTAssertEqual(items.first { $0.name == "errorMessage" }?.value, "No note with that title.")
     }
 
-    func testLockedNoteRefusesAppendWithoutAsking() {
+    func testLockedNoteRefusesAppendWithoutAsking() async {
         let (handler, store) = makeHandler()
         let id = store.createNote(in: nil, initial: NSAttributedString(string: "Secret")).id
         store.notes[store.noteIndex(id)!].lock = NoteLock(keyID: "k1", sealedID: UUID())
-        open(handler, "noteit://append?id=\(id.uuidString)&text=x")
-        open(handler, "noteit://x-callback-url/append?id=\(id.uuidString)&text=x&x-error=app://err")
+        await open(handler, "noteit://append?id=\(id.uuidString)&text=x")
+        await open(handler, "noteit://x-callback-url/append?id=\(id.uuidString)&text=x&x-error=app://err")
         XCTAssertTrue(questions.isEmpty)
         XCTAssertEqual(notices, ["That note is locked."])
         XCTAssertEqual(URLComponents(url: callbacks[0], resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "note_locked")
 
-        open(handler, "noteit://x-callback-url/append?id=\(id.uuidString)&text=x&x-error=https://example.com/err")
+        await open(handler, "noteit://x-callback-url/append?id=\(id.uuidString)&text=x&x-error=https://example.com/err")
         XCTAssertEqual(questions, ["A link wants to add text to a note."], "a web link asks, as if the note could be changed")
         XCTAssertEqual(callbacks.last, URL(string: "https://example.com/err?errorCode=not_changed"))
         XCTAssertEqual(text(of: id, in: store), "Secret")
     }
 
     /// What a web page sees must not depend on whether the note or notebook exists, or is locked.
-    func testWebCallbacksCantTellWhetherNotesExist() throws {
+    func testWebCallbacksCantTellWhetherNotesExist() async throws {
         let (handler, store) = makeHandler()
         _ = store.createNotebook(name: "Inbox", symbol: "tray", colorHex: "#0A84FF")
         let plain = store.createNote(in: nil, initial: NSAttributedString(string: "Plan")).id
@@ -189,7 +189,7 @@ final class URLSchemeHandlerTests: XCTestCase {
             for link in failing + ["append?id=\(plain.uuidString)&text=x", "new?notebook=Inbox&text=x"] {
                 questions = []
                 callbacks = []
-                open(handler, "noteit://x-callback-url/" + link + web)
+                await open(handler, "noteit://x-callback-url/" + link + web)
                 XCTAssertEqual(questions.count, 1, link)
                 let expected = !allow ? "https://example.com/cancel"
                     : failing.contains(link) ? "https://example.com/err?errorCode=not_changed" : "https://example.com/ok"
@@ -199,20 +199,20 @@ final class URLSchemeHandlerTests: XCTestCase {
         XCTAssertTrue(notices.isEmpty)
     }
 
-    func testRegisteredHostDispatches() {
+    func testRegisteredHostDispatches() async {
         let registry = URLRouteRegistry()
         var received: [URL] = []
         registry.register(host: "join") { received.append($0) }
         let (handler, _) = makeHandler(registry: registry)
-        open(handler, "noteit://join/abc#key")
+        await open(handler, "noteit://join/abc#key")
         XCTAssertEqual(received, [URL(string: "noteit://join/abc#key")!])
         XCTAssertTrue(notices.isEmpty)
     }
 
-    func testUnknownHostShowsNotice() {
+    func testUnknownHostShowsNotice() async {
         let (handler, _) = makeHandler()
-        open(handler, "noteit://nowhere")
-        open(handler, "noteit://bad_host")
+        await open(handler, "noteit://nowhere")
+        await open(handler, "noteit://bad_host")
         XCTAssertEqual(notices, ["NoteIt doesn't know this link.", "NoteIt doesn't know this link."])
     }
 

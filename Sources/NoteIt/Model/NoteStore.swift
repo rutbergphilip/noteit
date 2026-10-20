@@ -1284,6 +1284,12 @@ final class NoteStore: ObservableObject {
         var bodyURL: URL?
     }
 
+    /// The revision input of one note still lacking a revision, or nil.
+    func missingRevisionInput(forNote id: UUID) -> RevisionInput? {
+        guard let meta = note(with: id), meta.revision == nil else { return nil }
+        return RevisionInput(id: id, fields: Self.revisionFields(meta), bodyURL: bodyStorage.revisionInputURL(for: id))
+    }
+
     func missingRevisionInputs() -> [RevisionInput] {
         let noteInputs = notes.filter { $0.revision == nil }.map { meta in
             RevisionInput(id: meta.id, fields: Self.revisionFields(meta), bodyURL: bodyStorage.revisionInputURL(for: meta.id))
