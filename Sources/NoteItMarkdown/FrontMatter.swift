@@ -12,7 +12,7 @@ public struct FrontMatter: Sendable, Equatable {
     public var conflictSource: String?
     /// Written on placeholders only; informational when read (the sealed file decides whether a note is locked).
     public var locked: Bool
-    /// Read only; never written by this sub-project.
+    /// Read only: `written()` ignores it. The `tags:` lines themselves stay in `extra`, so a foreign file keeps them.
     public var tags: [String]
     /// Unknown keys, verbatim and in their original order: lines joined with "\n", no final newline.
     public var extra: String
@@ -99,6 +99,7 @@ public struct FrontMatter: Sendable, Equatable {
                 result.conflictSource = value
             case "tags":
                 result.tags = parseTags(value, continuation: entry.dropFirst().map(\.content))
+                extraLines += entry.map(\.content)
             default:
                 extraLines += entry.map(\.content)
             }

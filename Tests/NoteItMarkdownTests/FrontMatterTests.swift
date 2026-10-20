@@ -71,8 +71,8 @@ final class FrontMatterTests: XCTestCase {
         XCTAssertEqual(flow.tags, ["a", "b"])
         let (block, _) = try FrontMatter.read("---\ntags:\n  - work\n  - \"#home\"\n---\n")
         XCTAssertEqual(block.tags, ["work", "home"])
-        XCTAssertEqual(block.extra, "")
-        XCTAssertFalse(block.written().contains("tags"), "tags are never written")
+        XCTAssertEqual(block.extra, "tags:\n  - work\n  - \"#home\"", "a foreign file keeps its tags verbatim")
+        XCTAssertFalse(FrontMatter(id: UUID(), tags: ["work"]).written().contains("tags"), "the tags property is never written")
     }
 
     func testNoFrontMatterIsEmpty() throws {
