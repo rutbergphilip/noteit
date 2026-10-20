@@ -48,7 +48,7 @@ final class URLSchemeHandlerTests: XCTestCase {
     }
 
     private func open(_ handler: URLSchemeHandler, _ string: String) async {
-        await handler.handle(URL(string: string)!)
+        await handler.handle(URL(string: string)!)?.value
     }
 
     private func text(of id: UUID, in store: NoteStore) -> String {
@@ -81,6 +81,18 @@ final class URLSchemeHandlerTests: XCTestCase {
         await open(handler, "noteit://append?id=\(id.uuidString)&text=third")
         XCTAssertEqual(questions.count, 1)
         XCTAssertTrue(text(of: id, in: store).hasSuffix("third"))
+    }
+
+    /// The modal question must run before the entry point returns, not in a main-actor task that would hold up
+    /// every other main-actor job while it waits for the user.
+    func testAppendAsksBeforeEntryPointReturns() async {
+        let (handler, store) = makeHandler()
+        let id = store.createNote(in: nil, initial: NSAttributedString(string: "Plan")).id
+        let task = handler.handle(URL(string: "noteit://x-callback-url/append?id=\(id.uuidString)&text=more&x-success=app://ok")!)
+        XCTAssertEqual(questions, ["A link wants to add text to “Plan”."])
+        await task?.value
+        XCTAssertTrue(text(of: id, in: store).hasSuffix("more"))
+        XCTAssertEqual(callbacks.map(\.host), ["ok"])
     }
 
     func testDontAllowCallsXCancel() async {

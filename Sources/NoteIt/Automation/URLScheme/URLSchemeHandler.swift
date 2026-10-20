@@ -68,13 +68,16 @@ final class URLSchemeHandler: NSObject {
     @objc private func handleGetURL(_ event: NSAppleEventDescriptor, withReplyEvent reply: NSAppleEventDescriptor) {
         guard let string = event.paramDescriptor(forKeyword: keyDirectObject)?.stringValue,
               let url = URL(string: string) else { return }
-        Task { await handle(url) }
+        handle(url)
     }
 
-    func handle(_ url: URL) async {
+    /// Runs everything up to and including the question synchronously, so the modal alert never runs inside a
+    /// main-actor job. Returns the task that finishes an allowed change, if there is one.
+    @discardableResult
+    func handle(_ url: URL) -> Task<Void, Never>? {
         switch URLCommand.parse(url) {
         case .success(let (command, callback)):
-            await run(command, callback: callback)
+            return run(command, callback: callback)
         case .failure(let error):
             let failure: AutomationError
             switch error {
@@ -82,12 +85,13 @@ final class URLSchemeHandler: NSObject {
             case .unknownHost, .invalid: failure = .invalidInput(Self.unknownLinkMessage)
             }
             report(failure, callback: Self.callbacks(of: url))
+            return nil
         }
     }
 
     // MARK: Commands
 
-    private func run(_ command: URLCommand, callback: XCallback) async {
+    private func run(_ command: URLCommand, callback: XCallback) -> Task<Void, Never>? {
         do {
             switch command {
             case let .note(id, heading):
@@ -121,7 +125,7 @@ final class URLSchemeHandler: NSObject {
             case let .new(title, text, notebook, tags, open):
                 try create(title: title, text: text, notebook: notebook, tags: tags, open: open, callback: callback)
             case let .append(target, text, position, timestamp):
-                try await append(to: target, text: text, position: position, timestamp: timestamp, callback: callback)
+                return try append(to: target, text: text, position: position, timestamp: timestamp, callback: callback)
             case .shareInbox:
                 // Never asks: the user pressed Save in the Share sheet. Importing comes with automation Task 24.
                 throw AutomationError.invalidInput(Self.unknownLinkMessage)
@@ -131,15 +135,23 @@ final class URLSchemeHandler: NSObject {
                 }
                 handler(url)
             }
-        } catch let failure as ConcealedFailure {
+        } catch {
+            fail(error, callback: callback)
+        }
+        return nil
+    }
+
+    private func fail(_ error: any Error, callback: XCallback) {
+        switch error {
+        case let failure as ConcealedFailure:
             report(failure.error, callback: callback, concealed: true)
-        } catch let error as AutomationError {
+        case let error as AutomationError:
             if error == .cancelled {
                 if let cancel = callback.cancel { environment.openCallback(cancel) }
             } else {
                 report(error, callback: callback)
             }
-        } catch {
+        default:
             report(.invalidInput(Self.unknownLinkMessage), callback: callback)
         }
     }
@@ -187,7 +199,7 @@ final class URLSchemeHandler: NSObject {
     }
 
     private func append(to target: URLCommand.AppendTarget, text: String, position: AppendPosition, timestamp: Bool,
-                        callback: XCallback) async throws {
+                        callback: XCallback) throws -> Task<Void, Never> {
         let meta: NoteMeta
         do {
             meta = try appendTarget(target)
@@ -200,9 +212,15 @@ final class URLSchemeHandler: NSObject {
             try concealFromWeb(error, callback: callback, question: question)
         }
         try askFirst("A link wants to add text to “\(meta.displayTitle)”.", callback: callback)
-        let result = try await service.append(meta.id, text: text, format: .text, position: position, timestamp: timestamp,
-                                        ifRevision: nil)
-        succeed(callback, note: result)
+        return Task {
+            do {
+                let result = try await service.append(meta.id, text: text, format: .text, position: position,
+                                                      timestamp: timestamp, ifRevision: nil)
+                succeed(callback, note: result)
+            } catch {
+                fail(error, callback: callback)
+            }
+        }
     }
 
     private func appendTarget(_ target: URLCommand.AppendTarget) throws(AutomationError) -> NoteMeta {
