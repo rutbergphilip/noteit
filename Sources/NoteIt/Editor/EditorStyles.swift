@@ -1,31 +1,5 @@
 import AppKit
 
-/// Paragraph-level block kinds the editor understands.
-///
-/// RTFD drops custom attributes and plain `NSTextBlock`s, so special blocks are tagged with a
-/// sentinel `defaultTabInterval` (which RTF persists per paragraph) and drawn by `NoteItLayoutManager`.
-/// Headings and body paragraphs written by the editor carry sentinels too, so their identity doesn't
-/// depend on font size relative to the (user-adjustable) body size.
-enum BlockKind: String, CaseIterable, Identifiable {
-    case title, heading, subheading, body, code, quote, divider
-
-    var id: String { rawValue }
-
-    var displayName: String {
-        switch self {
-        case .title: "Title"
-        case .heading: "Heading"
-        case .subheading: "Subheading"
-        case .body: "Body"
-        case .code: "Monospaced"
-        case .quote: "Quote"
-        case .divider: "Divider"
-        }
-    }
-
-    static let menuCases: [BlockKind] = [.title, .heading, .subheading, .body, .code, .quote]
-}
-
 enum ListKind: Equatable {
     case bullet, numbered, checklist
 }
@@ -57,13 +31,13 @@ enum EditorStyle {
     static let verticalInset: CGFloat = 22
     /// Untagged paragraphs (legacy content, pasted text): classified by font as a fallback.
     static let defaultTab: CGFloat = 28
-    static let bodySentinel: CGFloat = 29
-    static let codeSentinel: CGFloat = 31
-    static let quoteSentinel: CGFloat = 33
-    static let dividerSentinel: CGFloat = 35
-    static let titleSentinel: CGFloat = 37
-    static let headingSentinel: CGFloat = 39
-    static let subheadingSentinel: CGFloat = 41
+    static let bodySentinel = CGFloat(BlockSentinels.body)
+    static let codeSentinel = CGFloat(BlockSentinels.code)
+    static let quoteSentinel = CGFloat(BlockSentinels.quote)
+    static let dividerSentinel = CGFloat(BlockSentinels.divider)
+    static let titleSentinel = CGFloat(BlockSentinels.title)
+    static let headingSentinel = CGFloat(BlockSentinels.heading)
+    static let subheadingSentinel = CGFloat(BlockSentinels.subheading)
     static let indentStep: CGFloat = 24
     static let listMarkerWidth: CGFloat = 22
     static let listBaseIndent: CGFloat = 4
