@@ -131,6 +131,13 @@ extension NoteStore {
         bodyExtras[id] = extras
     }
 
+    /// The note's unknown front matter keys, also when its body isn't loaded.
+    func storedFrontMatter(_ id: UUID) -> String? {
+        if let extras = bodyExtras[id] { return extras.frontMatter }
+        if bodyStorage.kind == .rtfd { return (try? readBodyExtrasSidecar(id))??.current.extras.frontMatter }
+        return (try? bodyStorage.read(id))?.extras.frontMatter
+    }
+
     /// The sidecar, or nil when there is none. Throws when it exists but can't be read or decoded.
     func readBodyExtrasSidecar(_ id: UUID) throws -> BodyExtrasSidecar? {
         let url = bodyExtrasFileURL(id)

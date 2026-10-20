@@ -354,6 +354,24 @@ final class BodyExtrasTests: XCTestCase {
         XCTAssertTrue(try leftoverTemps(store).isEmpty)
     }
 
+    func testSyncApplyWithoutFrontMatterKeepsTheLocalUnknownKeys() throws {
+        let id = UUID()
+        let store = makeStore()
+        try apply(store, id, "Remote\nfirst", extras: extrasA)
+        try apply(store, id, "Remote\nsecond", extras: .empty)
+        XCTAssertEqual(store.bodyExtras[id], ContainerExtras(frontMatter: extrasA.frontMatter))
+
+        let relaunched = makeStore()
+        XCTAssertNil(relaunched.bodyExtras[id])
+        try apply(relaunched, id, "Remote\nthird", extras: ContainerExtras(extra: ["futureB": .number("2")]))
+        let kept = ContainerExtras(frontMatter: extrasA.frontMatter, extra: ["futureB": .number("2")])
+        XCTAssertEqual(relaunched.bodyExtras[id], kept)
+        XCTAssertEqual(try readSidecar(relaunched, id).current.extras, kept)
+
+        try apply(relaunched, id, "Remote\nfourth", extras: extrasB)
+        XCTAssertEqual(relaunched.bodyExtras[id], extrasB)
+    }
+
     // MARK: Helpers
 
     private func makeStore(storage: NoteBodyStorage? = nil) -> NoteStore {

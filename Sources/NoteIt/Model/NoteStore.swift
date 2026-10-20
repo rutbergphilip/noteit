@@ -1375,7 +1375,7 @@ final class NoteStore: ObservableObject {
         var folded: String
         var tempBody: URL
         /// The incoming body's extras (`.empty` for an RTFD body); written with it, and kept in `bodyExtras` once
-        /// it is installed.
+        /// it is installed. Without `frontMatter`, the note's current one is kept.
         var extras: ContainerExtras = .empty
         /// The decrypted meta, kept in sync-meta-raw/ so fields this build doesn't know survive a re-export.
         var rawMeta: RawMeta
@@ -1423,8 +1423,12 @@ final class NoteStore: ObservableObject {
             history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id,
                                     force: unversionedLocalBodies.contains(id))
         }
-        try installPreparedBody(prepared.tempBody, text: prepared.body, extras: prepared.extras, for: prepared.meta)
-        setBodyExtras(prepared.extras, for: id)
+        // An RTFD body carries no front matter, so the unknown keys stay on this Mac (spec §3.3). A noteit-doc body
+        // without `frontMatter` is treated the same: absent can't be told from "all keys removed elsewhere".
+        var extras = prepared.extras
+        if extras.frontMatter == nil { extras.frontMatter = storedFrontMatter(id) }
+        try installPreparedBody(prepared.tempBody, text: prepared.body, extras: extras, for: prepared.meta)
+        setBodyExtras(extras, for: id)
         if prepared.replacesDifferentBody { unversionedLocalBodies.remove(id) }
         let wasTombstoned = pendingTrash.remove(id) != nil
 
