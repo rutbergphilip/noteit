@@ -1,0 +1,79 @@
+{
+  "cases" : [
+    {
+      "expectRecords" : [
+        {
+          "body" : "e1xydGYxXGFuc2kgTWlsaywgZWdnc30=",
+          "deviceID" : "snapshot-device",
+          "id" : "3A9DAEAC-6D56-4337-883D-483C7F883F85",
+          "kind" : "note",
+          "meta" : "ewogICJjcmVhdGVkQXQiIDogIjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwKICAiaWQiIDogIjNBOURBRUFDLTZENTYtNDMzNy04ODNELTQ4M0M3Rjg4M0Y4NSIsCiAgImlzUGlubmVkIiA6IHRydWUsCiAgIm5vdGVib29rSUQiIDogIkI2NUM5ODlBLUJCMEUtNDIyMS1CNkNFLTg3N0Y1OUVGOEEwNSIsCiAgInByZXZpZXciIDogIk1pbGssIGVnZ3MiLAogICJyZXZpc2lvbiIgOiAiN0E1RDFDQzctNTZBNi00QkNBLUFBNTktMjBCOEU4RDY4QTVCIiwKICAidGFncyIgOiBbCiAgICAiaG9tZSIKICBdLAogICJ0aXRsZSIgOiAiR3JvY2VyaWVzIFwvIHdlZWsgMSIsCiAgInVwZGF0ZWRBdCIgOiAiMjAyNi0wMS0wMVQwMDowMjowMFoiCn0=",
+          "modifiedAt" : "2026-01-01T00:02:00.000Z",
+          "revision" : "7A5D1CC7-56A6-4BCA-AA59-20B8E8D68A5B"
+        },
+        {
+          "body" : "e1xydGYxXGFuc2kgUGlja2xlZCBoZXJyaW5nfQ==",
+          "deviceID" : "snapshot-device",
+          "id" : "AF83CE9D-050F-484C-B231-AF90296A973B",
+          "kind" : "note",
+          "meta" : "ewogICJjcmVhdGVkQXQiIDogIjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwKICAiaWQiIDogIkFGODNDRTlELTA1MEYtNDg0Qy1CMjMxLUFGOTAyOTZBOTczQiIsCiAgImlzUGlubmVkIiA6IGZhbHNlLAogICJub3RlYm9va0lEIiA6ICJCNjVDOTg5QS1CQjBFLTQyMjEtQjZDRS04NzdGNTlFRjhBMDUiLAogICJwcmV2aWV3IiA6ICJQaWNrbGVkIGhlcnJpbmciLAogICJyZXZpc2lvbiIgOiAiQzVEOTk1MzEtMjM3OS00ODgyLUFDODAtODkwMkUyN0I1RjQ1IiwKICAidGFncyIgOiBbCgogIF0sCiAgInRpdGxlIiA6ICJTbcO2cmfDpXNib3JkIGlkZWFzIiwKICAidXBkYXRlZEF0IiA6ICIyMDI2LTAxLTAxVDAwOjAyOjAwWiIKfQ==",
+          "modifiedAt" : "2026-01-01T00:02:00.000Z",
+          "revision" : "C5D99531-2379-4882-AC80-8902E27B5F45"
+        },
+        {
+          "deviceID" : "snapshot-device",
+          "id" : "B65C989A-BB0E-4221-B6CE-877F59EF8A05",
+          "kind" : "notebook",
+          "meta" : "ewogICJjb2xvckhleCIgOiAiIzM0Qzc1OSIsCiAgImlkIiA6ICJCNjVDOTg5QS1CQjBFLTQyMjEtQjZDRS04NzdGNTlFRjhBMDUiLAogICJtb2RpZmllZEF0IiA6ICIyMDI2LTAxLTAxVDAwOjAxOjAwWiIsCiAgIm5hbWUiIDogIlByb2plY3RzIiwKICAicmV2aXNpb24iIDogIjUzNTQ3NDIzLUIxOUMtNDFDNC1CRkQ5LTRCMjM4MkMzNTkwOSIsCiAgInNvcnRJbmRleCIgOiAwLAogICJzeW1ib2wiIDogImZvbGRlciIKfQ==",
+          "modifiedAt" : "2026-01-01T00:01:00.000Z",
+          "revision" : "53547423-B19C-41C4-BFD9-4B2382C35909"
+        }
+      ],
+      "objects" : [
+        {
+          "data" : "UKjrHld1ibwQjWCqz3RbXgMqJezc/Lbho8fr5ws7lNs6mkTYZhG+sx+m461eentFeezFV4DloQSc9ZVXumlSGTjMr6eHzy2qTqQfmjqlbwUMJBW1apuR5dIX7UKkhpU9OXlw/YQ=",
+          "etag" : "eeb18cf83c9eeeed5608a71d8a24df09",
+          "key" : "inkwell/v1/devices/snapshot-device.json"
+        },
+        {
+          "data" : "eyJjcmVhdGVkQXQiOjc4ODkxODQwMCwiZW5jcnlwdGlvbiI6eyJpdGVyYXRpb25zIjoyMTAwMDAsImtleUNoZWNrIjoiMHZHYXh2UjVZNWpVWU02XC8xM2x4XC9SclBOU1k4bG9MT0JNY0FOdGcwdndQNTJiSkprYzhTSzRHclBVWTUiLCJzYWx0IjoiNmVpdGlTZWs0SFBDVXNLTGNmRmJwZz09In0sImZvcm1hdFZlcnNpb24iOjF9",
+          "etag" : "519c54e930d9dfdc40322ccd15742a81",
+          "key" : "inkwell/v1/manifest.json"
+        },
+        {
+          "data" : "vwXWLg9LfK4AqOX1m+6vxgqNoxNRwvcCYlg7v29F0ghGHSiQ6sCrqkVN9ukAVIcN8HLCnlzk4wIHSXP5luk5nf9eHmCUHtPyswJuGSEiql5G4Q5W0bWrvUaaamw3WBIBCTGqtC/mpCrvQ0Cuqg9LCnI8X906XUYCwREJoRQ7p3/M7ffLFqi8Fav0dZd316M6PEHty+QhzS5EpxhbyYDMACLXNCoJLaWO4R+VPmyuKb58EL/i4OfQ4Cdvqm4Ew+7jId3CG93jUYO9X3AgjJ4gyQozcX2YoOs1ZFJY0JBnx7cxjwd2UcfIawgf6aARN27KYr3CF7r7/Wu6A7sF848oEIZ6lKdj3wsVLIlfpKmd4xtxcpcdKiGTCVLNZoIBxwwvXrTw1PDKIdzjFXZkLDzhD9W2myrcXbsfNT6vXwk8Q/i4HaHkeOw6AAQ32TxuPPZh7NoO0niOzASe2/tpJZLIKBk6BTMOZVF522D9epxanPvFMRq2Dzwi2jHpXSOBs3bLQx2rpTIcD98Jlc5cguEns0ZxT25dgEcfrMo3rMwrVSeFVVvr4mOSKok5LeZG6lkdbKyqU9st1RIyNokT4xDA5kTRbxCPCWq/n4ExQ9eJTB2vEsUQj+D1rZaXBFGE9IubpJCOzG0EPApBT3Iwig4lr0MBGbTdbYKpZxh45lirhL/787f0vC4Wf3MmxUxJWNZPN3pZ4uSE8aTqnJx9EskO9R0+bYXTcUk=",
+          "etag" : "e4bab6cd55fbb00a879102498d83fdc3",
+          "key" : "inkwell/v1/notebooks/B65C989A-BB0E-4221-B6CE-877F59EF8A05.json"
+        },
+        {
+          "data" : "hxK9ua1vavDbyhMUyO4XfdFRTtR7GOqdIyYdjxmKwnOUseGrZElZw6Ar5Vz2uNfgvS7J",
+          "etag" : "54c0d28ef17f70ca1e065e2ad388146d",
+          "key" : "inkwell/v1/notes/3A9DAEAC-6D56-4337-883D-483C7F883F85.body"
+        },
+        {
+          "data" : "B32c7B0IWPDbm/a+hktvj3H+05qNmi/D5bmbhYh32YV68WfJkj2zQ2p1Co8eAvNfCkqHFS7HF/fMhFdzR6vzMizlZx9ulBxf6uyZjmDX9jaSxm8o8P1SW9SUUuh8na17155/pfAbT7MU0O1uKjvN9yDKyc4WBDixMqNkWy7/hd7CRbGROG0RWq3NjFNEWBFyiJInPlUXh6+AXfCGj02O4SslCZ9lNbA2ygAafZK972b7Ome57vx0bnd+2wtMO82XRx258GjpUotMUoZesm5aLseNlHmnyhqza5nrOh64KcGPLYuKAQN8fJFMLl4lbQMKLfcZAP3MnTCRYqpGD2O86Ld0KJVQwRCZ9V667m7slHcVND3xbqZ3wsWuvE6ns2u4OoJKmF0lsNoS6aLAyNDSogKS8uPNzY5oaVYO6NFoVEQsMhj9RCPTxBwVZ8WJmK+8TLInMNKvSMeHWBv6uZGcaZ47LsBDstXHvu6LPWytwaQtrkA/ay6xiWmMWwFiuVzlO0aRLRt3gwbI55yIcbylNjvLbxZz8J4ie108i2YmAXAMX4lQNOW7TjBauqDfDPREZQi0v+yMjZ3JEdOa3YpPU0bQBb6Afew6XKlpKmRHTQJgptU6FnBm/0oBe8v7BPp3fbDzr60JV08jvFCBcoHWrKn675MUyXFVjYFDWyQBamlH84INi/mw4TW88teAYDG901E3WzriA42ByEO/4dSaRTGq0ixwN0+eYYgUvli3F3O+HmCuzjxUZGSp6UsVhuwBFLtEb+uuNHSrgwWHVqjuJc4S2td0yhOzoE+DsXjyHj3EMBb55vaODP8AlKkR3bGnLvK0LbnLr0rV4X6IlqjbPzLSBM5+wkElsVqzFLEDevFxIGxjrAoiUXGo2BdAo26q+/fFaMnSr1+r4ibljrft/dO60JMGLeLwQMKSVD7taXt1+JBua6b4hKihZuN2qptAnI+FKx4uZ3LbOM/r6lCp9cIH03TL0Dzw+efGbUvrTK04ajSllwrTargjOm+P0a9kIuvN+cJ9xQ4nINFu9Fgn",
+          "etag" : "b4bfbef4fba23f44790bce87b9bcb49d",
+          "key" : "inkwell/v1/notes/3A9DAEAC-6D56-4337-883D-483C7F883F85.meta"
+        },
+        {
+          "data" : "+fZHsys+mWyn+x+Yn4MlnGjW6dmvnQa9yMEROOh6XYTEfSSaO1yrkJyHPYj7nqfhNYYG9zgVQ2s=",
+          "etag" : "91682ccc5207ad734cda2bf3bbc2df56",
+          "key" : "inkwell/v1/notes/AF83CE9D-050F-484C-B231-AF90296A973B.body"
+        },
+        {
+          "data" : "EhEX/BwD6Jlmk/++H8MeqMCCeoHj1XxUPnrX/bV54JHeP3ow6Xa4qRLGZZuiMp7/5vyCxM3WIVNKT4qWEIKxgFRac+/wel3UYgTcWaedbTipZjSLX9sYv7eqfvT0Mjwq6LZwkm/zRtnrepxnNYIVx5d7JvEO017k5H5lvVfRSRVCJmvjOPQpACzTGmNpmxiqkTLW/v3PKzCaUWqm5RCCqrE4RW0sJ/xyg3FTUv8yEei9kGkY+EQgmAPEg6w0lJXRwFYqmpzhbgvbW5mKuBNNtfCrZxapKY0TwfIx43AXvKqcBIHpWXHZeJUefNgeKikd0KZA8nHne6uCN7vjzDxDFaTFiLSPC4sLewdmN9SbOsdwOdrU59zTTKMQjI3YweoLB7kSAtia6Hagv/ygxHGsJfvzwcHIRJTjk5CjJcFkBKr6UbS7HijgowNwjXRXf/phFnvawlkOyxKyYOE1oVHN/7yWJzlNJxK8LnpJK7sOxNPUi249hrKahK0gYiaHVomA+q2/BLxncbNg5oSAHT9ZAm+9fbDyz7+YscgJy4I9KQu4KZN4qTO9NiF5r6J8RtN5k3Lw7ZsBlwQ1y3m1H46SY5ALHzpX/mtreM+lCr7gWbKZHgKXJVy1gUI0tYHBqgCwSND2heQoTNr12I2U2ymD/EENVuwSjb2RCjzLD6wgqJGEbXtOy8v9tFy+7cKofD/GauSPl3sfVbPjuEG0gzaQ05zsn6VQJgiI0mPIkLqP3WV2KfSAfWmAhjGgNC/jtfSquskRNhRwSbejP0gy4mya/H+mwPgJBl9cq1VUOB8IMmi6X99qR/V6QsK385Vc+zOMDI8KDFuEn88zSi3yeZQC/Fe8aw3Ag5y3XofIyoogQDm3A+U3uzOgX+FRlroDQPF2TuP97pbwg+FHAPUXox/YE6dKnsidLTLssgpsoiDKC2gtXE3Ev61rwQ1OHKiXMSZ8X7/CCLOyJTN2LqAjhhEQh6FZwFKGOggtI4NhXOlj/vbcPdYtH2cNmLSerHdV4E3ySig310VYjQ1Bi5s=",
+          "etag" : "2b9634f3cd37bd9f7443675c9d15c21f",
+          "key" : "inkwell/v1/notes/AF83CE9D-050F-484C-B231-AF90296A973B.meta"
+        },
+        {
+          "data" : "CpZpaJ/JSydp3TOJ4RahFZ9g1zjrs/ECNG/UqsJ4/dk+WZbOKD4bDgQOLHzHt0KK2O1A9ibV7IU1zyYPlLYsvhIO8twLBU682QHh+UMGJhB9ZiB8YNcUdlYrVo6PhoLBceTjKsNHkjBPoo9rW/jsQLD1S6IYcjEsMGAxHWrmro5Uab7BdAPsDgZQ",
+          "etag" : "53d4ce552ed6425e55790ab085c3e4ac",
+          "key" : "inkwell/v1/tombstones/65E29058-88E4-41BA-9FA1-9B83A7F3F5D9.json"
+        }
+      ],
+      "passphrase" : "correct horse battery staple"
+    }
+  ],
+  "generator" : "swift",
+  "version" : 1
+}

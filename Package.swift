@@ -66,7 +66,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NoteItSyncTests",
-            dependencies: ["NoteItSync"],
+            dependencies: ["NoteItSync", "NoteItDocTestSupport"],
             path: "Tests/NoteItSyncTests"
         ),
         .testTarget(

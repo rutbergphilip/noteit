@@ -1,0 +1,48 @@
+{
+  "cases" : [
+    {
+      "iterations" : 210000,
+      "key" : "z05PH4aKPweeJ66jLVlv0GOT2f+ogw7t8j5h1dCDJFE=",
+      "passphrase" : "correct horse battery staple",
+      "salt" : "KoX7aV6Zfgq7/fdpQmOkRw=="
+    },
+    {
+      "iterations" : 210000,
+      "key" : "5nFEJPL4wqGjTTR8t3lnBgMHIp+MEunpu+VRbK4X6LM=",
+      "passphrase" : "pässwörd 🔑",
+      "salt" : "QHlBa2S0u2KnnT8lQfFd1g=="
+    },
+    {
+      "iterations" : 210000,
+      "key" : "M7p5q142eIZpmGQIxIeryJ0nYyfGsVyVx5yEyf4Lw9w=",
+      "passphrase" : "café",
+      "salt" : "AAAAAAAAAAAAAAAAAAAAAA=="
+    },
+    {
+      "iterations" : 100000,
+      "key" : "W8P/utRSqMgMmjg6/WdIcI0tlYGdz8rkeLvymX5k218=",
+      "passphrase" : "x",
+      "salt" : "/////////////////////w=="
+    },
+    {
+      "iterations" : 1,
+      "key" : "Al6n6DJdC2865+FUc0Qtj4FbV1oRlGTHB0NCHnDZcwE=",
+      "passphrase" : "short salt",
+      "salt" : "AQ=="
+    },
+    {
+      "iterations" : 1000,
+      "key" : "mCrWBk2GSrFouEqEkA7c8fIhekEyIGpTAaPXbvEWemY=",
+      "passphrase" : "long salt",
+      "salt" : "W2KJ7UTwLchS4t8naeM0lG9vBlQNApey2p2gRu59PUNOLJ6DkWEm2fVr/2Yv7lJvUkvOXgOhcldIWnEWy6BJDg=="
+    },
+    {
+      "iterations" : 2,
+      "key" : "lkjsklkPF2ka355Z954rGsd2sd00CH7WxoLTBNxbFt8=",
+      "passphrase" : "",
+      "salt" : "v0sH2ZJE0smFUsjDa0RsZQ=="
+    }
+  ],
+  "generator" : "swift",
+  "version" : 1
+}

@@ -41,9 +41,9 @@ public actor FakeLocalStore: SyncLocalStore {
         entries[id] = entry
     }
 
-    public func delete(_ id: UUID) {
+    public func delete(_ id: UUID, at date: Date = Date()) {
         guard let entry = entries.removeValue(forKey: id) else { return }
-        journal[id] = LocalDeletion(kind: entry.record.kind, deletedAt: Date())
+        journal[id] = LocalDeletion(kind: entry.record.kind, deletedAt: date)
     }
 
     public func title(_ id: UUID) -> String? { entries[id]?.title }

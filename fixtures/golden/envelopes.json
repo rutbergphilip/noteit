@@ -1,0 +1,134 @@
+{
+  "cases" : [
+    {
+      "context" : "notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
+      "decoded" : {
+        "bodySHA256" : "bd5ebb81f4f160b2e2ee93a668e69ba312daf08d864d8bbf935cb2081840a76f",
+        "deviceID" : "device-1",
+        "deviceName" : "Work Mac/Studio",
+        "id" : "430742D2-5082-469B-9F71-FF2B36718F0D",
+        "kind" : "note",
+        "meta" : {
+          "createdAt" : "2026-01-01T00:00:00Z",
+          "id" : "430742D2-5082-469B-9F71-FF2B36718F0D",
+          "isPinned" : true,
+          "notebookID" : "432F35A9-1533-47B0-898F-B41726DFC163",
+          "preview" : "Road trip: A/B testing",
+          "revision" : "B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA",
+          "tags" : [
+            "work/2026",
+            "ideas"
+          ],
+          "title" : "Plans / ideas",
+          "updatedAt" : "2026-01-02T00:00:00Z"
+        },
+        "modifiedAt" : 789004800.25,
+        "revision" : "B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA"
+      },
+      "key" : "inkwell/v1/notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "note-envelope",
+      "plaintextJSON" : "{\"bodySHA256\":\"bd5ebb81f4f160b2e2ee93a668e69ba312daf08d864d8bbf935cb2081840a76f\",\"deviceID\":\"device-1\",\"deviceName\":\"Work Mac\\/Studio\",\"id\":\"430742D2-5082-469B-9F71-FF2B36718F0D\",\"kind\":\"note\",\"meta\":\"ewogICJjcmVhdGVkQXQiIDogIjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwKICAiaWQiIDogIjQzMDc0MkQyLTUwODItNDY5Qi05RjcxLUZGMkIzNjcxOEYwRCIsCiAgImlzUGlubmVkIiA6IHRydWUsCiAgIm5vdGVib29rSUQiIDogIjQzMkYzNUE5LTE1MzMtNDdCMC04OThGLUI0MTcyNkRGQzE2MyIsCiAgInByZXZpZXciIDogIlJvYWQgdHJpcDogQVwvQiB0ZXN0aW5nIiwKICAicmV2aXNpb24iIDogIkIzMjlEQzhCLTkwMjgtNEMwQy04N0YxLTBBQzkxRUI0RTRDQSIsCiAgInRhZ3MiIDogWwogICAgIndvcmtcLzIwMjYiLAogICAgImlkZWFzIgogIF0sCiAgInRpdGxlIiA6ICJQbGFucyBcLyBpZGVhcyIsCiAgInVwZGF0ZWRBdCIgOiAiMjAyNi0wMS0wMlQwMDowMDowMFoiCn0=\",\"modifiedAt\":789004800.25,\"revision\":\"B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA\"}",
+      "sealed" : "zB/Qgh642DAqukGDvPszkk2Qk+qH3WE3LxgsfyD22GMCItaEh4Zv+gv+Aji/RBaidxyUb3CsMhv4geG8Ukvb1NKcYO8k2t2vnZQkzqqMfFPagEw/EG0yko75Gz2cu5/UV56J052F+/RMQxq0AWdZJXA0GuMLcWaXN2PfKVbF5qffGLgpWcrsY3wUwNvlRWE8c+3ndLpTzr06kNFw61hCoOgXz2O6dzc+McSQTtAFpn36au3ABk1Ri0rvO94TNSjM3L3U+j3tBcMcyclCCmCVTIUAzlN8Ts0rt7CkwHI8sMnYl2zQZM4mQti9OuKl2MD6cHaPbgOmRxKqJ2AjP3VLOPgeInP2eFq00p2KkSA8I+cBAm3BOq0RlolL7PF96j7wnk0OaMtcCUIn5Hgrjs2Pzq1pNtbUTh6JZZrhCrRuE1ZzJUzA/vyLUzFJkoFXW0xq3k/U+XaiF2dufMna0upMnlmB2O/ACzbMkZL1Ys4ijpKybTxZwKdfVP+Y6E1RnLngBZSx5P2zAr9BetXvJ2dK3kSHnC+JUg+LDGRLLMOZGah+Sgp2MWaV4arQTZbSfRHis+wQex9Y4+P+E2c00LnZHbk/FxpTrIXebbyMcjXJuk0TIZUP3mtqP5GSC/bXQKY+eC8YCnQV9a5S0Q3U2dphwHzAJuCO9qykPXuQRQdImYDKaEwdYVUzs22zSOZOoYSUQTlJUCjoDJRtnT77I+OljUTOWWT0JCsBKYF7WYF34H6rtsq7sKVV32FsluXCu4S9w2vGFAOA4vjFeLMzhTYNVcFerHiwk/8dVte0YqDTSVfSfxHpQ5ykX5BoJV6SJ30LLhjorJAfik4tacrk0LF17lRGr4zNd1YL4sRdzwMnvtMlFySAWY5EDp+i/q8VhcZbrz6FeHDoGCZLXRRl1wZ1UGyt31Nj06cM1a2lKSCbptk5epkp05bRIFi0k+u5Ce88p9Y9ZsE+xaxdxCh8sTEcNOrjXjcMbZGJy6tZfn/EzygslKVYQWYIHRAtMODGijKGiAf2mHdv43Vaquew63Hnqw4wIp31N4P29ey7kquqmqlMF4gOjn6+ygU5BivEr9orUJIY"
+    },
+    {
+      "context" : "notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
+      "decoded" : {
+        "deviceID" : "device-1",
+        "deviceName" : "Work Mac",
+        "id" : "430742D2-5082-469B-9F71-FF2B36718F0D",
+        "kind" : "note",
+        "meta" : {
+          "createdAt" : "2026-01-01T00:00:00Z",
+          "id" : "430742D2-5082-469B-9F71-FF2B36718F0D",
+          "isPinned" : true,
+          "notebookID" : "432F35A9-1533-47B0-898F-B41726DFC163",
+          "preview" : "Road trip: A/B testing",
+          "revision" : "B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA",
+          "tags" : [
+            "work/2026",
+            "ideas"
+          ],
+          "title" : "Plans / ideas",
+          "updatedAt" : "2026-01-02T00:00:00Z"
+        },
+        "modifiedAt" : 789004800.25,
+        "revision" : "B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA"
+      },
+      "key" : "inkwell/v1/notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "note-envelope-legacy-without-body-sha",
+      "plaintextJSON" : "{\"deviceID\":\"device-1\",\"deviceName\":\"Work Mac\",\"id\":\"430742D2-5082-469B-9F71-FF2B36718F0D\",\"kind\":\"note\",\"meta\":\"ewogICJjcmVhdGVkQXQiIDogIjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwKICAiaWQiIDogIjQzMDc0MkQyLTUwODItNDY5Qi05RjcxLUZGMkIzNjcxOEYwRCIsCiAgImlzUGlubmVkIiA6IHRydWUsCiAgIm5vdGVib29rSUQiIDogIjQzMkYzNUE5LTE1MzMtNDdCMC04OThGLUI0MTcyNkRGQzE2MyIsCiAgInByZXZpZXciIDogIlJvYWQgdHJpcDogQVwvQiB0ZXN0aW5nIiwKICAicmV2aXNpb24iIDogIkIzMjlEQzhCLTkwMjgtNEMwQy04N0YxLTBBQzkxRUI0RTRDQSIsCiAgInRhZ3MiIDogWwogICAgIndvcmtcLzIwMjYiLAogICAgImlkZWFzIgogIF0sCiAgInRpdGxlIiA6ICJQbGFucyBcLyBpZGVhcyIsCiAgInVwZGF0ZWRBdCIgOiAiMjAyNi0wMS0wMlQwMDowMDowMFoiCn0=\",\"modifiedAt\":789004800.25,\"revision\":\"B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA\"}",
+      "sealed" : "t14mUt3F8Tt3X7WPadDGD+tfH6guGO7U/E+WebA7eLzlIGj6y0NIXAhvSCTw9u4tvRWfgyg5kUeZO5ac+nvdQF+pp499AH7mOwUaQ0DLicrGOkvkzf+Y3noB4ZCwRk8PPDnKUOAKKmz0hgNuJBxdobLyKPVLs7IsSLiT0Gd8ZJEzqTg7nr0Dfv0wFKCI9TiERLHaaaBz8Dx9LtGUH5+57OhZZAZ/IebJrTbDnVRGl1tiJZ2wlqCENBsyYtVBvRfcqLOFuN7xde7OB+tiR9dgG2L7FcxkmrS3H7X7wRZNviMQ2IlPvcdX/kZO2cuA8vwSBvNb53w/OPLm5/+cbJR3kkYq6sxkkLHATkB1P3fgrvVOfYiH7PC3/CgUtl3bi6SV0DxyNNGWZCVJK1sZ/8VyyoZ4hkXDc5rFCgTCcYzQSmKbPwuxf64xvasVYDSsLzR6U555QvKPtFrETCjggUR8T/6zQ4zk6zoBBSnsAe04LpzBuFhgIjDSR8rT7ElFjO4gQyXl5YBU2h2m62IEICv330ZlG9o+GzFqtu4pFY3v7K5zN3aS6hVyFwvCmXmF1495ZEXClOprbBo2Vq1Wn7YNb7QK0yjdTE00laxf1qvPAGa6Nj9kE7R+dL93fA80EVYQFHmfA3X1uZnngpldeoeVJSJu7BecUPGJrIR9MQfbcZIQJuVGf797lWzWhmZHDS6uBCQ/zAxpwVpB8c5K6MvRqJ2MguNoTbG+gsIvpZd8tkB+1Q3dL3/y4LUAe5X599rJgcGHOoNbtHpcrJfRSPY19zuVFqpsL7iJ/D0ZhXXPI9xjTDfKX8UzjBCjg58KWKh5qw1jS/J2wyLC2i4xHG34/tQV+D+tNYiZ1tb1vvGPTDV7kLycfDcf+oozRuV6S1e81Kbnjknx1M4nVx9YnpZ8jhcBCDu+JmJllfZl7IMVYdxfTyQfFWOpem2c3LRGHdXhpLJYuFCZ9cnorYI="
+    },
+    {
+      "context" : "notebooks/432F35A9-1533-47B0-898F-B41726DFC163.json",
+      "decoded" : {
+        "deviceID" : "device-2",
+        "deviceName" : "Laptop",
+        "id" : "432F35A9-1533-47B0-898F-B41726DFC163",
+        "kind" : "notebook",
+        "meta" : {
+          "colorHex" : "#3478F6",
+          "id" : "432F35A9-1533-47B0-898F-B41726DFC163",
+          "modifiedAt" : "2026-01-01T01:00:00Z",
+          "name" : "Home/Work",
+          "revision" : "5CCC5200-33A8-445A-99FD-C4E20B4B2D25",
+          "sortIndex" : 2,
+          "symbol" : "folder"
+        },
+        "modifiedAt" : 788922000,
+        "revision" : "5CCC5200-33A8-445A-99FD-C4E20B4B2D25"
+      },
+      "key" : "inkwell/v1/notebooks/432F35A9-1533-47B0-898F-B41726DFC163.json",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "notebook-envelope",
+      "plaintextJSON" : "{\"deviceID\":\"device-2\",\"deviceName\":\"Laptop\",\"id\":\"432F35A9-1533-47B0-898F-B41726DFC163\",\"kind\":\"notebook\",\"meta\":\"ewogICJjb2xvckhleCIgOiAiIzM0NzhGNiIsCiAgImlkIiA6ICI0MzJGMzVBOS0xNTMzLTQ3QjAtODk4Ri1CNDE3MjZERkMxNjMiLAogICJtb2RpZmllZEF0IiA6ICIyMDI2LTAxLTAxVDAxOjAwOjAwWiIsCiAgIm5hbWUiIDogIkhvbWVcL1dvcmsiLAogICJyZXZpc2lvbiIgOiAiNUNDQzUyMDAtMzNBOC00NDVBLTk5RkQtQzRFMjBCNEIyRDI1IiwKICAic29ydEluZGV4IiA6IDIsCiAgInN5bWJvbCIgOiAiZm9sZGVyIgp9\",\"modifiedAt\":788922000,\"revision\":\"5CCC5200-33A8-445A-99FD-C4E20B4B2D25\"}",
+      "sealed" : "7SouzSdLF0qn2Gsdq3XBvRaDnk2lqW4JFSao/265wuMYNKNARGU73b3/GQ0IlWT25LSujyqbHLd7/lnUjYWYkTbHFXN9xl70SlwnBkbFuUQ2WRWbK28ZvzSLnzPUNLsNjzQb0XyBEXefU99nNzR2XugivVUDL7DI9RedoC7kzqYjNK3obvIa8hFLOqnnFQ4VBXFM3Qc+iDIO+AVAiM11+gUvnOYa7tXQERy1tEeuvlI9RcpEeHYgd+zjUPEKkH3Cse7ayCHREDARUhAf/4Ebw1j5EDDtZS7IIQPwUTyazO0RIe2ys7xi4F5+NMt3gyvOXujBNv0psoUCEmBeWTvTtkUWKecRZwdZK/CxKojk4gRlrEhEgD8j1NLPah0JqwNsr7U5LqcqNAH4aoUW+vqzRkI82qSTY9RP1ibx8bPDzbQaFs49xPKCv6iFdTDLs0Qo7DEpWTko9zak6HaZ3QQKTe/dvhI5ZORFJMhr6zLIXGQvUR955ax/v6kXrpzrPyqC8Il8r1rr3fNvRS5CY8/aq0wZuxm/F7GrXxdEsiyqED6xjoPwcvmDZwfICDGLuvp5kR6ALArw6WW7ZDe4UGP7KsP1gd7qEyuYV3XF+LxCbt0YJkHniXqAoTwmLTMYT0PG5/ZNvjExb1+traJ/FPhsst7G7S4CZdy0DiRl4a9JjvY+nsp6YaUcO3mzha4nCzrqY+9LudlC8ORZtA=="
+    },
+    {
+      "context" : "tombstones/430742D2-5082-469B-9F71-FF2B36718F0D.json",
+      "decoded" : {
+        "deletedAt" : 789091200.5,
+        "deletedMetaETag" : "\"5d41402abc4b2a76b9719d911017c592\"",
+        "deviceID" : "device-2",
+        "id" : "430742D2-5082-469B-9F71-FF2B36718F0D",
+        "kind" : "note"
+      },
+      "key" : "inkwell/v1/tombstones/430742D2-5082-469B-9F71-FF2B36718F0D.json",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "tombstone",
+      "plaintextJSON" : "{\"deletedAt\":789091200.5,\"deletedMetaETag\":\"\\\"5d41402abc4b2a76b9719d911017c592\\\"\",\"deviceID\":\"device-2\",\"id\":\"430742D2-5082-469B-9F71-FF2B36718F0D\",\"kind\":\"note\"}",
+      "sealed" : "73aBPn7iqkqk4Y9rjIuUmb6fUszlx+JKFEYK5YCT9LpkzDMufTzIdud/AnlCPClpfXrFI1UjbTHIncK75Isf1zp1HNyXaKVy/M7r2+CXcIK0IJuvhhYKIqBf+vBnVgQmW7cVT4uuzVElrjnJJ2sWk1WiXRfdtCkbvllkiG0SVGyksCAj5jU4v5IGWvba08XiiFqtZjqNBj0yYsMy7vuq8jY/adARUWCDintAjbPjMqzFdfw/jhME2B6b544DOQ=="
+    },
+    {
+      "context" : "tombstones/432F35A9-1533-47B0-898F-B41726DFC163.json",
+      "decoded" : {
+        "deletedAt" : 788918400,
+        "deviceID" : "device-1",
+        "id" : "432F35A9-1533-47B0-898F-B41726DFC163",
+        "kind" : "notebook"
+      },
+      "key" : "inkwell/v1/tombstones/432F35A9-1533-47B0-898F-B41726DFC163.json",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "tombstone-legacy-without-etag",
+      "plaintextJSON" : "{\"deletedAt\":788918400,\"deviceID\":\"device-1\",\"id\":\"432F35A9-1533-47B0-898F-B41726DFC163\",\"kind\":\"notebook\"}",
+      "sealed" : "o3b+P8vvRSao6Toy6dPaA3U7EM7tKsUp72lColt4HefrixprM1+2nDsODSJJ95oRR6dKzjJV7mPPzmAe0IsvagSMqqBETipU9yn/UCkZOlM7G4mFmyD+6l+UlIEOMCAyt/cyutcHWlv+9gTbDJfceeCLLDTfIK+D+EKpgBXMFTDfVerY0vRt"
+    },
+    {
+      "context" : "devices/device-1.json",
+      "decoded" : {
+        "deviceID" : "device-1",
+        "lastSync" : 788918400.125,
+        "name" : "Work Mac/Studio"
+      },
+      "key" : "inkwell/v1/devices/device-1.json",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "device",
+      "plaintextJSON" : "{\"deviceID\":\"device-1\",\"lastSync\":788918400.125,\"name\":\"Work Mac\\/Studio\"}",
+      "sealed" : "b/pT2cdCIfH94wl3FSfEZpKqILBh9NSmpI8/bPYMn6/Dr903jmjuGk8uFOpHsdA/qZZNkhXpG1FuHJLpLRCua6Ixoa61Ex3QVd2v1mx5xiAdx+XpWH4dQVU9A0/7n384xfleSObT"
+    }
+  ],
+  "generator" : "swift",
+  "version" : 1
+}
