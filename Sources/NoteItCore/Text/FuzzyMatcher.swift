@@ -1,17 +1,23 @@
 import Foundation
 
-struct FuzzyMatch: Equatable {
-    let score: Int
-    let matchedIndices: [Int]   // Character offsets into the ORIGINAL candidate string, ascending
+/// A fuzzy match result. Moved from the app in foundations Task 1.2.
+public struct FuzzyMatch: Equatable, Sendable {
+    public let score: Int
+    public let matchedIndices: [Int]   // Character offsets into the ORIGINAL candidate string, ascending
+
+    public init(score: Int, matchedIndices: [Int]) {
+        self.score = score
+        self.matchedIndices = matchedIndices
+    }
 }
 
-/// A query folded once, for matching against many candidates.
-struct FuzzyQuery {
+/// A query folded once, for matching against many candidates. Moved from the app in foundations Task 1.2.
+public struct FuzzyQuery: Sendable {
     let terms: [[UInt32]]
     let whole: [UInt32]
-    var isEmpty: Bool { terms.isEmpty }
+    public var isEmpty: Bool { terms.isEmpty }
 
-    init(_ query: String) {
+    public init(_ query: String) {
         terms = query.split(whereSeparator: \.isWhitespace)
             .map { FuzzyMatcher.foldedCodes($0) }
             .filter { !$0.isEmpty }
@@ -19,10 +25,10 @@ struct FuzzyQuery {
     }
 }
 
-/// Subsequence matcher for short titles. Folds like `NoteStore.fold` (case, diacritics, width)
+/// Subsequence matcher for short titles. Folds like `TextFold.fold` (case, diacritics, width)
 /// one Character at a time so match positions map back to the original string. Folded characters
-/// are compared as integer codes, and prepared candidates are cached.
-enum FuzzyMatcher {
+/// are compared as integer codes, and prepared candidates are cached. Moved from the app in foundations Task 1.2.
+public enum FuzzyMatcher {
     private static let matchScore = 16
     private static let wordStartBonus = 12
     private static let firstCharacterBonus = 4
@@ -34,16 +40,16 @@ enum FuzzyMatcher {
     private static let unreachable = Int.min / 4
 
     /// nil when the query doesn't match. Empty/whitespace query matches everything with score 0 and no indices.
-    static func match(_ query: String, in candidate: String) -> FuzzyMatch? {
+    public static func match(_ query: String, in candidate: String) -> FuzzyMatch? {
         evaluate(FuzzyQuery(query), in: candidate)?.match
     }
 
-    static func match(_ query: FuzzyQuery, in candidate: String) -> FuzzyMatch? {
+    public static func match(_ query: FuzzyQuery, in candidate: String) -> FuzzyMatch? {
         evaluate(query, in: candidate)?.match
     }
 
     /// `isExact` is true when the folded candidate equals the folded query.
-    static func evaluate(_ query: FuzzyQuery, in candidate: String) -> (match: FuzzyMatch, isExact: Bool)? {
+    public static func evaluate(_ query: FuzzyQuery, in candidate: String) -> (match: FuzzyMatch, isExact: Bool)? {
         guard !query.isEmpty else { return (FuzzyMatch(score: 0, matchedIndices: []), false) }
         let target = PreparedCandidateCache.shared.prepared(candidate)
         for term in query.terms where !isSubsequence(term, of: target.codes) {
@@ -87,7 +93,7 @@ enum FuzzyMatcher {
 
     // MARK: - Folding
 
-    static func foldedCodes<S: StringProtocol>(_ string: S) -> [UInt32] {
+    public static func foldedCodes<S: StringProtocol>(_ string: S) -> [UInt32] {
         var result: [UInt32] = []
         for character in string {
             fold(character) { result.append($0) }
@@ -100,7 +106,7 @@ enum FuzzyMatcher {
             append(ascii >= 65 && ascii <= 90 ? UInt32(ascii) + 32 : UInt32(ascii))
             return
         }
-        for folded in NoteStore.fold(String(character)) {
+        for folded in TextFold.fold(String(character)) {
             append(code(of: folded))
         }
     }

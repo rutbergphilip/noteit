@@ -368,10 +368,7 @@ final class NoteStore: ObservableObject {
 
     // MARK: - Search index
 
-    nonisolated static func fold(_ string: String) -> String {
-        string.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
-            .precomposedStringWithCanonicalMapping
-    }
+    nonisolated static func fold(_ string: String) -> String { TextFold.fold(string) }
 
     private func setIndexEntry(_ id: UUID, text: String) {
         searchIndex[id] = Self.fold(text)

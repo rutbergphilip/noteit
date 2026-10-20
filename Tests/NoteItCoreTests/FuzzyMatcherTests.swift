@@ -1,5 +1,5 @@
 import XCTest
-@testable import NoteIt
+@testable import NoteItCore
 
 final class FuzzyMatcherTests: XCTestCase {
     func testNonMatchReturnsNil() {
@@ -104,7 +104,7 @@ final class FuzzyMatcherTests: XCTestCase {
             let match = try XCTUnwrap(FuzzyMatcher.match(query, in: candidate), "\(query) in \(candidate)")
             let characters = Array(candidate)
             let spelled = String(match.matchedIndices.map { characters[$0] })
-            XCTAssertEqual(NoteStore.fold(spelled), NoteStore.fold(query), "\(query) in \(candidate)")
+            XCTAssertEqual(TextFold.fold(spelled), TextFold.fold(query), "\(query) in \(candidate)")
         }
     }
 
