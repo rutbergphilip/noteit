@@ -83,39 +83,54 @@ enum MarkdownPasteDetector {
         guard let first = lines.first, isEnd(first, ["---"]),
               let end = lines.dropFirst().firstIndex(where: { isEnd($0, ["---", "..."]) }) else { return 0 }
         var hasKey = false
+        var hasValue = false
         for line in lines[1..<end] {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if trimmed.isEmpty { continue }
+            // Markdown headings look like YAML comments, so a `#` line means this is a section, not front matter.
+            if trimmed.hasPrefix("#") { return 0 }
             if trimmed.hasPrefix("- ") || line.first == " " || line.first == "\t" {
                 guard hasKey else { return 0 }
                 continue
             }
-            guard isFrontMatterKey(line) else { return 0 }
+            guard let valued = frontMatterKey(line) else { return 0 }
             hasKey = true
+            hasValue = hasValue || valued
         }
-        return hasKey ? end + 1 : 0
+        return hasValue ? end + 1 : 0
     }
 
-    /// A quoted key, or text before the first `: ` or a trailing `:` that starts with a letter or digit and isn't a URL.
-    private static func isFrontMatterKey(_ line: String) -> Bool {
-        if let quote = line.first, quote == "\"" || quote == "'" {
-            guard let close = line.dropFirst().firstIndex(of: quote) else { return false }
-            let after = line[line.index(after: close)...]
-            return after == ":" || after.hasPrefix(": ") || after.hasPrefix(":\t")
+    /// A quoted key, or text before the first `: ` or a trailing `:` that reads like a short label rather than prose.
+    /// Nil for any other line; otherwise whether the key has a value or is a bare lowercase name such as `tags:` above a list.
+    private static func frontMatterKey(_ line: String) -> Bool? {
+        func hasValue(after colon: String.Index) -> Bool {
+            !line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces).isEmpty
         }
-        guard let first = line.first, first.isLetter || first.isNumber else { return false }
-        var key: Substring?
+        if let quote = line.first, quote == "\"" || quote == "'" {
+            guard let close = line.dropFirst().firstIndex(of: quote) else { return nil }
+            let after = line[line.index(after: close)...]
+            guard after == ":" || after.hasPrefix(": ") || after.hasPrefix(":\t") else { return nil }
+            return hasValue(after: line.index(after: close))
+        }
+        guard let first = line.first, first.isLetter || first.isNumber else { return nil }
+        var found: String.Index?
         var index = line.startIndex
         while let colon = line[index...].firstIndex(of: ":") {
             let next = line.index(after: colon)
             if next == line.endIndex || line[next] == " " || line[next] == "\t" {
-                key = line[..<colon]
+                found = colon
                 break
             }
             index = next
         }
-        guard let key else { return false }
-        return !key.contains("://")
+        guard let colon = found else { return nil }
+        let key = line[..<colon]
+        let valued = hasValue(after: colon)
+        let hasSpace = key.contains { $0 == " " || $0 == "\t" }
+        guard !key.contains("://"), key.split(whereSeparator: { $0 == " " || $0 == "\t" }).count <= 3,
+              let last = key.last, !".!?,;".contains(last), valued || !hasSpace else { return nil }
+        let bareName = key.allSatisfy { ($0.isLetter && $0.isLowercase) || $0.isNumber || $0 == "_" || $0 == "-" }
+        return valued || bareName
     }
 
     /// Diffs, and text where many lines read like a programming language.

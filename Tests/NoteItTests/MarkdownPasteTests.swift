@@ -209,7 +209,11 @@ final class MarkdownPasteTests: XCTestCase {
         for line in ["See https://example.com for details", "**Note:** x", "  indented: first", "- item"] {
             XCTAssertEqual(count("---\n\(line)\n---\nBody\n"), 0, line)
         }
-        XCTAssertEqual(count("---\ntitle: x\ntags: [a, b]\n# comment\n\naliases:\n  - y\n- z\n---\nBody\n"), 9)
+        XCTAssertEqual(count("---\ntitle: x\ntags: [a, b]\n\naliases:\n  - y\n- z\n---\nBody\n"), 8)
+        XCTAssertEqual(count("---\ntitle: x\n# comment\n---\nBody\n"), 0)
+        for line in ["Next steps:", "Some long label here: x", "We agreed on three things: budget, hiring, travel.", "Wait, really?: yes", "Tags:"] {
+            XCTAssertEqual(count("---\n\(line)\n---\nBody\n"), 0, line)
+        }
 
         let note = "---\nSee https://example.com for details\n---\n## Next\n- a\n- b\n"
         XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(note))
@@ -217,6 +221,26 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: note)))
         XCTAssertEqual(kind(view, of: "Next"), .heading)
         XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: (view.string as NSString).range(of: "b", options: .backwards).location)))
+    }
+
+    func testMarkdownSectionsBetweenDividersAreNotFrontMatter() {
+        let notes = [
+            "---\n## Action items\nNext steps:\n- Email Ann\n- Book room\n---\n## Notes\n- x\n",
+            "---\nWe agreed on three things: budget, hiring, travel.\n---\n## Notes\n- x\n- y\n",
+        ]
+        for note in notes {
+            XCTAssertEqual(MarkdownPasteDetector.frontMatterLineCount(MarkdownReader.lines(of: note)), 0, note)
+            XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(note), note)
+            let view = editor(body(""))
+            XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: note)), note)
+            XCTAssertEqual(kind(view, of: "Notes"), .heading, view.string)
+            XCTAssertFalse(view.string.contains("## "), view.string)
+            XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: (view.string as NSString).range(of: "x", options: .backwards).location)), view.string)
+        }
+        let view = editor(body(""))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: notes[0])))
+        XCTAssertEqual(kind(view, of: "Action items"), .heading, view.string)
+        XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: (view.string as NSString).range(of: "Book room").location)), view.string)
     }
 
     func testPathologicalInputsAreFast() {
