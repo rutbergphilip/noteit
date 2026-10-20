@@ -53,6 +53,8 @@ final class ExtrasSpyStorage: NoteBodyStorage, @unchecked Sendable {
 /// A minimal Markdown store: one `<id>.md` file per note, written with `BodyCodec.markdown`.
 final class MarkdownTestStorage: NoteBodyStorage, @unchecked Sendable {
     let contentRootURL: URL
+    var failsPrepareTemp = false
+    var failsInstallTemp = false
     private(set) var preparedTemps = 0
 
     init(rootURL: URL) {
@@ -74,6 +76,7 @@ final class MarkdownTestStorage: NoteBodyStorage, @unchecked Sendable {
     }
     func writeMetadataOnly(for note: NoteMeta, notebook: Notebook?) throws {}
     func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, meta: NoteMeta) throws -> URL {
+        if failsPrepareTemp { throw POSIXError(.EIO) }
         preparedTemps += 1
         try FileManager.default.createDirectory(at: contentRootURL, withIntermediateDirectories: true)
         let temp = contentRootURL.appendingPathComponent(".\(UUID().uuidString).md.tmp")
@@ -81,7 +84,7 @@ final class MarkdownTestStorage: NoteBodyStorage, @unchecked Sendable {
         return temp
     }
     func installTemp(_ temp: URL, for note: NoteMeta, notebook: Notebook?) throws {
-        guard rename(temp.path, fileURL(for: note.id).path) == 0 else { throw POSIXError(.EIO) }
+        guard !failsInstallTemp, rename(temp.path, fileURL(for: note.id).path) == 0 else { throw POSIXError(.EIO) }
     }
     func moveToTrash(_ id: UUID) throws { try? FileManager.default.removeItem(at: fileURL(for: id)) }
     func recover(_ id: UUID) throws -> StoredBody? { nil }
@@ -474,7 +477,32 @@ final class BodyExtrasTests: XCTestCase {
         XCTAssertTrue(try markdownTemps(storage).isEmpty)
     }
 
+    func testMarkdownSyncApplyFailingRebuildLeavesNoTempAndTheOldBody() throws {
+        try assertFailedMarkdownApplyKeepsTheOldBody(failsInstall: false)
+    }
+
+    func testMarkdownSyncApplyFailingInstallLeavesNoTempAndTheOldBody() throws {
+        try assertFailedMarkdownApplyKeepsTheOldBody(failsInstall: true)
+    }
+
     // MARK: Helpers
+
+    /// A sync apply whose temp is rebuilt on main (the keys changed after prepare), failing in the rebuild or install.
+    private func assertFailedMarkdownApplyKeepsTheOldBody(failsInstall: Bool) throws {
+        let storage = MarkdownTestStorage(rootURL: root)
+        let store = makeStore(storage: storage)
+        let id = try saveNote(store, NSAttributedString(string: "Title\nbody"), extras: ContainerExtras(frontMatter: "aliases: [Old]"))
+        let old = try String(contentsOf: storage.fileURL(for: id), encoding: .utf8)
+        let prepared = try prepare(store, id, "Remote\nbody")
+        store.setBodyExtras(ContainerExtras(frontMatter: "aliases: [New]"), for: id)
+        if failsInstall { storage.failsInstallTemp = true } else { storage.failsPrepareTemp = true }
+        let before = storage.preparedTemps
+        XCTAssertThrowsError(try store.applyPreparedRemoteNote(prepared))
+        XCTAssertEqual(storage.preparedTemps, failsInstall ? before + 1 : before)
+        XCTAssertTrue(try markdownTemps(storage).isEmpty)
+        XCTAssertEqual(try String(contentsOf: storage.fileURL(for: id), encoding: .utf8), old)
+        XCTAssertEqual(try storage.read(id).text.string.trimmingCharacters(in: .newlines), "Title\nbody")
+    }
 
     private func markdownTemps(_ storage: MarkdownTestStorage) throws -> [String] {
         try fm.contentsOfDirectory(atPath: storage.contentRootURL.path).filter { $0.hasSuffix(".tmp") }
