@@ -8,7 +8,6 @@ NoteIt aims to be the fastest notes app on the Mac, and one where you own every 
 - [x] **Version history.** Restore any earlier version of a note.
 - [x] **Export, print and Share.** Markdown, HTML, PDF, RTFD and plain text, per note, per notebook or everything.
 - [x] **Import.** Apple Notes, Bear, Obsidian and Markdown folders.
-- [x] **Shared groundwork.** The building blocks that links, Markdown storage, automation and the iPhone app build on. Only two things change in the app: Settings › General scrolls when its window is short, and restoring a version of an open note can be undone in one step.
 
 Design: [`specs/2026-10-14-trash-export-import-design.md`](specs/2026-10-14-trash-export-import-design.md)
 
@@ -35,7 +34,7 @@ Foundations plan: [`plans/2026-10-19-foundations.md`](plans/2026-10-19-foundatio
 
 ### Wave 0: foundations
 
-- [ ] **Foundations.** Shared groundwork the later waves build on. You'll notice only two changes: the General settings tab scrolls, and Restore Version in an open note can be undone in one step ([design](specs/2026-10-19-program-design.md), [plan](plans/2026-10-19-foundations.md)).
+- [x] **Foundations.** Shared groundwork the later waves build on. You'll notice only two changes: the General settings tab scrolls, and Restore Version in an open note can be undone in one step ([design](specs/2026-10-19-program-design.md), [plan](plans/2026-10-19-foundations.md)).
 
 ### Wave 1
 
