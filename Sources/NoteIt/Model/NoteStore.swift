@@ -1439,7 +1439,12 @@ final class NoteStore: ObservableObject {
             history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id,
                                     force: unversionedLocalBodies.contains(id))
         }
-        try installPreparedBody(prepared.tempBody, text: prepared.body, extras: extras, for: prepared.meta)
+        do {
+            try installPreparedBody(prepared.tempBody, text: prepared.body, extras: extras, for: prepared.meta)
+        } catch {
+            prepared.discard()
+            throw error
+        }
         setBodyExtras(extras, for: id)
         if prepared.replacesDifferentBody { unversionedLocalBodies.remove(id) }
         let wasTombstoned = pendingTrash.remove(id) != nil
