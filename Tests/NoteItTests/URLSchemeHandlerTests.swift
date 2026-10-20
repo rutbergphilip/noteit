@@ -144,7 +144,7 @@ final class URLSchemeHandlerTests: XCTestCase {
                         [URLQueryItem(name: "errorCode", value: "not_changed")],
                         [URLQueryItem(name: "errorCode", value: "not_found"), URLQueryItem(name: "errorMessage", value: "No note with that id.")]])
         XCTAssertEqual(questions, ["A link wants to add text to a note."], "only the web link asks")
-        XCTAssertEqual(notices, ["No note with that id."], "a web link tells the user, not the page")
+        XCTAssertEqual(notices, ["No note with that id.", "No note with that id."], "web links tell the user, not the page")
     }
 
     func testAppendToMissingTitleSaysTitle() async {
@@ -190,14 +190,22 @@ final class URLSchemeHandlerTests: XCTestCase {
             for link in failing + ["append?id=\(plain.uuidString)&text=x", "new?notebook=Inbox&text=x"] {
                 questions = []
                 callbacks = []
+                notices = []
                 await open(handler, "noteit://x-callback-url/" + link + web)
                 XCTAssertEqual(questions.count, 1, link)
                 let expected = !allow ? "https://example.com/cancel"
                     : failing.contains(link) ? "https://example.com/err?errorCode=not_changed" : "https://example.com/ok"
                 XCTAssertEqual(callbacks, [URL(string: expected)!], link)
+                XCTAssertEqual(notices.count, allow && failing.contains(link) ? 1 : 0, "after Allow the user sees why: \(link)")
             }
         }
-        XCTAssertTrue(notices.isEmpty)
+    }
+
+    func testConcealedFailureAfterAllowShowsReason() async {
+        let (handler, _) = makeHandler()
+        await open(handler, "noteit://x-callback-url/append?title=Nothing&text=x&x-error=https://example.com/err")
+        XCTAssertEqual(callbacks, [URL(string: "https://example.com/err?errorCode=not_changed")!])
+        XCTAssertEqual(notices, ["No note with that title."])
     }
 
     /// Links that only show something call a web `x-success` the same way whether or not the note exists.

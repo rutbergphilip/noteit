@@ -264,10 +264,11 @@ final class URLSchemeHandler: NSObject {
     }
 
     /// Calls x-error when the link has one; otherwise shows the error, so a link never fails silently. A
-    /// `concealed` error reaches x-error only as `not_changed`; the user still sees why.
+    /// `concealed` error reaches x-error only as `not_changed`, and is always shown, so the user sees why.
     private func report(_ error: AutomationError, callback: XCallback, concealed: Bool = false) {
+        if concealed { environment.notify(error.message) }
         guard let failure = callback.error else {
-            environment.notify(error.message)
+            if !concealed { environment.notify(error.message) }
             return
         }
         let sent = concealed ? AutomationError.notChanged : error
