@@ -10,12 +10,14 @@ final class LibraryLauncherTests: XCTestCase {
     private let fm = FileManager.default
     private var logged: [String] = []
     private var missingAlerts: [URL] = []
+    private var unreadableAlerts: [String] = []
 
     override func setUpWithError() throws {
         base = fm.temporaryDirectory.appendingPathComponent("noteit-launch-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
         logged = []
         missingAlerts = []
+        unreadableAlerts = []
     }
 
     override func tearDownWithError() throws {
@@ -38,7 +40,8 @@ final class LibraryLauncherTests: XCTestCase {
             isLegacyAppRunning: running,
             quitLegacyApp: quit,
             log: { [weak self] in self?.logged.append($0) },
-            showContentRootMissing: { [weak self] in self?.missingAlerts.append($0) }
+            showContentRootMissing: { [weak self] in self?.missingAlerts.append($0) },
+            showLibraryLocationUnreadable: { [weak self] in self?.unreadableAlerts.append($0) }
         )
     }
 
@@ -239,7 +242,7 @@ final class LibraryLauncherTests: XCTestCase {
         guard case .open(let location) = launcher(override: dataDir.path).decide() else { return XCTFail("not opened") }
         XCTAssertEqual(location.format, .markdown)
         XCTAssertEqual(location.contentRootURL?.resolvingSymlinksInPath().path, moved.resolvingSymlinksInPath().path)
-        let saved = try XCTUnwrap(LibraryLocationFile.load(dataDir: dataDir))
+        guard case .loaded(let saved) = LibraryLocationFile.load(dataDir: dataDir) else { return XCTFail("not saved") }
         XCTAssertEqual(saved.contentRootURL.resolvingSymlinksInPath().path, moved.resolvingSymlinksInPath().path)
     }
 
@@ -259,15 +262,57 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertEqual(try snapshot(), before, "no library created in its place")
     }
 
-    func testCorruptLocationFileOpensRTFDAndIsSetAside() throws {
+    func testCorruptLocationFileOpensRTFDWithoutSeedingAndIsSetAside() throws {
         try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
         let url = dataDir.appendingPathComponent(LibraryLocationFile.fileName)
-        try Data("{ not json".utf8).write(to: url)
-        XCTAssertEqual(launcher(override: dataDir.path).decide(),
-                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: true)))
-        XCTAssertEqual(logged.count, 1)
-        XCTAssertFalse(fm.fileExists(atPath: url.path))
-        XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("bad")), Data("{ not json".utf8))
+        try Data("earlier".utf8).write(to: url.appendingPathExtension("bad"))
+        let noLibraryID = #"{"version":1,"format":"markdown","path":"~/Notes"}"#
+        for (index, contents) in ["{ not json", noLibraryID, #"{"format":"markdown"}"#].enumerated() {
+            logged = []
+            try Data(contents.utf8).write(to: url)
+            XCTAssertEqual(launcher(override: dataDir.path).decide(), .open(LibraryLocation(url: dataDir, seedsFreshLibrary: false)))
+            XCTAssertEqual(logged.count, 1, contents)
+            XCTAssertFalse(fm.fileExists(atPath: url.path))
+            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("bad-\(index + 2)")), Data(contents.utf8))
+        }
+        XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("bad")), Data("earlier".utf8))
+        XCTAssertEqual(unreadableAlerts, [])
+    }
+
+    private func assertUnreadableQuitsAndKeepsFile(_ contents: String?, file: StaticString = #filePath, line: UInt = #line) throws {
+        try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let url = dataDir.appendingPathComponent(LibraryLocationFile.fileName)
+        if let contents { try Data(contents.utf8).write(to: url) }
+        let before = try fm.contentsOfDirectory(atPath: dataDir.path)
+        let launcher = launcher(override: dataDir.path)
+        guard case .libraryLocationUnreadable(let reason) = launcher.decide() else {
+            return XCTFail("not reported", file: file, line: line)
+        }
+        var quitCalled = 0, opened = 0
+        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore(location: $0) }, quit: { quitCalled += 1 })
+        XCTAssertNil(store, file: file, line: line)
+        XCTAssertEqual(opened, 0, file: file, line: line)
+        XCTAssertEqual(quitCalled, 1, file: file, line: line)
+        XCTAssertEqual(unreadableAlerts, [reason], file: file, line: line)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: dataDir.path), before, "nothing renamed or created", file: file, line: line)
+    }
+
+    func testNewerVersionIsReportedAndLeftInPlace() throws {
+        try assertUnreadableQuitsAndKeepsFile(#"{"version":2,"format":"markdown","path":"~/Notes","libraryID":"6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11"}"#)
+        XCTAssertTrue(unreadableAlerts.first?.contains("version 2") == true, "\(unreadableAlerts)")
+    }
+
+    func testUnknownFormatIsReportedAndLeftInPlace() throws {
+        try assertUnreadableQuitsAndKeepsFile(#"{"version":1,"format":"sqlite","path":"~/Notes","libraryID":"6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11"}"#)
+        XCTAssertTrue(unreadableAlerts.first?.contains("sqlite") == true, "\(unreadableAlerts)")
+    }
+
+    func testUnreadableFileIsReportedAndLeftInPlace() throws {
+        let url = dataDir.appendingPathComponent(LibraryLocationFile.fileName)
+        try writeLocationFile(markdownFile(at: base))
+        try fm.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
+        try assertUnreadableQuitsAndKeepsFile(nil)
     }
 
     // MARK: - Store seed decision

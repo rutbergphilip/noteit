@@ -23,6 +23,9 @@ struct LibraryLauncher {
         case quitNoteIt
         /// The Markdown library's content folder isn't there: nothing may be opened or written.
         case contentRootMissing(URL)
+        /// `library-location.json` is there but can't be used (newer version or format, read error): nothing may be
+        /// opened or written. The reason is shown to the user.
+        case libraryLocationUnreadable(String)
     }
 
     var dataDirectoryOverride: () -> String?
@@ -32,6 +35,7 @@ struct LibraryLauncher {
     var fileManager: FileManager = .default
     var log: (String) -> Void = { NSLog("%@", $0) }
     var showContentRootMissing: (URL) -> Void = { LibraryLauncher.presentContentRootMissing($0) }
+    var showLibraryLocationUnreadable: (String) -> Void = { LibraryLauncher.presentLibraryLocationUnreadable($0) }
 
     var legacyDirectory: URL {
         baseDirectory().appendingPathComponent(AppIdentity.Legacy.dataFolderName, isDirectory: true)
@@ -53,11 +57,21 @@ struct LibraryLauncher {
         return applyingLocationFile(to: LibraryLocation(url: result.directory, seedsFreshLibrary: result.outcome.allowsSeeding))
     }
 
-    /// A Markdown library is never seeded.
+    /// A Markdown library is never seeded, and neither is a data folder whose location file is damaged.
     private func applyingLocationFile(to location: LibraryLocation) -> Decision {
         LibraryConverter.finishInterrupted(dataDir: location.url)
-        guard var file = LibraryLocationFile.load(dataDir: location.url, fileManager: fileManager, log: log),
-              file.format == .markdown else { return .open(location) }
+        var file: LibraryLocationFile
+        switch LibraryLocationFile.load(dataDir: location.url, fileManager: fileManager, log: log) {
+        case .missing:
+            return .open(location)
+        case .corrupt:
+            return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false))
+        case .unreadable(let reason):
+            return .libraryLocationUnreadable(reason)
+        case .loaded(let loaded):
+            file = loaded
+        }
+        guard file.format == .markdown else { return .open(location) }
         let root = contentRoot(of: &file, dataDir: location.url)
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
@@ -106,6 +120,11 @@ struct LibraryLauncher {
             showContentRootMissing(url)
             quit()
             return nil
+        case .libraryLocationUnreadable(let reason):
+            log("NoteIt: quitting; \(reason)")
+            showLibraryLocationUnreadable(reason)
+            quit()
+            return nil
         }
     }
 
@@ -117,6 +136,17 @@ struct LibraryLauncher {
         alert.alertStyle = .warning
         alert.messageText = "NoteIt can't find your library folder"
         alert.informativeText = "Your notes are kept in \(LibraryLocationFile.displayPath(url)), which isn't there. If it's on a disk that isn't connected, connect it and open NoteIt again."
+        alert.addButton(withTitle: "Quit")
+        alert.runModal()
+    }
+
+    static func presentLibraryLocationUnreadable(_ reason: String) {
+        _ = NSApplication.shared
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "NoteIt can't read its library settings"
+        alert.informativeText = reason + " NoteIt will quit without opening or changing your library."
         alert.addButton(withTitle: "Quit")
         alert.runModal()
     }

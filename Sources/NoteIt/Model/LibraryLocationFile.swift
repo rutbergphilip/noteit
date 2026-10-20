@@ -51,24 +51,61 @@ struct LibraryLocationFile: Codable, Equatable {
         dataDir.appendingPathComponent(fileName)
     }
 
-    /// nil when the file is missing (an RTFD library in `dataDir`) or unreadable. An unreadable file is logged and
-    /// renamed `library-location.json.bad`.
+    enum LoadResult: Equatable {
+        /// No file: an RTFD library in the data folder.
+        case missing
+        case loaded(LibraryLocationFile)
+        /// A damaged file; it has been logged and set aside as `library-location.json.bad`.
+        case corrupt
+        /// A file NoteIt can't use now (a newer version or format, or a read error); left untouched. The reason is
+        /// for the user.
+        case unreadable(String)
+    }
+
     static func load(dataDir: URL, fileManager: FileManager = .default,
-                     log: (String) -> Void = { NSLog("%@", $0) }) -> LibraryLocationFile? {
+                     log: (String) -> Void = { NSLog("%@", $0) }) -> LoadResult {
         let url = url(dataDir: dataDir)
-        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        guard fileManager.fileExists(atPath: url.path) else { return .missing }
+        let data: Data
         do {
-            return try JSONDecoder().decode(LibraryLocationFile.self, from: Data(contentsOf: url))
+            data = try Data(contentsOf: url)
         } catch {
-            log("NoteIt: \(fileName) is unreadable (\(error)); opening the library in the data folder")
-            let bad = url.appendingPathExtension("bad")
-            do {
-                if fileManager.fileExists(atPath: bad.path) { try fileManager.removeItem(at: bad) }
-                try fileManager.moveItem(at: url, to: bad)
-            } catch {
-                log("NoteIt: couldn't set aside \(fileName): \(error)")
+            log("NoteIt: couldn't read \(fileName): \(error)")
+            return .unreadable("\(fileName) couldn't be read: \(error.localizedDescription)")
+        }
+        if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let number = object["version"] as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+           let version = Int(exactly: number.doubleValue) {
+            guard version == currentVersion else {
+                log("NoteIt: \(fileName) has version \(version)")
+                return .unreadable("\(fileName) has version \(version), and this version of NoteIt reads only version \(currentVersion).")
             }
-            return nil
+            if let format = object["format"] as? String, LibraryFormatKind(rawValue: format) == nil {
+                log("NoteIt: \(fileName) has unknown format \(format)")
+                return .unreadable("\(fileName) names a library format this version of NoteIt doesn't know (\"\(format)\").")
+            }
+        }
+        do {
+            return .loaded(try JSONDecoder().decode(LibraryLocationFile.self, from: data))
+        } catch {
+            log("NoteIt: \(fileName) is damaged (\(error)); setting it aside and opening the library in the data folder")
+            setAside(url, fileManager: fileManager, log: log)
+            return .corrupt
+        }
+    }
+
+    /// Renames `url` to `<name>.bad`, or `.bad-2`, `.bad-3`… so an earlier one is never replaced.
+    private static func setAside(_ url: URL, fileManager: FileManager, log: (String) -> Void) {
+        var bad = url.appendingPathExtension("bad")
+        var attempt = 1
+        while (try? fileManager.attributesOfItem(atPath: bad.path)) != nil {
+            attempt += 1
+            bad = url.appendingPathExtension("bad-\(attempt)")
+        }
+        do {
+            try fileManager.moveItem(at: url, to: bad)
+        } catch {
+            log("NoteIt: couldn't set aside \(fileName): \(error)")
         }
     }
 
