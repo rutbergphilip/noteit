@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import NoteItMarkdown
 
 /// The on-disk format of a library's note bodies. Owned by the markdown-storage plan; built in foundations Task 4.1.
 enum LibraryFormatKind: String, Codable, Sendable {
@@ -13,6 +14,9 @@ struct StoredBody {
     var text: NSAttributedString
     var readOnlyReason: String? = nil
     var extras: ContainerExtras = .empty
+    /// A Markdown file's front matter keys that NoteIt owns (`id:`, `created:`…), as read; nil for other formats.
+    /// Its `extra` is empty: unknown keys are in `extras.frontMatter`. Never written back (spec §3.3).
+    var frontMatter: FrontMatter? = nil
 }
 
 extension StoredBody {

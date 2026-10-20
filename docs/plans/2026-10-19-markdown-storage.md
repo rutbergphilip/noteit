@@ -218,14 +218,15 @@ enum BodyCodec: String, CaseIterable, Sendable {
                                                                     // paths are read only when they stay inside the file's
                                                                     // folder after resolving symlinks; extras.frontMatter
                                                                     // is the unknown front matter keys (FrontMatter.extra),
-                                                                    // extras.extra["markdownFrontMatter"] the known ones
-    func write(_ text: NSAttributedString, extras: ContainerExtras = .empty, to url: URL) throws
+                                                                    // StoredBody.frontMatter the known ones (read only)
+    func write(_ text: NSAttributedString, extras: ContainerExtras = .empty, meta: NoteMeta? = nil, to url: URL) throws
                                                                     // .markdown: library flavour, UTF-8, images written
-                                                                    // to _attachments/ beside the file; extras.frontMatter
-                                                                    // and the known keys written back as front matter
-    func data(of text: NSAttributedString, extras: ContainerExtras = .empty) throws -> Data
+                                                                    // to _attachments/ beside the file; the keys NoteIt
+                                                                    // owns written from meta (spec §3.3), then
+                                                                    // extras.frontMatter
+    func data(of text: NSAttributedString, extras: ContainerExtras = .empty, meta: NoteMeta? = nil) throws -> Data
                                                                     // .markdown: the UTF-8 bytes of the .md file
-                                                                    // write(_:extras:to:) stores
+                                                                    // write(_:extras:meta:to:) stores
     // foundations' static members unchanged
 }
 

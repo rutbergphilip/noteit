@@ -27,7 +27,7 @@ enum BodyCodec: String, CaseIterable, Sendable {
 
     /// `.rtfd` reads `extras` as `.empty`. `.markdown` reads either flavour, takes relative image and attachment
     /// paths from inside the file's folder, and returns the unknown front matter keys as `extras.frontMatter` and the
-    /// known ones under `markdownFrontMatterKey`.
+    /// known ones as `frontMatter`.
     func read(at url: URL) throws -> StoredBody {
         switch self {
         case .rtfd:
@@ -41,15 +41,18 @@ enum BodyCodec: String, CaseIterable, Sendable {
                 Self.fileInside(folder, path: path).flatMap { try? Data(contentsOf: $0) }
             }
             var stored = try Self.attributedString(from: imported.body)
-            stored.extras.extra[Self.markdownFrontMatterKey] = Self.knownFrontMatter(imported.frontMatter)
+            var known = imported.frontMatter
+            known.extra = ""
+            stored.frontMatter = known
             return stored
         }
     }
 
     /// Replaces `url` atomically. `.rtfd` ignores `extras`; `.noteItDoc` writes one file with the attachments and
-    /// `extras` inside; `.markdown` writes `extras.frontMatter` back as front matter and the attachments to
-    /// `_attachments/` beside the file.
-    func write(_ text: NSAttributedString, extras: ContainerExtras = .empty, to url: URL) throws {
+    /// `extras` inside; `.markdown` writes the attachments to `_attachments/` beside the file and front matter with
+    /// the keys NoteIt owns taken from `meta` (none without it) followed by `extras.frontMatter`. Only `.markdown`
+    /// reads `meta`.
+    func write(_ text: NSAttributedString, extras: ContainerExtras = .empty, meta: NoteMeta? = nil, to url: URL) throws {
         switch self {
         case .rtfd:
             let temp = try RTFDBodyStorage.writeTempBody(text, in: url.deletingLastPathComponent())
@@ -65,13 +68,13 @@ enum BodyCodec: String, CaseIterable, Sendable {
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
                 try attachment.data.write(to: file, options: .atomic)
             }
-            try Data(Self.markdown(of: container, frontMatter: Self.frontMatter(from: extras), profile: .library).utf8)
+            try Data(Self.markdown(of: container, frontMatter: Self.frontMatter(meta, extras: extras), profile: .library).utf8)
                 .write(to: url, options: .atomic)
         }
     }
 
-    /// The bytes `write(_:extras:to:)` stores; for `.rtfd`, the package's flat-file serialization.
-    func data(of text: NSAttributedString, extras: ContainerExtras = .empty) throws -> Data {
+    /// The bytes `write(_:extras:meta:to:)` stores; for `.rtfd`, the package's flat-file serialization.
+    func data(of text: NSAttributedString, extras: ContainerExtras = .empty, meta: NoteMeta? = nil) throws -> Data {
         switch self {
         case .rtfd:
             guard let data = text.rtfd(from: NSRange(location: 0, length: text.length),
@@ -82,7 +85,7 @@ enum BodyCodec: String, CaseIterable, Sendable {
         case .noteItDoc:
             return try Self.noteItDoc(of: text, extras: extras).encoded()
         case .markdown:
-            return Data(Self.markdown(of: try Self.noteItDoc(of: text, extras: extras), frontMatter: Self.frontMatter(from: extras),
+            return Data(Self.markdown(of: try Self.noteItDoc(of: text, extras: extras), frontMatter: Self.frontMatter(meta, extras: extras),
                                       profile: .library).utf8)
         }
     }
@@ -129,12 +132,11 @@ enum BodyCodec: String, CaseIterable, Sendable {
 
     // MARK: noteit-doc container
 
-    /// The container's `extras` are `extras`, without `markdownFrontMatterKey`.
+    /// The container's `extras` are `extras`.
     static func noteItDoc(of text: NSAttributedString, extras: ContainerExtras = .empty,
                           imagePolicy: ImagePolicy = .normalize) throws -> BodyContainer {
         var container = try DocConverter.export(text, styles: AppDocStyleProvider.shared, imagePolicy: imagePolicy)
         container.extras = extras
-        container.extra[markdownFrontMatterKey] = nil
         return container
     }
 
@@ -166,25 +168,18 @@ extension BodyCodec {
         return (try DocConverter.importDocument(imported.body, styles: AppDocStyleProvider.shared), imported.unresolvedImages)
     }
 
-    /// Extras key for the known front matter lines of a `.markdown` file (`id:`, `created:`, `pinned:`…), so they
-    /// survive read → edit → write. Never written into a noteit-doc container.
-    static let markdownFrontMatterKey = "markdownFrontMatter"
-
-    private static func knownFrontMatter(_ frontMatter: FrontMatter) -> JSONValue? {
-        var known = frontMatter
-        known.extra = ""
-        let text = known.written()
-        guard !text.isEmpty else { return nil }
-        return .string(String(text.dropFirst("---\n".count).dropLast("\n---\n".count)))
-    }
-
-    private static func frontMatter(from extras: ContainerExtras) -> FrontMatter {
-        var frontMatter = FrontMatter.empty
-        if case .string(let known)? = extras.extra[markdownFrontMatterKey],
-           let (read, _) = try? FrontMatter.read("---\n" + known + "\n---\n") {
-            frontMatter = read
-        }
-        frontMatter.extra = extras.frontMatter ?? ""
+    /// The keys NoteIt owns always come from the note itself (markdown-storage spec §3.3), never from what was read.
+    static func frontMatter(_ meta: NoteMeta?, extras: ContainerExtras) -> FrontMatter {
+        var frontMatter = FrontMatter(extra: extras.frontMatter ?? "")
+        guard let meta else { return frontMatter }
+        frontMatter.id = meta.id
+        frontMatter.created = meta.createdAt
+        frontMatter.updated = meta.updatedAt
+        frontMatter.pinned = meta.isPinned
+        frontMatter.deleted = meta.deletedAt
+        frontMatter.conflictOf = meta.conflictOriginalID
+        frontMatter.conflictSource = meta.conflictSource
+        frontMatter.locked = meta.lock != nil
         return frontMatter
     }
 

@@ -114,20 +114,77 @@ final class BodyCodecMarkdownTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "One twox\\\nree four\n")
     }
 
+    private func meta(_ id: UUID, created: String = "2026-10-19T09:12:44Z", updated: String = "2026-10-19T10:03:02Z",
+                      pinned: Bool = false, deleted: String? = nil) -> NoteMeta {
+        let iso = ISO8601DateFormatter()
+        return NoteMeta(id: id, title: "Notes", preview: "", isPinned: pinned, createdAt: iso.date(from: created)!,
+                        updatedAt: iso.date(from: updated)!, tags: [], deletedAt: deleted.flatMap { iso.date(from: $0) })
+    }
+
     func testFrontMatterSurvivesEdit() throws {
         let url = dir.appendingPathComponent("note.md")
-        let known = "id: 6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11\ncreated: 2026-10-19T09:12:44Z\npinned: true"
+        let id = UUID(uuidString: "6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11")!
+        let known = "id: \(id.uuidString)\ncreated: 2026-10-19T09:12:44Z\nupdated: 2026-10-19T10:03:02Z\npinned: true"
         let unknown = "aliases:\n  - Weekly\ncssclasses: [wide]"
         try Data("---\n\(known)\n\(unknown)\n---\n# Notes\n\nBody\n".utf8).write(to: url)
         for edit in ["Edited body", ""] {
             let read = try BodyCodec.markdown.read(at: url)
             XCTAssertEqual(read.extras.frontMatter, unknown)
-            XCTAssertNil(try BodyCodec.noteItDoc(of: read.text, extras: read.extras).extra[BodyCodec.markdownFrontMatterKey])
-            try BodyCodec.markdown.write(NSAttributedString(string: edit), extras: read.extras, to: url)
+            XCTAssertEqual(read.frontMatter?.id, id)
+            XCTAssertEqual(read.frontMatter?.pinned, true)
+            XCTAssertEqual(read.frontMatter?.extra, "")
+            XCTAssertEqual(try BodyCodec.noteItDoc(of: read.text, extras: read.extras).extra, [:])
+            try BodyCodec.markdown.write(NSAttributedString(string: edit), extras: read.extras, meta: meta(id, pinned: true), to: url)
             let written = try String(contentsOf: url, encoding: .utf8)
             XCTAssertTrue(written.hasPrefix("---\n\(known)\n\(unknown)\n---\n"), written)
             XCTAssertEqual(try BodyCodec.markdown.read(at: url).text.string.trimmingCharacters(in: .newlines), edit)
         }
+    }
+
+    func testFrontMatterKeysNoteItOwnsComeFromTheNote() throws {
+        let url = dir.appendingPathComponent("copy.md")
+        let copied = UUID(), note = UUID()
+        let unknown = "aliases: [Copy]"
+        try Data("""
+            ---
+            id: \(copied.uuidString)
+            created: 2020-01-01T00:00:00Z
+            updated: 2020-01-02T00:00:00Z
+            pinned: true
+            deleted: 2020-01-03T00:00:00Z
+            \(unknown)
+            ---
+            Body
+
+            """.utf8).write(to: url)
+        let read = try BodyCodec.markdown.read(at: url)
+        XCTAssertEqual(read.frontMatter?.id, copied)
+
+        try BodyCodec.markdown.write(read.text, extras: read.extras, meta: meta(note), to: url)
+        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), """
+            ---
+            id: \(note.uuidString)
+            created: 2026-10-19T09:12:44Z
+            updated: 2026-10-19T10:03:02Z
+            \(unknown)
+            ---
+
+            Body
+
+            """)
+
+        let saved = meta(note, updated: "2026-10-20T08:00:00Z", deleted: "2026-10-20T08:00:00Z")
+        try BodyCodec.markdown.write(read.text, extras: read.extras, meta: saved, to: url)
+        var written = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(written.contains("\nupdated: 2026-10-20T08:00:00Z\ndeleted: 2026-10-20T08:00:00Z\n\(unknown)\n"), written)
+        XCTAssertEqual(try BodyCodec.markdown.data(of: read.text, extras: read.extras, meta: saved), try Data(contentsOf: url))
+
+        var recovered = saved
+        recovered.deletedAt = nil
+        try BodyCodec.markdown.write(read.text, extras: try BodyCodec.markdown.read(at: url).extras, meta: recovered, to: url)
+        written = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertFalse(written.contains("deleted:"), written)
+        XCTAssertTrue(written.contains("\nupdated: 2026-10-20T08:00:00Z\n\(unknown)\n---\n"), written)
     }
 
     private func png(_ color: NSColor) throws -> Data {
