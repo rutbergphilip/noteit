@@ -4,7 +4,7 @@ import Foundation
 /// Recently Deleted: deleting a note sets `deletedAt` (a normal, synced metadata change). Notes are removed
 /// for good, through the tombstone path in `deleteNotes`, 30 days later or when the user asks.
 extension NoteStore {
-    nonisolated static let recentlyDeletedRetention: TimeInterval = 30 * 24 * 60 * 60
+    nonisolated static let recentlyDeletedRetention: TimeInterval = TrashPolicy.retention
     static let purgeCheckInterval: TimeInterval = 24 * 60 * 60
 
     private static var purgeTimer: Timer?
@@ -20,7 +20,7 @@ extension NoteStore {
     }
 
     func purgeDate(of meta: NoteMeta) -> Date? {
-        meta.deletedAt.map { $0.addingTimeInterval(Self.recentlyDeletedRetention) }
+        meta.deletedAt.map { TrashPolicy.purgeDate(deletedAt: $0) }
     }
 
     /// Moves notes to Recently Deleted and returns the ones that moved. Undoing recovers them.
@@ -88,7 +88,7 @@ extension NoteStore {
     func purgeExpiredDeletedNotes(now: Date = Date()) -> Int {
         let expired = notes.filter { meta in
             guard let deletedAt = meta.deletedAt else { return false }
-            return now.timeIntervalSince(deletedAt) >= Self.recentlyDeletedRetention
+            return TrashPolicy.isExpired(deletedAt: deletedAt, now: now)
         }.map(\.id)
         if !expired.isEmpty { deleteNotes(expired) }
         history.pruneAll(keeping: Set(notes.map(\.id)))
@@ -109,19 +109,6 @@ extension NoteStore {
 
     /// "Deleted 3 days ago. It will be removed in 27 days."
     nonisolated static func deletionSummary(deletedAt: Date, now: Date = Date()) -> String {
-        let day: TimeInterval = 24 * 60 * 60
-        let elapsed = max(0, Int(now.timeIntervalSince(deletedAt) / day))
-        let remaining = max(0, Int(ceil((recentlyDeletedRetention - now.timeIntervalSince(deletedAt)) / day)))
-        let deleted = switch elapsed {
-        case 0: "Deleted today."
-        case 1: "Deleted yesterday."
-        default: "Deleted \(elapsed) days ago."
-        }
-        let removed = switch remaining {
-        case 0: "It will be removed soon."
-        case 1: "It will be removed in 1 day."
-        default: "It will be removed in \(remaining) days."
-        }
-        return "\(deleted) \(removed)"
+        TrashPolicy.deletionSummary(deletedAt: deletedAt, now: now)
     }
 }

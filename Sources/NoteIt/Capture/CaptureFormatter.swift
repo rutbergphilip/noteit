@@ -2,28 +2,28 @@ import AppKit
 
 /// Turns a captured selection into note content: a title, the quoted text and a source line.
 enum CaptureFormatter {
-    static let maxTitleLength = 60
+    static let maxTitleLength = CaptureTitle.maxLength
     static let maxSelectionLength = 200_000
 
-    static let titleScanLimit = 4_096
+    static let titleScanLimit = CaptureTitle.scanLimit
 
     static func title(for capture: CapturedSelection) -> String {
         let source = capture.source
-        let appName = singleLine(source.appName)
-        if let pageTitle = singleLine(source.pageTitle) {
-            return truncatedTitle(pageTitle)
+        let appName = CaptureTitle.singleLine(source.appName)
+        if let pageTitle = CaptureTitle.singleLine(source.pageTitle) {
+            return CaptureTitle.truncated(pageTitle)
         }
         if let window = usableWindowTitle(source.windowTitle, appName: appName) {
-            return truncatedTitle(window)
+            return CaptureTitle.truncated(window)
         }
         if let document = linkableURL(source.documentURL), document.isFileURL {
             let name = document.deletingPathExtension().lastPathComponent
-            if name != "/", let name = singleLine(name) {
-                return truncatedTitle(name)
+            if name != "/", let name = CaptureTitle.singleLine(name) {
+                return CaptureTitle.truncated(name)
             }
         }
-        if let line = firstLine(of: capture.text) {
-            return truncatedTitle(line)
+        if let line = CaptureTitle.firstLine(of: capture.text) {
+            return CaptureTitle.truncated(line)
         }
         guard let appName else { return "Captured Text" }
         return "Captured from \(appName)"
@@ -64,13 +64,13 @@ enum CaptureFormatter {
 
     private static func sourceLine(for capture: CapturedSelection) -> NSAttributedString {
         let source = capture.source
-        let appName = singleLine(source.appName)
+        let appName = CaptureTitle.singleLine(source.appName)
         let attributes = EditorStyle.bodyAttributes
         let line = NSMutableAttributedString()
 
         var link: (label: String, url: URL)?
         if let page = linkableURL(source.pageURL) {
-            link = (singleLine(source.pageTitle) ?? label(for: page), page)
+            link = (CaptureTitle.singleLine(source.pageTitle) ?? label(for: page), page)
         } else if let document = linkableURL(source.documentURL) {
             link = (label(for: document), document)
         }
@@ -90,7 +90,7 @@ enum CaptureFormatter {
         if let appName {
             text = "From \(appName)"
         }
-        if let window = singleLine(source.windowTitle), truncatedTitle(window) != title(for: capture), !isSame(window, appName) {
+        if let window = CaptureTitle.singleLine(source.windowTitle), CaptureTitle.truncated(window) != title(for: capture), !isSame(window, appName) {
             text += " — \(window)"
         }
         line.append(NSAttributedString(string: text, attributes: attributes))
@@ -101,7 +101,7 @@ enum CaptureFormatter {
         if url.isFileURL {
             let name = url.lastPathComponent
             let label = name.isEmpty || name == "/" ? url.path : name
-            return singleLine(label) ?? "file"
+            return CaptureTitle.singleLine(label) ?? "file"
         }
         var host = url.host ?? ""
         if host.lowercased().hasPrefix("www.") {
@@ -146,40 +146,9 @@ enum CaptureFormatter {
 
     // MARK: Title helpers
 
-    private static func firstLine(of text: String) -> String? {
-        let start = text.firstIndex(where: { !$0.isWhitespace }) ?? text.endIndex
-        let head = String(text[start...].prefix(titleScanLimit))
-        for raw in normalizedLines(head) {
-            if let line = singleLine(String(raw)) {
-                return line
-            }
-        }
-        return nil
-    }
-
-    /// Collapses every run of whitespace, including line and paragraph breaks, to one space.
-    private static func singleLine(_ text: String?) -> String? {
-        guard let text else { return nil }
-        let words = text.split(whereSeparator: { $0.isWhitespace })
-        return words.isEmpty ? nil : words.joined(separator: " ")
-    }
-
     private static func usableWindowTitle(_ text: String?, appName: String?) -> String? {
-        guard let window = singleLine(text), !isSame(window, appName), !isGenericUntitled(window) else { return nil }
+        guard let window = CaptureTitle.singleLine(text), !isSame(window, appName), !isGenericUntitled(window) else { return nil }
         return window
-    }
-
-    private static func truncatedTitle(_ line: String) -> String {
-        guard line.count > maxTitleLength else { return line }
-        let limit = maxTitleLength - 1
-        let head = line.prefix(limit)
-        let next = line[head.endIndex]
-        var cut = head
-        if !next.isWhitespace, let space = head.lastIndex(where: { $0.isWhitespace }), head.distance(from: head.startIndex, to: space) >= limit / 2 {
-            cut = head[..<space]
-        }
-        let kept = String(cut).trimmingCharacters(in: .whitespaces)
-        return kept + "…"
     }
 
     private static func isGenericUntitled(_ title: String) -> Bool {

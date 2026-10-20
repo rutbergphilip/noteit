@@ -839,42 +839,12 @@ final class NoteStore: ObservableObject {
 
     // MARK: - Persistence
 
-    private struct LibraryFile: Codable {
-        var version: Int
-        var notebooks: [Notebook]
-        var notes: [NoteMeta]
-    }
-
-    /// Best-effort salvage of a library.json that failed strict decoding.
-    private struct PartialLibrary: Decodable {
-        var notebooks: [Notebook]?
-        var notes: [NoteMeta]?
-
-        enum CodingKeys: String, CodingKey { case notebooks, notes }
-
-        init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            notebooks = try? c.decode([Notebook].self, forKey: .notebooks)
-            notes = try? c.decode([NoteMeta].self, forKey: .notes)
-        }
-    }
-
     nonisolated func bodyURL(for id: UUID) -> URL {
         notesURL.appendingPathComponent("\(id.uuidString).rtfd", isDirectory: true)
     }
 
-    nonisolated static let encoder: JSONEncoder = {
-        let e = JSONEncoder()
-        e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        e.dateEncodingStrategy = .iso8601
-        return e
-    }()
-
-    nonisolated static let decoder: JSONDecoder = {
-        let d = JSONDecoder()
-        d.dateDecodingStrategy = .iso8601
-        return d
-    }()
+    nonisolated static var encoder: JSONEncoder { LibraryCoding.encoder }
+    nonisolated static var decoder: JSONDecoder { LibraryCoding.decoder }
 
     nonisolated static func readBody(at url: URL) throws -> NSAttributedString {
         try NSAttributedString(
@@ -925,7 +895,7 @@ final class NoteStore: ObservableObject {
             do {
                 let raw = try Data(contentsOf: libraryURL)
                 data = raw
-                let library = try Self.decoder.decode(LibraryFile.self, from: raw)
+                let library = try LibraryCoding.decode(raw)
                 notebooks = library.notebooks
                 notes = library.notes
                 libraryNoteIDsOnDisk = Set(library.notes.map(\.id))
@@ -943,7 +913,7 @@ final class NoteStore: ObservableObject {
             } catch {
                 NSLog("NoteIt: failed to read library.json (\(error))")
                 backUpUnreadableLibrary()
-                let partial = data.flatMap { try? Self.decoder.decode(PartialLibrary.self, from: $0) }
+                let partial = data.flatMap(LibraryCoding.salvage)
                 rebuildFromBodies(recovered: partial)
                 libraryDirty = true
                 markInitialized()
