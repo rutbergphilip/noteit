@@ -175,12 +175,13 @@ struct DocExporter {
         return content
     }
 
-    /// Only a U+2028 whose `noteItSoftBreak` run is that one character: text typed next to it may have inherited it.
+    /// Only a U+2028 marked `noteItSoftBreak` whose neighbours are not: text typed next to it may have inherited it.
     private func isSoftBreak(at location: Int) -> Bool {
-        var run = NSRange()
-        guard text.attribute(.noteItSoftBreak, at: location, longestEffectiveRange: &run,
-                             in: NSRange(location: 0, length: text.length)) != nil else { return false }
-        return run == NSRange(location: location, length: 1)
+        guard text.attribute(.noteItSoftBreak, at: location, effectiveRange: nil) != nil else { return false }
+        if location > 0, text.attribute(.noteItSoftBreak, at: location - 1, effectiveRange: nil) != nil { return false }
+        if location + 1 < text.length,
+           text.attribute(.noteItSoftBreak, at: location + 1, effectiveRange: nil) != nil { return false }
+        return true
     }
 
     private func marks(_ attrs: [NSAttributedString.Key: Any], kind: BlockKind, checked: Bool) -> [Mark] {

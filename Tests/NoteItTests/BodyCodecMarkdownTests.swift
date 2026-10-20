@@ -114,6 +114,33 @@ final class BodyCodecMarkdownTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "One twox\\\nree four\n")
     }
 
+    func testManyLineBreaksExportQuickly() throws {
+        let bold = NSFontManager.shared.convert(EditorStyle.bodyFont, toHaveTrait: .boldFontMask)
+        let segment = String(repeating: "x", count: 18)
+        let text = NSMutableAttributedString()
+        for _ in 0..<50 {
+            text.append(EditorStyle.paragraph(Array(repeating: segment, count: 101).joined(separator: "\u{2028}"), kind: .body))
+        }
+        let ns = text.string as NSString
+        var breaks = 0
+        for index in 0..<ns.length where ns.character(at: index) == 0x2028 {
+            if breaks >= 4_900 {
+                text.addAttribute(.noteItSoftBreak, value: true, range: NSRange(location: index, length: 1))
+            }
+            text.addAttribute(.font, value: bold, range: NSRange(location: index + 1, length: 4))
+            breaks += 1
+        }
+        XCTAssertGreaterThanOrEqual(text.length, 95_000)
+        XCTAssertEqual(breaks, 5_000)
+        let start = Date()
+        let doc = try BodyCodec.noteItDoc(of: text).doc
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.3)
+        guard case .doc(let blocks) = doc, case .paragraph(_, _, let first)? = blocks.first,
+              case .paragraph(_, _, let last)? = blocks.last else { return XCTFail() }
+        XCTAssertEqual(first.filter { $0 == .hardBreak }.count, 100)
+        XCTAssertEqual(last.filter { $0 == .softBreak }.count, 100)
+    }
+
     private func meta(_ id: UUID, created: String = "2026-10-19T09:12:44Z", updated: String = "2026-10-19T10:03:02Z",
                       pinned: Bool = false, deleted: String? = nil) -> NoteMeta {
         let iso = ISO8601DateFormatter()
