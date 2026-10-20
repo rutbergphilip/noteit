@@ -1,6 +1,7 @@
 import Foundation
 
 /// Actions that can be bound to a global (system-wide) hotkey. All are unbound by default.
+/// New cases go in this file in `HotkeyOrder` order and have no default binding.
 enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
     case showMainWindow
     case newNote
@@ -44,12 +45,12 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         }
     }
 
-    /// Stable Carbon hotkey identifier (non-zero).
-    var hotkeyID: UInt32 { UInt32(Self.allCases.firstIndex(of: self)! + 1) }
+    /// Stable Carbon hotkey identifier (non-zero): the case's position in `HotkeyOrder`.
+    var hotkeyID: UInt32 { HotkeyOrder.hotkeyID(for: rawValue)! }
 
+    /// nil for an ID whose `HotkeyOrder` entry has no case yet.
     init?(hotkeyID: UInt32) {
-        let index = Int(hotkeyID) - 1
-        guard Self.allCases.indices.contains(index) else { return nil }
-        self = Self.allCases[index]
+        guard let action = HotkeyOrder.rawValue(for: hotkeyID).flatMap(Self.init(rawValue:)) else { return nil }
+        self = action
     }
 }
