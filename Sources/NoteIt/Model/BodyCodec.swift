@@ -188,9 +188,10 @@ extension BodyCodec {
         return frontMatter
     }
 
-    /// `path` from a note in `folder`, or nil when it leaves the folder, also through a symbolic link.
+    /// `path` (already percent-decoded) from a note in `folder`, or nil when it leaves the folder, also through a
+    /// symbolic link.
     static func fileInside(_ folder: URL, path: String) -> URL? {
-        guard let relative = AttachmentPaths.resolve(path, fromNoteAt: "note.md") else { return nil }
+        guard let relative = AttachmentPaths.resolve(decoded: path, fromNoteAt: "note.md") else { return nil }
         let root = folder.standardizedFileURL.resolvingSymlinksInPath()
         let file = folder.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
         return file.path.hasPrefix(root.path + "/") ? file : nil

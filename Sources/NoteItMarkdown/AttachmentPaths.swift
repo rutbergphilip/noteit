@@ -19,7 +19,11 @@ public enum AttachmentPaths {
     /// A reference written in the note at `notePath` → a content-relative path, or nil when it leaves the content
     /// folder or isn't a relative path.
     public static func resolve(_ reference: String, fromNoteAt notePath: String) -> String? {
-        let decoded = reference.removingPercentEncoding ?? reference
+        resolve(decoded: reference.removingPercentEncoding ?? reference, fromNoteAt: notePath)
+    }
+
+    /// As `resolve(_:fromNoteAt:)`, for a reference that is already percent-decoded (as `MarkdownCodec.parse` gives it).
+    public static func resolve(decoded: String, fromNoteAt notePath: String) -> String? {
         guard !decoded.isEmpty, !decoded.hasPrefix("/"), !decoded.contains("://"), !decoded.lowercased().hasPrefix("file:") else {
             return nil
         }

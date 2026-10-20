@@ -138,6 +138,21 @@ final class BodyCodecMarkdownTests: XCTestCase {
         }.tiffRepresentation.flatMap { NSBitmapImageRep(data: $0)?.representation(using: .png, properties: [:]) })
     }
 
+    func testImageNamesWithPercentAndSpaceSurviveSaveAndReload() throws {
+        let text = NSMutableAttributedString(attributedString: EditorStyle.paragraph("Images:", kind: .body))
+        for (name, color) in [("my%20photo.png", NSColor.red), ("my photo.png", NSColor.blue)] {
+            let attachment = NSTextAttachment(fileWrapper: FileWrapper(regularFileWithContents: try png(color)))
+            attachment.fileWrapper?.preferredFilename = name
+            text.insert(NSAttributedString(attachment: attachment), at: 7)
+        }
+        let url = dir.appendingPathComponent("note.md")
+        try BodyCodec.markdown.write(text, to: url)
+        let read = try BodyCodec.markdown.read(at: url).text
+        let markdown = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertEqual(Set(try BodyCodec.noteItDoc(of: read).attachments.values.map(\.name)), ["my%20photo.png", "my photo.png"], markdown)
+        XCTAssertTrue(BodyCodec.semanticallyEqual(read, text))
+    }
+
     func testImagesOutsideTheNoteFolderAreNotRead() throws {
         let notes = dir.appendingPathComponent("notes", isDirectory: true)
         let attachments = notes.appendingPathComponent("_attachments", isDirectory: true)

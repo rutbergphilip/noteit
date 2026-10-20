@@ -21,5 +21,7 @@ final class AttachmentPathsTests: XCTestCase {
         XCTAssertNil(AttachmentPaths.resolve("../x.png", fromNoteAt: "Note.md"))
         XCTAssertNil(AttachmentPaths.resolve("/etc/passwd", fromNoteAt: "Note.md"))
         XCTAssertNil(AttachmentPaths.resolve("https://example.com/x.png", fromNoteAt: "Note.md"))
+        XCTAssertEqual(AttachmentPaths.resolve(decoded: "../_attachments/x%20y.png", fromNoteAt: "Work/Note.md"), "_attachments/x%20y.png")
+        XCTAssertNil(AttachmentPaths.resolve(decoded: "../x.png", fromNoteAt: "Note.md"))
     }
 }
