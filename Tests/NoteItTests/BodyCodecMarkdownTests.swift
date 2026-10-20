@@ -122,30 +122,52 @@ final class BodyCodecMarkdownTests: XCTestCase {
     }
 
     func testManyLineBreaksExportQuickly() throws {
+        let text = lineBreakText(paragraphs: 50)
+        XCTAssertGreaterThanOrEqual(text.length, 95_000)
+        let start = Date()
+        let doc = try BodyCodec.noteItDoc(of: text).doc
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        guard case .doc(let blocks) = doc, case .paragraph(_, _, let first)? = blocks.first,
+              case .paragraph(_, _, let last)? = blocks.last else { return XCTFail() }
+        XCTAssertEqual(first.filter { $0 == .hardBreak }.count, 100)
+        XCTAssertEqual(last.filter { $0 == .softBreak }.count, 100)
+
+        // Linear work grows 8x for 8x the breaks; quadratic work would grow 64x.
+        let small = try fastestExport(lineBreakText(paragraphs: 10))
+        let large = try fastestExport(lineBreakText(paragraphs: 80))
+        XCTAssertLessThan(large, small * 24 + 0.05, "\(small)s for 1,000 breaks, \(large)s for 8,000")
+    }
+
+    /// `paragraphs` paragraphs of 100 line breaks each, every break followed by bold text; the last 2% are soft.
+    private func lineBreakText(paragraphs: Int) -> NSAttributedString {
         let bold = NSFontManager.shared.convert(EditorStyle.bodyFont, toHaveTrait: .boldFontMask)
         let segment = String(repeating: "x", count: 18)
         let text = NSMutableAttributedString()
-        for _ in 0..<50 {
+        for _ in 0..<paragraphs {
             text.append(EditorStyle.paragraph(Array(repeating: segment, count: 101).joined(separator: "\u{2028}"), kind: .body))
         }
         let ns = text.string as NSString
+        let softFrom = paragraphs * 100 * 49 / 50
         var breaks = 0
         for index in 0..<ns.length where ns.character(at: index) == 0x2028 {
-            if breaks >= 4_900 {
+            if breaks >= softFrom {
                 text.addAttribute(.noteItSoftBreak, value: true, range: NSRange(location: index, length: 1))
             }
             text.addAttribute(.font, value: bold, range: NSRange(location: index + 1, length: 4))
             breaks += 1
         }
-        XCTAssertGreaterThanOrEqual(text.length, 95_000)
-        XCTAssertEqual(breaks, 5_000)
-        let start = Date()
-        let doc = try BodyCodec.noteItDoc(of: text).doc
-        XCTAssertLessThan(Date().timeIntervalSince(start), 0.3)
-        guard case .doc(let blocks) = doc, case .paragraph(_, _, let first)? = blocks.first,
-              case .paragraph(_, _, let last)? = blocks.last else { return XCTFail() }
-        XCTAssertEqual(first.filter { $0 == .hardBreak }.count, 100)
-        XCTAssertEqual(last.filter { $0 == .softBreak }.count, 100)
+        XCTAssertEqual(breaks, paragraphs * 100)
+        return text
+    }
+
+    private func fastestExport(_ text: NSAttributedString) throws -> TimeInterval {
+        var fastest = TimeInterval.infinity
+        for _ in 0..<3 {
+            let start = Date()
+            _ = try BodyCodec.noteItDoc(of: text)
+            fastest = min(fastest, Date().timeIntervalSince(start))
+        }
+        return fastest
     }
 
     func testEnterAfterASoftBreakInAListItemKeepsItSoft() throws {
