@@ -214,7 +214,7 @@ public final class LocalHTTPServer: @unchecked Sendable {
         connections.removeValue(forKey: ObjectIdentifier(connection))
     }
 
-    /// The parser takes the largest body any route allows; each route's own limit is checked after matching.
+    /// The parser takes the largest body any route allows; each route's own limit is checked against the head.
     fileprivate func parser() -> HTTPParser {
         var parserLimits = limits
         let registered = routeRegistry.routes.compactMap(\.maxBodyBytes).max() ?? 0
@@ -233,12 +233,29 @@ public final class LocalHTTPServer: @unchecked Sendable {
         case stream(client: ClientRecord, cursor: String?, cors: HTTPHeaders)
     }
 
-    func handle(_ request: HTTPRequest, policy: RequestPolicy) async -> Outcome {
+    /// `admitted`: `screen` already let this request's head through (and took its rate-limit token).
+    func handle(_ request: HTTPRequest, policy: RequestPolicy, admitted: Bool = false) async -> Outcome {
         let started = DispatchTime.now()
         let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
                                                              reason: "Local API request")
         defer { ProcessInfo.processInfo.endActivity(activity) }
-        let (outcome, pattern) = await pipeline(request, policy: policy)
+        let (outcome, pattern) = await pipeline(request, policy: policy, admitted: admitted)
+        log(request, pattern: pattern, outcome: outcome, started: started)
+        return outcome
+    }
+
+    /// Runs the head-only steps of the pipeline (Host, Origin, route, Content-Type, the route's body limit against
+    /// `contentLength`, rate limit, auth) before a body is read. nil = read the body; otherwise answer and close.
+    func screen(_ head: HTTPRequest, contentLength: Int, policy: RequestPolicy) -> HTTPResponse? {
+        let started = DispatchTime.now()
+        let (gate, pattern) = admit(head, bodyLength: contentLength, policy: policy, consumeRate: true)
+        guard case .done(let outcome) = gate else { return nil }
+        log(head, pattern: pattern, outcome: outcome, started: started)
+        guard case .response(let response, _) = outcome else { return Self.error(.badRequest) }
+        return response
+    }
+
+    private func log(_ request: HTTPRequest, pattern: String?, outcome: Outcome, started: DispatchTime) {
         let status: Int
         switch outcome {
         case .response(let response, _): status = response.status
@@ -246,21 +263,36 @@ public final class LocalHTTPServer: @unchecked Sendable {
         }
         let milliseconds = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
         logger.info("\(request.method, privacy: .public) \(pattern ?? "-", privacy: .public) \(status) \(milliseconds) ms")
-        return outcome
     }
 
-    private func pipeline(_ request: HTTPRequest, policy: RequestPolicy) async -> (Outcome, String?) {
+    private struct Admission {
+        let match: RouteMatch
+        let origin: OriginDecision
+        let cors: HTTPHeaders
+        let client: ClientRecord?
+    }
+
+    private enum Gate {
+        case admitted(Admission)
+        case done(Outcome)
+    }
+
+    private static func withCORS(_ response: HTTPResponse, _ cors: HTTPHeaders) -> Outcome {
+        var response = response
+        for (name, value) in cors.pairs { response.headers[name] = value }
+        return .response(response, close: false)
+    }
+
+    /// Spec §6.6 up to the handler. Needs only the head plus the body's length.
+    private func admit(_ request: HTTPRequest, bodyLength: Int, policy: RequestPolicy,
+                       consumeRate: Bool) -> (Gate, String?) {
         guard policy.checkHost(request) else {
-            return (.response(Self.error(.misdirected), close: true), nil)
+            return (.done(.response(Self.error(.misdirected), close: true)), nil)
         }
         let origin = policy.classifyOrigin(request)
-        guard origin != .rejected else { return (.response(Self.error(.originNotAllowed), close: false), nil) }
+        guard origin != .rejected else { return (.done(.response(Self.error(.originNotAllowed), close: false)), nil) }
         let cors = policy.corsHeaders(for: origin)
-        func reply(_ response: HTTPResponse) -> Outcome {
-            var response = response
-            for (name, value) in cors.pairs { response.headers[name] = value }
-            return .response(response, close: false)
-        }
+        func reply(_ response: HTTPResponse) -> Gate { .done(Self.withCORS(response, cors)) }
         if let preflight = policy.preflight(request) { return (reply(preflight), nil) }
 
         let router = Router(routes: APIRoutes.all + routeRegistry.routes)
@@ -281,14 +313,14 @@ public final class LocalHTTPServer: @unchecked Sendable {
 
         if let code = policy.checkContentType(request, route: spec) { return (reply(Self.error(code)), pattern) }
         let defaultLimit = spec.body == .binary ? limits.maxBinaryBody : limits.maxJSONBody
-        if request.body.count > min(spec.maxBodyBytes ?? defaultLimit, Self.maxBodyCap) {
+        if bodyLength > min(spec.maxBodyBytes ?? defaultLimit, Self.maxBodyCap) {
             return (reply(Self.error(.tooLarge)), pattern)
         }
 
         let bearer = request.headers["Authorization"]
         let client = spec.scope == nil ? nil : registry.authenticate(bearer: bearer)
-        if let wait = limiter.consume(client: client?.id.uuidString ?? "anon",
-                                      bucket: client == nil ? .unauthenticated : spec.bucket) {
+        if consumeRate, let wait = limiter.consume(client: client?.id.uuidString ?? "anon",
+                                                   bucket: client == nil ? .unauthenticated : spec.bucket) {
             var response = Self.error(.rateLimited)
             response.headers["Retry-After"] = String(wait)
             return (reply(response), pattern)
@@ -305,8 +337,21 @@ public final class LocalHTTPServer: @unchecked Sendable {
             guard client.scopes.contains(where: { $0.allows(required) }) else {
                 return (reply(Self.error(.forbiddenScope)), pattern)
             }
-            onAuthenticated?(client.id)
         }
+        return (.admitted(Admission(match: match, origin: origin, cors: cors, client: client)), pattern)
+    }
+
+    private func pipeline(_ request: HTTPRequest, policy: RequestPolicy, admitted: Bool) async -> (Outcome, String?) {
+        let admission: Admission
+        switch admit(request, bodyLength: request.body.count, policy: policy, consumeRate: !admitted) {
+        case (.done(let outcome), let pattern): return (outcome, pattern)
+        case (.admitted(let found), _): admission = found
+        }
+        let (match, origin, cors, client) = (admission.match, admission.origin, admission.cors, admission.client)
+        let spec = match.spec
+        let pattern = spec.pattern
+        func reply(_ response: HTTPResponse) -> Outcome { Self.withCORS(response, cors) }
+        if let client { onAuthenticated?(client.id) }
 
         let context = LocalAPIContext(request: request, route: match, client: client, origin: origin)
         guard let route = RouteID(rawValue: spec.id) else {
@@ -448,6 +493,8 @@ private final class Connection: @unchecked Sendable {
     private var receiving = false
     private var closed = false
     private var stopping = false
+    /// The head of the request in `buffer` passed `screen`; its body is still arriving.
+    private var headAdmitted = false
     private var idleTimer: DispatchWorkItem?
     private var subscription: UUID?
     private var heartbeat: DispatchSourceTimer?
@@ -503,7 +550,19 @@ private final class Connection: @unchecked Sendable {
 
     private func process() {
         guard !busy, !closed, !isStream, let server else { return }
-        switch server.parser().parse(buffer) {
+        let parser = server.parser()
+        if !headAdmitted, case .head(let head, let bodyStart, let contentLength) = parser.parseHead(buffer),
+           buffer.count - bodyStart < contentLength {
+            // Don't buffer a body the request would be refused for anyway.
+            if let response = server.screen(head, contentLength: contentLength, policy: policy) {
+                idleTimer?.cancel()
+                busy = true
+                write(response.serialized(keepAlive: false)) { [weak self] in self?.close() }
+                return
+            }
+            headAdmitted = true
+        }
+        switch parser.parse(buffer) {
         case .needMore:
             armIdleTimer()
             receive()
@@ -516,8 +575,10 @@ private final class Connection: @unchecked Sendable {
             busy = true
             idleTimer?.cancel()
             let policy = policy
+            let admitted = headAdmitted
+            headAdmitted = false
             Task { [weak self] in
-                let outcome = await server.handle(request, policy: policy)
+                let outcome = await server.handle(request, policy: policy, admitted: admitted)
                 server.queue.async { self?.finish(outcome, request: request) }
             }
         }

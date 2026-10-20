@@ -251,7 +251,9 @@ public struct HTTPResponse: Sendable {
 // NoteItAPI/Server/HTTPParser.swift
 public struct HTTPParserLimits: Sendable { public var maxHeaderBytes = 16_384; public var maxJSONBody = 2_000_000; public var maxBinaryBody = 25_000_000 }
 public enum HTTPParseResult: Equatable { case needMore, request(HTTPRequest, consumed: Int), failure(status: Int, APIErrorCode) }
-public struct HTTPParser { public init(limits: HTTPParserLimits = .init()); public func parse(_ buffer: Data) -> HTTPParseResult }
+public enum HTTPHeadResult: Equatable { case needMore, head(HTTPRequest, bodyStart: Int, contentLength: Int), failure(status: Int, APIErrorCode) }
+public struct HTTPParser { public init(limits: HTTPParserLimits = .init()); public func parse(_ buffer: Data) -> HTTPParseResult
+                           public func parseHead(_ buffer: Data) -> HTTPHeadResult }                                // head only, no body limit
 
 // NoteItAPI/Server/RouteMatch.swift (built in foundations 5.2)
 public struct RouteMatch: Sendable { public let spec: RouteSpec; public let params: [String: String] }
@@ -627,7 +629,7 @@ T7, T8 and T9 can run in parallel.
 
 #### Task 7: HTTP parser, response and router
 **Files:** `Sources/NoteItAPI/Server/HTTPParser.swift`, `Router.swift`; `Tests/NoteItAPITests/HTTPParserTests.swift`, `RouterTests.swift`. `HTTPMessage.swift` and `RouteMatch` come from foundations (5.1, 5.2).
-- [ ] Parser: request line, headers (CRLF; reject bare LF with 400), `Content-Length` (missing on POST/PATCH with body → 411; `Transfer-Encoding: chunked` → 411), percent-decoded path and query, limits per route body kind (the parser takes the larger binary limit; the server re-checks JSON routes against `maxJSONBody`). Pipelined requests return `consumed` so the caller keeps the rest.
+- [ ] Parser: request line, headers (CRLF; reject bare LF with 400), `Content-Length` (missing on POST/PATCH with body → 411; `Transfer-Encoding: chunked` → 411), percent-decoded path and query, limits per route body kind (the parser takes the larger binary limit; the server re-checks JSON routes against `maxJSONBody`; before reading a body the server runs the head-only pipeline steps — Host, Origin, route, Content-Type, the route's limit against the declared `Content-Length`, rate limit, auth — and answers a refusal at once with `Connection: close`). Pipelined requests return `consumed` so the caller keeps the rest.
 - [ ] Check that `HTTPResponse.serialized` (foundations' `HTTPMessage.swift`) writes `HTTP/1.1 <status> <reason>`, `Content-Length`, `Content-Type`, `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `Connection: keep-alive|close`; fix it there if it doesn't.
 - [ ] Router: literal segments beat params; `/v1/notes/{id}` must not match `/v1/notes/{id}/append`; wrong method on a known path → 405 (`bad_request` body, `Allow` header).
 - [ ] Tests: `testParsesSimpleGet`, `testNeedsMoreForPartialHeaders`, `testNeedsMoreForPartialBody`, `testPipelinedRequests`, `testHeaderLimit`, `testBodyLimit`, `testChunkedRejected`, `testBareLFRejected`, `testQueryDecoding`, `testResponseSerialization`, `testFuzzNeverCrashes` (10,000 random byte buffers and random truncations of valid requests; only asserts no crash and a result), `testRouterParams`, `testRouterLiteralBeatsParam`, `testRouter405`, `testRouter404`.

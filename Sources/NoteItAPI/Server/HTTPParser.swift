@@ -19,8 +19,15 @@ public enum HTTPParseResult: Equatable {
     case failure(status: Int, APIErrorCode)
 }
 
+public enum HTTPHeadResult: Equatable {
+    case needMore
+    /// A complete head; `request.body` is empty. The body is `contentLength` bytes starting at `bodyStart`.
+    case head(HTTPRequest, bodyStart: Int, contentLength: Int)
+    case failure(status: Int, APIErrorCode)
+}
+
 /// An incremental HTTP/1.1 request parser. It doesn't know the route yet, so it applies the larger binary body
-/// limit; the server re-checks each route's own limit after matching.
+/// limit; the server checks each route's own limit against the head (`parseHead`) before reading the body.
 public struct HTTPParser: Sendable {
     public let limits: HTTPParserLimits
 
@@ -29,6 +36,27 @@ public struct HTTPParser: Sendable {
     }
 
     public func parse(_ buffer: Data) -> HTTPParseResult {
+        let head: HTTPRequest
+        let bodyStart: Int
+        let contentLength: Int
+        switch parseHead(buffer) {
+        case .needMore: return .needMore
+        case .failure(let status, let code): return .failure(status: status, code)
+        case .head(let request, let start, let length): (head, bodyStart, contentLength) = (request, start, length)
+        }
+        if contentLength > max(limits.maxBinaryBody, limits.maxJSONBody) {
+            return .failure(status: 413, .tooLarge)
+        }
+        guard buffer.count - bodyStart >= contentLength else { return .needMore }
+
+        let start = buffer.startIndex + bodyStart
+        var request = head
+        request.body = Data(buffer[start..<(start + contentLength)])
+        return .request(request, consumed: bodyStart + contentLength)
+    }
+
+    /// Parses only the head, so a request can be checked before its body is read. No body limit applies here.
+    public func parseHead(_ buffer: Data) -> HTTPHeadResult {
         // Only the head is copied; a large body arriving in many reads is never re-copied while it's incomplete.
         let scanned = [UInt8](buffer.prefix(limits.maxHeaderBytes + 4))
         guard let headEnd = Self.headEnd(in: scanned) else {
@@ -69,15 +97,8 @@ public struct HTTPParser: Sendable {
         } else {
             contentLength = 0
         }
-        if contentLength > max(limits.maxBinaryBody, limits.maxJSONBody) {
-            return .failure(status: 413, .tooLarge)
-        }
-        guard buffer.count - bodyStart >= contentLength else { return .needMore }
-
-        let start = buffer.startIndex + bodyStart
-        let body = Data(buffer[start..<(start + contentLength)])
-        let request = HTTPRequest(method: method, path: path, query: query, headers: headers, body: body)
-        return .request(request, consumed: bodyStart + contentLength)
+        let request = HTTPRequest(method: method, path: path, query: query, headers: headers, body: Data())
+        return .head(request, bodyStart: bodyStart, contentLength: contentLength)
     }
 
     // MARK: - Pieces

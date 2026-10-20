@@ -196,6 +196,46 @@ final class LocalHTTPServerTests: XCTestCase {
         XCTAssertTrue(good.readResponse().hasPrefix("HTTP/1.1 200"))
     }
 
+    /// Only the head is sent: each request must be refused from its head alone, without waiting for the body.
+    func testHeadIsCheckedBeforeBodyIsRead() async throws {
+        let harness = try await start()
+        let host = "Host: 127.0.0.1:\(harness.port)"
+        let json = "Content-Type: application/json"
+        let cases: [(String, String, String)] = [
+            ("POST /v1/notes HTTP/1.1\r\nHost: evil.example\r\n\(json)\r\nContent-Length: 50000000\r\n\r\n", "421", "misdirected"),
+            ("POST /v1/notes HTTP/1.1\r\n\(host)\r\nOrigin: https://example.com\r\n\(json)\r\nContent-Length: 50000000\r\n\r\n",
+             "403", "origin_not_allowed"),
+            ("POST /v1/notes HTTP/1.1\r\n\(host)\r\n\(json)\r\nContent-Length: 3000000\r\n\r\n", "413", "too_large"),
+            ("POST /v1/nothing HTTP/1.1\r\n\(host)\r\n\(json)\r\nContent-Length: 50000000\r\n\r\n", "404", "not_found"),
+            ("PUT /v1/notes HTTP/1.1\r\n\(host)\r\n\(json)\r\nContent-Length: 50000000\r\n\r\n", "405", "bad_request"),
+            ("POST /v1/notes HTTP/1.1\r\n\(host)\r\n\(json)\r\nContent-Length: 1000000\r\n\r\n", "401", "unauthorized"),
+        ]
+        for (head, status, code) in cases {
+            let client = try XCTUnwrap(RawHTTPClient(port: harness.port))
+            client.send(head)
+            let response = client.readResponse()
+            XCTAssertTrue(response.hasPrefix("HTTP/1.1 \(status)"), response)
+            XCTAssertTrue(response.contains("\"\(code)\""), response)
+            XCTAssertTrue(response.lowercased().contains("connection: close"), response)
+            XCTAssertTrue(client.isClosedByPeer(), status)
+        }
+    }
+
+    func testAdmittedHeadThenBodyIsHandledOnce() async throws {
+        let harness = try await start(rules: [.general: .init(perSecond: 0.001, burst: 1),
+                                              .write: .init(perSecond: 0.001, burst: 1)])
+        let (_, token) = try harness.token([.write])
+        let body = #"{"title":"x"}"#
+        let client = try XCTUnwrap(RawHTTPClient(port: harness.port))
+        client.send("POST /v1/notes HTTP/1.1\r\nHost: 127.0.0.1:\(harness.port)\r\nAuthorization: Bearer \(token)\r\n"
+                    + "Content-Type: application/json\r\nContent-Length: \(body.utf8.count)\r\n\r\n")
+        try await Task.sleep(nanoseconds: 100_000_000)
+        client.send(body)
+        let response = client.readResponse()
+        XCTAssertTrue(response.hasPrefix("HTTP/1.1 200"), response)
+        XCTAssertTrue(response.contains("noteCreate"), response)
+    }
+
     func testRateLimited429WithRetryAfter() async throws {
         var rules = RateLimiter.defaults
         rules[.unauthenticated] = RateLimiter.Rule(perSecond: 0.01, burst: 2)

@@ -78,6 +78,19 @@ final class HTTPParserTests: XCTestCase {
         XCTAssertEqual(parser.parse(data(conflicting)), .failure(status: 400, .badRequest))
     }
 
+    func testParseHeadReturnsHeadBeforeBody() {
+        let limited = HTTPParser(limits: HTTPParserLimits(maxJSONBody: 10, maxBinaryBody: 20))
+        let head = "POST /v1/notes HTTP/1.1\r\nHost: x\r\nContent-Length: 50000000\r\n\r\n"
+        guard case .head(let request, let bodyStart, let length) = limited.parseHead(data(head + "ab")) else {
+            return XCTFail("expected a head")
+        }
+        XCTAssertEqual(request.path, "/v1/notes")
+        XCTAssertTrue(request.body.isEmpty)
+        XCTAssertEqual(bodyStart, head.utf8.count)
+        XCTAssertEqual(length, 50_000_000)
+        XCTAssertEqual(limited.parseHead(data("POST /v1/notes HTTP/1.1\r\n")), .needMore)
+    }
+
     func testChunkedRejected() {
         let chunked = "POST /v1/notes HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n2\r\n{}\r\n0\r\n\r\n"
         XCTAssertEqual(parser.parse(data(chunked)), .failure(status: 411, .lengthRequired))
