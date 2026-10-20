@@ -39,6 +39,9 @@ public final class LocalHTTPServer: @unchecked Sendable {
 
     var idleTimeout: TimeInterval = 30
     var heartbeatInterval: TimeInterval = 15
+    /// After answering and closing early, unread request bytes are drained this long, up to this many (RFC 9112 §9.6).
+    var lingerTimeout: TimeInterval = 2
+    var lingerDiscardLimit = 16_000_000
     /// Tests: runs on the queue right after a listener starts and before it's ready.
     var listenerStarted: (() -> Void)?
 
@@ -48,6 +51,8 @@ public final class LocalHTTPServer: @unchecked Sendable {
     private var startToken: UUID?
     private var pendingListener: NWListener?
     private var connections: [ObjectIdentifier: Connection] = [:]
+    /// Over-capacity connections being answered `503`; capped separately so they can't pile up.
+    private var rejected: [ObjectIdentifier: Connection] = [:]
     private var port: UInt16 = 0
 
     private let hooksLock = NSLock()
@@ -120,7 +125,7 @@ public final class LocalHTTPServer: @unchecked Sendable {
             pendingListener = nil
             listener?.cancel()
             listener = nil
-            for connection in connections.values { connection.shutDown() }
+            for connection in Array(connections.values) + Array(rejected.values) { connection.shutDown() }
         }
     }
 
@@ -195,23 +200,23 @@ public final class LocalHTTPServer: @unchecked Sendable {
     }
 
     private func accept(_ nwConnection: NWConnection) {
+        let connection = Connection(server: self, connection: nwConnection, policy: RequestPolicy(port: port))
         guard connections.count < Self.maxConnections else {
+            guard rejected.count < Self.maxConnections else { return nwConnection.cancel() }
             var response = HTTPResponse.error(.rateLimited, "Too many open connections. Try again in a moment.")
             response.status = 503
             response.headers["Retry-After"] = "1"
-            nwConnection.start(queue: queue)
-            nwConnection.send(content: response.serialized(keepAlive: false), completion: .contentProcessed { _ in
-                nwConnection.cancel()
-            })
+            rejected[ObjectIdentifier(connection)] = connection
+            connection.reject(response)
             return
         }
-        let connection = Connection(server: self, connection: nwConnection, policy: RequestPolicy(port: port))
         connections[ObjectIdentifier(connection)] = connection
         connection.start()
     }
 
     fileprivate func removed(_ connection: Connection) {
         connections.removeValue(forKey: ObjectIdentifier(connection))
+        rejected.removeValue(forKey: ObjectIdentifier(connection))
     }
 
     /// The parser takes the largest body any route allows; each route's own limit is checked against the head.
@@ -496,6 +501,10 @@ private final class Connection: @unchecked Sendable {
     /// The head of the request in `buffer` passed `screen`; its body is still arriving.
     private var headAdmitted = false
     private var idleTimer: DispatchWorkItem?
+    /// Set while lingering: the response is out (or going) and further bytes are discarded up to this many.
+    private var discardBudget: Int?
+    private var lingerSent = false
+    private var lingerPeerDone = false
     private var subscription: UUID?
     private var heartbeat: DispatchSourceTimer?
 
@@ -507,6 +516,18 @@ private final class Connection: @unchecked Sendable {
     }
 
     func start() {
+        begin()
+        armIdleTimer()
+        receive()
+    }
+
+    /// Answers without reading a request, e.g. `503` when the server is full.
+    func reject(_ response: HTTPResponse) {
+        begin()
+        respondAndLinger(response, unreadBody: nil)
+    }
+
+    private func begin() {
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .failed, .cancelled: self?.close()
@@ -514,13 +535,11 @@ private final class Connection: @unchecked Sendable {
             }
         }
         connection.start(queue: queue)
-        armIdleTimer()
-        receive()
     }
 
     /// The server is stopping: idle connections and streams close now, a busy one after answering `api_disabled`.
     func shutDown() {
-        if busy {
+        if busy, discardBudget == nil {
             stopping = true
         } else {
             close()
@@ -535,6 +554,12 @@ private final class Connection: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
             guard let self, !self.closed else { return }
             self.receiving = false
+            if let budget = self.discardBudget {
+                let remaining = budget - (data?.count ?? 0)
+                self.discardBudget = remaining
+                if isComplete || error != nil || remaining <= 0 { return self.finishLinger() }
+                return self.receive()
+            }
             if isComplete || error != nil {
                 self.close()
                 return
@@ -555,10 +580,7 @@ private final class Connection: @unchecked Sendable {
            buffer.count - bodyStart < contentLength {
             // Don't buffer a body the request would be refused for anyway.
             if let response = server.screen(head, contentLength: contentLength, policy: policy) {
-                idleTimer?.cancel()
-                busy = true
-                write(response.serialized(keepAlive: false)) { [weak self] in self?.close() }
-                return
+                return respondAndLinger(response, unreadBody: contentLength - (buffer.count - bodyStart))
             }
             headAdmitted = true
         }
@@ -569,7 +591,7 @@ private final class Connection: @unchecked Sendable {
         case .failure(let status, let code):
             var response = LocalHTTPServer.error(code)
             response.status = status
-            write(response.serialized(keepAlive: false)) { [weak self] in self?.close() }
+            respondAndLinger(response, unreadBody: nil)
         case .request(let request, let consumed):
             buffer.removeFirst(consumed)
             busy = true
@@ -658,6 +680,37 @@ private final class Connection: @unchecked Sendable {
             if error != nil { return self.close() }
             then?()
         })
+    }
+
+    /// Lingering close (RFC 9112 §9.6): send the response, shut down the write side, then discard what the client
+    /// still sends until it closes, `lingerDiscardLimit` bytes or `lingerTimeout`, so it can read the response instead
+    /// of having its upload reset. The connection keeps its slot until then.
+    private func respondAndLinger(_ response: HTTPResponse, unreadBody: Int?) {
+        guard let server, !closed else { return }
+        busy = true
+        buffer.removeAll()
+        let limit = server.lingerDiscardLimit
+        discardBudget = unreadBody.map { min(max($0, 0) + 65_536, limit) } ?? limit
+        idleTimer?.cancel()
+        let timer = DispatchWorkItem { [weak self] in self?.close() }
+        idleTimer = timer
+        queue.asyncAfter(deadline: .now() + server.lingerTimeout, execute: timer)
+        write(response.serialized(keepAlive: false)) { [weak self] in
+            guard let self else { return }
+            self.connection.send(content: nil, contentContext: .finalMessage, isComplete: true,
+                                 completion: .contentProcessed { [weak self] error in
+                guard let self, !self.closed else { return }
+                if error != nil { return self.close() }
+                self.lingerSent = true
+                if self.lingerPeerDone { self.close() }
+            })
+        }
+        receive()
+    }
+
+    private func finishLinger() {
+        lingerPeerDone = true
+        if lingerSent { close() }
     }
 
     private func armIdleTimer() {

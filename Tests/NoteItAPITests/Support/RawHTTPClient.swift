@@ -35,6 +35,22 @@ final class RawHTTPClient {
         _ = data.withUnsafeBytes { Darwin.send(fd, $0.baseAddress, data.count, 0) }
     }
 
+    /// Blocks until all of `data` is written; the `errno` of a failed write, or nil.
+    func sendAll(_ data: Data) -> Int32? {
+        data.withUnsafeBytes { raw -> Int32? in
+            var offset = 0
+            while offset < raw.count {
+                let count = Darwin.send(fd, raw.baseAddress! + offset, raw.count - offset, 0)
+                if count < 0 {
+                    if errno == EINTR { continue }
+                    return errno
+                }
+                offset += count
+            }
+            return nil
+        }
+    }
+
     /// Reads until `done` holds for everything read so far (consuming it), EOF or timeout.
     @discardableResult
     func read(until done: (String) -> Bool) -> String {

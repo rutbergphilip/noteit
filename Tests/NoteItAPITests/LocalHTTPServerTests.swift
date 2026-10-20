@@ -221,6 +221,33 @@ final class LocalHTTPServerTests: XCTestCase {
         }
     }
 
+    /// A client that writes its whole body before reading (like Python's urllib) must still get the early 4xx:
+    /// the server drains the body instead of resetting the upload.
+    func testEarlyRejectLingersWhileTheBodyArrives() async throws {
+        let routes = LocalAPIRouteRegistry()
+        routes.register(RouteSpec(id: "tasks.upload", method: .POST, pattern: "/v1/tasks/upload", scope: .write,
+                                  body: .binary, bucket: .write, maxBodyBytes: 20_000_000, summary: "Upload")) { _ in
+            HTTPResponse(status: 201)
+        }
+        let harness = try await start(routes: routes)
+        let host = "Host: 127.0.0.1:\(harness.port)"
+        let length = 8_000_000
+        let body = Data(repeating: 0x61, count: length)
+        let cases = [
+            ("POST /v1/tasks/upload HTTP/1.1\r\n\(host)\r\nContent-Type: application/octet-stream\r\n", "401"),
+            ("POST /v1/notes HTTP/1.1\r\n\(host)\r\nContent-Type: application/json\r\n", "413"),
+        ]
+        for (head, status) in cases {
+            let client = try XCTUnwrap(RawHTTPClient(port: harness.port))
+            client.send(head + "Content-Length: \(length)\r\n\r\n")
+            XCTAssertNil(client.sendAll(body), "the upload was reset before the \(status) could be read")
+            let response = client.readResponse()
+            XCTAssertTrue(response.hasPrefix("HTTP/1.1 \(status)"), response)
+            XCTAssertTrue(response.lowercased().contains("connection: close"), response)
+            XCTAssertTrue(client.isClosedByPeer(), status)
+        }
+    }
+
     func testAdmittedHeadThenBodyIsHandledOnce() async throws {
         let harness = try await start(rules: [.general: .init(perSecond: 0.001, burst: 1),
                                               .write: .init(perSecond: 0.001, burst: 1)])
