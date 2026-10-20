@@ -53,6 +53,7 @@ final class ExtrasSpyStorage: NoteBodyStorage, @unchecked Sendable {
 /// A minimal Markdown store: one `<id>.md` file per note, written with `BodyCodec.markdown`.
 final class MarkdownTestStorage: NoteBodyStorage, @unchecked Sendable {
     let contentRootURL: URL
+    private(set) var preparedTemps = 0
 
     init(rootURL: URL) {
         contentRootURL = rootURL.appendingPathComponent("markdown", isDirectory: true)
@@ -73,6 +74,7 @@ final class MarkdownTestStorage: NoteBodyStorage, @unchecked Sendable {
     }
     func writeMetadataOnly(for note: NoteMeta, notebook: Notebook?) throws {}
     func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, meta: NoteMeta) throws -> URL {
+        preparedTemps += 1
         try FileManager.default.createDirectory(at: contentRootURL, withIntermediateDirectories: true)
         let temp = contentRootURL.appendingPathComponent(".\(UUID().uuidString).md.tmp")
         try BodyCodec.markdown.write(text, extras: extras, meta: meta, to: temp)
@@ -442,7 +444,41 @@ final class BodyExtrasTests: XCTestCase {
         XCTAssertEqual(try relaunched.bodyStorage.read(id).text.string.trimmingCharacters(in: .newlines), "Remote\nthird")
     }
 
+    func testMarkdownSyncApplyWritesTheIncomingFrontMatterOnce() throws {
+        let id = UUID()
+        let storage = MarkdownTestStorage(rootURL: root)
+        let store = makeStore(storage: storage)
+        let incoming = ContainerExtras(frontMatter: "aliases: [Remote]\ntags: [a]")
+        try apply(store, id, "Remote\nfirst", extras: incoming)
+        let file = try String(contentsOf: storage.fileURL(for: id), encoding: .utf8)
+        XCTAssertTrue(file.contains("\naliases: [Remote]\ntags: [a]\n---\n"), file)
+        XCTAssertEqual(store.bodyExtras[id], incoming)
+        XCTAssertEqual(storage.preparedTemps, 1)
+
+        try apply(store, id, "Remote\nsecond", extras: .empty, rtfd: true)
+        XCTAssertTrue(try String(contentsOf: storage.fileURL(for: id), encoding: .utf8).contains("\naliases: [Remote]\ntags: [a]\n"))
+        XCTAssertEqual(storage.preparedTemps, 2)
+        XCTAssertTrue(try markdownTemps(storage).isEmpty)
+    }
+
+    func testMarkdownSyncApplyRebuildsWhenTheKeysChangeAfterPrepare() throws {
+        let storage = MarkdownTestStorage(rootURL: root)
+        let store = makeStore(storage: storage)
+        let id = try saveNote(store, NSAttributedString(string: "Title\nbody"), extras: ContainerExtras(frontMatter: "aliases: [Old]"))
+        let prepared = try prepare(store, id, "Remote\nbody")
+        store.setBodyExtras(ContainerExtras(frontMatter: "aliases: [New]"), for: id)
+        let before = storage.preparedTemps
+        try store.applyPreparedRemoteNote(prepared)
+        XCTAssertEqual(storage.preparedTemps, before + 1)
+        XCTAssertTrue(try String(contentsOf: storage.fileURL(for: id), encoding: .utf8).contains("\naliases: [New]\n---\n"))
+        XCTAssertTrue(try markdownTemps(storage).isEmpty)
+    }
+
     // MARK: Helpers
+
+    private func markdownTemps(_ storage: MarkdownTestStorage) throws -> [String] {
+        try fm.contentsOfDirectory(atPath: storage.contentRootURL.path).filter { $0.hasSuffix(".tmp") }
+    }
 
     private func makeStore(storage: NoteBodyStorage? = nil) -> NoteStore {
         NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false), bodyStorage: storage)
@@ -450,10 +486,13 @@ final class BodyExtrasTests: XCTestCase {
 
     /// Sync apply of a noteit-doc body with `extras`, or of an RTFD body (which has none).
     private func apply(_ store: NoteStore, _ id: UUID, _ text: String, extras: ContainerExtras, rtfd: Bool = false) throws {
-        var prepared = try NoteStore.prepareRemoteNote(S.notePayload(id, revision: UUID(), text: text), storage: store.bodyStorage)
-        prepared.extras = rtfd ? .empty : extras
-        prepared.bodyIsRTFD = rtfd
-        try store.applyPreparedRemoteNote(prepared)
+        try store.applyPreparedRemoteNote(prepare(store, id, text, extras: extras, rtfd: rtfd))
+    }
+
+    private func prepare(_ store: NoteStore, _ id: UUID, _ text: String, extras: ContainerExtras = .empty,
+                         rtfd: Bool = true) throws -> NoteStore.PreparedRemoteNote {
+        try NoteStore.prepareRemoteNote(S.notePayload(id, revision: UUID(), text: text), storage: store.bodyStorage,
+                                        extras: rtfd ? .empty : extras, bodyIsRTFD: rtfd)
     }
 
     /// A note saved with `extras`, through the regular editor path.

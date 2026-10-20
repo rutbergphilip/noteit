@@ -1379,6 +1379,9 @@ final class NoteStore: ObservableObject {
         var extras: ContainerExtras = .empty
         /// The body came as RTFD, which carries no front matter: the note's current unknown keys are kept.
         var bodyIsRTFD: Bool
+        /// The extras `tempBody` was written with. For an RTFD body on a non-RTFD store, they hold the unknown keys
+        /// read from the note's file when it was prepared.
+        var tempExtras: ContainerExtras = .empty
         /// The decrypted meta, kept in sync-meta-raw/ so fields this build doesn't know survive a re-export.
         var rawMeta: RawMeta
         /// The body on disk differs from the incoming one, so it may be kept as a version before being replaced.
@@ -1389,18 +1392,25 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    nonisolated static func prepareRemoteNote(_ payload: RecordPayload, storage: NoteBodyStorage) throws -> PreparedRemoteNote {
+    nonisolated static func prepareRemoteNote(_ payload: RecordPayload, storage: NoteBodyStorage,
+                                              extras: ContainerExtras = .empty,
+                                              bodyIsRTFD: Bool = true) throws -> PreparedRemoteNote {
         var meta = try decodeMeta(NoteMeta.self, payload)
         meta.revision = payload.revision
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
         let body = try deserializeBody(data)
         applyDerivedFields(to: &meta, from: body)
-        let temp = try storage.prepareTemp(body, extras: .empty, meta: meta)
+        var tempExtras = extras
+        if bodyIsRTFD, storage.kind != .rtfd {
+            tempExtras.frontMatter = (try? BodyCodec.markdownFrontMatterExtra(at: storage.fileURL(for: payload.id))) ?? nil
+        }
+        let temp = try storage.prepareTemp(body, extras: tempExtras, meta: meta)
         var replaces = false
         if FileManager.default.fileExists(atPath: storage.fileURL(for: payload.id).path) {
             replaces = (try? storage.read(payload.id)).map { !$0.text.isEqual(to: body) } ?? true
         }
-        return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp, bodyIsRTFD: true,
+        return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp, extras: extras,
+                                  bodyIsRTFD: bodyIsRTFD, tempExtras: tempExtras,
                                   rawMeta: RawMeta(sourceRevision: payload.revision, meta: payload.meta),
                                   replacesDifferentBody: replaces)
     }
@@ -1415,10 +1425,14 @@ final class NoteStore: ObservableObject {
             prepared.discard()
             throw SyncApplyError.bodyWriteBlocked(id)
         }
-        // An RTFD body carries no front matter, so the unknown keys stay on this Mac (spec §3.3).
+        // An RTFD body carries no front matter, so the unknown keys stay on this Mac (spec §3.3). Other stores read
+        // them from the file while preparing; only keys changed in memory since then need a rebuilt temp.
         var extras = prepared.extras
-        if prepared.bodyIsRTFD { extras.frontMatter = storedFrontMatter(id) }
-        if extras != prepared.extras, bodyStorage.kind != .rtfd {
+        if prepared.bodyIsRTFD {
+            extras.frontMatter = bodyStorage.kind == .rtfd ? storedFrontMatter(id)
+                : bodyExtras[id].map(\.frontMatter) ?? prepared.tempExtras.frontMatter
+        }
+        if bodyStorage.kind != .rtfd, extras != prepared.tempExtras {
             do {
                 let temp = try bodyStorage.prepareTemp(prepared.body, extras: extras, meta: prepared.meta)
                 prepared.discard()
