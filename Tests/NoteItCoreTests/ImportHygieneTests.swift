@@ -6,6 +6,7 @@ final class ImportHygieneTests: XCTestCase {
     private static let portableFolders = [
         "Sources/NoteItCore",
         "Sources/NoteItDoc",
+        "Sources/NoteItMarkdown",
         "Tests/Support/NoteItDocTestSupport",
         "Sources/NoteItSync",
         "Sources/NoteItAPI",
@@ -40,8 +41,24 @@ final class ImportHygieneTests: XCTestCase {
         XCTAssertTrue(violations.isEmpty, "Forbidden imports in portable targets:\n" + violations.joined(separator: "\n"))
     }
 
+    /// NoteItMarkdown is Foundation plus NoteItDoc only (program §1); CryptoKit hashes attachments.
+    func testMarkdownImportsOnlyFoundationAndNoteItDoc() throws {
+        let allowed: Set<String> = ["Foundation", "CryptoKit", "NoteItDoc"]
+        var violations: [String] = []
+        for file in try swiftFiles(in: repoRoot.appendingPathComponent("Sources/NoteItMarkdown", isDirectory: true)) {
+            for line in try String(contentsOf: file, encoding: .utf8).components(separatedBy: .newlines) {
+                let words = line.trimmingCharacters(in: .whitespaces).split(separator: " ").map(String.init)
+                guard let index = words.firstIndex(of: "import"), words[..<index].allSatisfy({ $0.hasPrefix("@") }),
+                      let path = words.last, index < words.count - 1 else { continue }
+                let module = path.split(separator: ".").first.map(String.init) ?? ""
+                if !allowed.contains(module) { violations.append("\(file.lastPathComponent): \(line)") }
+            }
+        }
+        XCTAssertTrue(violations.isEmpty, violations.joined(separator: "\n"))
+    }
+
     func testScannedFoldersExist() {
-        for folder in ["Sources/NoteItCore", "Sources/NoteItSync"] {
+        for folder in ["Sources/NoteItCore", "Sources/NoteItSync", "Sources/NoteItMarkdown"] {
             let path = repoRoot.appendingPathComponent(folder).path
             XCTAssertTrue(FileManager.default.fileExists(atPath: path), "Missing \(folder)")
         }

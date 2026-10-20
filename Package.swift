@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "NoteItCore", targets: ["NoteItCore"]),
         .library(name: "NoteItSync", targets: ["NoteItSync"]),
         .library(name: "NoteItDoc", targets: ["NoteItDoc"]),
+        .library(name: "NoteItMarkdown", targets: ["NoteItMarkdown"]),
         .library(name: "NoteItAPI", targets: ["NoteItAPI"])
     ],
     dependencies: [
@@ -23,6 +24,11 @@ let package = Package(
             name: "NoteItDoc",
             dependencies: ["NoteItCore"],
             path: "Sources/NoteItDoc"
+        ),
+        .target(
+            name: "NoteItMarkdown",
+            dependencies: ["NoteItDoc"],
+            path: "Sources/NoteItMarkdown"
         ),
         .target(
             name: "NoteItDocAppKit",
@@ -70,6 +76,11 @@ let package = Package(
             name: "NoteItDocTests",
             dependencies: ["NoteItDoc", "NoteItDocTestSupport"],
             path: "Tests/NoteItDocTests"
+        ),
+        .testTarget(
+            name: "NoteItMarkdownTests",
+            dependencies: ["NoteItMarkdown", "NoteItDocTestSupport"],
+            path: "Tests/NoteItMarkdownTests"
         ),
         .testTarget(
             name: "NoteItDocAppKitTests",

@@ -454,7 +454,7 @@ Moved to foundations (docs/plans/2026-10-19-foundations.md), program §2 step 4.
 
 **Files:** `Package.swift`, `Sources/NoteItMarkdown/FrontMatter.swift`, `Tests/NoteItMarkdownTests/FrontMatterTests.swift`
 
-- [ ] Add the target and test target (see File structure). `NoteItMarkdown` declares no platforms of its own, imports only Foundation and `NoteItDoc`, and passes the wave 0 `ImportHygieneTests` (no AppKit in an iOS-capable target).
+- [ ] Add the target, a `NoteItMarkdown` library product (so the iOS build check has a scheme) and the test target (see File structure). `NoteItMarkdown` declares no platforms of its own, imports only Foundation, CryptoKit (SHA-256 attachment keys, as `NoteItDoc` does) and `NoteItDoc`, and passes the wave 0 `ImportHygieneTests` (no AppKit in an iOS-capable target), which also checks that import allow-list.
 - [ ] Tests: the spec §3.3 example round-trips byte for byte; `pinned: false` is never written; `deleted`, `conflict-of`, `conflict-source` only when set; unknown keys (`aliases:` with a block list, `cssclasses:`) are kept verbatim and in order; `tags: [a, b]` and block-list tags are read; no front matter → `.empty` with `bodyStart` at 0; `---` not on line 1 is body text; an unterminated block throws `invalidFrontMatter(line:)`; CRLF input is read; dates without `Z` are read as UTC.
 - [ ] Tests: `locked: true` is written only when set and ignored as a source of truth when read (`FrontMatter.locked` is informational).
 - [ ] Verify: `swift test --filter FrontMatterTests` → 0 failures; `ImportHygieneTests` → 0 failures.
