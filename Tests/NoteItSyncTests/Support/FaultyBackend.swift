@@ -10,6 +10,8 @@ actor FaultyBackend: StorageBackend {
         case failAfter
         /// Runs `action` against the real storage, then forwards the put.
         case before(@Sendable () async -> Void)
+        /// Forwards the put, then runs `action` against the real storage before returning.
+        case after(@Sendable () async -> Void)
     }
 
     let inner: InMemoryBackend
@@ -54,6 +56,10 @@ actor FaultyBackend: StorageBackend {
                 throw StorageError.network("injected after \(key)")
             case .before(let action):
                 await action()
+            case .after(let action):
+                let etag = try await inner.put(key, data: data, ifMatch: ifMatch, ifNoneMatch: ifNoneMatch)
+                await action()
+                return etag
             }
         }
         return try await inner.put(key, data: data, ifMatch: ifMatch, ifNoneMatch: ifNoneMatch)
@@ -71,6 +77,10 @@ actor FaultyBackend: StorageBackend {
                 throw StorageError.network("injected after deleting \(key)")
             case .before(let action):
                 await action()
+            case .after(let action):
+                try await inner.delete(key, ifMatch: ignoreDeleteConditions ? nil : ifMatch)
+                await action()
+                return
             }
         }
         try await inner.delete(key, ifMatch: ignoreDeleteConditions ? nil : ifMatch)

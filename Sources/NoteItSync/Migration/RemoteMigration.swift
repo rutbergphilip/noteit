@@ -6,12 +6,11 @@ import Foundation
 /// complete store and is simply resumed on the next connect. The legacy objects are left in place.
 ///
 /// Several devices may migrate at once, and once one of them writes the manifest it starts syncing under
-/// the new root. So objects are only created, never blindly replaced, and the copy stops as soon as the
-/// manifest appears: a slower device must not undo edits made under the new root.
+/// the new root. So objects are only created, never blindly replaced, and the manifest is checked before
+/// every create. Once it appears the copy stops, and the objects created since the last check that saw no
+/// manifest are deleted again (unless changed since): a slower device must not undo edits or deletions
+/// made under the new root.
 public enum RemoteMigration {
-    /// How many objects are copied between checks for a manifest written by another device.
-    static let manifestCheckInterval = 50
-
     /// Returns whether a legacy store was copied, by this device or another one during the copy.
     /// Does nothing when `noteit/v1/` already has a manifest.
     @discardableResult
@@ -22,11 +21,24 @@ public enum RemoteMigration {
         guard objects.contains(where: { $0.key == legacyManifest }) else { return false }
 
         var copied = 0
-        for (index, object) in objects.enumerated() where object.key != legacyManifest {
-            if index > 0, index % manifestCheckInterval == 0, try await exists(RemoteLayout.manifest(), in: backend) {
-                log("NoteItSync: another device finished copying \(RemoteLayout.legacyRoot) first")
-                return true
+        var unconfirmed: [(key: String, etag: String)] = []
+        func manifestAppeared() async throws -> Bool {
+            guard try await exists(RemoteLayout.manifest(), in: backend) else {
+                unconfirmed.removeAll()
+                return false
             }
+            for object in unconfirmed {
+                do {
+                    try await backend.delete(object.key, ifMatch: object.etag)
+                } catch StorageError.notFound {
+                } catch StorageError.preconditionFailed {}
+            }
+            unconfirmed.removeAll()
+            log("NoteItSync: another device finished copying \(RemoteLayout.legacyRoot) first")
+            return true
+        }
+
+        for object in objects where object.key != legacyManifest {
             let key = RemoteLayout.root + object.key.dropFirst(RemoteLayout.legacyRoot.count)
             let data: Data
             do {
@@ -34,15 +46,19 @@ public enum RemoteMigration {
             } catch StorageError.notFound {
                 continue  // Deleted by another device since the listing.
             }
+            if try await manifestAppeared() { return true }
             switch try await copy(data, to: key, in: backend) {
-            case .copied: copied += 1
+            case .created(let etag):
+                unconfirmed.append((key, etag))
+                copied += 1
+            case .replaced: copied += 1
             case .skipped: break
             case .storeMigrated:
                 log("NoteItSync: another device finished copying \(RemoteLayout.legacyRoot) first")
                 return true
             }
         }
-        if try await exists(RemoteLayout.manifest(), in: backend) { return true }
+        if try await manifestAppeared() { return true }
         do {
             let manifest = try await backend.get(legacyManifest).data
             try await backend.put(RemoteLayout.manifest(), data: manifest, ifMatch: nil, ifNoneMatch: true)
@@ -53,12 +69,11 @@ public enum RemoteMigration {
         return true
     }
 
-    private enum CopyResult { case copied, skipped, storeMigrated }
+    private enum CopyResult { case created(etag: String), replaced, skipped, storeMigrated }
 
     private static func copy(_ data: Data, to key: String, in backend: StorageBackend) async throws -> CopyResult {
         do {
-            try await backend.put(key, data: data, ifMatch: nil, ifNoneMatch: true)
-            return .copied
+            return .created(etag: try await backend.put(key, data: data, ifMatch: nil, ifNoneMatch: true))
         } catch StorageError.preconditionFailed {}
         let existing: (data: Data, etag: String)
         do {
@@ -72,7 +87,7 @@ public enum RemoteMigration {
         if try await exists(RemoteLayout.manifest(), in: backend) { return .storeMigrated }
         do {
             try await backend.put(key, data: data, ifMatch: existing.etag, ifNoneMatch: false)
-            return .copied
+            return .replaced
         } catch StorageError.preconditionFailed {
             return .skipped
         }
