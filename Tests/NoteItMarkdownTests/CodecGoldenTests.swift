@@ -13,6 +13,17 @@ final class CodecGoldenTests: XCTestCase {
         }
     }
 
+    func testSerialize() throws {
+        let fixtures = try MarkdownFixture.load().filter(\.isCanonical)
+        XCTAssertGreaterThan(fixtures.count, 30)
+        for fixture in fixtures {
+            let frontMatter = try MarkdownCodec.parse(fixture.markdown).frontMatter
+            let markdown = MarkdownCodec.serialize(fixture.body, frontMatter: frontMatter, profile: .library, attachmentPath: { $0 },
+                                                   noteLinkName: MarkdownFixture.noteLinkName, previous: nil)
+            XCTAssertEqual(markdown, fixture.markdown, fixture.name)
+        }
+    }
+
     func testParseKeepsASourceRangePerBlock() throws {
         let markdown = "# Title\n\n```swift\na\nb\n```\n\n\n<!-- noteit: align=center -->\nText\n"
         let parsed = try MarkdownCodec.parse(markdown)

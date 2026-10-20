@@ -50,7 +50,7 @@ New:
 | `Sources/NoteItMarkdown/SourcePreservation.swift` | Reuse of unchanged block bytes |
 | `Sources/NoteItMarkdown/AttachmentPaths.swift` | `_attachments/` naming and relative path resolution |
 | `Sources/NoteItMarkdown/WikiLinks.swift` | `[[File name|text]]` / `[[File name#Heading]]` syntax (`[[File name\|text]]` in table cells), read and write through resolver closures |
-| `Tests/NoteItMarkdownTests/{CodecGoldenTests,CodecPropertyTests,FrontMatterTests,ForeignMarkdownTests,EscapingTests,SourcePreservationTests,WikiLinkSyntaxTests}.swift` | Tests |
+| `Tests/NoteItMarkdownTests/{CodecGoldenTests,CodecPropertyTests,FrontMatterTests,ForeignMarkdownTests,EscapingTests,SourcePreservationTests,WikiLinkSyntaxTests,CorpusTests,AttachmentPathsTests}.swift` | Tests |
 | `Tests/NoteItMarkdownTests/Fixtures/*.md`, `*.json` | Golden pairs; `foreign/` from Obsidian, Bear, iA Writer |
 | `Sources/NoteIt/Model/LibraryLocationFile.swift` | `library-location.json` read/write |
 | `Sources/NoteIt/MarkdownLibrary/MarkdownBodyStorage.swift` | `NoteBodyStorage` for Markdown: files, front matter, notebook folders, `.trash/` |
@@ -471,14 +471,16 @@ Moved to foundations (docs/plans/2026-10-19-foundations.md), program §2 step 4.
 
 ### Task 2.3: Writer, escaping, source preservation
 
-**Files:** `Sources/NoteItMarkdown/{MarkdownCodec,BlockWriter,InlineWriter,SourcePreservation}.swift`, `Tests/NoteItMarkdownTests/{CodecGoldenTests,CodecPropertyTests,EscapingTests,SourcePreservationTests}.swift`
+**Files:** `Sources/NoteItMarkdown/{MarkdownCodec,BlockWriter,InlineWriter,SourcePreservation}.swift`, `Tests/NoteItMarkdownTests/{CodecGoldenTests,CodecPropertyTests,EscapingTests,WikiLinkSyntaxTests,SourcePreservationTests,CorpusTests}.swift`
+
+The writer writes one blank line after front matter, which the parser reads as the separator, not as an empty paragraph. Unknown blocks are not written. Images in headings are written as `![…](…)`, not as a fallback, because they read back unchanged.
 
 - [ ] `CodecGoldenTests.testSerialize`: `serialize(json) == md` byte for byte for every canonical fixture.
-- [ ] `CodecPropertyTests`: `parse(serialize(doc)) == doc` for 2,000 `RandomDocGenerator(seed:)` documents, both flavours where the flavour can hold the doc; failures print the seed.
+- [ ] `CodecPropertyTests`: `parse(serialize(doc)) == doc` for 2,000 `RandomDocGenerator(seed:)` documents, both flavours where the flavour can hold the doc (the portable check needs more than 20 such documents); serializing a parsed file again gives the same text; failures print the seed.
 - [ ] `EscapingTests`: text containing `*`, `_`, `==`, `<u>`, `#` and `1.` at line start, `|` in cells, backslashes, literal `[[`, and `<!-- noteit:` round-trips as text.
 - [ ] `WikiLinkSyntaxTests`: a note link is written as raw `[[…]]` and never escaped, also when the shown text has `*` or `_`; outside tables `|` inside a wiki link is not escaped; in a table cell `[[Name|text]]` is written as `[[Name\|text]]`, the cell count of the row is unchanged, and it reads back as the same link (program §11); `noteLinkName` returning nil writes the title; the `portable` flavour writes the same wiki-link syntax.
-- [ ] `SourcePreservationTests`: a foreign file with non-canonical style (`__bold__`, `+` bullets, setext headings) keeps those bytes when a different block changes; changed blocks are canonical; front matter extra is preserved.
-- [ ] Corpus check: serialize the seeded sample library (`SeedData`) and 500 random docs; count blocks that need the rich-block fallback; the test fails above 1%.
+- [ ] `SourcePreservationTests`: a foreign file with non-canonical style (`__bold__`, `+` bullets, setext headings) keeps those bytes when a different block changes; changed blocks are canonical; front matter extra is preserved; every block of the foreign fixtures is kept when nothing changes, and CRLF files are written with LF.
+- [ ] Corpus check (`CorpusTests`): serialize 500 random docs; the test fails if more than 1% of the blocks plain Markdown can hold (all but code blocks with marks or atoms and tables that aren't GFM-shaped, which random docs produce often) need the rich-block fallback. The `SeedData` 1% check is in Task 2.4's `BodyCodecMarkdownTests`, because `SeedData` lives in the `NoteIt` target.
 - [ ] Verify: `swift test --filter NoteItMarkdownTests` → 0 failures.
 
 ### Task 2.4: Import options and `case markdown` of `BodyCodec`

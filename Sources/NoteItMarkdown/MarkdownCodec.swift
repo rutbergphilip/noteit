@@ -89,13 +89,47 @@ public enum MarkdownCodec {
         let (frontMatter, bodyStart) = try FrontMatter.read(source)
         return withoutActuallyEscaping(resolveNoteLink) { resolve in
             var parser = BlockParser(resolveNoteLink: resolve)
-            let blocks = parser.parseBlocks(BlockParser.lines(of: source, from: bodyStart))
+            var lines = BlockParser.lines(of: source, from: bodyStart)
+            if bodyStart != source.startIndex, lines.first?.isBlank == true { lines.removeFirst() }
+            let blocks = parser.parseBlocks(lines)
             var seen = Set<AttachmentRef>()
             let refs = parser.inline.refs.filter { seen.insert($0).inserted }
             let body = BodyContainer(doc: .doc(blocks.map(\.0)), attachments: [:],
                                      frontMatter: frontMatter.extra.isEmpty ? nil : frontMatter.extra)
             return ParsedMarkdown(frontMatter: frontMatter, body: body, attachmentRefs: refs,
                                   sourceMap: SourceMap(blocks: blocks.map(\.1)), source: source)
+        }
+    }
+
+    /// Writes `body` in `profile`. `attachmentPath` maps an attachment's SHA-256 to its path relative to the note;
+    /// `noteLinkName` maps a linked note to its wiki-link target (nil: the link's text). With `previous`, the
+    /// blocks that didn't change keep their source text. `library` output reads back as the same document.
+    public static func serialize(_ body: BodyContainer, frontMatter: FrontMatter, profile: MarkdownProfile,
+                                 attachmentPath: (String) -> String, noteLinkName: (UUID) -> String? = { _ in nil },
+                                 previous: ParsedMarkdown?) -> String {
+        write(body, frontMatter: frontMatter, profile: profile, attachmentPath: attachmentPath, noteLinkName: noteLinkName,
+              previous: previous).text
+    }
+
+    static func write(_ body: BodyContainer, frontMatter: FrontMatter, profile: MarkdownProfile,
+                      attachmentPath: (String) -> String, noteLinkName: (UUID) -> String? = { _ in nil },
+                      previous: ParsedMarkdown?) -> MarkdownWriter.Output {
+        var front: FrontMatter
+        switch profile {
+        case .library:
+            front = frontMatter
+            if front.extra.isEmpty, let extra = body.frontMatter { front.extra = extra }
+        case .portable:
+            front = FrontMatter(id: frontMatter.id)
+        }
+        let header = front.written()
+        let blocks: [DocNode] = if case .doc(let content) = body.doc { content } else { [body.doc] }
+        let readable = blocks.map { MarkdownWriter.readable($0, attachmentPath: attachmentPath, profile: profile) }
+        return withoutActuallyEscaping(noteLinkName) { name in
+            let writer = MarkdownWriter(profile: profile, noteLinkName: name, header: header)
+            var output = writer.write(readable, previous: profile == .library ? previous : nil)
+            output.text = header + output.text
+            return output
         }
     }
 }
