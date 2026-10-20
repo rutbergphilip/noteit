@@ -158,9 +158,9 @@ final class WireTypeTests: XCTestCase {
     }
 
     func testDiscoveryDirectory() {
-        let home = URL(fileURLWithPath: "/Users/someone", isDirectory: true)
+        let home = URL(fileURLWithPath: "/fake-home", isDirectory: true)
         XCTAssertEqual(DiscoveryFile.directory(environment: [:], home: home).path,
-                       "/Users/someone/Library/Application Support/NoteIt")
+                       "/fake-home/Library/Application Support/NoteIt")
         XCTAssertEqual(DiscoveryFile.directory(environment: ["NOTEIT_DATA_DIR": "/data/x"], home: home).path, "/data/x")
     }
 
