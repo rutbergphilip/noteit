@@ -214,6 +214,16 @@ final class AutomationServiceTests: XCTestCase {
         XCTAssertNil(service.findByTitle("A"))
     }
 
+    func testFindByTitleIgnoresCaseOnly() throws {
+        let (service, store) = makeService()
+        let cafe = store.createNote(in: nil, initial: NSAttributedString(string: "Café\nbody")).id
+        _ = store.createNote(in: nil, initial: NSAttributedString(string: ""))
+        XCTAssertEqual(service.findByTitle("CAFÉ")?.id, cafe)
+        XCTAssertNil(service.findByTitle("cafe"), "no diacritic folding")
+        XCTAssertNil(service.findByTitle("ｃａｆé"), "no width folding")
+        XCTAssertNil(service.findByTitle("New Note"), "an untitled note never matches")
+    }
+
     func testSetTitleKeepsAttributes() throws {
         let (service, store) = makeService()
         let id = try service.create(title: "Old title", body: "body", format: .text, notebook: nil, tags: [], pinned: false).id

@@ -146,12 +146,13 @@ final class AutomationService {
         store.emptyRecentlyDeleted()
     }
 
+    /// The most recently edited note whose stored title equals `title`, ignoring case only. Untitled notes never match.
     func findByTitle(_ title: String) -> NoteMeta? {
         guard !isLoading() else { return nil }
-        let folded = NoteStore.fold(title.trimmingCharacters(in: .whitespacesAndNewlines))
-        guard !folded.isEmpty else { return nil }
+        let wanted = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty else { return nil }
         return store.notes(for: .allNotes, search: "")
-            .filter { NoteStore.fold($0.displayTitle) == folded }
+            .filter { $0.title.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(wanted) == .orderedSame }
             .max { $0.updatedAt < $1.updatedAt }
             .map(visible)
     }
