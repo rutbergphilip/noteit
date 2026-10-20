@@ -52,10 +52,10 @@ The button next to a changed shortcut puts back its default, and **Restore Defau
 
 | Shortcut | Action |
 |---|---|
-| ⌘V | Paste. Copied Markdown, such as `## Heading`, a list or `**bold**`, comes in formatted |
+| ⌘V | Paste. Copied Markdown, such as a list, a checklist or `**bold**`, comes in formatted |
 | ⇧⌘V (or ⌥⇧⌘V) | Paste and Match Style: just the text, in the style where you paste it |
 
-Text copied from a web page or another rich-text app keeps its formatting as before; ⌘V only turns text into formatting when it's clearly Markdown source, for example from a code editor, a terminal or a `.md` file. Anything less clear, such as code, a diff or a single `- item` line, is pasted as it is. Markdown pasted in the middle of a line joins that line; headings, lists and other blocks go on lines of their own. Inside a code block, pasted text always stays as it is. One ⌘Z undoes the whole paste.
+Text copied from a web page or another rich-text app keeps its formatting as before; ⌘V only turns text into formatting when it's clearly Markdown source, for example from a code editor, a terminal or a `.md` file. Anything less clear, such as code, a config file, a diff, a single `- item` line or `# headings` with nothing else Markdown, is pasted as it is. Markdown pasted in the middle of a line joins that line; headings, lists and other blocks go on lines of their own. Inside a code block, pasted text always stays as it is. One ⌘Z undoes the whole paste.
 
 If you've bound ⇧⌘V yourself, as a menu shortcut or a global hotkey, it keeps working and Paste and Match Style stays on ⌥⇧⌘V.
 

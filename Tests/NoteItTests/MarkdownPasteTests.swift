@@ -59,10 +59,10 @@ final class MarkdownPasteTests: XCTestCase {
     // MARK: Detector
 
     func testDetectsMarkdownSource() {
-        for text in ["# Title", "## Notes\nSome text", "- one\n- two", "* a\n* b", "+ a\n+ b", "1. first\n2. second",
+        for text in ["- one\n- two", "* a\n* b", "+ a\n+ b", "1. first\n2. second",
                      "> quoted", "- [ ] task", "- [x] done", "```\ncode\n```", "```swift\nlet x = 1;\n```",
                      "| a | b |\n|---|---|\n| 1 | 2 |", "some **bold** text", "(**bold**)",
-                     "see [the docs](https://example.com)", "# Groceries\n- milk\n- eggs\n"] {
+                     "see [the docs](https://example.com)", "# Groceries\n- milk\n- eggs\n", "# Title\n> quoted"] {
             XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(text), text)
         }
     }
@@ -71,7 +71,7 @@ final class MarkdownPasteTests: XCTestCase {
         for text in ["https://example.com/some_path/__init__?q=*", "important*", "*", "2*3*4",
                      "Plain prose, with punctuation - and a dash.", "#hashtag and #another", "a**2 + b**2",
                      "Price: 5 * 3", "x | y", "Dear team,\n\nThanks for the update.\nBest", "- item", "* item",
-                     "some *emphasis* here", "snake_case and _this_", "-  wide\n-  dash"] {
+                     "some *emphasis* here", "snake_case and _this_", "-  wide\n-  dash", "# Title", "## Notes\nSome text"] {
             XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(text), text)
         }
     }
@@ -116,6 +116,30 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertFalse(view.pasteMarkdown(from: pasteboard(plain: "- item")))
     }
 
+    func testShellAndConfigCommentsStayPlain() {
+        let gitignore = "# Build output\nbuild/\n*.log\n\n# macOS\n.DS_Store\n"
+        let shell = "# install deps\nbrew install node\nnpm ci\n"
+        let compose = "# Services\nservices:\n  web:\n    image: nginx\n    ports:\n      - \"80:80\"\n      - \"443:443\"\n"
+        let env = "# Settings\n- staging\n- production\nAPI_URL=https://example.com\nDEBUG=1\nLOG_LEVEL=info\n"
+        for text in [gitignore, shell, compose, env] {
+            XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(text), text)
+        }
+        XCTAssertFalse(editor(body("")).pasteMarkdown(from: pasteboard(plain: compose)))
+    }
+
+    func testEverydayMarkdownStillConverts() throws {
+        let readme = "## Install\n\nRun this in the project folder:\n\n```sh\nnpm ci\n```\n"
+        let answer = "**Short answer:** yes, it works.\n\n1. Open the settings.\n2. Turn it on.\n\n### Why\nIt saves time.\n"
+        let checklist = "- [ ] milk\n- [x] eggs\n"
+        for text in [readme, answer, checklist] {
+            XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(text), text)
+        }
+        let view = editor(body(""))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: answer)))
+        XCTAssertEqual(kind(view, of: "Why"), .subheading)
+        XCTAssertTrue(EditorStyle.isBold(try XCTUnwrap(font(view, at: "Short answer"))))
+    }
+
     func testNoteWithHeadingAndListConverts() {
         let view = editor(body(""))
         XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "## Groceries\n- milk\n- eggs\n")))
@@ -152,8 +176,9 @@ final class MarkdownPasteTests: XCTestCase {
 
     func testPasteMidParagraphKeepsTextAfterOnItsOwnLine() {
         let view = editor(body("Before after\nNext\n"), caret: 6)
-        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "# Big\n- item")))
-        XCTAssertEqual(view.string, "Before\nBig\n\(EditorStyle.markerText(.bullet, level: 0))item\n after\nNext\n")
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "# Big\n- item\n- more")))
+        let bullet = EditorStyle.markerText(.bullet, level: 0)
+        XCTAssertEqual(view.string, "Before\nBig\n\(bullet)item\n\(bullet)more\n after\nNext\n")
         XCTAssertEqual(kind(view, of: "Before"), .body)
         XCTAssertEqual(kind(view, of: "Big"), .title)
         XCTAssertEqual(kind(view, of: "after"), .body)
@@ -163,7 +188,7 @@ final class MarkdownPasteTests: XCTestCase {
         let text = NSMutableAttributedString(attributedString: EditorStyle.paragraph("My note", kind: .title))
         text.append(body("Body"))
         let view = editor(text, caret: 7)
-        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "## Section\n- a\n")))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "## Section\n- a\n- b\n")))
         XCTAssertTrue(view.string.hasPrefix("My note\nSection\n"))
         XCTAssertEqual(kind(view, of: "My note"), .title)
         XCTAssertEqual(kind(view, of: "Section"), .heading)
@@ -271,8 +296,8 @@ final class MarkdownPasteTests: XCTestCase {
 
     func testWindowsLineEndingsAndTablesKeepTheLineAfter() {
         let view = editor(body("Intro"))
-        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "# Title\r\n")))
-        XCTAssertTrue(view.string.hasSuffix("Title\n"))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "# Title\r\n> quote\r\n")))
+        XCTAssertTrue(view.string.hasSuffix("quote\n"))
 
         let table = editor(body(""))
         XCTAssertTrue(table.pasteMarkdown(from: pasteboard(plain: "| a | b |\n|---|---|\n| 1 | 2 |")))

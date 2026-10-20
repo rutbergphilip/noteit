@@ -7,9 +7,8 @@ enum MarkdownPasteDetector {
         try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
     }
 
-    /// Each of these is enough on its own.
+    /// Each of these is enough on its own. A `#` heading isn't: shell and config files start comments with it.
     private static let strongSignals: [NSRegularExpression] = [
-        "^ {0,3}#{1,6}[ \\t]+\\S",
         "^[ \\t]*[-*+] \\[[ xX]\\](?:[ \\t]|$)",
         "\\[[^\\]\\n]+\\]\\(https?://[^()\\s]+(?:[ \\t]+\"[^\"\\n]*\")?\\)",
         "(?<![\\w*])\\*\\*[^\\s*](?:[^\\n]*?[^\\s*])?\\*\\*(?![\\w*(])",
@@ -19,6 +18,8 @@ enum MarkdownPasteDetector {
     private static let fence = regex("^[ \\t]*(?:```|~~~)")
     private static let listItem = regex("^[ \\t]*(?:[-*+]|\\d{1,9}[.)]) \\S")
     private static let commentStar = regex("^[ \\t]+\\*")
+    private static let configLine = regex("^(?:[ \\t]+[A-Za-z_][\\w.-]*|[a-z_][\\w.-]*):(?:[ \\t]|$)|^[A-Z_][A-Z0-9_]*=")
+    private static let pathToken = regex("^!?[\\w.*?/\\[\\]-]*\\w[\\w.*?/\\[\\]-]*$")
 
     /// Bare URLs, whose underscores and asterisks aren't emphasis.
     private static let bareURL = regex("(?<![(<\\w])[A-Za-z][A-Za-z0-9+.-]*://\\S+")
@@ -73,8 +74,15 @@ enum MarkdownPasteDetector {
             return ["{", "}", ";", "):"].contains(where: trimmed.hasSuffix)
                 || codeStarts.contains(where: trimmed.hasPrefix)
                 || (inComment && matches(commentStar, line))
+                || matches(configLine, line)
+                || isPathOrGlob(trimmed)
         }
         return Double(codeLike.count) >= 0.3 * Double(nonBlank.count)
+    }
+
+    /// A single path or glob such as `build/`, `*.log` or `.DS_Store`.
+    private static func isPathOrGlob(_ line: String) -> Bool {
+        matches(pathToken, line) && (line.contains("/") || line.hasPrefix(".") || line.contains("*.") || line.contains(".*"))
     }
 
     private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
