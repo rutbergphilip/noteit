@@ -249,6 +249,46 @@ final class CodeStylingTests: XCTestCase {
         XCTAssertTrue(markdown.contains("```typescript\ntop\nlet value"), markdown)
     }
 
+    func testCodeBlockAtTopOfNoteDrawsInFull() throws {
+        // The text view clips drawing above the text container, so the card must start inside it.
+        func layout(_ markdown: String) throws -> (NoteItTextView, NSRect, NSRect, Int) {
+            let (scrollView, textView) = NoteItTextView.make()
+            scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+            textView.setFrameSize(NSSize(width: 600, height: 400))
+            textView.storage.setAttributedString(MarkdownReader.attributedString(from: markdown))
+            textView.normalizePendingEdits()
+            let lm = try XCTUnwrap(textView.layoutManager as? NoteItLayoutManager)
+            lm.ensureLayout(for: try XCTUnwrap(textView.textContainer))
+            let code = (textView.string as NSString).range(of: "let a").location
+            let block = try XCTUnwrap(textView.codeBlockRange(at: code))
+            let card = try XCTUnwrap(lm.codeCardRect(forBlock: block, origin: textView.textContainerOrigin))
+            let used = lm.lineFragmentUsedRect(forGlyphAt: lm.glyphIndexForCharacter(at: code), effectiveRange: nil)
+            return (textView, card, used.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y), code)
+        }
+        let (top, card, line, code) = try layout("```swift\nlet a = 1\n```\n\nafter\n")
+        let (_, laterCard, laterLine, _) = try layout("Intro\n\n```swift\nlet a = 1\n```\n")
+        XCTAssertEqual(code, 0)
+        let origin = top.textContainerOrigin
+        XCTAssertGreaterThanOrEqual(card.minY, origin.y, "\(card) starts above the text container")
+        XCTAssertEqual(line.minY - card.minY, laterLine.minY - laterCard.minY, accuracy: 0.01)
+        XCTAssertEqual(card.height, laterCard.height, accuracy: 0.01)
+        let lm = try XCTUnwrap(top.layoutManager as? NoteItLayoutManager)
+        let chrome = lm.codeChrome(forBlockAt: 0, card: card)
+        XCTAssertGreaterThanOrEqual(chrome.label.minY, origin.y)
+        XCTAssertGreaterThanOrEqual(chrome.copy.minY, origin.y)
+
+        let rep = try XCTUnwrap(top.bitmapImageRepForCachingDisplay(in: top.bounds))
+        top.cacheDisplay(in: top.bounds, to: rep)
+        let scale = CGFloat(rep.pixelsHigh) / top.bounds.height
+        let painted = (0..<rep.pixelsHigh).first { (rep.colorAt(x: Int(card.midX * scale), y: $0)?.alphaComponent ?? 0) > 0.01 }
+        XCTAssertEqual(CGFloat(try XCTUnwrap(painted)), (card.minY * scale).rounded(.down), accuracy: 1, "the card's top edge is drawn")
+
+        // The caret and clicks follow the moved line.
+        XCTAssertTrue(card.contains(line), "\(line) not inside \(card)")
+        XCTAssertEqual(top.characterIndexForInsertion(at: NSPoint(x: line.minX + 1, y: line.midY)), 0)
+        XCTAssertEqual(top.characterIndexForInsertion(at: NSPoint(x: line.maxX + 1, y: line.midY)), "let a = 1".utf16.count)
+    }
+
     func testAutomaticHasNoSentinel() {
         let ps = EditorStyle.attributes(for: .code)[.paragraphStyle] as? NSParagraphStyle
         XCTAssertNil(EditorStyle.codeLanguage(of: ps))

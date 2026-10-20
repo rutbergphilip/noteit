@@ -824,6 +824,18 @@ extension NoteItTextView.ParagraphEdit: Equatable {
 
 // MARK: - Layout manager
 
+/// The typesetter drops `paragraphSpacingBefore` at the top of the text container, which leaves no room
+/// for a leading code block's card: the view clips drawing above the container. Code blocks keep it there.
+final class CodeCardTypesetter: NSATSTypesetter {
+    override func paragraphSpacing(beforeGlyphAt glyphIndex: Int, withProposedLineFragmentRect rect: NSRect) -> CGFloat {
+        let spacing = super.paragraphSpacing(beforeGlyphAt: glyphIndex, withProposedLineFragmentRect: rect)
+        guard spacing == 0, rect.minY <= 0, let ps = currentParagraphStyle, ps.textBlocks.isEmpty,
+              let text = attributedString, paragraphCharacterRange.location < text.length else { return spacing }
+        let font = text.attribute(.font, at: paragraphCharacterRange.location, effectiveRange: nil) as? NSFont
+        return EditorStyle.blockKind(paragraphStyle: ps, font: font) == .code ? ps.paragraphSpacingBefore : spacing
+    }
+}
+
 /// Draws code block cards, inline code pills, quote bars, dividers and checklist checkboxes.
 final class NoteItLayoutManager: NSLayoutManager {
     var codeSettings = CodeStyleSettings.current
@@ -834,6 +846,16 @@ final class NoteItLayoutManager: NSLayoutManager {
 
     static let pillPadding: CGFloat = 4
     static let cardPadding: CGFloat = 9
+
+    override init() {
+        super.init()
+        typesetter = CodeCardTypesetter()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        typesetter = CodeCardTypesetter()
+    }
 
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         guard let ts = textStorage, ts.length > 0, let tc = textContainers.first else {
