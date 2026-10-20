@@ -13,7 +13,7 @@ import Foundation
 /// and those created since the last check that saw no manifest are deleted again (unless changed since).
 /// Other copies are kept: they are identical to what the finishing device copied or skipped. A sync tool may
 /// deliver another device's tombstones before the manifest, so the only tombstones removed before copying are
-/// ones this device's earlier attempt created (per `record`, still holding the etag that create returned) that no
+/// ones this device's earlier attempt created (per `record`, still holding the etag that put returned) that no
 /// longer match the legacy ones. A crash between such a create and saving its etag leaves a tombstone treated as foreign.
 public enum RemoteMigration {
     /// Returns whether a legacy store was copied, by this device or another one during the copy.
@@ -73,20 +73,25 @@ public enum RemoteMigration {
             let tombstone = tombstoneKey(for: key)
             if let tombstone, try await foreignTombstone(tombstone, recorded: recorded, in: backend) { continue }
             let isTombstone = key.hasPrefix(RemoteLayout.root + "tombstones/")
+            var owned: String?
             if isTombstone {
-                // Checked against the legacy copy by `removeStaleTombstones` this run.
-                if case .confirmed = recorded[key] { continue }
-                let pending = MigrationTombstoneEntry.pending(hash: sha256(data))
-                if recorded[key] != pending {
-                    recorded[key] = pending
+                let digest = sha256(data)
+                if case .confirmed(let etag, let hash) = recorded[key] {
+                    if hash == digest, try await currentEtag(key, in: backend) == etag { continue }
+                    owned = etag
+                } else if recorded[key] != .pending(hash: digest) {
+                    recorded[key] = .pending(hash: digest)
                     try record.save(recorded)
                 }
             }
             let result = try await copy(data, to: key, in: backend)
             if isTombstone {
-                if case .created(let etag) = result {
-                    recorded[key] = .confirmed(etag: etag)
-                } else {
+                switch result {
+                case .created(let etag):
+                    recorded[key] = .confirmed(etag: etag, hash: sha256(data))
+                case .replaced(let etag, let previous) where owned != nil && previous == owned:
+                    recorded[key] = .confirmed(etag: etag, hash: sha256(data))
+                default:
                     recorded[key] = nil
                 }
                 try record.save(recorded)
@@ -128,7 +133,7 @@ public enum RemoteMigration {
     private static func removeStaleTombstones(_ recorded: inout [String: MigrationTombstoneEntry],
                                               in backend: StorageBackend) async throws -> Bool {
         for (key, entry) in recorded.sorted(by: { $0.key < $1.key }) {
-            guard case .confirmed(let etag) = entry else {
+            guard case .confirmed(let etag, _) = entry else {
                 recorded[key] = nil
                 continue
             }
@@ -163,9 +168,18 @@ public enum RemoteMigration {
                                          in backend: StorageBackend) async throws -> Bool {
         do {
             let current = try await backend.get(tombstone).etag
-            return recorded[tombstone] != .confirmed(etag: current)
+            guard case .confirmed(let etag, _) = recorded[tombstone] else { return true }
+            return etag != current
         } catch StorageError.notFound {
             return false
+        }
+    }
+
+    private static func currentEtag(_ key: String, in backend: StorageBackend) async throws -> String? {
+        do {
+            return try await backend.get(key).etag
+        } catch StorageError.notFound {
+            return nil
         }
     }
 
@@ -189,7 +203,8 @@ public enum RemoteMigration {
         }
     }
 
-    private enum CopyResult { case created(etag: String), replaced, skipped, storeMigrated }
+    /// `replaced` carries the new etag and the one the replacement was conditioned on.
+    private enum CopyResult { case created(etag: String), replaced(etag: String, previous: String), skipped, storeMigrated }
 
     private static func copy(_ data: Data, to key: String, in backend: StorageBackend) async throws -> CopyResult {
         do {
@@ -206,8 +221,8 @@ public enum RemoteMigration {
         // root, and only if it is still the object just read.
         if try await exists(RemoteLayout.manifest(), in: backend) { return .storeMigrated }
         do {
-            try await backend.put(key, data: data, ifMatch: existing.etag, ifNoneMatch: false)
-            return .replaced
+            let etag = try await backend.put(key, data: data, ifMatch: existing.etag, ifNoneMatch: false)
+            return .replaced(etag: etag, previous: existing.etag)
         } catch StorageError.preconditionFailed {
             return .skipped
         }

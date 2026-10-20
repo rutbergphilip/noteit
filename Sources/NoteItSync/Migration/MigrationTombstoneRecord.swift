@@ -5,10 +5,11 @@ public enum MigrationTombstoneEntry: Equatable, Sendable, Codable {
     /// Saved before the put, with the SHA-256 hex of the bytes. Never proof of ownership: every device's copy
     /// of a legacy tombstone has the same bytes.
     case pending(hash: String)
-    /// Saved once the put created the object, with the etag it returned. Owned while the object still has it.
-    case confirmed(etag: String)
+    /// Saved once the put created (or replaced this device's own copy of) the object, with the etag it returned
+    /// and the SHA-256 hex of the bytes put. Owned while the object still has that etag.
+    case confirmed(etag: String, hash: String)
 
-    private enum CodingKeys: String, CodingKey { case pending, confirmed }
+    private enum CodingKeys: String, CodingKey { case pending, confirmed, hash }
 
     public init(from decoder: Decoder) throws {
         // Older records held plain strings (a hash or an etag), which prove nothing.
@@ -18,7 +19,12 @@ public enum MigrationTombstoneEntry: Equatable, Sendable, Codable {
         }
         let container = try decoder.container(keyedBy: CodingKeys.self)
         if let etag = try container.decodeIfPresent(String.self, forKey: .confirmed) {
-            self = .confirmed(etag: etag)
+            // Confirmed entries without a hash can't be checked against the legacy bytes.
+            if let hash = try container.decodeIfPresent(String.self, forKey: .hash) {
+                self = .confirmed(etag: etag, hash: hash)
+            } else {
+                self = .pending(hash: "")
+            }
         } else {
             self = .pending(hash: try container.decode(String.self, forKey: .pending))
         }
@@ -28,7 +34,9 @@ public enum MigrationTombstoneEntry: Equatable, Sendable, Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
         case .pending(let hash): try container.encode(hash, forKey: .pending)
-        case .confirmed(let etag): try container.encode(etag, forKey: .confirmed)
+        case .confirmed(let etag, let hash):
+            try container.encode(etag, forKey: .confirmed)
+            try container.encode(hash, forKey: .hash)
         }
     }
 }

@@ -269,7 +269,7 @@ final class RemoteMigrationTests: XCTestCase {
         let partial = try await inner.list(prefix: RemoteLayout.root)
         XCTAssertEqual(partial.map(\.key), ["noteit/v1/tombstones/\(id).json"])
         let created = try await inner.get("noteit/v1/tombstones/\(id).json").etag
-        XCTAssertEqual(record.load(), ["noteit/v1/tombstones/\(id).json": .confirmed(etag: created)])
+        XCTAssertEqual(record.load(), ["noteit/v1/tombstones/\(id).json": .confirmed(etag: created, hash: Self.sha256(Data("deleted".utf8)))])
 
         // An Inkwell device restores the note before the next attempt.
         try await inner.delete("inkwell/v1/tombstones/\(id).json")
@@ -369,7 +369,7 @@ final class RemoteMigrationTests: XCTestCase {
                 XCTFail("expected the copy to be interrupted")
             } catch StorageError.network {}
             let created = try await inner.get(tombstone).etag
-            XCTAssertEqual(record.load()[tombstone], .confirmed(etag: created))
+            XCTAssertEqual(record.load()[tombstone], .confirmed(etag: created, hash: Self.sha256(Data("deleted".utf8))))
         }
 
         try await reviveLegacyNote(id, in: inner)
@@ -378,6 +378,48 @@ final class RemoteMigrationTests: XCTestCase {
         let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
         XCTAssertFalse(keys.contains(tombstone), "the leftover tombstone was kept")
         XCTAssertTrue(keys.contains("noteit/v1/notes/\(id).meta"))
+        XCTAssertEqual(record.load(), [:], "the record outlived the migration")
+    }
+
+    func testConfirmedTombstoneIsRefreshedWhenTheLegacyCopyChangesDuringTheRetry() async throws {
+        let inner = InMemoryBackend()
+        let id = Self.noteID(8)
+        let other = Self.noteID(9)
+        let restored = Self.noteID(3)
+        let tombstone = "noteit/v1/tombstones/\(id).json"
+        try await inner.put("inkwell/v1/manifest.json", data: try legacyManifest(passphrase: "pw"), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put("inkwell/v1/tombstones/\(id).json", data: Data("deleted".utf8), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put("inkwell/v1/tombstones/\(other).json", data: Data("other".utf8), ifMatch: nil, ifNoneMatch: true)
+        let record = InMemoryMigrationTombstoneRecord()
+        let flaky = FaultyBackend(inner)
+        await flaky.onNextPut(keyContaining: other, .failBefore)
+        do {
+            try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, record: record, log: { _ in })
+            XCTFail("expected the copy to be interrupted")
+        } catch StorageError.network {}
+        let created = try await inner.get(tombstone).etag
+        XCTAssertEqual(record.load()[tombstone], .confirmed(etag: created, hash: Self.sha256(Data("deleted".utf8))))
+
+        // An Inkwell device restores and deletes the note again after the stale check, before the copy reaches it.
+        try await inner.put("inkwell/v1/notes/\(restored).meta", data: Data("meta".utf8), ifMatch: nil, ifNoneMatch: true)
+        let retry = FaultyBackend(inner)
+        await retry.onNextPut(keyContaining: "notes/", .after({
+            _ = try? await inner.put("inkwell/v1/tombstones/\(id).json", data: Data("deleted again".utf8),
+                                     ifMatch: nil, ifNoneMatch: false)
+        }))
+        await retry.onNextPut(keyContaining: other, .failBefore)
+        do {
+            try await RemoteMigration.migrateLegacyStoreIfNeeded(retry, record: record, log: { _ in })
+            XCTFail("expected the copy to be interrupted")
+        } catch StorageError.network {}
+        let replaced = try await inner.get(tombstone)
+        XCTAssertEqual(replaced.data, Data("deleted again".utf8))
+        XCTAssertEqual(record.load()[tombstone], .confirmed(etag: replaced.etag, hash: Self.sha256(Data("deleted again".utf8))))
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, record: record, log: { _ in })
+        XCTAssertTrue(migrated)
+        let copied = try await inner.get(tombstone).data
+        XCTAssertEqual(copied, Data("deleted again".utf8))
         XCTAssertEqual(record.load(), [:], "the record outlived the migration")
     }
 
@@ -390,8 +432,12 @@ final class RemoteMigrationTests: XCTestCase {
         let record = FileMigrationTombstoneRecord(url: url)
         XCTAssertEqual(record.load(), ["noteit/v1/tombstones/a.json": .pending(hash: "abc")])
 
-        try record.save(["k": .confirmed(etag: "e"), "p": .pending(hash: "h")])
-        XCTAssertEqual(FileMigrationTombstoneRecord(url: url).load(), ["k": .confirmed(etag: "e"), "p": .pending(hash: "h")])
+        try record.save(["k": .confirmed(etag: "e", hash: "x"), "p": .pending(hash: "h")])
+        XCTAssertEqual(FileMigrationTombstoneRecord(url: url).load(), ["k": .confirmed(etag: "e", hash: "x"), "p": .pending(hash: "h")])
+
+        // Confirmed entries saved without the hash of the bytes put prove nothing either.
+        try Data(#"{"k":{"confirmed":"e"}}"#.utf8).write(to: url)
+        XCTAssertEqual(FileMigrationTombstoneRecord(url: url).load(), ["k": .pending(hash: "")])
     }
 
     func testFileRecordOutlivesAnInterruptedCopyAcrossReconnects() async throws {
