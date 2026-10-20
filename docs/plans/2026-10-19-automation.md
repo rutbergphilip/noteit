@@ -357,7 +357,8 @@ public protocol NotebookDTOExtending: AnyObject, Sendable {                     
 }
 public final class LocalHTTPServer: @unchecked Sendable {
     public init(registry: ClientRegistry, pairing: PairingBroker, changes: ChangeHub, limiter: RateLimiter, responder: LocalAPIResponder,
-                ping: @escaping @Sendable () -> PingDTO, limits: HTTPParserLimits = .init())
+                ping: @escaping @Sendable () -> PingDTO, limits: HTTPParserLimits = .init(),
+                routeRegistry: LocalAPIRouteRegistry = .shared)                                                      // T10: injectable so tests never touch .shared
     /// Tries each port in order and returns the bound one. Port 0 = ephemeral (tests).
     public func start(ports: [UInt16]) async throws -> UInt16
     public func stop()
@@ -661,6 +662,7 @@ T7, T8 and T9 can run in parallel.
 - [ ] Wrap each request in `ProcessInfo.processInfo.performActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Local API request")`.
 - [ ] Log with `Logger(subsystem: AppIdentity.bundleID, category: "LocalAPI")`: method, route pattern, status, milliseconds.
 - [ ] Tests (port 0, `URLSession` with an ephemeral configuration, fake responder): `testPingWithoutToken`, `testUnauthorizedWithoutToken`, `testScopeEnforced`, `testWebOriginRejected`, `testExtensionPreflightAndCORS`, `testHostHeaderRebindingRejected` (raw `NWConnection` with `Host: evil.example`), `testRateLimited429WithRetryAfter`, `testKeepAliveTwoRequestsOneConnection`, `testPairingEndToEnd`, `testEventsStreamDeliversAndRevokes`, `testStopClosesConnections`, `testPortFallbackSkipsBusyPort` (bind a dummy listener first), `testBindsOnlyLoopback` (connecting to the Mac's non-loopback address fails; skip if the Mac has none), `testRegisteredRouteUsesPipelineAndBodyLimit` (the spec is built with the public `RouteSpec.init` from a test target that imports `NoteItAPI` without `@testable`), `testRegisteringConflictingRouteTraps` (checked with `validate()`), `testRouteIdMustBeSlugDotName`, `testRegisteredSearchModeAndCapability`, `testPingHasCapabilitiesNotFeatures`, `testSafariWithoutBundleHeaderIs400OnPairing`; in `LocalAPIRouteRegistryTests`: `testSecondTagTreeProviderIsReported`, `testNotebookExtendersKeepOrder`.
+- Note (T10 as built): `init` also takes `routeRegistry:` (default `.shared`), because `LocalAPIRouteRegistryTests.testSharedStartsEmpty` forbids tests from registering into `.shared`. The parser's body cap is raised to the largest registered `maxBodyBytes` (at most 60 MB) and each route's limit is re-checked after matching. Handlers are awaited asynchronously, so the activity uses `beginActivity`/`endActivity` around the request rather than the synchronous `performActivity`. Extra connections get `503` with a `rate_limited` body and `Retry-After: 1`. `onAuthenticated` and `lastUsed` hooks are there for T12's `lastUsedAt`.
 - [ ] Verify: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter "LocalHTTPServerTests|LocalAPIRouteRegistryTests"` → `Executed <n> tests, with 0 failures`.
 - [ ] Commit `feat(local-api): add loopback http server`.
 

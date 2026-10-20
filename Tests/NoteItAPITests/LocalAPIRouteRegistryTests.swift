@@ -137,4 +137,36 @@ final class LocalAPIRouteRegistryTests: XCTestCase {
         XCTAssertTrue(LocalAPIRouteRegistry.shared.routes.isEmpty)
         XCTAssertTrue(LocalAPIRouteRegistry.shared.capabilities.isEmpty)
     }
+
+    func testSecondTagTreeProviderIsReported() async {
+        let registry = LocalAPIRouteRegistry(trapsOnProblems: false)
+        XCTAssertNil(registry.tagTreeProvider)
+        registry.extendTags { [TagNodeDTO(name: "work", path: "work", noteCount: 1, totalCount: 1, children: [])] }
+        XCTAssertTrue(registry.validate().isEmpty)
+        registry.extendTags { [] }
+        XCTAssertEqual(registry.validate().count, 1)
+        XCTAssertTrue(registry.validate()[0].contains("Tag tree provider"), registry.validate()[0])
+        let tree = await registry.tagTreeProvider?()
+        XCTAssertEqual(tree?.map(\.name), ["work"], "the first provider is kept")
+    }
+
+    @MainActor
+    func testNotebookExtendersKeepOrder() {
+        final class Appender: NotebookDTOExtending {
+            let segment: String
+            init(_ segment: String) { self.segment = segment }
+            func extend(_ dto: inout NotebookDTO, notebookID: UUID) {
+                dto.path = (dto.path ?? []) + [segment]
+                dto.parentID = notebookID
+            }
+        }
+        let registry = LocalAPIRouteRegistry()
+        registry.extendNotebooks(with: Appender("a"))
+        registry.extendNotebooks(with: Appender("b"))
+        let id = UUID()
+        var dto = NotebookDTO(id: id, name: "N", symbol: "book", color: "blue", sortIndex: 0, noteCount: 0)
+        for extender in registry.notebookExtenders { extender.extend(&dto, notebookID: id) }
+        XCTAssertEqual(dto.path, ["a", "b"])
+        XCTAssertEqual(dto.parentID, id)
+    }
 }

@@ -1,0 +1,579 @@
+import Foundation
+import Network
+import NoteItSync
+import os
+
+/// Answers the built-in note, notebook, tag, attachment, search and daily routes (the app's `LocalAPIHandlers`).
+public protocol LocalAPIResponder: Sendable {
+    func respond(_ context: LocalAPIContext) async -> HTTPResponse
+}
+
+public enum LocalHTTPServerError: Error, Equatable, Sendable {
+    case noPorts
+    case alreadyRunning
+    case portInUse(UInt16)
+    case failed(String)
+}
+
+/// The Local API transport: an HTTP/1.1 server on 127.0.0.1 only, built on Network.framework (automation spec §6.1).
+/// Every request goes through the pipeline of spec §6.6 before a handler sees it. Routes are `APIRoutes.all` plus the
+/// routes in `routeRegistry`.
+public final class LocalHTTPServer: @unchecked Sendable {
+    public static let maxConnections = 32
+    /// Registered routes may raise their body limit up to this.
+    public static let maxBodyCap = 60_000_000
+
+    let registry: ClientRegistry
+    let pairing: PairingBroker
+    let changes: ChangeHub
+    let limiter: RateLimiter
+    let responder: LocalAPIResponder
+    let ping: @Sendable () -> PingDTO
+    let limits: HTTPParserLimits
+    let routeRegistry: LocalAPIRouteRegistry
+    let queue = DispatchQueue(label: "\(AppIdentity.bundleID).local-api")
+    private let queueKey = DispatchSpecificKey<Bool>()
+    private let logger = Logger(subsystem: AppIdentity.bundleID, category: "LocalAPI")
+
+    var idleTimeout: TimeInterval = 30
+    var heartbeatInterval: TimeInterval = 15
+
+    // Touched on `queue` only.
+    private var listener: NWListener?
+    private var connections: [ObjectIdentifier: Connection] = [:]
+    private var port: UInt16 = 0
+
+    private let hooksLock = NSLock()
+    private var authenticatedHandler: (@Sendable (UUID) -> Void)?
+    private var lastUsedProvider: (@Sendable (UUID) -> Date?)?
+
+    public init(registry: ClientRegistry, pairing: PairingBroker, changes: ChangeHub, limiter: RateLimiter,
+                responder: LocalAPIResponder, ping: @escaping @Sendable () -> PingDTO, limits: HTTPParserLimits = .init(),
+                routeRegistry: LocalAPIRouteRegistry = .shared) {
+        self.registry = registry
+        self.pairing = pairing
+        self.changes = changes
+        self.limiter = limiter
+        self.responder = responder
+        self.ping = ping
+        self.limits = limits
+        self.routeRegistry = routeRegistry
+        queue.setSpecific(key: queueKey, value: true)
+        let previous = registry.onRevoke
+        registry.onRevoke = { [changes] id in
+            previous?(id)
+            changes.closeAll(client: id)
+        }
+    }
+
+    /// Called with the client id after each request that authenticated (for `lastUsedAt`).
+    public var onAuthenticated: (@Sendable (UUID) -> Void)? {
+        get { hooksLock.withLock { authenticatedHandler } }
+        set { hooksLock.withLock { authenticatedHandler = newValue } }
+    }
+
+    /// `lastUsedAt` for `GET /v1/me` and `GET /v1/clients`.
+    public var lastUsed: (@Sendable (UUID) -> Date?)? {
+        get { hooksLock.withLock { lastUsedProvider } }
+        set { hooksLock.withLock { lastUsedProvider = newValue } }
+    }
+
+    /// Tries each port in order and returns the bound one. Port 0 = ephemeral (tests). Throws `.portInUse(port)`
+    /// when the last port tried was taken.
+    public func start(ports: [UInt16]) async throws -> UInt16 {
+        guard onQueue({ listener == nil }) else { throw LocalHTTPServerError.alreadyRunning }
+        var lastError = LocalHTTPServerError.noPorts
+        for port in ports {
+            do {
+                return try await bind(port)
+            } catch let error as LocalHTTPServerError {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    /// Stops listening and closes every connection; a request still being handled is answered with
+    /// `503 api_disabled`.
+    public func stop() {
+        onQueue {
+            listener?.cancel()
+            listener = nil
+            for connection in connections.values { connection.shutDown() }
+        }
+    }
+
+    // MARK: - Listening
+
+    private func bind(_ port: UInt16) async throws -> UInt16 {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1",
+                                                     port: port == 0 ? .any : NWEndpoint.Port(rawValue: port) ?? .any)
+        parameters.allowLocalEndpointReuse = false
+        let listener: NWListener
+        do {
+            listener = try NWListener(using: parameters)
+        } catch {
+            throw Self.mapError(error, port: port)
+        }
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, Error>) in
+            let once = Once()
+            listener.stateUpdateHandler = { [weak self, weak listener] state in
+                guard let self, let listener, !once.done else { return }
+                switch state {
+                case .ready:
+                    once.done = true
+                    let bound = listener.port?.rawValue ?? port
+                    self.listener = listener
+                    self.port = bound
+                    continuation.resume(returning: bound)
+                case .failed(let error), .waiting(let error):
+                    once.done = true
+                    listener.cancel()
+                    continuation.resume(throwing: Self.mapError(error, port: port))
+                case .cancelled:
+                    once.done = true
+                    continuation.resume(throwing: LocalHTTPServerError.failed("The listener was cancelled."))
+                default:
+                    break
+                }
+            }
+            listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+            listener.start(queue: queue)
+        }
+    }
+
+    private static func mapError(_ error: Error, port: UInt16) -> LocalHTTPServerError {
+        if case .posix(let code) = error as? NWError, code == .EADDRINUSE || code == .EACCES {
+            return .portInUse(port)
+        }
+        return .failed(String(describing: error))
+    }
+
+    private func accept(_ nwConnection: NWConnection) {
+        guard connections.count < Self.maxConnections else {
+            var response = HTTPResponse.error(.rateLimited, "Too many open connections. Try again in a moment.")
+            response.status = 503
+            response.headers["Retry-After"] = "1"
+            nwConnection.start(queue: queue)
+            nwConnection.send(content: response.serialized(keepAlive: false), completion: .contentProcessed { _ in
+                nwConnection.cancel()
+            })
+            return
+        }
+        let connection = Connection(server: self, connection: nwConnection, policy: RequestPolicy(port: port))
+        connections[ObjectIdentifier(connection)] = connection
+        connection.start()
+    }
+
+    fileprivate func removed(_ connection: Connection) {
+        connections.removeValue(forKey: ObjectIdentifier(connection))
+    }
+
+    /// The parser takes the largest body any route allows; each route's own limit is checked after matching.
+    fileprivate func parser() -> HTTPParser {
+        var parserLimits = limits
+        let registered = routeRegistry.routes.compactMap(\.maxBodyBytes).max() ?? 0
+        parserLimits.maxBinaryBody = min(max(limits.maxBinaryBody, registered), Self.maxBodyCap)
+        return HTTPParser(limits: parserLimits)
+    }
+
+    private func onQueue<T>(_ body: () -> T) -> T {
+        DispatchQueue.getSpecific(key: queueKey) == true ? body() : queue.sync(execute: body)
+    }
+
+    // MARK: - Pipeline
+
+    enum Outcome {
+        case response(HTTPResponse, close: Bool)
+        case stream(client: ClientRecord, cursor: String?, cors: HTTPHeaders)
+    }
+
+    func handle(_ request: HTTPRequest, policy: RequestPolicy) async -> Outcome {
+        let started = DispatchTime.now()
+        let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                                                             reason: "Local API request")
+        defer { ProcessInfo.processInfo.endActivity(activity) }
+        let (outcome, pattern) = await pipeline(request, policy: policy)
+        let status: Int
+        switch outcome {
+        case .response(let response, _): status = response.status
+        case .stream: status = 200
+        }
+        let milliseconds = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
+        logger.info("\(request.method, privacy: .public) \(pattern ?? "-", privacy: .public) \(status) \(milliseconds) ms")
+        return outcome
+    }
+
+    private func pipeline(_ request: HTTPRequest, policy: RequestPolicy) async -> (Outcome, String?) {
+        guard policy.checkHost(request) else {
+            return (.response(Self.error(.misdirected), close: true), nil)
+        }
+        let origin = policy.classifyOrigin(request)
+        guard origin != .rejected else { return (.response(Self.error(.originNotAllowed), close: false), nil) }
+        let cors = policy.corsHeaders(for: origin)
+        func reply(_ response: HTTPResponse) -> Outcome {
+            var response = response
+            for (name, value) in cors.pairs { response.headers[name] = value }
+            return .response(response, close: false)
+        }
+        if let preflight = policy.preflight(request) { return (reply(preflight), nil) }
+
+        let router = Router(routes: APIRoutes.all + routeRegistry.routes)
+        let match: RouteMatch
+        switch router.match(method: request.method, path: request.path) {
+        case .success(let found):
+            match = found
+        case .failure(.notFound):
+            return (reply(Self.error(.notFound, "There is no route at that path.")), nil)
+        case .failure:
+            var response = Self.error(.badRequest, "That method isn't allowed on this path.")
+            response.status = 405
+            response.headers["Allow"] = router.allowedMethods(path: request.path).joined(separator: ", ")
+            return (reply(response), nil)
+        }
+        let spec = match.spec
+        let pattern = spec.pattern
+
+        if let code = policy.checkContentType(request, route: spec) { return (reply(Self.error(code)), pattern) }
+        let defaultLimit = spec.body == .binary ? limits.maxBinaryBody : limits.maxJSONBody
+        if request.body.count > min(spec.maxBodyBytes ?? defaultLimit, Self.maxBodyCap) {
+            return (reply(Self.error(.tooLarge)), pattern)
+        }
+
+        let bearer = request.headers["Authorization"]
+        let client = spec.scope == nil ? nil : registry.authenticate(bearer: bearer)
+        if let wait = limiter.consume(client: client?.id.uuidString ?? "anon",
+                                      bucket: client == nil ? .unauthenticated : spec.bucket) {
+            var response = Self.error(.rateLimited)
+            response.headers["Retry-After"] = String(wait)
+            return (reply(response), pattern)
+        }
+
+        if let required = spec.scope {
+            guard let client else {
+                return (reply(Self.error(registry.wasRevoked(bearer: bearer) ? .tokenRevoked : .unauthorized)), pattern)
+            }
+            guard RequestPolicy.originBindingAllows(record: client, decision: origin,
+                                                    extensionBundle: request.headers[RequestPolicy.extensionBundleHeader]) else {
+                return (reply(Self.error(.unauthorized, "This token can't be used from this origin.")), pattern)
+            }
+            guard client.scopes.contains(where: { $0.allows(required) }) else {
+                return (reply(Self.error(.forbiddenScope)), pattern)
+            }
+            onAuthenticated?(client.id)
+        }
+
+        let context = LocalAPIContext(request: request, route: match, client: client, origin: origin)
+        guard let route = RouteID(rawValue: spec.id) else {
+            guard let handler = routeRegistry.handler(for: spec.id) else { return (reply(Self.error(.notFound)), pattern) }
+            return (reply(await handler(context)), pattern)
+        }
+        switch route {
+        case .ping:
+            var dto = ping()
+            for name in routeRegistry.capabilities where !dto.capabilities.contains(name) {
+                dto.capabilities.append(name)
+            }
+            return (reply(.json(dto)), pattern)
+        case .openapi:
+            let body = OpenAPIDocument.data(registry: routeRegistry, appVersion: ping().appVersion)
+            return (reply(HTTPResponse(status: 200, headers: HTTPHeaders([("Content-Type", "application/json; charset=utf-8")]),
+                                       body: body)), pattern)
+        case .pairStart, .pairComplete:
+            return (reply(pair(route, request: request, origin: origin)), pattern)
+        case .me:
+            return (reply(.json(clientDTO(context.client!))), pattern)
+        case .meDelete:
+            return (reply(revoke(context.client!.id)), pattern)
+        case .changes:
+            guard let limit = Self.limit(request.query["limit"]) else {
+                return (reply(Self.error(.badRequest, "limit must be a number from 1 to 500.")), pattern)
+            }
+            switch changes.changes(since: request.query["since"], limit: limit) {
+            case .success(let page): return (reply(.json(page)), pattern)
+            case .failure(let code): return (reply(Self.error(code)), pattern)
+            }
+        case .events:
+            let cursor = request.headers["Last-Event-ID"] ?? request.query["since"]
+            return (.stream(client: context.client!, cursor: cursor, cors: cors), pattern)
+        case .clientsList:
+            return (reply(.json(registry.clients.map(clientDTO))), pattern)
+        case .clientDelete:
+            guard let id = match.params["id"].flatMap(UUID.init(uuidString:)) else {
+                return (reply(Self.error(.notFound)), pattern)
+            }
+            return (reply(revoke(id)), pattern)
+        default:
+            return (reply(await responder.respond(context)), pattern)
+        }
+    }
+
+    private func pair(_ route: RouteID, request: HTTPRequest, origin: OriginDecision) -> HTTPResponse {
+        let stored: String?
+        switch RequestPolicy.storedOrigin(for: origin, extensionBundle: request.headers[RequestPolicy.extensionBundleHeader]) {
+        case .success(let value):
+            stored = value
+        case .failure(let code):
+            return Self.error(code, "Safari extensions must send \(RequestPolicy.extensionBundleHeader) with their bundle identifier.")
+        }
+        let decoder = APIJSON.decoder()
+        if route == .pairStart {
+            guard let body = try? decoder.decode(PairStartRequest.self, from: request.body) else {
+                return Self.error(.badRequest, "Send clientName, kind (cli, extension, mcp or script) and scopes.")
+            }
+            switch pairing.start(body, origin: stored) {
+            case .success(let response): return .json(response)
+            case .failure(let code): return Self.error(code)
+            }
+        }
+        guard let body = try? decoder.decode(PairCompleteRequest.self, from: request.body) else {
+            return Self.error(.badRequest, "Send pairingID and code.")
+        }
+        switch pairing.complete(body, origin: stored) {
+        case .success(let response): return .json(response)
+        case .failure(let code): return Self.error(code)
+        }
+    }
+
+    private func revoke(_ id: UUID) -> HTTPResponse {
+        do {
+            try registry.revoke(id)
+            return HTTPResponse(status: 204)
+        } catch let code as APIErrorCode {
+            return Self.error(code, "No client with that id.")
+        } catch {
+            return Self.error(.internal, "The client couldn't be removed.")
+        }
+    }
+
+    private func clientDTO(_ record: ClientRecord) -> ClientDTO {
+        ClientDTO(id: record.id, name: record.name, kind: record.kind, scopes: record.scopes, origin: record.origin,
+                  tokenHint: record.tokenHint, createdAt: record.createdAt, lastUsedAt: lastUsed?(record.id))
+    }
+
+    private static func limit(_ text: String?) -> Int? {
+        guard let text else { return 50 }
+        guard let value = Int(text), (1...500).contains(value) else { return nil }
+        return value
+    }
+
+    static func error(_ code: APIErrorCode, _ message: String? = nil) -> HTTPResponse {
+        .error(code, message ?? defaultMessage(code))
+    }
+
+    static func defaultMessage(_ code: APIErrorCode) -> String {
+        switch code {
+        case .badRequest: return "The request is malformed."
+        case .unauthorized: return "A valid token is required."
+        case .tokenRevoked: return "This token was revoked."
+        case .forbiddenScope: return "This token doesn't have the scope this route needs."
+        case .originNotAllowed: return "Requests from this origin aren't allowed."
+        case .pairingDenied: return "Pairing was denied in NoteIt."
+        case .pairingFailed: return "Pairing failed. Check the code shown in NoteIt, or start again."
+        case .pairingInProgress: return "Another pairing is in progress."
+        case .notFound: return "Not found."
+        case .cursorExpired: return "The cursor has expired. List again with updatedSince."
+        case .lengthRequired: return "Request bodies need Content-Length."
+        case .tooLarge: return "The request is too large."
+        case .unsupportedMediaType: return "This route needs Content-Type: application/json."
+        case .misdirected: return "The Host header must be 127.0.0.1 or localhost with the API's port."
+        case .rateLimited: return "Too many requests. Try again after Retry-After seconds."
+        case .apiDisabled: return "The Local API was turned off."
+        case .notReady: return "Your library is still opening. Try again in a moment."
+        default: return "The request failed."
+        }
+    }
+}
+
+/// Touched on the server queue only.
+private final class Once: @unchecked Sendable {
+    var done = false
+}
+
+// MARK: - Connection
+
+/// One TCP connection. Every property is touched on the server's queue only.
+private final class Connection: @unchecked Sendable {
+    private weak var server: LocalHTTPServer?
+    private let connection: NWConnection
+    private let policy: RequestPolicy
+    private let queue: DispatchQueue
+    private var buffer = Data()
+    private var busy = false
+    private var receiving = false
+    private var closed = false
+    private var stopping = false
+    private var idleTimer: DispatchWorkItem?
+    private var subscription: UUID?
+    private var heartbeat: DispatchSourceTimer?
+
+    init(server: LocalHTTPServer, connection: NWConnection, policy: RequestPolicy) {
+        self.server = server
+        self.connection = connection
+        self.policy = policy
+        self.queue = server.queue
+    }
+
+    func start() {
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .failed, .cancelled: self?.close()
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        armIdleTimer()
+        receive()
+    }
+
+    /// The server is stopping: idle connections and streams close now, a busy one after answering `api_disabled`.
+    func shutDown() {
+        if busy {
+            stopping = true
+        } else {
+            close()
+        }
+    }
+
+    private var isStream: Bool { subscription != nil }
+
+    private func receive() {
+        guard !receiving, !closed else { return }
+        receiving = true
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { [weak self] data, _, isComplete, error in
+            guard let self, !self.closed else { return }
+            self.receiving = false
+            if isComplete || error != nil {
+                self.close()
+                return
+            }
+            if self.isStream {
+                self.receive()
+                return
+            }
+            if let data { self.buffer.append(data) }
+            self.process()
+        }
+    }
+
+    private func process() {
+        guard !busy, !closed, !isStream, let server else { return }
+        switch server.parser().parse(buffer) {
+        case .needMore:
+            armIdleTimer()
+            receive()
+        case .failure(let status, let code):
+            var response = LocalHTTPServer.error(code)
+            response.status = status
+            write(response.serialized(keepAlive: false)) { [weak self] in self?.close() }
+        case .request(let request, let consumed):
+            buffer.removeFirst(consumed)
+            busy = true
+            idleTimer?.cancel()
+            let policy = policy
+            Task { [weak self] in
+                let outcome = await server.handle(request, policy: policy)
+                server.queue.async { self?.finish(outcome, request: request) }
+            }
+        }
+    }
+
+    private func finish(_ outcome: LocalHTTPServer.Outcome, request: HTTPRequest) {
+        guard !closed else { return }
+        busy = false
+        if stopping {
+            write(LocalHTTPServer.error(.apiDisabled).serialized(keepAlive: false)) { [weak self] in self?.close() }
+            return
+        }
+        switch outcome {
+        case .response(let response, let close):
+            let keepAlive = !close && request.headers["Connection"]?.lowercased() != "close"
+            write(response.serialized(keepAlive: keepAlive)) { [weak self] in
+                if keepAlive { self?.process() } else { self?.close() }
+            }
+        case .stream(let client, let cursor, let cors):
+            startStream(client: client, cursor: cursor, cors: cors, request: request)
+        }
+    }
+
+    // MARK: Server-Sent Events
+
+    private func startStream(client: ClientRecord, cursor: String?, cors: HTTPHeaders, request: HTTPRequest) {
+        guard let server else { return close() }
+        let result = server.changes.subscribe(client: client.id, after: cursor, onClose: { [weak self, queue] in
+            queue.async { self?.endStreamRevoked() }
+        }, { [weak self, queue] change in
+            queue.async { self?.sendEvent(change) }
+        })
+        switch result {
+        case .failure(let code):
+            var response = LocalHTTPServer.error(code)
+            for (name, value) in cors.pairs { response.headers[name] = value }
+            write(response.serialized(keepAlive: true)) { [weak self] in self?.process() }
+            return
+        case .success(let id):
+            subscription = id
+        }
+        var head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\n"
+            + "X-Content-Type-Options: nosniff\r\nConnection: keep-alive\r\n"
+        for (name, value) in cors.pairs { head += "\(name): \(value)\r\n" }
+        write(Data((head + "\r\n").utf8))
+
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + server.heartbeatInterval, repeating: server.heartbeatInterval)
+        timer.setEventHandler { [weak self] in self?.write(Data(": ping\n\n".utf8)) }
+        timer.resume()
+        heartbeat = timer
+        receive()
+
+        // Revoked between authentication and subscribing.
+        if !server.registry.clients.contains(where: { $0.id == client.id }) {
+            server.changes.closeAll(client: client.id)
+        }
+    }
+
+    private func sendEvent(_ change: ChangeDTO) {
+        guard !closed, isStream, let json = try? APIJSON.encoder().encode(change) else { return }
+        write(Data("id: \(change.cursor)\nevent: change\ndata: ".utf8) + json + Data("\n\n".utf8))
+    }
+
+    private func endStreamRevoked() {
+        guard !closed, isStream else { return }
+        subscription = nil
+        write(Data("event: revoked\ndata: {}\n\n".utf8)) { [weak self] in self?.close() }
+    }
+
+    // MARK: Plumbing
+
+    private func write(_ data: Data, then: (() -> Void)? = nil) {
+        guard !closed else { return }
+        connection.send(content: data, completion: .contentProcessed { [weak self] error in
+            guard let self, !self.closed else { return }
+            if error != nil { return self.close() }
+            then?()
+        })
+    }
+
+    private func armIdleTimer() {
+        guard let server, !isStream else { return }
+        idleTimer?.cancel()
+        let timer = DispatchWorkItem { [weak self] in
+            guard let self, !self.busy, !self.isStream else { return }
+            self.close()
+        }
+        idleTimer = timer
+        queue.asyncAfter(deadline: .now() + server.idleTimeout, execute: timer)
+    }
+
+    func close() {
+        guard !closed else { return }
+        closed = true
+        idleTimer?.cancel()
+        heartbeat?.cancel()
+        if let subscription { server?.changes.unsubscribe(subscription) }
+        subscription = nil
+        connection.cancel()
+        server?.removed(self)
+    }
+}
