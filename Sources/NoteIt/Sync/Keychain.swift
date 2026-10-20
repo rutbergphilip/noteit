@@ -48,9 +48,12 @@ enum Keychain {
     }
 }
 
-/// A `SecretStore` that names the items it adds, as Keychain Access shows them.
+/// A `SecretStore` that names the items it adds, as Keychain Access shows them, and tells a missing item apart
+/// from one it couldn't read.
 protocol LabeledSecretStore: SecretStore {
     func write(_ value: String, service: String, account: String, label: String) throws
+    /// nil only when there is no such item; throws when the item couldn't be read.
+    func readExisting(service: String, account: String) throws -> String?
 }
 
 /// `SecretStore` over the login keychain's generic passwords.
@@ -62,6 +65,19 @@ struct SecItemStore: LabeledSecretStore {
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
+    }
+
+    func readExisting(service: String, account: String) throws -> String? {
+        var query = Self.baseQuery(service: service, account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = item as? Data, let text = String(data: data, encoding: .utf8) else {
+            throw Keychain.Failure(status: status == errSecSuccess ? errSecDecode : status)
+        }
+        return text
     }
 
     func write(_ value: String, service: String, account: String) throws {

@@ -634,13 +634,37 @@ final class LocalAPIHandlersTests: XCTestCase {
         try registry.revoke(record.id)
         XCTAssertNil(secrets.values["test.local-api/clients"])
     }
+
+    func testKeychainClientStoreKeepsClientsItCouldNotRead() throws {
+        let secrets = MemorySecrets()
+        let (record, _) = try ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+            .issue(name: "CLI", kind: .cli, scopes: [.read], origin: nil)
+        let saved = secrets.values["s/clients"]
+
+        secrets.failsReads = true
+        let registry = ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+        XCTAssertEqual(registry.clients, [])
+        XCTAssertThrowsError(try registry.issue(name: "New", kind: .cli, scopes: [.read], origin: nil))
+        XCTAssertThrowsError(try registry.revokeAll())
+        XCTAssertEqual(secrets.values["s/clients"], saved)
+
+        secrets.failsReads = false
+        XCTAssertEqual(KeychainClientStore(secrets: secrets, service: "s").load(), [record])
+    }
 }
 
 private final class MemorySecrets: LabeledSecretStore {
     var values: [String: String] = [:]
     var labels: [String: String] = [:]
 
+    var failsReads = false
+
     func read(service: String, account: String) -> String? { values["\(service)/\(account)"] }
+
+    func readExisting(service: String, account: String) throws -> String? {
+        if failsReads { throw Keychain.Failure(status: errSecInteractionNotAllowed) }
+        return values["\(service)/\(account)"]
+    }
 
     func write(_ value: String, service: String, account: String) throws {
         try write(value, service: service, account: account, label: "NoteIt Sync")
