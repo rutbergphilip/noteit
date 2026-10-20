@@ -27,6 +27,8 @@ extension SyncEngine {
             try openSession(manifest, etag: etag, kind: kind, credential: credential, encrypted: encrypted,
                             supported: supported, passedCipher: cipher, makeCipher: makeCipher)
         }
+        // A store still under Inkwell's prefix is copied to `RemoteLayout.root` first, so it isn't read as missing.
+        try await RemoteMigration.migrateLegacyStoreIfNeeded(backend)
         if let (manifest, etag) = try await readManifestAndETag(backend) {
             return (try open(manifest, etag), false)
         }
@@ -122,9 +124,7 @@ extension SyncEngine {
                 if manifest.keyring != nil { throw SyncError.wrongPassphrase }
                 throw SyncError.encryptionMismatch
             }
-            guard (try? passedCipher.open(encryption.keyCheck, context: keyCheckContext)) == keyCheckPlaintext else {
-                throw SyncError.wrongPassphrase
-            }
+            guard opensKeyCheck(encryption, with: passedCipher) else { throw SyncError.wrongPassphrase }
             return session(passedCipher, keyID: KeyIdentity.legacyKeyID(encryption))
         }
 
@@ -169,8 +169,14 @@ extension SyncEngine {
         }
         // v1 keys derive from the passphrase's raw bytes (program §4 rule 12), never normalised.
         let cipher = try makeCipher(passphrase, encryption.salt, encryption.iterations)
-        guard (try? cipher.open(encryption.keyCheck, context: keyCheckContext)) == keyCheckPlaintext else { throw SyncError.wrongPassphrase }
+        guard opensKeyCheck(encryption, with: cipher) else { throw SyncError.wrongPassphrase }
         return session(cipher, keyID: KeyIdentity.legacyKeyID(encryption))
+    }
+
+    /// New stores seal `keyCheckPlaintext`; stores created by Inkwell seal `legacyKeyCheckPlaintext`.
+    private static func opensKeyCheck(_ encryption: Manifest.Encryption, with cipher: any SyncCipher) -> Bool {
+        let check = try? cipher.open(encryption.keyCheck, context: keyCheckContext)
+        return check == keyCheckPlaintext || check == legacyKeyCheckPlaintext
     }
 
     // MARK: - Creating

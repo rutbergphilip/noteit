@@ -124,9 +124,9 @@ final class GoldenVectorTests: XCTestCase {
         let nfc = "caf\u{E9}"
         let nfd = "cafe\u{301}"
         func encrypted(_ passphrase: String, salt: Data, iterations: Int = 210_000, formatVersion: Int = 1,
-                       keyCheck: ((Data) -> Data)? = nil) throws -> Manifest {
+                       checkPlaintext: Data = SyncEngine.keyCheckPlaintext, keyCheck: ((Data) -> Data)? = nil) throws -> Manifest {
             let key = try KeyDerivation.checkedKey(passphrase: passphrase, salt: salt, iterations: iterations)
-            var check = try DeterministicAESCipher(key: key).seal(SyncEngine.keyCheckPlaintext, context: SyncEngine.keyCheckContext)
+            var check = try DeterministicAESCipher(key: key).seal(checkPlaintext, context: SyncEngine.keyCheckContext)
             if let keyCheck { check = keyCheck(check) }
             return Manifest(formatVersion: formatVersion, encryption: .init(salt: salt, iterations: iterations, keyCheck: check),
                             createdAt: VectorIO.epoch)
@@ -148,6 +148,9 @@ final class GoldenVectorTests: XCTestCase {
             ("salt-15-bytes", passphrase, Manifest(encryption: .init(salt: salt.prefix(15), iterations: 210_000, keyCheck: main.encryption!.keyCheck),
                                                     createdAt: VectorIO.epoch)),
             ("empty-key-check", passphrase, Manifest(encryption: .init(salt: salt, iterations: 210_000, keyCheck: Data()), createdAt: VectorIO.epoch)),
+            // Stores created by Inkwell (before 0.4.0) seal the legacy key check.
+            ("encrypted-inkwell-key-check", passphrase,
+             try encrypted(passphrase, salt: salt, checkPlaintext: SyncEngine.legacyKeyCheckPlaintext)),
         ]
         var cases: [ManifestCase] = []
         for (name, phrase, manifest) in inputs {
@@ -155,7 +158,7 @@ final class GoldenVectorTests: XCTestCase {
             cases.append(ManifestCase(name: name, passphrase: phrase, manifestJSON: json, expect: await connectOutcome(json, phrase)))
         }
         XCTAssertEqual(cases.map(\.expect), ["ok", "ok", "ok", "wrongPassphrase", "ok", "wrongPassphrase", "unsupportedFormat",
-                                             "unsupportedFormat", "invalidManifest", "invalidManifest", "invalidManifest"])
+                                             "unsupportedFormat", "invalidManifest", "invalidManifest", "invalidManifest", "ok"])
 
         // Keyring stores (Task 3.2). `expect` describes the manifest and its unwrapped key, not what this build opens.
         func keyring(_ label: String, passphrase: String) throws -> Manifest {

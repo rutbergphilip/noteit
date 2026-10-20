@@ -25,7 +25,7 @@
         "modifiedAt" : 789004800.25,
         "revision" : "B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA"
       },
-      "key" : "inkwell/v1/notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
+      "key" : "noteit/v1/notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
       "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
       "name" : "note-envelope",
       "plaintextJSON" : "{\"bodySHA256\":\"bd5ebb81f4f160b2e2ee93a668e69ba312daf08d864d8bbf935cb2081840a76f\",\"deviceID\":\"device-1\",\"deviceName\":\"Work Mac\\/Studio\",\"id\":\"430742D2-5082-469B-9F71-FF2B36718F0D\",\"kind\":\"note\",\"meta\":\"ewogICJjcmVhdGVkQXQiIDogIjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwKICAiaWQiIDogIjQzMDc0MkQyLTUwODItNDY5Qi05RjcxLUZGMkIzNjcxOEYwRCIsCiAgImlzUGlubmVkIiA6IHRydWUsCiAgIm5vdGVib29rSUQiIDogIjQzMkYzNUE5LTE1MzMtNDdCMC04OThGLUI0MTcyNkRGQzE2MyIsCiAgInByZXZpZXciIDogIlJvYWQgdHJpcDogQVwvQiB0ZXN0aW5nIiwKICAicmV2aXNpb24iIDogIkIzMjlEQzhCLTkwMjgtNEMwQy04N0YxLTBBQzkxRUI0RTRDQSIsCiAgInRhZ3MiIDogWwogICAgIndvcmtcLzIwMjYiLAogICAgImlkZWFzIgogIF0sCiAgInRpdGxlIiA6ICJQbGFucyBcLyBpZGVhcyIsCiAgInVwZGF0ZWRBdCIgOiAiMjAyNi0wMS0wMlQwMDowMDowMFoiCn0=\",\"modifiedAt\":789004800.25,\"revision\":\"B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA\"}",
@@ -55,7 +55,7 @@
         "modifiedAt" : 789004800.25,
         "revision" : "B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA"
       },
-      "key" : "inkwell/v1/notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
+      "key" : "noteit/v1/notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
       "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
       "name" : "note-envelope-legacy-without-body-sha",
       "plaintextJSON" : "{\"deviceID\":\"device-1\",\"deviceName\":\"Work Mac\",\"id\":\"430742D2-5082-469B-9F71-FF2B36718F0D\",\"kind\":\"note\",\"meta\":\"ewogICJjcmVhdGVkQXQiIDogIjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwKICAiaWQiIDogIjQzMDc0MkQyLTUwODItNDY5Qi05RjcxLUZGMkIzNjcxOEYwRCIsCiAgImlzUGlubmVkIiA6IHRydWUsCiAgIm5vdGVib29rSUQiIDogIjQzMkYzNUE5LTE1MzMtNDdCMC04OThGLUI0MTcyNkRGQzE2MyIsCiAgInByZXZpZXciIDogIlJvYWQgdHJpcDogQVwvQiB0ZXN0aW5nIiwKICAicmV2aXNpb24iIDogIkIzMjlEQzhCLTkwMjgtNEMwQy04N0YxLTBBQzkxRUI0RTRDQSIsCiAgInRhZ3MiIDogWwogICAgIndvcmtcLzIwMjYiLAogICAgImlkZWFzIgogIF0sCiAgInRpdGxlIiA6ICJQbGFucyBcLyBpZGVhcyIsCiAgInVwZGF0ZWRBdCIgOiAiMjAyNi0wMS0wMlQwMDowMDowMFoiCn0=\",\"modifiedAt\":789004800.25,\"revision\":\"B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA\"}",
@@ -80,7 +80,7 @@
         "modifiedAt" : 788922000,
         "revision" : "5CCC5200-33A8-445A-99FD-C4E20B4B2D25"
       },
-      "key" : "inkwell/v1/notebooks/432F35A9-1533-47B0-898F-B41726DFC163.json",
+      "key" : "noteit/v1/notebooks/432F35A9-1533-47B0-898F-B41726DFC163.json",
       "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
       "name" : "notebook-envelope",
       "plaintextJSON" : "{\"deviceID\":\"device-2\",\"deviceName\":\"Laptop\",\"id\":\"432F35A9-1533-47B0-898F-B41726DFC163\",\"kind\":\"notebook\",\"meta\":\"ewogICJjb2xvckhleCIgOiAiIzM0NzhGNiIsCiAgImlkIiA6ICI0MzJGMzVBOS0xNTMzLTQ3QjAtODk4Ri1CNDE3MjZERkMxNjMiLAogICJtb2RpZmllZEF0IiA6ICIyMDI2LTAxLTAxVDAxOjAwOjAwWiIsCiAgIm5hbWUiIDogIkhvbWVcL1dvcmsiLAogICJyZXZpc2lvbiIgOiAiNUNDQzUyMDAtMzNBOC00NDVBLTk5RkQtQzRFMjBCNEIyRDI1IiwKICAic29ydEluZGV4IiA6IDIsCiAgInN5bWJvbCIgOiAiZm9sZGVyIgp9\",\"modifiedAt\":788922000,\"revision\":\"5CCC5200-33A8-445A-99FD-C4E20B4B2D25\"}",
@@ -95,7 +95,7 @@
         "id" : "430742D2-5082-469B-9F71-FF2B36718F0D",
         "kind" : "note"
       },
-      "key" : "inkwell/v1/tombstones/430742D2-5082-469B-9F71-FF2B36718F0D.json",
+      "key" : "noteit/v1/tombstones/430742D2-5082-469B-9F71-FF2B36718F0D.json",
       "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
       "name" : "tombstone",
       "plaintextJSON" : "{\"deletedAt\":789091200.5,\"deletedMetaETag\":\"\\\"5d41402abc4b2a76b9719d911017c592\\\"\",\"deviceID\":\"device-2\",\"id\":\"430742D2-5082-469B-9F71-FF2B36718F0D\",\"kind\":\"note\"}",
@@ -109,7 +109,7 @@
         "id" : "432F35A9-1533-47B0-898F-B41726DFC163",
         "kind" : "notebook"
       },
-      "key" : "inkwell/v1/tombstones/432F35A9-1533-47B0-898F-B41726DFC163.json",
+      "key" : "noteit/v1/tombstones/432F35A9-1533-47B0-898F-B41726DFC163.json",
       "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
       "name" : "tombstone-legacy-without-etag",
       "plaintextJSON" : "{\"deletedAt\":788918400,\"deviceID\":\"device-1\",\"id\":\"432F35A9-1533-47B0-898F-B41726DFC163\",\"kind\":\"notebook\"}",
@@ -122,7 +122,7 @@
         "lastSync" : 788918400.125,
         "name" : "Work Mac/Studio"
       },
-      "key" : "inkwell/v1/devices/device-1.json",
+      "key" : "noteit/v1/devices/device-1.json",
       "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
       "name" : "device",
       "plaintextJSON" : "{\"deviceID\":\"device-1\",\"lastSync\":788918400.125,\"name\":\"Work Mac\\/Studio\"}",

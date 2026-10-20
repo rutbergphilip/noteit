@@ -98,50 +98,50 @@ final class S3BackendTests: XCTestCase {
         StubURLProtocol.reset { request in
             let q = self.query(request)
             if q["continuation-token"] == nil {
-                return .init(status: 200, body: self.listXML(["inkwell/v1/a", "inkwell/v1/b"], truncated: true, token: "tok+/="))
+                return .init(status: 200, body: self.listXML(["noteit/v1/a", "noteit/v1/b"], truncated: true, token: "tok+/="))
             }
             XCTAssertEqual(q["continuation-token"], "tok+/=")
-            return .init(status: 200, body: self.listXML(["inkwell/v1/c"], truncated: false))
+            return .init(status: 200, body: self.listXML(["noteit/v1/c"], truncated: false))
         }
-        let objects = try await makeBackend().list(prefix: "inkwell/v1/")
-        XCTAssertEqual(objects.map(\.key), ["inkwell/v1/a", "inkwell/v1/b", "inkwell/v1/c"])
-        XCTAssertEqual(objects.first?.etag, "e-inkwell/v1/a")
+        let objects = try await makeBackend().list(prefix: "noteit/v1/")
+        XCTAssertEqual(objects.map(\.key), ["noteit/v1/a", "noteit/v1/b", "noteit/v1/c"])
+        XCTAssertEqual(objects.first?.etag, "e-noteit/v1/a")
         let requests = StubURLProtocol.requests
         XCTAssertEqual(requests.count, 2)
         XCTAssertEqual(query(requests[0].request)["list-type"], "2")
-        XCTAssertEqual(query(requests[0].request)["prefix"], "inkwell/v1/")
+        XCTAssertEqual(query(requests[0].request)["prefix"], "noteit/v1/")
         XCTAssertTrue(requests[0].request.url!.absoluteString.hasPrefix("http://localhost:9000/notes/?"))
     }
 
     func testPrefixIsPrependedAndStripped() async throws {
         StubURLProtocol.reset { request in
             if request.httpMethod == "GET" {
-                return .init(status: 200, body: self.listXML(["sub/dir/inkwell/v1/x"], truncated: false))
+                return .init(status: 200, body: self.listXML(["sub/dir/noteit/v1/x"], truncated: false))
             }
             return .init(status: 200, headers: ["ETag": "\"new\""])
         }
         let backend = makeBackend(prefix: "/sub/dir/")
-        let objects = try await backend.list(prefix: "inkwell/v1/")
-        XCTAssertEqual(objects.map(\.key), ["inkwell/v1/x"])
-        let etag = try await backend.put("inkwell/v1/y", data: Data("hi".utf8), ifMatch: nil, ifNoneMatch: false)
+        let objects = try await backend.list(prefix: "noteit/v1/")
+        XCTAssertEqual(objects.map(\.key), ["noteit/v1/x"])
+        let etag = try await backend.put("noteit/v1/y", data: Data("hi".utf8), ifMatch: nil, ifNoneMatch: false)
         XCTAssertEqual(etag, "new")
         let requests = StubURLProtocol.requests
-        XCTAssertEqual(query(requests[0].request)["prefix"], "sub/dir/inkwell/v1/")
-        XCTAssertEqual(requests[1].request.url?.absoluteString, "http://localhost:9000/notes/sub/dir/inkwell/v1/y")
+        XCTAssertEqual(query(requests[0].request)["prefix"], "sub/dir/noteit/v1/")
+        XCTAssertEqual(requests[1].request.url?.absoluteString, "http://localhost:9000/notes/sub/dir/noteit/v1/y")
         XCTAssertEqual(requests[1].body, Data("hi".utf8))
         XCTAssertEqual(requests[1].request.value(forHTTPHeaderField: "x-amz-content-sha256"), SigV4Signer.sha256Hex(Data("hi".utf8)))
     }
 
     func testPathStyleAndVirtualHostURLs() throws {
-        let path = try makeBackend(pathStyle: true, endpoint: "https://s3.example.com").makeURL(key: "inkwell/v1/a b.meta")
-        XCTAssertEqual(path.absoluteString, "https://s3.example.com/notes/inkwell/v1/a%20b.meta")
-        let virtual = try makeBackend(pathStyle: false, endpoint: "https://s3.example.com:8443").makeURL(key: "inkwell/v1/a")
-        XCTAssertEqual(virtual.absoluteString, "https://notes.s3.example.com:8443/inkwell/v1/a")
+        let path = try makeBackend(pathStyle: true, endpoint: "https://s3.example.com").makeURL(key: "noteit/v1/a b.meta")
+        XCTAssertEqual(path.absoluteString, "https://s3.example.com/notes/noteit/v1/a%20b.meta")
+        let virtual = try makeBackend(pathStyle: false, endpoint: "https://s3.example.com:8443").makeURL(key: "noteit/v1/a")
+        XCTAssertEqual(virtual.absoluteString, "https://notes.s3.example.com:8443/noteit/v1/a")
     }
 
     func testGetReturnsDataAndUnquotedETag() async throws {
         StubURLProtocol.reset { _ in .init(status: 200, headers: ["ETag": "\"abc\""], body: Data([1, 2, 3])) }
-        let got = try await makeBackend(pathStyle: false).get("inkwell/v1/k")
+        let got = try await makeBackend(pathStyle: false).get("noteit/v1/k")
         XCTAssertEqual(got.data, Data([1, 2, 3]))
         XCTAssertEqual(got.etag, "abc")
         XCTAssertEqual(StubURLProtocol.requests[0].request.url?.host, "notes.localhost")
@@ -375,11 +375,11 @@ final class S3BackendTests: XCTestCase {
         StubURLProtocol.reset(fakeServer(honorsConditions: true))
         let backend = makeBackend(verifyConditionals: true)
         try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
-        let canary = StubURLProtocol.requests.filter { $0.request.url!.path.contains("/inkwell/.canary/") }
+        let canary = StubURLProtocol.requests.filter { $0.request.url!.path.contains("/noteit/.canary/") }
         XCTAssertFalse(canary.isEmpty)
         let ifMatch = canary.compactMap { $0.request.value(forHTTPHeaderField: "If-Match") }
         XCTAssertFalse(ifMatch.isEmpty)
-        XCTAssertEqual(Set(ifMatch), ["\"inkwell-canary-mismatch\""])
+        XCTAssertEqual(Set(ifMatch), ["\"noteit-canary-mismatch\""])
     }
 
     func testCanaryKeepsConditionalsOnHonestServerAndCleansUp() async throws {
@@ -389,7 +389,7 @@ final class S3BackendTests: XCTestCase {
         try await backend.put("k2", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
         XCTAssertTrue(backend.conditionalWritesSupported)
         XCTAssertTrue(backend.conditionalDeletesSupported)
-        let canary = StubURLProtocol.requests.filter { $0.request.url!.path.contains("inkwell/.canary/") }
+        let canary = StubURLProtocol.requests.filter { $0.request.url!.path.contains("noteit/.canary/") }
         XCTAssertEqual(canary.map { $0.request.httpMethod! }, ["PUT", "PUT", "PUT", "DELETE", "DELETE"], "probe runs once")
         XCTAssertEqual(StubURLProtocol.requests.count, canary.count + 2)
     }
@@ -432,7 +432,7 @@ final class S3BackendTests: XCTestCase {
         XCTAssertTrue(backend.conditionalWritesSupported, "an unreachable server says nothing about conditionals")
         lock.withLock { failing = false }
         try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
-        let canaryPuts = StubURLProtocol.requests.filter { $0.request.url!.path.contains("inkwell/.canary/") && $0.request.httpMethod == "PUT" }
+        let canaryPuts = StubURLProtocol.requests.filter { $0.request.url!.path.contains("noteit/.canary/") && $0.request.httpMethod == "PUT" }
         XCTAssertGreaterThanOrEqual(canaryPuts.count, 4, "probe ran again after recovery")
         XCTAssertTrue(backend.conditionalWritesSupported)
     }

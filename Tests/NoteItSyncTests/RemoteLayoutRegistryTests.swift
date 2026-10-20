@@ -112,9 +112,11 @@ final class RemoteLayoutRegistryTests: XCTestCase {
     }
 
     func testLegacyListRootsAllowed() {
-        XCTAssertTrue(RemoteLayout.isListablePrefix("inkwell/v1/"))
+        XCTAssertTrue(RemoteLayout.isListablePrefix(RemoteLayout.legacyRoot), "RemoteMigration lists it")
         XCTAssertTrue(RemoteLayout.isListablePrefix("inkwell/"))
+        XCTAssertFalse(RemoteLayout.isValidKey(RemoteLayout.legacyRoot + "manifest.json"))
         XCTAssertTrue(RemoteLayout.isListablePrefix(RemoteLayout.root))
+        XCTAssertTrue(RemoteLayout.isListablePrefix("noteit/"))
         XCTAssertFalse(RemoteLayout.isListablePrefix(""))
     }
 }

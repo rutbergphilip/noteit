@@ -48,12 +48,12 @@ final class InMemoryBackendTests: XCTestCase {
 
     func testListPrefix() async throws {
         let backend = InMemoryBackend()
-        try await backend.put("inkwell/v1/notes/1.meta", data: Data([1, 2]), ifMatch: nil, ifNoneMatch: false)
-        try await backend.put("inkwell/v1/notes/2.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
+        try await backend.put("noteit/v1/notes/1.meta", data: Data([1, 2]), ifMatch: nil, ifNoneMatch: false)
+        try await backend.put("noteit/v1/notes/2.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
         try await backend.put("other/x", data: Data(), ifMatch: nil, ifNoneMatch: false)
 
-        let objects = try await backend.list(prefix: "inkwell/v1/")
-        XCTAssertEqual(objects.map(\.key), ["inkwell/v1/notes/1.meta", "inkwell/v1/notes/2.meta"])
+        let objects = try await backend.list(prefix: "noteit/v1/")
+        XCTAssertEqual(objects.map(\.key), ["noteit/v1/notes/1.meta", "noteit/v1/notes/2.meta"])
         XCTAssertEqual(objects.map(\.size), [2, 1])
         let listCount = await backend.listCount
         XCTAssertEqual(listCount, 1)
@@ -114,12 +114,12 @@ final class InMemoryBackendTests: XCTestCase {
 
     func testRemoteLayoutKeys() {
         let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
-        XCTAssertEqual(RemoteLayout.root, "inkwell/v1/")
-        XCTAssertEqual(RemoteLayout.manifest(), "inkwell/v1/manifest.json")
-        XCTAssertEqual(RemoteLayout.meta(.notebook, id), "inkwell/v1/notebooks/11111111-2222-3333-4444-555555555555.json")
-        XCTAssertEqual(RemoteLayout.meta(.note, id), "inkwell/v1/notes/11111111-2222-3333-4444-555555555555.meta")
-        XCTAssertEqual(RemoteLayout.body(id), "inkwell/v1/notes/11111111-2222-3333-4444-555555555555.body")
-        XCTAssertEqual(RemoteLayout.tombstone(id), "inkwell/v1/tombstones/11111111-2222-3333-4444-555555555555.json")
-        XCTAssertEqual(RemoteLayout.device("mac-1"), "inkwell/v1/devices/mac-1.json")
+        XCTAssertEqual(RemoteLayout.root, "noteit/v1/")
+        XCTAssertEqual(RemoteLayout.manifest(), "noteit/v1/manifest.json")
+        XCTAssertEqual(RemoteLayout.meta(.notebook, id), "noteit/v1/notebooks/11111111-2222-3333-4444-555555555555.json")
+        XCTAssertEqual(RemoteLayout.meta(.note, id), "noteit/v1/notes/11111111-2222-3333-4444-555555555555.meta")
+        XCTAssertEqual(RemoteLayout.body(id), "noteit/v1/notes/11111111-2222-3333-4444-555555555555.body")
+        XCTAssertEqual(RemoteLayout.tombstone(id), "noteit/v1/tombstones/11111111-2222-3333-4444-555555555555.json")
+        XCTAssertEqual(RemoteLayout.device("mac-1"), "noteit/v1/devices/mac-1.json")
     }
 }

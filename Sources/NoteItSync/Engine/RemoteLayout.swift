@@ -1,13 +1,13 @@
 import Foundation
 
 public enum RemoteLayout {
-    // "inkwell" is the legacy protocol name (from before NoteIt); it is part of the wire format and must stay.
-    public static let folder = "inkwell"
+    public static let folder = "noteit"
     public static let root = folder + "/v1/"
+    /// Where Inkwell (NoteIt's former name) kept the store. Read only to migrate it (see `RemoteMigration`).
+    public static let legacyRoot = "inkwell/v1/"
     /// Throwaway objects written to probe conditional-write support (S3 only).
     public static let canaryPrefix = folder + "/.canary/"
-    // Legacy bytes, kept so the probe stays identical for remote stores shared with Inkwell.
-    public static let canaryMismatchETag = "inkwell-canary-mismatch"
+    public static let canaryMismatchETag = "noteit-canary-mismatch"
     // Legacy bytes: seeds every note's content revision, which is synced. Changing it forces a full re-sync.
     public static let revisionHashSeed = "inkwell-revision-v1"
 
@@ -45,9 +45,9 @@ public enum RecordSealing: Sendable, Equatable { case storeKey, spaceKey, unseal
 
 /// One row of the remote layout registry (foundations Task 3.5).
 public struct RemotePrefix: Sendable, Equatable {
-    /// Full key prefix, e.g. "inkwell/v1/notes/".
+    /// Full key prefix, e.g. "noteit/v1/notes/".
     public let path: String
-    /// Segments after `path`; "inkwell/v1/notes/<UUID>.meta" is 1.
+    /// Segments after `path`; "noteit/v1/notes/<UUID>.meta" is 1.
     public let depth: Int
     public let sealing: RecordSealing
     /// The sub-project slug that owns the row.
@@ -99,15 +99,16 @@ extension RemoteLayout {
     }
 
     /// A registered prefix path, `canaryPrefix`, or a parent root of either (every shorter prefix ending at a
-    /// "/", such as "inkwell/v1/" and "inkwell/"), so legacy clients (the 0.2.x engine, rclone) keep listing.
-    /// Everything else is refused, including "".
+    /// "/", such as "noteit/v1/" and "noteit/"), so clients that list the whole root (the 0.4.x engine, rclone)
+    /// keep listing. `legacyRoot` and "inkwell/" stay listable so `RemoteMigration` can look for an Inkwell
+    /// store; keys under them are not valid. Everything else is refused, including "".
     public static func isListablePrefix(_ prefix: String) -> Bool {
         isListablePrefix(prefix, prefixes: prefixes)
     }
 
     static func isListablePrefix(_ prefix: String, prefixes: [RemotePrefix]) -> Bool {
         guard prefix.hasSuffix("/"), hasValidSegments(String(prefix.dropLast())) else { return false }
-        return (prefixes.map(\.path) + [canaryPrefix]).contains { $0.hasPrefix(prefix) }
+        return (prefixes.map(\.path) + [canaryPrefix, legacyRoot]).contains { $0.hasPrefix(prefix) }
     }
 
     static func isCanaryKey(_ key: String) -> Bool {

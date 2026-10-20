@@ -13,25 +13,25 @@
     },
     {
       "expect" : "ok",
-      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"K94t\\/wymFe5aF\\/dQ6Rf4mzpTWHIobo5aoIiM3uQcMnfLzSkrqCm9KzimBa6r\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":1}",
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"BkGQbVtkbsVO7k04iXgPVjnJlbsjx3oz8rKesB8rojGMe1a+bfTKuuNuWaY=\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":1}",
       "name" : "encrypted",
       "passphrase" : "correct horse battery staple"
     },
     {
       "expect" : "wrongPassphrase",
-      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"K94t\\/wymFe5aF\\/dQ6Rf4mzpTWHIobo5aoIiM3uQcMnfLzSkrqCm9KzimBa6r\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":1}",
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"BkGQbVtkbsVO7k04iXgPVjnJlbsjx3oz8rKesB8rojGMe1a+bfTKuuNuWaY=\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":1}",
       "name" : "encrypted-wrong-passphrase",
       "passphrase" : "correct horse battery stapler"
     },
     {
       "expect" : "ok",
-      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":100000,\"keyCheck\":\"ZMt7uJXGQXCZ4b2siNp2KvYC6ByPBpQjq8IjMgwmdpZk0CWr+pCl6rVf7ll6\",\"salt\":\"Eq8oo3jmbcAJyez5WVwuog==\"},\"formatVersion\":1}",
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":100000,\"keyCheck\":\"j8Hf27HDMSuZlSi+sX5Ahsmh3z0O0tH1c+BaAzYiolazFhatlkrLdrtTfGs=\",\"salt\":\"Eq8oo3jmbcAJyez5WVwuog==\"},\"formatVersion\":1}",
       "name" : "encrypted-nfc-passphrase",
       "passphrase" : "café"
     },
     {
       "expect" : "wrongPassphrase",
-      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":100000,\"keyCheck\":\"ZMt7uJXGQXCZ4b2siNp2KvYC6ByPBpQjq8IjMgwmdpZk0CWr+pCl6rVf7ll6\",\"salt\":\"Eq8oo3jmbcAJyez5WVwuog==\"},\"formatVersion\":1}",
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":100000,\"keyCheck\":\"j8Hf27HDMSuZlSi+sX5Ahsmh3z0O0tH1c+BaAzYiolazFhatlkrLdrtTfGs=\",\"salt\":\"Eq8oo3jmbcAJyez5WVwuog==\"},\"formatVersion\":1}",
       "name" : "encrypted-nfd-passphrase-not-normalized",
       "passphrase" : "café"
     },
@@ -42,19 +42,19 @@
     },
     {
       "expect" : "unsupportedFormat",
-      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"K94t\\/wymFe5aF\\/dQ6Rf4mzpTWHIobo5aoIiM3uQcMnfLzSkrqCm9KzimBa6r\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":3}",
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"BkGQbVtkbsVO7k04iXgPVjnJlbsjx3oz8rKesB8rojGMe1a+bfTKuuNuWaY=\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":3}",
       "name" : "format-3-encrypted",
       "passphrase" : "correct horse battery staple"
     },
     {
       "expect" : "invalidManifest",
-      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":99999,\"keyCheck\":\"K94t\\/wymFe5aF\\/dQ6Rf4mzpTWHIobo5aoIiM3uQcMnfLzSkrqCm9KzimBa6r\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":1}",
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":99999,\"keyCheck\":\"BkGQbVtkbsVO7k04iXgPVjnJlbsjx3oz8rKesB8rojGMe1a+bfTKuuNuWaY=\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":1}",
       "name" : "iterations-below-range",
       "passphrase" : "correct horse battery staple"
     },
     {
       "expect" : "invalidManifest",
-      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"K94t\\/wymFe5aF\\/dQ6Rf4mzpTWHIobo5aoIiM3uQcMnfLzSkrqCm9KzimBa6r\",\"salt\":\"Wmn7imEIy8C008AxX44y\"},\"formatVersion\":1}",
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"BkGQbVtkbsVO7k04iXgPVjnJlbsjx3oz8rKesB8rojGMe1a+bfTKuuNuWaY=\",\"salt\":\"Wmn7imEIy8C008AxX44y\"},\"formatVersion\":1}",
       "name" : "salt-15-bytes",
       "passphrase" : "correct horse battery staple"
     },
@@ -62,6 +62,12 @@
       "expect" : "invalidManifest",
       "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":1}",
       "name" : "empty-key-check",
+      "passphrase" : "correct horse battery staple"
+    },
+    {
+      "expect" : "ok",
+      "manifestJSON" : "{\"createdAt\":788918400,\"encryption\":{\"iterations\":210000,\"keyCheck\":\"K94t\\/wymFe5aF\\/dQ6Rf4mzpTWHIobo5aoIiM3uQcMnfLzSkrqCm9KzimBa6r\",\"salt\":\"Wmn7imEIy8C008AxX44yNg==\"},\"formatVersion\":1}",
+      "name" : "encrypted-inkwell-key-check",
       "passphrase" : "correct horse battery staple"
     },
     {

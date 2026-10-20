@@ -623,6 +623,8 @@ final class SyncController: ObservableObject {
         let deviceName = config.deviceName
         let storeSession = try await withAccess(destination) {
             try await Self.offMain { () async throws -> StoreSession in
+                // A store still under Inkwell's prefix is copied first, or it would look vanished below.
+                try await RemoteMigration.migrateLegacyStoreIfNeeded(destination.backend)
                 // Never recreate a vanished store: syncing against an empty remote would delete every note here.
                 do {
                     _ = try await destination.backend.get(RemoteLayout.manifest())
@@ -866,6 +868,12 @@ final class SyncController: ObservableObject {
                 config.folderPath = url.path
             }
             ephemeralSecrets = Secrets(accessKey: extras.accessKey, secret: extras.secret, passphrase: extras.passphrase)
+            // Synced before with this config: resume like a normal launch, keeping the sync state.
+            if FileManager.default.fileExists(atPath: stateURL(for: config).path) {
+                activate(config, session: nil)
+                NSLog("NoteItSync: resumed (\(config.provider.rawValue), encrypted: \(config.encrypted))")
+                return true
+            }
             Task {
                 do {
                     try await connect(config, accessKey: extras.accessKey, secret: extras.secret, passphrase: extras.passphrase)

@@ -90,6 +90,25 @@ final class SyncEngineTests: XCTestCase {
         await assertConverged(a, b)
     }
 
+    func testStoreCopiedFromInkwellKeepsSyncingWithoutConflictCopies() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        try await RemoteMigrationTests.moveToLegacyRoot(memory)
+        // B didn't write the remote revision, so only the unchanged revision shows the remote is the same.
+        await b.store.edit(id, title: "v2 edited before the copy")
+
+        // The in-memory backend gives every copied object a new etag, so no base matches the remote.
+        _ = try await SyncEngine.connect(backend: memory, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
+        let reports = try await sync(b, a)
+        XCTAssertEqual(reports.map(\.conflicts), [0, 0])
+        let titleOnA = await a.store.title(id)
+        XCTAssertEqual(titleOnA, "v2 edited before the copy")
+        let count = await a.store.snapshot().count
+        XCTAssertEqual(count, 1)
+        await assertConverged(a, b)
+    }
+
     func testEditOnBReachesA() async throws {
         let a = device("A"), b = device("B")
         let id = await a.store.create(title: "v1")

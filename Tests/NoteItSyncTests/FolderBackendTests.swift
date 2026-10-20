@@ -105,14 +105,14 @@ final class FolderBackendTests: XCTestCase {
     }
 
     func testListPrefix() async throws {
-        try await backend.put("inkwell/v1/notes/1.meta", data: Data([1, 2]), ifMatch: nil, ifNoneMatch: false)
-        try await backend.put("inkwell/v1/notes/2.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
+        try await backend.put("noteit/v1/notes/1.meta", data: Data([1, 2]), ifMatch: nil, ifNoneMatch: false)
+        try await backend.put("noteit/v1/notes/2.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
         try await backend.put("other/x", data: Data(), ifMatch: nil, ifNoneMatch: false)
 
-        let objects = try await backend.list(prefix: "inkwell/v1/")
-        XCTAssertEqual(objects.map(\.key), ["inkwell/v1/notes/1.meta", "inkwell/v1/notes/2.meta"])
+        let objects = try await backend.list(prefix: "noteit/v1/")
+        XCTAssertEqual(objects.map(\.key), ["noteit/v1/notes/1.meta", "noteit/v1/notes/2.meta"])
         XCTAssertEqual(objects.map(\.size), [2, 1])
-        let got = try await backend.get("inkwell/v1/notes/1.meta")
+        let got = try await backend.get("noteit/v1/notes/1.meta")
         XCTAssertEqual(objects.first?.etag, got.etag)
     }
 
@@ -149,18 +149,18 @@ final class FolderBackendTests: XCTestCase {
     }
 
     func testListSkipsTempAndHiddenFiles() async throws {
-        try await backend.put("inkwell/v1/notes/a.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
-        let dir = root.appendingPathComponent("inkwell/v1/notes")
+        try await backend.put("noteit/v1/notes/a.meta", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
+        let dir = root.appendingPathComponent("noteit/v1/notes")
         try Data([1]).write(to: dir.appendingPathComponent(".a.meta.tmp-\(UUID().uuidString)"))
         try Data([1]).write(to: dir.appendingPathComponent("b.meta.tmp-123"))
         try Data([1]).write(to: dir.appendingPathComponent(".hidden"))
         try Data([1]).write(to: dir.appendingPathComponent("c.meta.icloud"))
-        let hiddenDir = root.appendingPathComponent("inkwell/.Trash")
+        let hiddenDir = root.appendingPathComponent("noteit/.Trash")
         try FileManager.default.createDirectory(at: hiddenDir, withIntermediateDirectories: true)
         try Data([1]).write(to: hiddenDir.appendingPathComponent("x"))
 
         let objects = try await backend.list(prefix: "")
-        XCTAssertEqual(objects.map(\.key), ["inkwell/v1/notes/a.meta"])
+        XCTAssertEqual(objects.map(\.key), ["noteit/v1/notes/a.meta"])
     }
 
     func testProbeFailsOnReadOnlyDir() async throws {
@@ -185,11 +185,11 @@ final class FolderBackendTests: XCTestCase {
     }
 
     func testNestedKeysCreateDirectories() async throws {
-        let key = "inkwell/v1/devices/deep/er/mac-1.json"
+        let key = "noteit/v1/devices/deep/er/mac-1.json"
         try await backend.put(key, data: Data("x".utf8), ifMatch: nil, ifNoneMatch: true)
         var isDir: ObjCBool = false
         XCTAssertTrue(FileManager.default.fileExists(
-            atPath: root.appendingPathComponent("inkwell/v1/devices/deep/er").path, isDirectory: &isDir))
+            atPath: root.appendingPathComponent("noteit/v1/devices/deep/er").path, isDirectory: &isDir))
         XCTAssertTrue(isDir.boolValue)
         let got = try await backend.get(key)
         XCTAssertEqual(got.data, Data("x".utf8))
@@ -197,7 +197,7 @@ final class FolderBackendTests: XCTestCase {
     }
 
     func testETagIsContentBasedForSmallFilesOnCoarseMtimeVolumes() async throws {
-        let key = "inkwell/v1/notes/x.meta"
+        let key = "noteit/v1/notes/x.meta"
         let first = try await backend.put(key, data: Data("AAAA".utf8), ifMatch: nil, ifNoneMatch: false)
         XCTAssertTrue(first.hasPrefix("h"))
         XCTAssertEqual(first.count, 33)
@@ -223,16 +223,16 @@ final class FolderBackendTests: XCTestCase {
 
     func testLargeFilesUseStatETag() async throws {
         let data = Data(repeating: 7, count: 256 * 1024 + 1)
-        let etag = try await backend.put("inkwell/v1/notes/x.body", data: data, ifMatch: nil, ifNoneMatch: false)
+        let etag = try await backend.put("noteit/v1/notes/x.body", data: data, ifMatch: nil, ifNoneMatch: false)
         XCTAssertFalse(etag.hasPrefix("h"))
         XCTAssertEqual(etag.split(separator: "-").count, 3)
-        let got = try await backend.get("inkwell/v1/notes/x.body")
+        let got = try await backend.get("noteit/v1/notes/x.body")
         XCTAssertEqual(got.etag, etag)
     }
 
     func testListReusesHashesForUnchangedFiles() async throws {
         for i in 0..<5 {
-            try await backend.put("inkwell/v1/notes/\(i).meta", data: Data("note \(i)".utf8), ifMatch: nil, ifNoneMatch: false)
+            try await backend.put("noteit/v1/notes/\(i).meta", data: Data("note \(i)".utf8), ifMatch: nil, ifNoneMatch: false)
         }
         let first = try await backend.list(prefix: "")
         let reads = backend.hashedFileReads
@@ -242,7 +242,7 @@ final class FolderBackendTests: XCTestCase {
     }
 
     func testGetAndPutETagsMatchContentUnderConcurrentRenames() async throws {
-        let key = "inkwell/v1/notes/x.body"
+        let key = "noteit/v1/notes/x.body"
         let base = 300_000
         let writers = [FolderBackend(root: root), FolderBackend(root: root)]
         let reader = FolderBackend(root: root)

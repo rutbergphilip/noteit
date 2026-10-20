@@ -22,11 +22,11 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
       ],
       "name" : "create-propagates",
       "steps" : [
@@ -79,11 +79,11 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
       ],
       "name" : "edit-propagates",
       "steps" : [
@@ -176,13 +176,13 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta",
-        "inkwell/v1/notes/new.body",
-        "inkwell/v1/notes/new.meta"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta",
+        "noteit/v1/notes/new.body",
+        "noteit/v1/notes/new.meta"
       ],
       "name" : "concurrent-edit-conflict-copy",
       "steps" : [
@@ -264,10 +264,10 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json",
-        "inkwell/v1/tombstones/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.json"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/tombstones/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.json"
       ],
       "name" : "delete-propagates",
       "steps" : [
@@ -342,11 +342,11 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
       ],
       "name" : "edit-resurrects-remote-delete",
       "steps" : [
@@ -438,11 +438,11 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
       ],
       "name" : "delete-loses-to-remote-edit",
       "steps" : [
@@ -515,10 +515,10 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json",
-        "inkwell/v1/tombstones/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.json"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/tombstones/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.json"
       ],
       "name" : "both-delete",
       "steps" : [
@@ -606,10 +606,10 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json",
-        "inkwell/v1/notebooks/061739F8-E9AE-49CC-B878-5957E55A949D.json"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notebooks/061739F8-E9AE-49CC-B878-5957E55A949D.json"
       ],
       "name" : "notebook-last-writer-wins",
       "steps" : [
@@ -703,11 +703,11 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
-        "inkwell/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.body",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
       ],
       "name" : "push-retried-after-network-failure",
       "steps" : [
@@ -762,9 +762,9 @@
         ]
       },
       "expectRemoteKeys" : [
-        "inkwell/v1/devices/device-A.json",
-        "inkwell/v1/devices/device-B.json",
-        "inkwell/v1/manifest.json"
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json"
       ],
       "name" : "tombstone-swept-after-30-days",
       "steps" : [

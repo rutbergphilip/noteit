@@ -834,10 +834,12 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    /// Trims whitespace and invisible characters (attachment glyphs, list markers' tabs).
+    /// Trims whitespace and invisible characters (attachment glyphs, list markers' tabs, pasted control characters).
     nonisolated private static func clean(_ line: String) -> String {
-        line.replacingOccurrences(of: "\u{FFFC}", with: "")
+        let visible = line.replacingOccurrences(of: "\u{FFFC}", with: "")
             .replacingOccurrences(of: "\t", with: " ")
+            .unicodeScalars.filter { $0.properties.generalCategory != .control }
+        return String(String.UnicodeScalarView(visible))
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

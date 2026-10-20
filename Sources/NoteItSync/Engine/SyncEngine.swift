@@ -84,8 +84,9 @@ public struct FeatureBlocker: Sendable, Equatable {
 ///   which every device resolves as "finish the deletion".
 /// - resurrectPush: delete the tombstone first, then push.
 public actor SyncEngine {
-    // Legacy protocol name: existing manifests seal exactly these bytes, so it must stay.
-    static let keyCheckPlaintext = Data("inkwell-key-check".utf8)
+    static let keyCheckPlaintext = Data("noteit-key-check".utf8)
+    /// What stores created by Inkwell (NoteIt's former name) sealed; still accepted when verifying a passphrase.
+    static let legacyKeyCheckPlaintext = Data("inkwell-key-check".utf8)
     static let keyCheckContext = "manifest"
     static let iterationRange = 100_000...10_000_000
     static let defaultIterations = 210_000
@@ -509,6 +510,13 @@ public actor SyncEngine {
             state.bases[id] = .init(revision: envelope.revision, remoteMetaETag: remote.etag, bodyETag: owned ? bodyETag : nil)
             state.pendingPushes[id] = nil
             try saveState()
+            return
+        }
+
+        // Same revision as our base under a new etag (the store was copied, e.g. from `inkwell/v1/`):
+        // the remote never changed, so this is a plain push.
+        if let base = state.bases[id], base.revision == envelope.revision {
+            try await push(id, kind: kind, remoteETag: remote.etag, pass)
             return
         }
 

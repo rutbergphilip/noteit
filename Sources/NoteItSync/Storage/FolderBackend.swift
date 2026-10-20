@@ -4,8 +4,7 @@ import Foundation
 /// Stores objects as files under a root directory (NAS mount, iCloud Drive, Dropbox, ...).
 public final class FolderBackend: StorageBackend, @unchecked Sendable {
     static let hashedSizeLimit: Int64 = 256 * 1024
-    // Legacy name kept on purpose: Macs still running Inkwell lock the same file.
-    static let lockFileName = ".inkwell-lock"
+    static let lockFileName = ".noteit-lock"
 
     public let root: URL
     private let lock = NSLock()
