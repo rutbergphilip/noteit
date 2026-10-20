@@ -49,7 +49,7 @@ struct MarkdownWriter {
 
     func write(_ blocks: [DocNode], previous: ParsedMarkdown?) -> Output {
         registerNoteLinks(in: blocks)
-        var (units, trailing) = Self.units(of: blocks)
+        var (units, trailing) = Self.units(of: blocks, profile: profile)
         if let previous {
             let texts = SourcePreservation.match(units.map(\.nodes), in: previous)
             for index in units.indices {
@@ -72,13 +72,18 @@ struct MarkdownWriter {
 
     // MARK: Units
 
-    static func units(of blocks: [DocNode]) -> ([Unit], Int) {
+    /// An unknown block is a fallback comment alone in `library` and dropped in `portable`.
+    static func units(of blocks: [DocNode], profile: MarkdownProfile) -> ([Unit], Int) {
         var units: [Unit] = []
         var empties = 0
         for node in blocks {
             switch node {
             case BlockParser.emptyParagraph:
                 empties += 1
+                continue
+            case .unknown where profile == .library:
+                units.append(Unit(nodes: [node], emptiesBefore: empties, mode: .fallback))
+                empties = 0
                 continue
             case .unknown, .doc:
                 continue
@@ -464,9 +469,13 @@ struct MarkdownWriter {
     }
 
     /// The doc as the reader gives it back: images and attachments by path, marks in canonical order, no empty
-    /// or mergeable text runs; `portable` drops font sizes.
+    /// or mergeable text runs; `portable` drops font sizes and unknown blocks.
     static func readable(_ node: DocNode, attachmentPath: (String) -> String, profile: MarkdownProfile) -> DocNode {
-        mapContent(node) { content in
+        if profile == .portable, case .doc(let blocks) = node {
+            let known = blocks.filter { if case .unknown = $0 { false } else { true } }
+            if known.count != blocks.count { return readable(.doc(known), attachmentPath: attachmentPath, profile: profile) }
+        }
+        return mapContent(node) { content in
             var result: [Inline] = []
             for inline in content {
                 switch inline {

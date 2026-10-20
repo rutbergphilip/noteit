@@ -475,7 +475,7 @@ Moved to foundations (docs/plans/2026-10-19-foundations.md), program §2 step 4.
 
 **Files:** `Sources/NoteItMarkdown/{MarkdownCodec,BlockWriter,InlineWriter,SourcePreservation}.swift`, `Tests/NoteItMarkdownTests/{CodecGoldenTests,CodecPropertyTests,EscapingTests,WikiLinkSyntaxTests,SourcePreservationTests,CorpusTests}.swift`
 
-The writer writes one blank line after front matter, which the parser reads as the separator, not as an empty paragraph. Unknown blocks are not written. Images in headings are written as `![…](…)`, not as a fallback, because they read back unchanged.
+The writer writes one blank line after front matter, which the parser reads as the separator, not as an empty paragraph. An unknown block is written in `library` as a lone `<!-- noteit: doc=… -->` comment with its raw JSON, which the reader turns back into the same `.unknown` block; `portable` drops it. Images in headings are written as `![…](…)`, not as a fallback, because they read back unchanged.
 
 - [ ] `CodecGoldenTests.testSerialize`: `serialize(json) == md` byte for byte for every canonical fixture.
 - [ ] `CodecPropertyTests`: `parse(serialize(doc)) == doc` for 2,000 `RandomDocGenerator(seed:)` documents, both flavours where the flavour can hold the doc (the portable check needs more than 20 such documents); serializing a parsed file again gives the same text; failures print the seed.
