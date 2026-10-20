@@ -278,8 +278,8 @@ extension Notebook { public static let ownedCodingKeys: Set<String> }
 
 // Text/TextFold.swift and Text/FuzzyMatcher.swift
 public enum TextFold { public static func fold(_ s: String) -> String }   // the body of today's NoteStore.fold
-public struct FuzzyMatch: Equatable, Sendable { /* unchanged */ }
-public struct FuzzyQuery: Sendable { /* unchanged */ }
+public struct FuzzyMatch: Equatable, Sendable { public let score: Int; public let matchedIndices: [Int]; public init(score: Int, matchedIndices: [Int]) }   // stored types as today
+public struct FuzzyQuery: Sendable { public init(_ text: String); public var isEmpty: Bool { get } }   // other members as today
 public enum FuzzyMatcher {                                // today's API made public, scoring unchanged
     public static func match(_ query: String, in candidate: String) -> FuzzyMatch?
     public static func match(_ query: FuzzyQuery, in candidate: String) -> FuzzyMatch?
@@ -817,7 +817,8 @@ extension NoteStore {
     /// from the sidecar) and from sync apply once its body is installed (a failed apply leaves it unchanged);
     /// passed to every body write (editor save, updateBody, editBody, sync apply, which passes the incoming extras);
     /// replaced by editBody's non-nil `extras` in the same write; dropped when the note is purged.
-    var bodyExtras: [UUID: ContainerExtras] { get }           // private(set)
+    var bodyExtras: [UUID: ContainerExtras] { get }           // internal(set) — written only via setBodyExtras(_:for:) in NoteStore+BodyExtras.swift and by NoteStore+BodyEdits.swift
+    func setBodyExtras(_ extras: ContainerExtras?, for id: UUID)   // nil removes the entry
 }
 
 // Model/NoteStore.swift (4.1). For callers that delete or mark the source of a capture (share-inbox item,
@@ -1062,7 +1063,7 @@ Moved from organise T1.
 - Modify: `Sources/NoteIt/Model/NoteStore.swift` (`fold`)
 
 - [ ] Move the body of `NoteStore.fold` into `TextFold.fold`. `NoteStore.fold` stays as a one-line `nonisolated static` forwarder, because callers in `Palette/` and `NoteStore` use it.
-- [ ] Move `FuzzyMatch`, `FuzzyQuery` and `FuzzyMatcher` unchanged except for `public`. Anything in them that calls `NoteStore.fold` now calls `TextFold.fold`.
+- [ ] Move `FuzzyMatch`, `FuzzyQuery` and `FuzzyMatcher` unchanged except for `public` on the types and on every member the app uses (`FuzzyMatch.score`, `matchedIndices` and a public memberwise init; `FuzzyQuery.init(_:)` and `isEmpty`; the matcher's entry points), as frozen above. Anything in them that calls `NoteStore.fold` now calls `TextFold.fold`.
 - [ ] In the moved `FuzzyMatcherTests`, replace `@testable import NoteIt` with `@testable import NoteItCore`. The test bodies don't change.
 - [ ] `TextFoldTests`: case and diacritic folding ("Éclair" → "eclair"), width folding, and an empty string. Each expected value is the output of today's `NoteStore.fold`, captured before the move.
 
@@ -1320,7 +1321,7 @@ sync-security's M0 lists the tests this step must include. They are named below 
   - `features` is encoded sorted, through a custom `encode(to:)` that sorts before writing and omits nil values.
   - Encoding with `SyncEngine.encode` (`.sortedKeys`) gives the same bytes as before for a v1 manifest.
 - [ ] `StoreFeature` has the four §4 names (`noteit-doc`, `keyring`, `locked-notes`, `noteit-space`), `known`, `requires`, and `supported`, which is empty in this task and in 3.2: this build can't open a keyring store yet, so it doesn't claim to. Task 3.3 adds `keyring` in the same change that adds `connectSession` and the keyring cipher. `noteit-doc`, `locked-notes` and `noteit-space` stay outside `supported` until their readers ship: web-app adds `noteit-doc` with the Mac body conversion (its Tasks 0.4–0.5, wave 3), sync-security adds `locked-notes` in its milestone M5 (wave 3, after web-app 0.4–0.5) and sharing adds `noteit-space`.
-- [ ] `SyncEngine.maxFormatVersion = 2`. `openExisting` and `SyncController.inspect` share one gate, `SyncEngine.checkOpenable(_ manifest: Manifest, supported: Set<StoreFeature> = StoreFeature.supported) throws` (internal, used by both). It throws:
+- [ ] `SyncEngine.maxFormatVersion = 2`. `openExisting` and `SyncController.inspect` share one gate, `SyncEngine.checkOpenable(_ manifest: Manifest, supported: Set<StoreFeature> = StoreFeature.supported) throws` (`public`, because `SyncController` is in the app target; used by both). It throws:
   - `unsupportedFormat(v)` when `v > maxFormatVersion`;
   - `unsupportedFeature(name)` for a name outside `known`, or for a known name outside `supported`;
   - `invalidManifest("features without formatVersion 2")` when `features` is non-empty and `formatVersion != 2`;
@@ -1659,7 +1660,7 @@ Task 4.1 is serial and must be done first, because it touches every body read an
 
   Also modify `Sources/NoteIt/Model/{NoteStore+Trash,NoteStore+Sync,VersionHistory}.swift` where they build a body path.
 
-- [ ] Move the body file code out of `NoteStore` into `RTFDBodyStorage` unchanged. That covers the package layout, the `.trash/<id>-<timestamp>.rtfd` naming, the file-wrapper reads and writes, the atomic temp-then-replace install, and the recovery copy format.
+- [ ] Move the body file code out of `NoteStore` into `RTFDBodyStorage` unchanged. The static `NoteStore.readBody`, `writeTempBody` and `installBody` stay as thin forwards to `RTFDBodyStorage`, because `VersionHistory`, `ExportTests` and `VersionHistoryTests` call them; they are not removed in wave 0. That covers the package layout, the `.trash/<id>-<timestamp>.rtfd` naming, the file-wrapper reads and writes, the atomic temp-then-replace install, and the recovery copy format.
   - `NoteStore` creates `RTFDBodyStorage(rootURL:)` in `init` and keeps it as `bodyStorage`.
   - `bodyURL(for:)` stays as a one-line forward to `fileURL(for:)`, so callers outside the model (export, Quick Look, self-tests) keep compiling.
   - The `notebook:` parameters are unused by RTFD and are passed through so the Markdown storage can use them.
@@ -1887,7 +1888,7 @@ Task 4.1 is serial and must be done first, because it touches every body read an
   - `testSavedBodyVersionKeepsExtras`: on an RTFD store, a note with a `frontMatter` and a `zig-nightly` code paragraph is saved, then edited and saved again after `VersionHistory.minimumInterval` (injected `now`); the version `recordSavedBody` kept has a `.extras.json` holding the first save's extras and ID, and restoring it gives them back. A note with no extras gets a version extras file with `.empty` extras, and a sync apply that replaces a body keeps the replaced body's extras in its version the same way;
   - `PurgeAuxFilesTests` gains Version History: in `testFailedLibrarySaveKeepsAuxFiles` the purged note's `history/<UUID>/` folder, with a version and its `.extras.json`, is still in place after the failed save; in `testAuxFilesRemovedAfterDurableDelete` it still exists before `flush` and is gone after it;
   - `testRestoreLegacyVersionKeepsCurrentExtras`: a version package with no extras file (as an older build leaves it) restored into a note with a `frontMatter` gives the version's text and keeps that `frontMatter` in `bodyExtras[id]` and in the sidecar;
-  - `testFailedVersionAbortsEdit`: with an injected history whose `record` returns nil, `editBody` with `.recordCurrent` throws `versionNotSaved` on the closed path and on the open path, and the body, the text storage, the undo stack and `externallyUpdatedNoteID` are unchanged; `restoreVersion` with the same history throws `versionNotSaved` and leaves the body unchanged;
+  - `testFailedVersionAbortsEdit`: with a history whose `record` returns nil (NoteStore gains an internal test-only seam `var recordVersionOverride: ((NSAttributedString, UUID) -> NoteVersion?)?`, nil by default; when set, the store calls it instead of `history.record`), `editBody` with `.recordCurrent` throws `versionNotSaved` on the closed path and on the open path, and the body, the text storage, the undo stack and `externallyUpdatedNoteID` are unchanged; `restoreVersion` with the same history throws `versionNotSaved` and leaves the body unchanged;
   - a throwing `edit` leaves the body unchanged;
   - the open path with a real `NoteItTextView` in an offscreen window: one undo step named `actionName`, and undo restores the text;
   - `testUndoRestoreVersionRestoresExtras`: on an RTFD store, a note open in an offscreen `NoteItTextView` with extras A and a `zig-nightly` code paragraph has a version restored whose text differs and whose extras are B. One undo ("Undo Restore Version") gives the earlier text, `bodyExtras[id] == A`, and a sidecar whose only entry is A and matches the saved body, from one body write, with the note clean; redo gives the version's text with B the same way. A restore that changes only the extras undoes and redoes the same way, and an edit with nil `extras` registers no extras action;
@@ -1915,7 +1916,7 @@ Task 4.1 is serial and must be done first, because it touches every body read an
   - `DailyLogLine.format` and `prefix`, which use `en_US_POSIX` `HH:mm` (left out when `timestamp` is false); `format` cleans the text as the frozen comment states.
   - All of these are Foundation only.
 - [ ] `dailyNotesNotebookID(createIfMissing:)`:
-  - It uses the stored ID when that notebook exists and is not deleted.
+  - It uses the stored ID when `notebook(with:)` returns a notebook (deleted notebooks are removed from the library, so existence is the live state).
   - Otherwise, with `createIfMissing`, it creates "Daily Notes" with symbol `calendar` and the first palette color, then stores its ID.
 - [ ] `dailyNote(for:createIfMissing:)` looks for a live note in that notebook whose title parses (`DailyNoteTitle.parse`, which tries every supported format) to the same `DayKey`. It prefers the oldest `createdAt`. Because lookup recognises every format, switching `dailyNoteTitleFormat` never creates a second daily note for a day that already has one.
   - Otherwise, with `createIfMissing`, it calls `createNote(in:initial:)` with the title in the user's chosen format (`PrefKey.dailyNoteTitleFormat`, default `iso`) as the first line. Existing titles are never rewritten when the format changes.
