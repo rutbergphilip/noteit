@@ -59,10 +59,10 @@ final class MarkdownPasteTests: XCTestCase {
     // MARK: Detector
 
     func testDetectsMarkdownSource() {
-        for text in ["# Title", "## Notes\nSome text", "- one\n- two", "* item", "+ item", "1. first\n2. second",
-                     "> quoted", "- [ ] task", "- [x] done", "```\ncode\n```", "Above\n\n---\n\nBelow",
-                     "| a | b |\n|---|---|\n| 1 | 2 |", "some **bold** text", "__strong__ words", "run `make` now",
-                     "see [the docs](https://example.com)", "~~gone~~"] {
+        for text in ["# Title", "## Notes\nSome text", "- one\n- two", "* a\n* b", "+ a\n+ b", "1. first\n2. second",
+                     "> quoted", "- [ ] task", "- [x] done", "```\ncode\n```", "```swift\nlet x = 1;\n```",
+                     "| a | b |\n|---|---|\n| 1 | 2 |", "some **bold** text", "(**bold**)",
+                     "see [the docs](https://example.com)", "# Groceries\n- milk\n- eggs\n"] {
             XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(text), text)
         }
     }
@@ -70,9 +70,57 @@ final class MarkdownPasteTests: XCTestCase {
     func testIgnoresOrdinaryText() {
         for text in ["https://example.com/some_path/__init__?q=*", "important*", "*", "2*3*4",
                      "Plain prose, with punctuation - and a dash.", "#hashtag and #another", "a**2 + b**2",
-                     "Price: 5 * 3", "x | y", "Dear team,\n\nThanks for the update.\nBest"] {
+                     "Price: 5 * 3", "x | y", "Dear team,\n\nThanks for the update.\nBest", "- item", "* item",
+                     "some *emphasis* here", "snake_case and _this_", "-  wide\n-  dash"] {
             XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(text), text)
         }
+    }
+
+    func testCodeAndDiffsStayPlain() {
+        let python = """
+        class Greeter:
+            def __init__(self, name):
+                self.name = name
+
+            def greet(self):
+                return f"Hello {self.name}"
+        """
+        let diff = """
+        diff --git a/main.swift b/main.swift
+        --- a/main.swift
+        +++ b/main.swift
+        @@ -1,3 +1,3 @@
+         func f() {
+        -    let x = 1
+        +    let x = 2
+         }
+        """
+        let hunk = "-    let x = 1\n+    let x = 2\n+    let y = **x**"
+        let docComment = """
+        /**
+         * Adds two numbers.
+         * @param a first
+         * @param b second
+         */
+        function add(a, b) {
+          return a + b;
+        }
+        """
+        let commentOnly = "/**\n * @param x the value\n * @returns the result\n */"
+        for text in [python, diff, hunk, docComment, commentOnly, "if __name__ == \"__main__\":", "call **opts**(x)",
+                     "# Notes\nimport os\nfrom x import y\nx = 1"] {
+            XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(text), text)
+        }
+        let view = editor(body(""))
+        XCTAssertFalse(view.pasteMarkdown(from: pasteboard(plain: python)))
+        XCTAssertFalse(view.pasteMarkdown(from: pasteboard(plain: "- item")))
+    }
+
+    func testNoteWithHeadingAndListConverts() {
+        let view = editor(body(""))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "## Groceries\n- milk\n- eggs\n")))
+        XCTAssertEqual(kind(view, of: "Groceries"), .heading)
+        XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: (view.string as NSString).range(of: "eggs").location)))
     }
 
     // MARK: ⌘V
@@ -173,7 +221,7 @@ final class MarkdownPasteTests: XCTestCase {
         text.append(MarkdownReader.attributedString(from: "| a | b |\n|---|---|\n| 1 | 2 |\n"))
         let view = editor(text)
         view.setSelectedRange(NSRange(location: 2, length: (view.string as NSString).range(of: "a").location + 1 - 2))
-        XCTAssertFalse(view.pasteMarkdown(from: pasteboard(plain: "- x\n")))
+        XCTAssertFalse(view.pasteMarkdown(from: pasteboard(plain: "- x\n- y\n")))
     }
 
     func testOwnCopyRoundTrips() throws {

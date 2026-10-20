@@ -1,35 +1,84 @@
 import AppKit
 import NoteItSync
 
-/// Decides whether pasted text is Markdown source worth converting.
+/// Decides whether pasted text is Markdown source worth converting. Anything unclear stays plain text.
 enum MarkdownPasteDetector {
-    private static let blockPatterns = [
-        "^ {0,3}#{1,6}[ \\t]+\\S",
-        "^[ \\t]*(?:[-*+]|\\d{1,9}[.)])[ \\t]+\\S",
-        "^ {0,3}>[ \\t]*\\S",
-        "^[ \\t]*(?:```|~~~)",
-        "^ {0,3}([-*_])(?:[ \\t]*\\1){2,}[ \\t]*$",
-        "^[^\\n]*\\|[^\\n]*\\n[ \\t]*\\|?[ \\t]*:?-+:?[ \\t]*(?:\\|[ \\t]*:?-+:?[ \\t]*)+\\|?[ \\t]*$",
-    ]
-    private static let inlinePatterns = [
-        "(?<![\\w*])\\*\\*[^\\s*](?:[^\\n]*?[^\\s*])?\\*\\*(?![\\w*])",
-        "(?<![\\w_])__[^\\s_](?:[^\\n]*?[^\\s_])?__(?![\\w_])",
-        "`[^`\\n]+`",
-        "\\[[^\\]\\n]+\\]\\([^()\\s]+(?:[ \\t]+\"[^\"\\n]*\")?\\)",
-        "(?<!~)~~[^\\s~](?:[^\\n]*?[^\\s~])?~~(?!~)",
-    ]
-    private static let regexes: [NSRegularExpression] = (blockPatterns + inlinePatterns).map {
-        try! NSRegularExpression(pattern: $0, options: [.anchorsMatchLines])
+    private static func regex(_ pattern: String) -> NSRegularExpression {
+        try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
     }
 
+    /// Each of these is enough on its own.
+    private static let strongSignals: [NSRegularExpression] = [
+        "^ {0,3}#{1,6}[ \\t]+\\S",
+        "^[ \\t]*[-*+] \\[[ xX]\\](?:[ \\t]|$)",
+        "\\[[^\\]\\n]+\\]\\(https?://[^()\\s]+(?:[ \\t]+\"[^\"\\n]*\")?\\)",
+        "(?<![\\w*])\\*\\*[^\\s*](?:[^\\n]*?[^\\s*])?\\*\\*(?![\\w*(])",
+        "^ {0,3}>[ \\t]+\\S",
+        "^[^\\n]*\\|[^\\n]*\\n[ \\t]*\\|?[ \\t]*:?-+:?[ \\t]*(?:\\|[ \\t]*:?-+:?[ \\t]*)+\\|?[ \\t]*$",
+    ].map(regex)
+    private static let fence = regex("^[ \\t]*(?:```|~~~)")
+    private static let listItem = regex("^[ \\t]*(?:[-*+]|\\d{1,9}[.)]) \\S")
+    private static let commentStar = regex("^[ \\t]+\\*")
+
     /// Bare URLs, whose underscores and asterisks aren't emphasis.
-    private static let bareURL = try! NSRegularExpression(pattern: "(?<![(<\\w])[A-Za-z][A-Za-z0-9+.-]*://\\S+")
+    private static let bareURL = regex("(?<![(<\\w])[A-Za-z][A-Za-z0-9+.-]*://\\S+")
+
+    private static let codeStarts = ["def ", "class ", "import ", "from ", "func ", "fn ", "#include", "#!", "//", "/*"]
 
     static func looksLikeMarkdown(_ text: String) -> Bool {
-        let lines = MarkdownReader.lines(of: text).joined(separator: "\n")
-        let normalized = bareURL.stringByReplacingMatches(in: lines, range: NSRange(location: 0, length: (lines as NSString).length), withTemplate: "")
-        let range = NSRange(location: 0, length: (normalized as NSString).length)
-        return regexes.contains { $0.firstMatch(in: normalized, range: range) != nil }
+        let lines = MarkdownReader.lines(of: text)
+        var hasFencedBlock = false
+        var outside: [String] = []
+        var fenced: [String]?
+        for line in lines {
+            if matches(fence, line) {
+                if fenced == nil {
+                    fenced = [line]
+                } else {
+                    fenced = nil
+                    hasFencedBlock = true
+                }
+            } else if fenced != nil {
+                fenced?.append(line)
+            } else {
+                outside.append(line)
+            }
+        }
+        outside += fenced ?? []
+        if looksLikeCode(outside) { return false }
+        if hasFencedBlock { return true }
+
+        let joined = outside.joined(separator: "\n")
+        let normalized = bareURL.stringByReplacingMatches(in: joined, range: NSRange(location: 0, length: (joined as NSString).length), withTemplate: "")
+        if strongSignals.contains(where: { matches($0, normalized) }) { return true }
+        let inComment = joined.contains("/**") || joined.contains("*/")
+        let items = outside.filter { matches(listItem, $0) && !(inComment && matches(commentStar, $0)) }
+        return items.count >= 2
+    }
+
+    /// Diffs, and text where many lines read like a programming language.
+    private static func looksLikeCode(_ lines: [String]) -> Bool {
+        if lines.contains(where: { $0.hasPrefix("diff --git") || $0.hasPrefix("@@ ") || $0.hasPrefix("+++ ") || $0.hasPrefix("--- a/") }) {
+            return true
+        }
+        let changed = lines.filter { $0.hasPrefix("+") || $0.hasPrefix("-") }
+        let indented = changed.filter { $0.dropFirst().hasPrefix("  ") || $0.dropFirst().hasPrefix("\t") }
+        if !changed.isEmpty, indented.count * 2 > changed.count { return true }
+
+        let inComment = lines.contains { $0.contains("/*") || $0.contains("*/") }
+        let nonBlank = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard !nonBlank.isEmpty else { return false }
+        let codeLike = nonBlank.filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return ["{", "}", ";", "):"].contains(where: trimmed.hasSuffix)
+                || codeStarts.contains(where: trimmed.hasPrefix)
+                || (inComment && matches(commentStar, line))
+        }
+        return Double(codeLike.count) >= 0.3 * Double(nonBlank.count)
+    }
+
+    private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
+        regex.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length)) != nil
     }
 
     /// Whether the pasteboard's rich text, if any, is only the plain text with colours on it (an editor or
