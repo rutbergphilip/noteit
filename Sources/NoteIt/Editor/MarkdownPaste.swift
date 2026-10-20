@@ -3,31 +3,34 @@ import NoteItSync
 
 /// Decides whether pasted text is Markdown source worth converting. Anything unclear stays plain text.
 enum MarkdownPasteDetector {
+    /// Longer pastes skip detection and paste as plain text.
+    static let maxLength = 200_000
+
+    // Every pattern here runs in linear time: runs are possessive and can't overlap what follows them.
     private static func regex(_ pattern: String) -> NSRegularExpression {
         try! NSRegularExpression(pattern: pattern, options: [.anchorsMatchLines])
     }
 
     /// Each of these is enough on its own. A `#` heading isn't: shell and config files start comments with it.
     private static let strongSignals: [NSRegularExpression] = [
-        "^[ \\t]*[-*+] \\[[ xX]\\](?:[ \\t]|$)",
-        "\\[[^\\]\\n]+\\]\\(https?://[^()\\s]+(?:[ \\t]+\"[^\"\\n]*\")?\\)",
-        "(?<![\\w*])\\*\\*[^\\s*](?:[^\\n]*?[^\\s*])?\\*\\*(?![\\w*(])",
-        "^ {0,3}>[ \\t]+\\S",
-        "^[^\\n]*\\|[^\\n]*\\n[ \\t]*\\|?[ \\t]*:?-+:?[ \\t]*(?:\\|[ \\t]*:?-+:?[ \\t]*)+\\|?[ \\t]*$",
+        "^[ \\t]*+[-*+] \\[[ xX]\\](?:[ \\t]|$)",
+        "\\[[^\\[\\]\\n]++\\]\\(https?://[^()\\s]++(?:[ \\t]++\"[^\"\\n]*+\")?\\)",
+        "^ {0,3}>[ \\t]++\\S",
     ].map(regex)
-    private static let fence = regex("^[ \\t]*(?:```|~~~)")
-    private static let listItem = regex("^[ \\t]*(?:[-*+]|\\d{1,9}[.)]) \\S")
-    private static let commentStar = regex("^[ \\t]+\\*")
-    private static let configLine = regex("^(?:[ \\t]+[A-Za-z_][\\w.-]*|[a-z_][\\w.-]*):(?:[ \\t]|$)|^[A-Z_][A-Z0-9_]*=")
-    private static let pathToken = regex("^!?[\\w.*?/\\[\\]-]*\\w[\\w.*?/\\[\\]-]*$")
-
-    /// Bare URLs, whose underscores and asterisks aren't emphasis.
-    private static let bareURL = regex("(?<![(<\\w])[A-Za-z][A-Za-z0-9+.-]*://\\S+")
+    private static let boldOpen = regex("(?<![\\w*])\\*\\*[^\\s*]")
+    private static let boldClose = regex("[^\\s*]\\*\\*(?![\\w*(])")
+    private static let tableDelimiter = regex("^[ \\t]*+\\|?+[ \\t]*+:?-++:?[ \\t]*+(?:\\|[ \\t]*+:?-++:?[ \\t]*+)++\\|?[ \\t]*+$")
+    private static let fence = regex("^[ \\t]*+(?:```|~~~)")
+    private static let listItem = regex("^[ \\t]*+(?:[-*+]|\\d{1,9}[.)]) \\S")
+    private static let commentStar = regex("^[ \\t]++\\*")
+    private static let envLine = regex("^[A-Z_][A-Z0-9_]*+=")
 
     private static let codeStarts = ["def ", "class ", "import ", "from ", "func ", "fn ", "#include", "#!", "//", "/*"]
 
     static func looksLikeMarkdown(_ text: String) -> Bool {
-        let lines = MarkdownReader.lines(of: text)
+        guard (text as NSString).length <= maxLength else { return false }
+        let all = MarkdownReader.lines(of: text)
+        let lines = all.dropFirst(frontMatterLineCount(all))
         var hasFencedBlock = false
         var outside: [String] = []
         var fenced: [String]?
@@ -50,11 +53,28 @@ enum MarkdownPasteDetector {
         if hasFencedBlock { return true }
 
         let joined = outside.joined(separator: "\n")
-        let normalized = bareURL.stringByReplacingMatches(in: joined, range: NSRange(location: 0, length: (joined as NSString).length), withTemplate: "")
-        if strongSignals.contains(where: { matches($0, normalized) }) { return true }
+        let normalized = removingBareURLs(joined)
+        if strongSignals.contains(where: { matches($0, normalized) }) || hasBold(normalized) || hasTable(normalized) {
+            return true
+        }
         let inComment = joined.contains("/**") || joined.contains("*/")
         let items = outside.filter { matches(listItem, $0) && !(inComment && matches(commentStar, $0)) }
         return items.count >= 2
+    }
+
+    /// The lines of a leading `---` YAML block such as an Obsidian note's front matter, or 0.
+    static func frontMatterLineCount(_ lines: [String]) -> Int {
+        func isEnd(_ line: String, _ marks: [String]) -> Bool { marks.contains(line.trimmingCharacters(in: .whitespaces)) }
+        guard let first = lines.first, isEnd(first, ["---"]),
+              let end = lines.dropFirst().firstIndex(where: { isEnd($0, ["---", "..."]) }) else { return 0 }
+        var hasKey = false
+        for line in lines[1..<end] {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix("- ") || line.first == " " || line.first == "\t" { continue }
+            guard let colon = trimmed.firstIndex(of: ":"), colon != trimmed.startIndex else { return 0 }
+            hasKey = true
+        }
+        return hasKey ? end + 1 : 0
     }
 
     /// Diffs, and text where many lines read like a programming language.
@@ -69,20 +89,124 @@ enum MarkdownPasteDetector {
         let inComment = lines.contains { $0.contains("/*") || $0.contains("*/") }
         let nonBlank = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !nonBlank.isEmpty else { return false }
-        let codeLike = nonBlank.filter { line in
+        // Less-indented lines before the current one, each with whether it is a bare `key:` that opens a YAML map.
+        var outer: [(indent: Int, opensMap: Bool)] = []
+        var codeLike = 0
+        for line in nonBlank {
+            let indent = line.prefix { $0 == " " || $0 == "\t" }.count
+            while let last = outer.last, last.indent >= indent { outer.removeLast() }
+            let key = yamlKey(line)
+            let config = if let key {
+                indent == 0 ? key.lowercase : outer.last?.opensMap == true
+            } else {
+                matches(envLine, line)
+            }
+            outer.append((indent, key?.opensMap == true))
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            return ["{", "}", ";", "):"].contains(where: trimmed.hasSuffix)
-                || codeStarts.contains(where: trimmed.hasPrefix)
-                || (inComment && matches(commentStar, line))
-                || matches(configLine, line)
-                || isPathOrGlob(trimmed)
+            if config || ["{", "}", ";", "):"].contains(where: trimmed.hasSuffix) || codeStarts.contains(where: trimmed.hasPrefix)
+                || (inComment && matches(commentStar, line)) || isPathOrGlob(trimmed) {
+                codeLike += 1
+            }
         }
-        return Double(codeLike.count) >= 0.3 * Double(nonBlank.count)
+        return Double(codeLike) >= 0.3 * Double(nonBlank.count)
+    }
+
+    /// A line starting with optional indentation and `key:` followed by a space, a tab or the line's end.
+    private static func yamlKey(_ line: String) -> (lowercase: Bool, opensMap: Bool)? {
+        var rest = Substring(line).unicodeScalars.drop { $0 == " " || $0 == "\t" }
+        guard let first = rest.first, first == "_" || ("a"..."z").contains(first) || ("A"..."Z").contains(first) else { return nil }
+        rest = rest.drop { isWord($0) || $0 == "." || $0 == "-" }
+        guard rest.first == ":" else { return nil }
+        let after = rest.dropFirst()
+        guard after.isEmpty || after.first == " " || after.first == "\t" else { return nil }
+        return (first == "_" || ("a"..."z").contains(first), after.allSatisfy { $0 == " " || $0 == "\t" })
     }
 
     /// A single path or glob such as `build/`, `*.log` or `.DS_Store`.
     private static func isPathOrGlob(_ line: String) -> Bool {
-        matches(pathToken, line) && (line.contains("/") || line.hasPrefix(".") || line.contains("*.") || line.contains(".*"))
+        let token = line.hasPrefix("!") ? line.dropFirst() : Substring(line)
+        var hasWord = false
+        for scalar in token.unicodeScalars {
+            if isWord(scalar) {
+                hasWord = true
+            } else if !".*?/[]-".unicodeScalars.contains(scalar) {
+                return false
+            }
+        }
+        return hasWord && (line.contains("/") || line.hasPrefix(".") || line.contains("*.") || line.contains(".*"))
+    }
+
+    /// `**bold**` within one line.
+    private static func hasBold(_ text: String) -> Bool {
+        let ns = text as NSString
+        var location = 0
+        while location < ns.length {
+            let newline = ns.range(of: "\n", options: .literal, range: NSRange(location: location, length: ns.length - location)).location
+            let lineEnd = newline == NSNotFound ? ns.length : newline
+            let line = NSRange(location: location, length: lineEnd - location)
+            if let open = boldOpen.firstMatch(in: text, options: .withTransparentBounds, range: line) {
+                let from = open.range.location + 2
+                if boldClose.firstMatch(in: text, options: .withTransparentBounds, range: NSRange(location: from, length: lineEnd - from)) != nil {
+                    return true
+                }
+            }
+            location = lineEnd + 1
+        }
+        return false
+    }
+
+    /// A GFM table: a line with a `|` followed by a delimiter row.
+    private static func hasTable(_ text: String) -> Bool {
+        let ns = text as NSString
+        var found = false
+        tableDelimiter.enumerateMatches(in: text, range: NSRange(location: 0, length: ns.length)) { match, _, stop in
+            guard let at = match?.range.location, at > 0, ns.character(at: at - 1) == 0x0A else { return }
+            let previous = ns.range(of: "\n", options: [.literal, .backwards], range: NSRange(location: 0, length: at - 1))
+            let start = previous.location == NSNotFound ? 0 : NSMaxRange(previous)
+            if ns.range(of: "|", options: .literal, range: NSRange(location: start, length: at - 1 - start)).location != NSNotFound {
+                found = true
+                stop.pointee = true
+            }
+        }
+        return found
+    }
+
+    /// Drops bare URLs such as `https://example.com/a_b*`, whose underscores and asterisks aren't emphasis.
+    /// A URL starts at a letter not preceded by `(`, `<` or a word character.
+    private static func removingBareURLs(_ text: String) -> String {
+        let ns = text as NSString
+        let out = NSMutableString()
+        var copied = 0
+        var search = 0
+        func char(_ i: Int) -> unichar { ns.character(at: i) }
+        func isLetter(_ c: unichar) -> Bool { (0x41...0x5A).contains(c) || (0x61...0x7A).contains(c) }
+        func isScheme(_ c: unichar) -> Bool { isLetter(c) || (0x30...0x39).contains(c) || c == 0x2B || c == 0x2E || c == 0x2D }
+        func isSpace(_ c: unichar) -> Bool { Unicode.Scalar(c).map { CharacterSet.whitespacesAndNewlines.contains($0) } ?? false }
+        func blocksURL(_ c: unichar) -> Bool { c == 0x28 || c == 0x3C || Unicode.Scalar(c).map(isWord) == true }
+        while search < ns.length {
+            let separator = ns.range(of: "://", options: .literal, range: NSRange(location: search, length: ns.length - search)).location
+            guard separator != NSNotFound else { break }
+            var runStart = separator
+            while runStart > copied, isScheme(char(runStart - 1)) { runStart -= 1 }
+            let start = (runStart..<separator).first { isLetter(char($0)) && ($0 == 0 || !blocksURL(char($0 - 1))) }
+            var end = separator + 3
+            if let start {
+                while end < ns.length, !isSpace(char(end)) { end += 1 }
+                if end > separator + 3 {
+                    out.append(ns.substring(with: NSRange(location: copied, length: start - copied)))
+                    copied = end
+                    search = end
+                    continue
+                }
+            }
+            search = separator + 1
+        }
+        out.append(ns.substring(from: copied))
+        return out as String
+    }
+
+    private static func isWord(_ scalar: Unicode.Scalar) -> Bool {
+        scalar == "_" || CharacterSet.alphanumerics.contains(scalar)
     }
 
     private static func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
@@ -155,8 +279,15 @@ extension NoteItTextView {
         }
         guard let plain = pboard.string(forType: .string), MarkdownPasteDetector.looksLikeMarkdown(plain),
               MarkdownPasteDetector.richTextIsSource(on: pboard, plain: plain) else { return false }
-        let converted = MarkdownReader.attributedString(from: plain, resolveImage: { _ in nil })
+        let lines = MarkdownReader.lines(of: plain)
+        let frontMatter = MarkdownPasteDetector.frontMatterLineCount(lines)
+        let markdown = lines.dropFirst(frontMatter).joined(separator: "\n")
+        let converted = NSMutableAttributedString(attributedString: MarkdownReader.attributedString(from: markdown, resolveImage: { _ in nil }))
         guard converted.length > 0 else { return false }
+        if frontMatter > 0 {
+            let verbatim = lines.prefix(frontMatter).joined(separator: "\n") + "\n"
+            converted.insert(NSAttributedString(string: verbatim, attributes: EditorStyle.bodyAttributes), at: 0)
+        }
         if let inline = inlineFragment(plain, converted) {
             return insertPasted(inline, in: sel, actionName: "Paste")
         }

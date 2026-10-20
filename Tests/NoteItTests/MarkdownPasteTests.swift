@@ -140,6 +140,57 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertTrue(EditorStyle.isBold(try XCTUnwrap(font(view, at: "Short answer"))))
     }
 
+    func testIndentedLabelsUnderListItemsAreNotConfig() throws {
+        let answer = "1. **Option A**\n   Pros: fast\n   Cons: costly\n2. **Option B**\n   Pros: cheap\n   Cons: slow\nPick A if speed matters.\n"
+        XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(answer))
+        let view = editor(body(""))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: answer)))
+        XCTAssertTrue(EditorStyle.isBold(try XCTUnwrap(font(view, at: "Option B"))))
+        XCTAssertFalse(view.string.contains("**"))
+    }
+
+    func testFrontMatterStaysVerbatimAboveConvertedBody() throws {
+        let frontMatter = "---\ntitle: Trip\ntags: travel\ncreated: 2026-10-01\n---"
+        let note = frontMatter + "\n## Packing\n- passport\n- charger\n\nBook the **train** early.\n"
+        XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(note))
+        XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(frontMatter + "\nJust a sentence.\n"))
+        let view = editor(body(""))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: note)))
+        XCTAssertTrue(view.string.hasPrefix(frontMatter + "\n"), view.string)
+        for line in ["title: Trip", "tags: travel", "created: 2026-10-01"] {
+            XCTAssertEqual(kind(view, of: line), .body, line)
+        }
+        let ns = view.string as NSString
+        XCTAssertEqual(view.blockKind(ofParagraph: view.paragraphRange(at: 0)), .body)
+        XCTAssertEqual(view.blockKind(ofParagraph: view.paragraphRange(at: ns.range(of: "---\n## ").location)), .body)
+        XCTAssertEqual(kind(view, of: "Packing"), .heading)
+        XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: ns.range(of: "charger").location)))
+        XCTAssertTrue(EditorStyle.isBold(try XCTUnwrap(font(view, at: "train"))))
+        XCTAssertFalse(view.string.contains("**"))
+    }
+
+    func testPathologicalInputsAreFast() {
+        let n = 100_000
+        let inputs = [
+            String(repeating: "a", count: n) + " ",
+            String(repeating: "ab-", count: n / 3) + "(x",
+            String(repeating: "*_[(`|#", count: n / 7),
+            String(repeating: "**a ", count: n / 4),
+            String(repeating: "[", count: n) + "](x",
+            String(repeating: "|", count: n) + "\n|-|-x",
+            String(repeating: " ", count: n) + "-",
+            String(repeating: "a:", count: n / 2) + "//",
+            String(repeating: "**x\n", count: n / 4),
+            String(repeating: "  k: v\n", count: n / 7),
+        ]
+        for input in inputs {
+            let start = Date()
+            _ = MarkdownPasteDetector.looksLikeMarkdown(input)
+            XCTAssertLessThan(Date().timeIntervalSince(start), 0.5, String(input.prefix(12)))
+        }
+        XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(String(repeating: "- item\n", count: 30_000)))
+    }
+
     func testNoteWithHeadingAndListConverts() {
         let view = editor(body(""))
         XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "## Groceries\n- milk\n- eggs\n")))
