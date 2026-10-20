@@ -52,6 +52,7 @@ final class PurgeAuxFilesTests: XCTestCase {
     private func apply(_ store: NoteStore, _ payload: RecordPayload, extras: ContainerExtras) throws {
         var prepared = try NoteStore.prepareRemoteNote(payload, storage: store.bodyStorage)
         prepared.extras = extras
+        prepared.bodyIsRTFD = false
         try store.applyPreparedRemoteNote(prepared)
     }
 

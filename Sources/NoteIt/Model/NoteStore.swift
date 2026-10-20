@@ -1375,8 +1375,10 @@ final class NoteStore: ObservableObject {
         var folded: String
         var tempBody: URL
         /// The incoming body's extras (`.empty` for an RTFD body); written with it, and kept in `bodyExtras` once
-        /// it is installed. Without `frontMatter`, the note's current one is kept.
+        /// it is installed.
         var extras: ContainerExtras = .empty
+        /// The body came as RTFD, which carries no front matter: the note's current unknown keys are kept.
+        var bodyIsRTFD: Bool
         /// The decrypted meta, kept in sync-meta-raw/ so fields this build doesn't know survive a re-export.
         var rawMeta: RawMeta
         /// The body on disk differs from the incoming one, so it may be kept as a version before being replaced.
@@ -1398,7 +1400,7 @@ final class NoteStore: ObservableObject {
         if FileManager.default.fileExists(atPath: storage.fileURL(for: payload.id).path) {
             replaces = (try? storage.read(payload.id)).map { !$0.text.isEqual(to: body) } ?? true
         }
-        return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp,
+        return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp, bodyIsRTFD: true,
                                   rawMeta: RawMeta(sourceRevision: payload.revision, meta: payload.meta),
                                   replacesDifferentBody: replaces)
     }
@@ -1423,10 +1425,9 @@ final class NoteStore: ObservableObject {
             history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id,
                                     force: unversionedLocalBodies.contains(id))
         }
-        // An RTFD body carries no front matter, so the unknown keys stay on this Mac (spec §3.3). A noteit-doc body
-        // without `frontMatter` is treated the same: absent can't be told from "all keys removed elsewhere".
+        // An RTFD body carries no front matter, so the unknown keys stay on this Mac (spec §3.3).
         var extras = prepared.extras
-        if extras.frontMatter == nil { extras.frontMatter = storedFrontMatter(id) }
+        if prepared.bodyIsRTFD { extras.frontMatter = storedFrontMatter(id) }
         try installPreparedBody(prepared.tempBody, text: prepared.body, extras: extras, for: prepared.meta)
         setBodyExtras(extras, for: id)
         if prepared.replacesDifferentBody { unversionedLocalBodies.remove(id) }

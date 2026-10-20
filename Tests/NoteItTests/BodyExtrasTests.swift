@@ -354,22 +354,24 @@ final class BodyExtrasTests: XCTestCase {
         XCTAssertTrue(try leftoverTemps(store).isEmpty)
     }
 
-    func testSyncApplyWithoutFrontMatterKeepsTheLocalUnknownKeys() throws {
+    func testSyncApplyKeepsTheLocalUnknownKeysOnlyForAnRTFDBody() throws {
         let id = UUID()
         let store = makeStore()
         try apply(store, id, "Remote\nfirst", extras: extrasA)
-        try apply(store, id, "Remote\nsecond", extras: .empty)
+        try apply(store, id, "Remote\nsecond", extras: .empty, rtfd: true)
         XCTAssertEqual(store.bodyExtras[id], ContainerExtras(frontMatter: extrasA.frontMatter))
 
         let relaunched = makeStore()
         XCTAssertNil(relaunched.bodyExtras[id])
-        try apply(relaunched, id, "Remote\nthird", extras: ContainerExtras(extra: ["futureB": .number("2")]))
-        let kept = ContainerExtras(frontMatter: extrasA.frontMatter, extra: ["futureB": .number("2")])
-        XCTAssertEqual(relaunched.bodyExtras[id], kept)
-        XCTAssertEqual(try readSidecar(relaunched, id).current.extras, kept)
+        try apply(relaunched, id, "Remote\nthird", extras: .empty, rtfd: true)
+        XCTAssertEqual(relaunched.bodyExtras[id], ContainerExtras(frontMatter: extrasA.frontMatter))
+        XCTAssertEqual(try readSidecar(relaunched, id).current.extras, ContainerExtras(frontMatter: extrasA.frontMatter))
 
-        try apply(relaunched, id, "Remote\nfourth", extras: extrasB)
-        XCTAssertEqual(relaunched.bodyExtras[id], extrasB)
+        let noKeys = ContainerExtras(extra: ["futureB": .number("2")])
+        try apply(relaunched, id, "Remote\nfourth", extras: noKeys)
+        XCTAssertEqual(relaunched.bodyExtras[id], noKeys)
+        XCTAssertEqual(try readSidecar(relaunched, id).current.extras, noKeys)
+        XCTAssertNil(makeStore().storedFrontMatter(id))
     }
 
     // MARK: Helpers
@@ -378,10 +380,11 @@ final class BodyExtrasTests: XCTestCase {
         NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false), bodyStorage: storage)
     }
 
-    /// Sync apply with `extras` as the incoming body's extras.
-    private func apply(_ store: NoteStore, _ id: UUID, _ text: String, extras: ContainerExtras) throws {
+    /// Sync apply of a noteit-doc body with `extras`, or of an RTFD body (which has none).
+    private func apply(_ store: NoteStore, _ id: UUID, _ text: String, extras: ContainerExtras, rtfd: Bool = false) throws {
         var prepared = try NoteStore.prepareRemoteNote(S.notePayload(id, revision: UUID(), text: text), storage: store.bodyStorage)
-        prepared.extras = extras
+        prepared.extras = rtfd ? .empty : extras
+        prepared.bodyIsRTFD = rtfd
         try store.applyPreparedRemoteNote(prepared)
     }
 
