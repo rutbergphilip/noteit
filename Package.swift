@@ -24,6 +24,11 @@ let package = Package(
             path: "Sources/NoteItDoc"
         ),
         .target(
+            name: "NoteItDocAppKit",
+            dependencies: ["NoteItDoc", "NoteItCore"],
+            path: "Sources/NoteItDocAppKit"
+        ),
+        .target(
             name: "NoteItDocTestSupport",
             dependencies: ["NoteItDoc"],
             path: "Tests/Support/NoteItDocTestSupport"
@@ -37,6 +42,7 @@ let package = Package(
             dependencies: [
                 "NoteItCore",
                 "NoteItDoc",
+                "NoteItDocAppKit",
                 "NoteItSync",
                 .product(name: "Sparkle", package: "Sparkle")
             ],
@@ -54,13 +60,18 @@ let package = Package(
             path: "Tests/NoteItDocTests"
         ),
         .testTarget(
+            name: "NoteItDocAppKitTests",
+            dependencies: ["NoteItDocAppKit", "NoteItDocTestSupport"],
+            path: "Tests/NoteItDocAppKitTests"
+        ),
+        .testTarget(
             name: "NoteItSyncTests",
             dependencies: ["NoteItSync"],
             path: "Tests/NoteItSyncTests"
         ),
         .testTarget(
             name: "NoteItTests",
-            dependencies: ["NoteIt", "NoteItCore", "NoteItDoc", "NoteItSync"],
+            dependencies: ["NoteIt", "NoteItCore", "NoteItDoc", "NoteItDocAppKit", "NoteItSync"],
             path: "Tests/NoteItTests"
         )
     ]

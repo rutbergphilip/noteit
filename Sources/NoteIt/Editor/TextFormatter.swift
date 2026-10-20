@@ -233,6 +233,7 @@ extension NoteItTextView {
         let full = NSRange(location: 0, length: s.length)
         guard full.length > 0 else { return }
         let fm = NSFontManager.shared
+        if kind != .code { EditorStyle.removeCodeLanguageID(from: s) }
         switch kind {
         case .code:
             s.addAttribute(.font, value: EditorStyle.codeFont, range: full)
@@ -807,7 +808,7 @@ extension NoteItTextView {
             let ps = attributes(ofParagraph: para)[.paragraphStyle] as? NSParagraphStyle
             let base = EditorStyle.paragraphStyle(for: .body, existing: ps)
             base.alignment = .natural
-            return makeEdit(para, newMarker: nil, paragraphStyle: base)
+            return makeEdit(para, newMarker: nil, paragraphStyle: base) { s in EditorStyle.removeCodeLanguageID(from: s) }
         }
         apply(edits, actionName: "Clear Formatting")
         typingAttributes = EditorStyle.bodyAttributes

@@ -38,16 +38,16 @@ enum EditorStyle {
     static let titleSentinel = CGFloat(BlockSentinels.title)
     static let headingSentinel = CGFloat(BlockSentinels.heading)
     static let subheadingSentinel = CGFloat(BlockSentinels.subheading)
-    static let indentStep: CGFloat = 24
-    static let listMarkerWidth: CGFloat = 22
-    static let listBaseIndent: CGFloat = 4
-    static let codeIndent: CGFloat = 14
-    static let quoteIndent: CGFloat = 18
+    static let indentStep = DocParagraphModel.indentStep
+    static let listMarkerWidth = DocParagraphModel.listMarkerWidth
+    static let listBaseIndent = DocParagraphModel.listBaseIndent
+    static let codeIndent = DocParagraphModel.codeIndent
+    static let quoteIndent = DocParagraphModel.quoteIndent
     static let codeBlockOuterSpacing: CGFloat = 15
     /// Right inset (as a negative tail indent) of a code block's first paragraph, so its text never runs
     /// under the language label and copy button.
     static let codeChromeInset: CGFloat = 120
-    static let dividerCharacter = "\u{00A0}"
+    static let dividerCharacter = DocParagraphModel.dividerCharacter
 
     static var bodySize: CGFloat {
         let stored = UserDefaults.standard.double(forKey: "editorFontSize")
@@ -56,28 +56,37 @@ enum EditorStyle {
 
     // MARK: Fonts
 
-    static var bodyFont: NSFont { .systemFont(ofSize: bodySize) }
-    static var titleFont: NSFont { .systemFont(ofSize: bodySize + 12, weight: .bold) }
-    static var headingFont: NSFont { .systemFont(ofSize: bodySize + 5, weight: .semibold) }
-    static var subheadingFont: NSFont { .systemFont(ofSize: bodySize + 1.5, weight: .semibold) }
-    static var codeFont: NSFont { .monospacedSystemFont(ofSize: bodySize - 1, weight: .regular) }
-    static var inlineCodeFont: NSFont { .monospacedSystemFont(ofSize: bodySize - 1, weight: .medium) }
+    static var bodyFont: NSFont { font(for: .body, bodySize: bodySize) }
+    static var titleFont: NSFont { font(for: .title, bodySize: bodySize) }
+    static var headingFont: NSFont { font(for: .heading, bodySize: bodySize) }
+    static var subheadingFont: NSFont { font(for: .subheading, bodySize: bodySize) }
+    static var codeFont: NSFont { font(for: .code, bodySize: bodySize) }
+    static var inlineCodeFont: NSFont { inlineCodeFont(bodySize: bodySize) }
 
     static func font(for kind: BlockKind) -> NSFont {
+        font(for: kind, bodySize: bodySize)
+    }
+
+    /// The font of a `kind` paragraph when the body text is `size` points; `AppDocStyleProvider` reads it too.
+    static func font(for kind: BlockKind, bodySize size: CGFloat) -> NSFont {
         switch kind {
-        case .title: titleFont
-        case .heading: headingFont
-        case .subheading: subheadingFont
-        case .code: codeFont
-        case .body, .quote, .divider: bodyFont
+        case .title: .systemFont(ofSize: size + 12, weight: .bold)
+        case .heading: .systemFont(ofSize: size + 5, weight: .semibold)
+        case .subheading: .systemFont(ofSize: size + 1.5, weight: .semibold)
+        case .code: .monospacedSystemFont(ofSize: size - 1, weight: .regular)
+        case .body, .quote, .divider: .systemFont(ofSize: size)
         }
+    }
+
+    static func inlineCodeFont(bodySize size: CGFloat) -> NSFont {
+        .monospacedSystemFont(ofSize: size - 1, weight: .medium)
     }
 
     // MARK: Colors
     // Text colors are stored as light-appearance values; the text view's adaptive color mapping
     // converts them for dark mode. Drawing-only colors (code background, rules) are dynamic.
 
-    static let checkedTextColor = NSColor(srgbRed: 0.56, green: 0.56, blue: 0.58, alpha: 1)
+    static let checkedTextColor = DocParagraphModel.checkedTextColor
 
     static let codeBlockBackground = NSColor(name: nil) { appearance in
         appearance.isDark ? NSColor(white: 1, alpha: 0.07) : NSColor(white: 0, alpha: 0.045)
@@ -98,8 +107,8 @@ enum EditorStyle {
         appearance.isDark ? NSColor(white: 1, alpha: 0.06) : NSColor(srgbRed: 0.955, green: 0.955, blue: 0.97, alpha: 1)
     }
     /// Static stand-ins written by builders; replaced with the dynamic colors when loaded into the editor.
-    static let tableBorderStatic = NSColor(srgbRed: 0.80, green: 0.80, blue: 0.82, alpha: 1)
-    static let tableHeaderStatic = NSColor(srgbRed: 0.955, green: 0.955, blue: 0.97, alpha: 1)
+    static let tableBorderStatic = DocParagraphModel.tableBorderStatic
+    static let tableHeaderStatic = DocParagraphModel.tableHeaderStatic
 
     struct Swatch: Identifiable {
         let name: String
@@ -131,73 +140,16 @@ enum EditorStyle {
     // MARK: Paragraph styles
 
     static func baseParagraph() -> NSMutableParagraphStyle {
-        let ps = NSMutableParagraphStyle()
-        ps.lineHeightMultiple = 1.15
-        ps.paragraphSpacing = 6
-        ps.defaultTabInterval = bodySentinel
-        return ps
+        DocParagraphModel.baseParagraph()
     }
 
     /// Paragraph style for `kind`, keeping alignment and table cell blocks of `existing`.
     static func paragraphStyle(for kind: BlockKind, existing: NSParagraphStyle? = nil, indentLevel: Int = 0) -> NSMutableParagraphStyle {
-        let ps = baseParagraph()
-        switch kind {
-        case .title:
-            ps.defaultTabInterval = titleSentinel
-            ps.paragraphSpacing = 10
-        case .heading:
-            ps.defaultTabInterval = headingSentinel
-            ps.paragraphSpacingBefore = 10
-            ps.paragraphSpacing = 6
-        case .subheading:
-            ps.defaultTabInterval = subheadingSentinel
-            ps.paragraphSpacingBefore = 6
-            ps.paragraphSpacing = 4
-        case .body:
-            break
-        case .code:
-            ps.defaultTabInterval = codeSentinel
-            ps.lineHeightMultiple = 1.1
-            ps.paragraphSpacing = 0
-            ps.firstLineHeadIndent = codeIndent
-            ps.headIndent = codeIndent
-        case .quote:
-            ps.defaultTabInterval = quoteSentinel
-            ps.firstLineHeadIndent = quoteIndent
-            ps.headIndent = quoteIndent
-        case .divider:
-            ps.defaultTabInterval = dividerSentinel
-            ps.paragraphSpacingBefore = 4
-            ps.paragraphSpacing = 8
-        }
-        if kind != .code && kind != .divider && indentLevel > 0 {
-            ps.firstLineHeadIndent += CGFloat(indentLevel) * indentStep
-            ps.headIndent += CGFloat(indentLevel) * indentStep
-        }
-        if let existing {
-            if kind != .divider { ps.alignment = existing.alignment }
-            if kind == .code, blockKind(paragraphStyle: existing, font: nil) == .code {
-                setCodeLanguage(codeLanguage(of: existing), on: ps)
-            }
-            let tableBlocks = existing.textBlocks.filter { $0 is NSTextTableBlock }
-            if !tableBlocks.isEmpty { ps.textBlocks = tableBlocks }
-        }
-        return ps
+        DocParagraphModel.paragraphStyle(for: kind, existing: existing, indentLevel: indentLevel)
     }
 
     static func listParagraphStyle(level: Int, existing: NSParagraphStyle? = nil) -> NSMutableParagraphStyle {
-        let ps = baseParagraph()
-        ps.paragraphSpacing = 3
-        let first = listBaseIndent + CGFloat(level) * indentStep
-        ps.firstLineHeadIndent = first
-        ps.headIndent = first + listMarkerWidth
-        ps.tabStops = [NSTextTab(textAlignment: .left, location: first + listMarkerWidth)]
-        if let existing {
-            ps.alignment = existing.alignment
-            let tableBlocks = existing.textBlocks.filter { $0 is NSTextTableBlock }
-            if !tableBlocks.isEmpty { ps.textBlocks = tableBlocks }
-        }
-        return ps
+        DocParagraphModel.listParagraphStyle(level: level, existing: existing)
     }
 
     static func attributes(for kind: BlockKind, existing: NSParagraphStyle? = nil, indentLevel: Int = 0) -> [NSAttributedString.Key: Any] {
@@ -209,39 +161,19 @@ enum EditorStyle {
     // MARK: Classification
 
     static func blockKind(paragraphStyle ps: NSParagraphStyle?, font: NSFont?) -> BlockKind {
-        if let ps {
-            switch ps.defaultTabInterval {
-            case codeSentinel: return .code
-            case quoteSentinel: return .quote
-            case dividerSentinel: return .divider
-            case titleSentinel: return .title
-            case headingSentinel: return .heading
-            case subheadingSentinel: return .subheading
-            case bodySentinel: return .body
-            default: break
-            }
-        }
-        // Legacy fallback for paragraphs without a sentinel.
-        guard let font else { return .body }
-        let bold = isBold(font)
-        let size = font.pointSize
-        let base = bodySize
-        if bold && size >= base + 9 { return .title }
-        if bold && size >= base + 3.5 { return .heading }
-        if bold && size >= base + 1 && !isMonospaced(font) { return .subheading }
-        return .body
+        DocParagraphModel.blockKind(paragraphStyle: ps, font: font, baseSize: bodySize)
     }
 
     static func isBold(_ font: NSFont) -> Bool {
-        font.fontDescriptor.symbolicTraits.contains(.bold)
+        DocParagraphModel.isBold(font)
     }
 
     static func isItalic(_ font: NSFont) -> Bool {
-        font.fontDescriptor.symbolicTraits.contains(.italic)
+        DocParagraphModel.isItalic(font)
     }
 
     static func isMonospaced(_ font: NSFont) -> Bool {
-        font.fontDescriptor.symbolicTraits.contains(.monoSpace) || font.isFixedPitch
+        DocParagraphModel.isMonospaced(font)
     }
 
     static func isHeading(_ kind: BlockKind) -> Bool {
@@ -250,50 +182,35 @@ enum EditorStyle {
 
     // MARK: Lists
 
-    static let bulletGlyphs: [String] = ["•", "◦", "▪"]
-    static let uncheckedBox = "☐"
-    static let checkedBox = "☑"
+    static let bulletGlyphs = DocParagraphModel.bulletGlyphs
+    static let uncheckedBox = ChecklistMarkers.unchecked
+    static let checkedBox = ChecklistMarkers.checked
 
-    static func bulletGlyph(level: Int) -> String { bulletGlyphs[level % bulletGlyphs.count] }
+    static func bulletGlyph(level: Int) -> String { DocParagraphModel.bulletGlyph(level: level) }
 
     static func listLevel(of ps: NSParagraphStyle?) -> Int {
-        guard let ps else { return 0 }
-        return max(0, Int(((ps.firstLineHeadIndent - listBaseIndent) / indentStep).rounded()))
+        DocParagraphModel.listLevel(of: ps)
     }
 
     static func indentLevel(of ps: NSParagraphStyle?, kind: BlockKind) -> Int {
-        guard let ps else { return 0 }
-        let base: CGFloat = kind == .quote ? quoteIndent : (kind == .code ? codeIndent : 0)
-        return max(0, Int(((ps.firstLineHeadIndent - base) / indentStep).rounded()))
+        DocParagraphModel.indentLevel(of: ps, kind: kind)
     }
 
     /// Parses a list marker at the start of `paragraph` (a paragraph's text).
     static func listMarker(in paragraph: String) -> ListMarker? {
-        let ns = paragraph as NSString
-        guard ns.length >= 2 else { return nil }
-        let first = ns.substring(to: 1)
-        if bulletGlyphs.contains(first), ns.character(at: 1) == 9 {
-            return ListMarker(kind: .bullet, length: 2)
+        guard let marker = DocParagraphModel.listMarker(in: paragraph) else { return nil }
+        switch marker.kind {
+        case .bullet: return ListMarker(kind: .bullet, length: marker.length)
+        case .numbered(let n): return ListMarker(kind: .numbered(n), length: marker.length)
+        case .checkbox(let checked): return ListMarker(kind: .checkbox(checked: checked), length: marker.length)
         }
-        if first == uncheckedBox || first == checkedBox, ns.character(at: 1) == 9 {
-            return ListMarker(kind: .checkbox(checked: first == checkedBox), length: 2)
-        }
-        var i = 0
-        while i < min(ns.length, 4), let scalar = UnicodeScalar(ns.character(at: i)), CharacterSet.decimalDigits.contains(scalar) {
-            i += 1
-        }
-        if i > 0, i + 1 < ns.length, ns.character(at: i) == 46 /* . */, ns.character(at: i + 1) == 9,
-           let n = Int(ns.substring(to: i)) {
-            return ListMarker(kind: .numbered(n), length: i + 2)
-        }
-        return nil
     }
 
     static func markerText(_ kind: ListMarker.Kind, level: Int) -> String {
         switch kind {
-        case .bullet: bulletGlyph(level: level) + "\t"
-        case .numbered(let n): "\(n).\t"
-        case .checkbox(let checked): (checked ? checkedBox : uncheckedBox) + "\t"
+        case .bullet: DocParagraphModel.markerText(.bullet, level: level)
+        case .numbered(let n): DocParagraphModel.markerText(.numbered(n), level: level)
+        case .checkbox(let checked): DocParagraphModel.markerText(.checkbox(checked: checked), level: level)
         }
     }
 
@@ -326,13 +243,10 @@ enum EditorStyle {
     }
 
     /// The flat background older versions stored on inline code; it's replaced by the drawn pill.
-    static let legacyInlineCodeBackground = NSColor(srgbRed: 0.92, green: 0.92, blue: 0.94, alpha: 1)
+    static let legacyInlineCodeBackground = DocParagraphModel.legacyInlineCodeBackground
 
     static func isLegacyInlineCodeBackground(_ color: NSColor?) -> Bool {
-        guard let color, let c = color.usingColorSpace(.sRGB), let l = legacyInlineCodeBackground.usingColorSpace(.sRGB) else { return false }
-        let tolerance: CGFloat = 0.01
-        return abs(c.redComponent - l.redComponent) < tolerance && abs(c.greenComponent - l.greenComponent) < tolerance
-            && abs(c.blueComponent - l.blueComponent) < tolerance && abs(c.alphaComponent - l.alphaComponent) < tolerance
+        DocParagraphModel.isLegacyInlineCodeBackground(color)
     }
 
     /// Inline code is stored as a monospaced font outside code blocks. With the *Same as Text* inline
@@ -343,29 +257,22 @@ enum EditorStyle {
     }
 
     // MARK: Code block language
-    // A code paragraph's language is an extra left tab stop at `rawValue × 0.5` pt (0.5–10.5 pt).
-    // Tab stops are written to RTF in twips, so the value survives exactly, and a stop left of the
-    // code indent is never reached by typing a tab. No such stop means Automatic.
+    // A code paragraph's language is an extra left tab stop (see `DocParagraphModel.codeLanguage(of:)`), and,
+    // when it came from a document, `noteItCodeLanguageID` holds the identifier as written.
 
-    static let codeLanguageStep: CGFloat = 0.5
+    static let codeLanguageStep = DocParagraphModel.codeLanguageStep
 
     static func codeLanguage(of ps: NSParagraphStyle?) -> CodeLanguage? {
-        guard let ps else { return nil }
-        for tab in ps.tabStops where tab.location > 0 && tab.location < codeIndent {
-            let raw = Int((tab.location / codeLanguageStep).rounded())
-            if abs(CGFloat(raw) * codeLanguageStep - tab.location) < 0.01, let language = CodeLanguage(rawValue: raw) {
-                return language
-            }
-        }
-        return nil
+        DocParagraphModel.codeLanguage(of: ps)
     }
 
     static func setCodeLanguage(_ language: CodeLanguage?, on ps: NSMutableParagraphStyle) {
-        var tabs = ps.tabStops.filter { !($0.location > 0 && $0.location < codeIndent) }
-        if let language {
-            tabs.append(NSTextTab(textAlignment: .left, location: CGFloat(language.rawValue) * codeLanguageStep))
-        }
-        ps.tabStops = tabs
+        DocParagraphModel.setCodeLanguage(language, on: ps)
+    }
+
+    /// Drops a code paragraph's language identifier when the text stops being code.
+    static func removeCodeLanguageID(from s: NSMutableAttributedString) {
+        s.removeAttribute(.noteItCodeLanguageID, range: NSRange(location: 0, length: s.length))
     }
 
     static func divider() -> NSAttributedString {
@@ -374,12 +281,7 @@ enum EditorStyle {
 
     /// An NSTextTable with a bold header row. `widths` are optional column percentages.
     static func table(header: [String], rows: [[String]], widths: [CGFloat]? = nil, monospacedFirstColumn: Bool = false) -> NSAttributedString {
-        let table = NSTextTable()
-        table.numberOfColumns = header.count
-        table.layoutAlgorithm = .automaticLayoutAlgorithm
-        table.collapsesBorders = true
-        table.hidesEmptyCells = false
-        table.setValue(99.5, type: .percentageValueType, for: .width)
+        let table = DocParagraphModel.makeTable(columns: header.count)
 
         let result = NSMutableAttributedString()
         for (c, title) in header.enumerated() {
@@ -394,23 +296,11 @@ enum EditorStyle {
     }
 
     static func tableBlock(table: NSTextTable, row: Int, column: Int, columns: Int, width: CGFloat?, header: Bool) -> NSTextTableBlock {
-        let block = NSTextTableBlock(table: table, startingRow: row, rowSpan: 1, startingColumn: column, columnSpan: 1)
-        block.setWidth(1, type: .absoluteValueType, for: .border)
-        block.setBorderColor(tableBorderStatic)
-        block.setWidth(8, type: .absoluteValueType, for: .padding)
-        // Uniform tables get no cell widths: the 100%-wide table shares space evenly, whereas
-        // percentage cell widths exclude padding/borders and would overflow the container.
-        if let width { block.setValue(width, type: .percentageValueType, for: .width) }
-        if header { block.backgroundColor = tableHeaderStatic }
-        return block
+        DocParagraphModel.tableBlock(table: table, row: row, column: column, width: width, header: header)
     }
 
     static func tableCellParagraph(block: NSTextBlock) -> NSMutableParagraphStyle {
-        let ps = NSMutableParagraphStyle()
-        ps.textBlocks = [block]
-        ps.lineHeightMultiple = 1.1
-        ps.defaultTabInterval = bodySentinel
-        return ps
+        DocParagraphModel.tableCellParagraph(block: block)
     }
 
     static func tableCell(_ text: String, table: NSTextTable, row: Int, column: Int, columns: Int, width: CGFloat?, header: Bool, monospaced: Bool) -> NSAttributedString {

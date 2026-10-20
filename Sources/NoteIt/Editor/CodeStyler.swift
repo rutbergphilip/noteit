@@ -293,6 +293,11 @@ final class CodeStyler {
                 EditorStyle.setCodeLanguage(language, on: m)
                 ts.addAttribute(.paragraphStyle, value: m, range: r)
             }
+            if let language {
+                ts.addAttribute(.noteItCodeLanguageID, value: language.identifier, range: block)
+            } else {
+                ts.removeAttribute(.noteItCodeLanguageID, range: block)
+            }
         }
         highlight(block)
         textView.needsDisplay = true
