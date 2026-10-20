@@ -46,6 +46,8 @@ struct NoteListView: View {
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
+                // Rows the table never re-measures (seen after sync updates) fall back to this height.
+                .environment(\.defaultMinListRowHeight, NoteRow.height)
                 .onDeleteCommand {
                     if let note = store.note(with: store.selectedNoteID) { delete(note) }
                 }
@@ -172,8 +174,21 @@ struct NoteRow: View {
     let note: NoteMeta
     let notebook: Notebook?
 
+    private static let verticalPadding: CGFloat = 8
+    private static let spacing: CGFloat = 4
+
+    /// Every row is this tall (the preview always reserves two lines), so the list can use it as its
+    /// minimum row height and a row is never laid out shorter than its content.
+    static let height: CGFloat = {
+        let layout = NSLayoutManager()
+        func line(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> CGFloat {
+            ceil(layout.defaultLineHeight(for: .systemFont(ofSize: size, weight: weight)))
+        }
+        return verticalPadding * 2 + spacing * 2 + line(13, .semibold) + line(12) * 2 + line(11)
+    }()
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Self.spacing) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(note.displayTitle)
                     .font(Tokens.Font.cardTitle)
@@ -198,7 +213,7 @@ struct NoteRow: View {
             Text(note.preview.isEmpty ? "No additional text" : note.preview)
                 .font(Tokens.Font.cardPreview)
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
+                .lineLimit(2, reservesSpace: true)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 6) {
@@ -217,7 +232,7 @@ struct NoteRow: View {
                 }
             }
         }
-        .padding(.vertical, 8)
+        .padding(.vertical, Self.verticalPadding)
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
     }
