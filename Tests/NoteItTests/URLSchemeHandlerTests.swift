@@ -136,8 +136,14 @@ final class URLSchemeHandlerTests: XCTestCase {
         let (handler, _) = makeHandler()
         open(handler, "noteit://x-callback-url/open?id=\(UUID().uuidString)&x-error=https://example.com/err")
         open(handler, "noteit://x-callback-url/open?id=\(UUID().uuidString)&x-error=app://err")
-        XCTAssertEqual(callbacks.map { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems?.map(\.name) ?? [] },
-                       [["errorCode"], ["errorCode", "errorMessage"]])
+        open(handler, "noteit://x-callback-url/append?id=\(UUID().uuidString)&text=x&x-error=https://example.com/err")
+        open(handler, "noteit://x-callback-url/append?id=\(UUID().uuidString)&text=x&x-error=app://err")
+        XCTAssertEqual(callbacks.map { URLComponents(url: $0, resolvingAgainstBaseURL: false)?.queryItems ?? [] },
+                       [[URLQueryItem(name: "errorCode", value: "not_found")],
+                        [URLQueryItem(name: "errorCode", value: "not_found"), URLQueryItem(name: "errorMessage", value: "No note with that id.")],
+                        [URLQueryItem(name: "errorCode", value: "not_changed")],
+                        [URLQueryItem(name: "errorCode", value: "not_found"), URLQueryItem(name: "errorMessage", value: "No note with that id.")]])
+        XCTAssertEqual(questions, ["A link wants to add text to a note."], "only the web link asks")
         XCTAssertTrue(notices.isEmpty)
     }
 
@@ -154,8 +160,43 @@ final class URLSchemeHandlerTests: XCTestCase {
         let id = store.createNote(in: nil, initial: NSAttributedString(string: "Secret")).id
         store.notes[store.noteIndex(id)!].lock = NoteLock(keyID: "k1", sealedID: UUID())
         open(handler, "noteit://append?id=\(id.uuidString)&text=x")
+        open(handler, "noteit://x-callback-url/append?id=\(id.uuidString)&text=x&x-error=app://err")
         XCTAssertTrue(questions.isEmpty)
         XCTAssertEqual(notices, ["That note is locked."])
+        XCTAssertEqual(URLComponents(url: callbacks[0], resolvingAgainstBaseURL: false)?.queryItems?.first?.value, "note_locked")
+
+        open(handler, "noteit://x-callback-url/append?id=\(id.uuidString)&text=x&x-error=https://example.com/err")
+        XCTAssertEqual(questions, ["A link wants to add text to a note."], "a web link asks, as if the note could be changed")
+        XCTAssertEqual(callbacks.last, URL(string: "https://example.com/err?errorCode=not_changed"))
+        XCTAssertEqual(text(of: id, in: store), "Secret")
+    }
+
+    /// What a web page sees must not depend on whether the note or notebook exists, or is locked.
+    func testWebCallbacksCantTellWhetherNotesExist() throws {
+        let (handler, store) = makeHandler()
+        _ = store.createNotebook(name: "Inbox", symbol: "tray", colorHex: "#0A84FF")
+        let plain = store.createNote(in: nil, initial: NSAttributedString(string: "Plan")).id
+        let locked = store.createNote(in: nil, initial: NSAttributedString(string: "Secret")).id
+        store.notes[store.noteIndex(locked)!].lock = NoteLock(keyID: "k1", sealedID: UUID())
+        let deleted = store.createNote(in: nil, initial: NSAttributedString(string: "Gone")).id
+        store.moveToRecentlyDeleted([deleted])
+        let web = "&x-error=https://example.com/err&x-cancel=https://example.com/cancel&x-success=https://example.com/ok"
+        let failing = ["append?id=\(UUID().uuidString)&text=x", "append?id=\(locked.uuidString)&text=x",
+                       "append?id=\(deleted.uuidString)&text=x", "append?title=Nothing&text=x", "append?title=Secret&text=x",
+                       "new?notebook=Nowhere&text=x", "new?notebook=\(UUID().uuidString)&text=x"]
+        for allow in [false, true] {
+            answer = allow
+            for link in failing + ["append?id=\(plain.uuidString)&text=x", "new?notebook=Inbox&text=x"] {
+                questions = []
+                callbacks = []
+                open(handler, "noteit://x-callback-url/" + link + web)
+                XCTAssertEqual(questions.count, 1, link)
+                let expected = !allow ? "https://example.com/cancel"
+                    : failing.contains(link) ? "https://example.com/err?errorCode=not_changed" : "https://example.com/ok"
+                XCTAssertEqual(callbacks, [URL(string: expected)!], link)
+            }
+        }
+        XCTAssertTrue(notices.isEmpty)
     }
 
     func testRegisteredHostDispatches() {

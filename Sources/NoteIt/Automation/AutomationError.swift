@@ -7,7 +7,7 @@ enum AutomationError: Error, Equatable {
     case notFound, noteTitleNotFound, noteDeleted, noteUnreadable, noteLocked, notReady, notebookNotFound, notebookNameNotFound,
          invalidInput(String),
          revisionMismatch(current: UUID?), formatUnavailable(String), tooLarge, dailyNotesUnavailable, cancelled,
-         versionNotSaved
+         versionNotSaved, notChanged
 
     var apiCode: APIErrorCode {
         switch self {
@@ -16,7 +16,7 @@ enum AutomationError: Error, Equatable {
         case .noteUnreadable: .noteUnreadable
         case .noteLocked: .noteLocked
         case .notReady: .notReady
-        case .invalidInput, .cancelled: .badRequest
+        case .invalidInput, .cancelled, .notChanged: .badRequest
         case .revisionMismatch: .revisionMismatch
         case .formatUnavailable, .dailyNotesUnavailable: .notImplemented
         case .tooLarge: .tooLarge
@@ -27,6 +27,7 @@ enum AutomationError: Error, Equatable {
     /// The x-callback-url `errorCode`.
     var callbackCode: String {
         if case .cancelled = self { return "cancelled" }
+        if case .notChanged = self { return "not_changed" }
         return apiCode.rawValue
     }
 
@@ -47,6 +48,7 @@ enum AutomationError: Error, Equatable {
         case .dailyNotesUnavailable: "Daily notes aren't available in this version."
         case .cancelled: "Cancelled."
         case .versionNotSaved: "Couldn't save a version of the note, so it wasn't changed."
+        case .notChanged: "NoteIt couldn't make that change."
         }
     }
 }

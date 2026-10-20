@@ -131,6 +131,8 @@ final class URLSchemeHandler: NSObject {
                 }
                 handler(url)
             }
+        } catch let failure as ConcealedFailure {
+            report(failure.error, callback: callback, concealed: true)
         } catch let error as AutomationError {
             if error == .cancelled {
                 if let cancel = callback.cancel { environment.openCallback(cancel) }
@@ -149,10 +151,19 @@ final class URLSchemeHandler: NSObject {
     }
 
     private func create(title: String?, text: String, notebook: String?, tags: [String], open: Bool,
-                        callback: XCallback) throws(AutomationError) {
-        try service.ensureReady()
+                        callback: XCallback) throws {
         let ref = notebook.map { UUID(uuidString: $0).map(NotebookRef.id) ?? .name($0) }
-        let notebookName = try service.resolveNotebook(ref).flatMap { service.store.notebook(with: $0)?.name }
+        let notebookName: String?
+        do {
+            try service.ensureReady()
+            notebookName = try service.resolveNotebook(ref).flatMap { service.store.notebook(with: $0)?.name }
+        } catch {
+            let question = switch ref {
+            case .name(let name): "A link wants to create a note in “\(name)”."
+            case .id, .none: "A link wants to create a note."
+            }
+            try concealFromWeb(error, callback: callback, question: question)
+        }
         try askFirst("A link wants to create a note in “\(notebookName ?? "NoteIt")”.")
         let meta = try service.create(title: title, body: text, format: .text, notebook: ref, tags: tags, pinned: false)
         if open {
@@ -164,7 +175,25 @@ final class URLSchemeHandler: NSObject {
     }
 
     private func append(to target: URLCommand.AppendTarget, text: String, position: AppendPosition, timestamp: Bool,
-                        callback: XCallback) throws(AutomationError) {
+                        callback: XCallback) throws {
+        let meta: NoteMeta
+        do {
+            meta = try appendTarget(target)
+        } catch {
+            let question = switch target {
+            case .id: "A link wants to add text to a note."
+            case .title(let title): "A link wants to add text to “\(title)”."
+            case .daily: "A link wants to add text to today's daily note."
+            }
+            try concealFromWeb(error, callback: callback, question: question)
+        }
+        try askFirst("A link wants to add text to “\(meta.displayTitle)”.")
+        let result = try service.append(meta.id, text: text, format: .text, position: position, timestamp: timestamp,
+                                        ifRevision: nil)
+        succeed(callback, note: result)
+    }
+
+    private func appendTarget(_ target: URLCommand.AppendTarget) throws(AutomationError) -> NoteMeta {
         if target == .daily { try requireDailyNotes() }
         try service.ensureReady()
         let meta: NoteMeta
@@ -181,10 +210,22 @@ final class URLSchemeHandler: NSObject {
         if meta.deletedAt != nil { throw .noteDeleted }
         if meta.isLocked { throw .noteLocked }
         if service.store.isBodyWriteBlocked(meta.id) { throw .noteUnreadable }
-        try askFirst("A link wants to add text to “\(meta.displayTitle)”.")
-        let result = try service.append(meta.id, text: text, format: .text, position: position, timestamp: timestamp,
-                                        ifRevision: nil)
-        succeed(callback, note: result)
+        return meta
+    }
+
+    /// A failure before the question would tell a web page whether a note or notebook exists, or is locked. With
+    /// an `http(s)` callback the link asks anyway, in words taken only from the link, and then fails with
+    /// `not_changed`, so the page sees the same as for Don't Allow or a later failure.
+    private func concealFromWeb(_ error: AutomationError, callback: XCallback, question: String) throws -> Never {
+        guard Self.hasWebCallback(callback) else { throw error }
+        try askFirst(question)
+        throw ConcealedFailure(error: error)
+    }
+
+    private struct ConcealedFailure: Error { var error: AutomationError }
+
+    static func hasWebCallback(_ callback: XCallback) -> Bool {
+        [callback.success, callback.error, callback.cancel].contains { $0.map { !XCallback.mayReceiveNoteDetails($0) } ?? false }
     }
 
     private func requireDailyNotes() throws(AutomationError) {
@@ -209,15 +250,17 @@ final class URLSchemeHandler: NSObject {
         environment.openCallback(URLCommand.callbackURL(success, adding: items))
     }
 
-    /// Calls x-error when the link has one; otherwise shows the error, so a link never fails silently.
-    private func report(_ error: AutomationError, callback: XCallback) {
+    /// Calls x-error when the link has one; otherwise shows the error, so a link never fails silently. A
+    /// `concealed` error reaches x-error only as `not_changed`; the user still sees why.
+    private func report(_ error: AutomationError, callback: XCallback, concealed: Bool = false) {
         guard let failure = callback.error else {
             environment.notify(error.message)
             return
         }
-        var items = [URLQueryItem(name: "errorCode", value: error.callbackCode)]
+        let sent = concealed ? AutomationError.notChanged : error
+        var items = [URLQueryItem(name: "errorCode", value: sent.callbackCode)]
         if XCallback.mayReceiveNoteDetails(failure) {
-            items.append(URLQueryItem(name: "errorMessage", value: error.message))
+            items.append(URLQueryItem(name: "errorMessage", value: sent.message))
         }
         environment.openCallback(URLCommand.callbackURL(failure, adding: items))
     }

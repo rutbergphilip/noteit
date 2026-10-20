@@ -94,6 +94,7 @@ x-callback-url: the same actions under `noteit://x-callback-url/<action>?…&x-s
 - `x-error` receives `errorCode` (the `AutomationError` code, such as `not_found`) and `errorMessage`.
 - `x-cancel` is called when the user answers **Don't Allow** to a confirmation.
 - Callbacks with the scheme `http` or `https` never receive a note id, title or link: `x-success` is called with no added parameters, and `x-error` gets only `errorCode`.
+- A web page must not learn whether a note or notebook exists, or is locked. When any callback has the scheme `http` or `https`, a `new` or `append` link whose target can't be used (a missing note, notebook or daily note, a locked, deleted or unreadable note, a library still loading) asks its question anyway, worded only from what the link says (**A link wants to add text to a note.** for an id, the title or notebook name as given otherwise). **Don't Allow** calls `x-cancel` as usual; **Allow** (or the setting that skips the question) calls `x-error` with `errorCode` `not_changed`, and the reason is shown to the user only when the link has no `x-error`. Errors that depend only on the link itself, such as `too_large` or an invalid parameter, keep their code. Links whose callbacks are all other schemes get the detailed `errorCode` and `errorMessage` without being asked.
 - Callback URLs with the schemes `javascript`, `file`, `data` or `noteit` are ignored.
 
 Safety:

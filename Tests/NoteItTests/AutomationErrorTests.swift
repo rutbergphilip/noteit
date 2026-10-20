@@ -7,7 +7,7 @@ final class AutomationErrorTests: XCTestCase {
         .notFound, .noteTitleNotFound, .noteDeleted, .noteUnreadable, .noteLocked, .notReady, .notebookNotFound,
         .notebookNameNotFound, .invalidInput("Bad title."),
         .revisionMismatch(current: UUID()), .formatUnavailable("rtf"), .tooLarge, .dailyNotesUnavailable, .cancelled,
-        .versionNotSaved,
+        .versionNotSaved, .notChanged,
     ]
 
     func testEveryErrorHasCodeAndMessage() {
@@ -22,6 +22,7 @@ final class AutomationErrorTests: XCTestCase {
         XCTAssertEqual(AutomationError.revisionMismatch(current: nil).apiCode.httpStatus, 412)
         XCTAssertEqual(AutomationError.noteUnreadable.callbackCode, "note_unreadable")
         XCTAssertEqual(AutomationError.cancelled.callbackCode, "cancelled")
+        XCTAssertEqual(AutomationError.notChanged.callbackCode, "not_changed")
         XCTAssertEqual(AutomationError.versionNotSaved.apiCode.httpStatus, 500)
         XCTAssertEqual(AutomationError.versionNotSaved.message, "Couldn't save a version of the note, so it wasn't changed.")
     }
