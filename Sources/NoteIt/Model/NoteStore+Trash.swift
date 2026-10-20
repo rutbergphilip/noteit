@@ -37,6 +37,7 @@ extension NoteStore {
             moved.append(id)
         }
         guard !moved.isEmpty else { return [] }
+        for id in moved { if let meta = note(with: id) { dispatchDerivedIndexes(.metadata(meta)) } }
         commitUserMetadataChange()
         if let undoManager {
             undoManager.registerUndo(withTarget: self) { store in
@@ -64,6 +65,7 @@ extension NoteStore {
             recovered.append(id)
         }
         guard !recovered.isEmpty else { return [] }
+        for id in recovered { if let meta = note(with: id) { dispatchDerivedIndexes(.metadata(meta)) } }
         commitUserMetadataChange()
         if let undoManager {
             undoManager.registerUndo(withTarget: self) { store in

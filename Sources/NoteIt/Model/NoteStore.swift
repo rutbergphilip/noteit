@@ -117,6 +117,8 @@ final class NoteStore: ObservableObject {
     /// Raw meta files of removed records (other than notes), deleted once the removal is saved; mirrored to
     /// `sync-meta-raw/pending-deletions.json` with the tombstones.
     var rawMetaDeletionQueue: [RawMetaKind: Set<UUID>] = [:]
+    /// Registered derived indexes in registration order (Task 4.4). Appended only by `registerDerivedIndex`.
+    var derivedIndexes: [DerivedIndex] = []
     /// Note the user is currently typing in; selection reconciliation won't yank it.
     private var editingNoteID: UUID?
     /// Local deletions not yet pushed by sync, mirrored to `sync-deletions.json`.
@@ -299,6 +301,7 @@ final class NoteStore: ObservableObject {
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
+        dispatchDerivedIndexes(.changed(meta, snapshot))
     }
 
     /// For editor commits made inside a SwiftUI view update. Sync calls `commitStagedEditorBody` before it
@@ -379,8 +382,10 @@ final class NoteStore: ObservableObject {
         searchIndexDirty = true
     }
 
-    /// Indexes notes lacking a (fresh) entry by parsing their RTFD off the main actor.
-    private func scheduleIndexRebuild() {
+    /// Indexes notes lacking a (fresh) entry by parsing their RTFD off the main actor, and rebuilds every
+    /// registered derived index.
+    func scheduleIndexRebuild() {
+        rebuildDerivedIndexes()
         guard !indexRebuildInFlight else { return }
         let missing = notes.filter { searchIndex[$0.id] == nil && loadErrors[$0.id] == nil }.map(\.id)
         guard !missing.isEmpty else { return }
@@ -490,6 +495,7 @@ final class NoteStore: ObservableObject {
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
+        dispatchDerivedIndexes(.changed(meta, body))
         return meta
     }
 
@@ -551,6 +557,7 @@ final class NoteStore: ObservableObject {
             history.removeHistory(of: id)
             appliedRemoteRevisions.notes[id.uuidString] = nil
             pendingTrash.insert(id)
+            dispatchDerivedIndexes(.removed(id))
         }
         bodyAccessOrder.removeAll { removed.contains($0) }
         searchIndexDirty = true
@@ -598,6 +605,7 @@ final class NoteStore: ObservableObject {
                 notes[i].revision = UUID()
                 hasUnannouncedLocalChange = true
             }
+            dispatchDerivedIndexes(.metadata(notes[i]))
         }
     }
 
@@ -610,6 +618,7 @@ final class NoteStore: ObservableObject {
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
+        dispatchDerivedIndexes(.metadata(notes[index]))
         reconcileSelectionAfterUserAction()
     }
 
@@ -620,6 +629,7 @@ final class NoteStore: ObservableObject {
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
+        dispatchDerivedIndexes(.metadata(notes[index]))
         reconcileSelectionAfterUserAction()
     }
 
@@ -631,6 +641,7 @@ final class NoteStore: ObservableObject {
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
+        dispatchDerivedIndexes(.metadata(notes[index]))
         reconcileSelectionAfterUserAction()
     }
 
@@ -682,6 +693,7 @@ final class NoteStore: ObservableObject {
         for index in notes.indices where notes[index].notebookID == id && notes[index].deletedAt == nil {
             notes[index].deletedAt = date
             notes[index].revision = UUID()
+            dispatchDerivedIndexes(.metadata(notes[index]))
         }
         if selection == .notebook(id) { selection = .allNotes }
         reindexNotebooks(sortedNotebooks)
@@ -1026,6 +1038,7 @@ final class NoteStore: ObservableObject {
         indexSaveWorkItem?.cancel()
         indexSaveWorkItem = nil
         if isTerminating { writeRecoveryCopies() }
+        dispatchDerivedIndexes(.flush)
         trimBodyCache()
         if hasUnannouncedLocalChange, !libraryDirty {
             hasUnannouncedLocalChange = false
@@ -1404,6 +1417,7 @@ final class NoteStore: ObservableObject {
         } else {
             notes.append(prepared.meta)
         }
+        dispatchDerivedIndexes(.changed(prepared.meta, prepared.body))
         appliedRemoteRevisions.notes[id.uuidString] = prepared.rawMeta.sourceRevision
         searchIndex[id] = prepared.folded
         searchIndexDirty = true
@@ -1439,6 +1453,7 @@ final class NoteStore: ObservableObject {
         queueRawMetaDeletion(id, kind: .notebooks)
         for index in notes.indices where notes[index].notebookID == id && notes[index].deletedAt == nil {
             notes[index].notebookID = nil
+            dispatchDerivedIndexes(.metadata(notes[index]))
         }
         libraryDirty = true
         persistRemoteApply()
@@ -1478,6 +1493,7 @@ final class NoteStore: ObservableObject {
     func updateSyncCreatedNote(_ id: UUID, _ change: (inout NoteMeta) -> Void) {
         guard let index = noteIndex(id) else { return }
         change(&notes[index])
+        dispatchDerivedIndexes(.metadata(notes[index]))
         libraryDirty = true
         hasUnannouncedLocalChange = true
         flush()
