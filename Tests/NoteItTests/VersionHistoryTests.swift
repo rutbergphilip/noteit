@@ -1,6 +1,7 @@
 import AppKit
 import XCTest
 @testable import NoteIt
+import NoteItCore
 import NoteItSync
 
 @MainActor
@@ -32,7 +33,7 @@ final class VersionHistoryTests: XCTestCase {
     }
 
     private func texts(_ store: NoteStore, _ id: UUID) throws -> [String] {
-        try store.versions(of: id).map { try store.history.load($0).string }
+        try store.versions(of: id).map { try store.history.load($0).text.string }
     }
 
     func testVersionsAreStoredUnderHistoryWithUTCTimestampNames() throws {
@@ -47,7 +48,8 @@ final class VersionHistoryTests: XCTestCase {
         XCTAssertEqual(version.url.lastPathComponent, "20270115T080000Z.rtfd")
         XCTAssertEqual(version.date, clock)
         let leftovers = try fm.contentsOfDirectory(atPath: version.url.deletingLastPathComponent().path)
-        XCTAssertEqual(leftovers, [version.url.lastPathComponent], "no temp files are left behind")
+        XCTAssertEqual(leftovers.sorted(), ["20270115T080000Z.extras.json", "20270115T080000Z.rtfd"],
+                       "the version and its extras file, and no temp files")
     }
 
     func testSavedBodyIsKeptAtMostEveryTenMinutes() throws {
@@ -80,7 +82,7 @@ final class VersionHistoryTests: XCTestCase {
         }
         let versions = store.versions(of: id)
         XCTAssertEqual(versions.count, VersionHistory.maxVersions)
-        XCTAssertEqual(try store.history.load(versions[0]).string, "v53", "the newest are kept")
+        XCTAssertEqual(try store.history.load(versions[0]).text.string, "v53", "the newest are kept")
 
         advance(minutes: 60 * 24 * 31)
         edit(store, id, "much later")
@@ -97,7 +99,7 @@ final class VersionHistoryTests: XCTestCase {
         let orphan = UUID()
         let source = store.bodyURL(for: store.createNote(in: nil, initial: NSAttributedString(string: "x")).id)
         store.flush()
-        XCTAssertNotNil(store.history.recordSavedBody(at: source, of: orphan))
+        XCTAssertNotNil(store.history.recordSavedBody(at: source, extras: store.savedBodyVersionEntry(orphan), of: orphan))
         store.purgeExpiredDeletedNotes()
         XCTAssertFalse(fm.fileExists(atPath: store.history.directory(for: orphan).path))
     }
@@ -227,6 +229,61 @@ final class VersionHistoryTests: XCTestCase {
         a.flush()
         try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
         XCTAssertEqual(try texts(b, id), ["Shared\nlocal", "Shared\nbefore"])
+    }
+
+    func testSavedBodyVersionKeepsExtras() throws {
+        let store = makeStore()
+        let extras = ContainerExtras(frontMatter: "title: First", extra: ["futureKey": .string("kept")])
+        let blocks: [DocNode] = [
+            .paragraph(align: nil, indent: nil, content: [.text("First", marks: [])]),
+            .codeBlock(align: nil, language: "zig-nightly", content: [.text("const x = 1;", marks: [])]),
+        ]
+        let first = try DocConverter.importDocument(BodyContainer(doc: .doc(blocks)), styles: AppDocStyleProvider.shared)
+        let id = store.createNote(in: nil, initial: NSAttributedString(string: "placeholder")).id
+        store.flush()
+        store.setBodyExtras(extras, for: id)
+        store.updateBody(id, first)
+        store.flush()
+        let firstDigest = try RTFDBodyStorage.packageDigest(at: store.bodyURL(for: id))
+
+        advance(minutes: 11)
+        store.setBodyExtras(.empty, for: id)
+        edit(store, id, "Second")
+        let version = try XCTUnwrap(store.versions(of: id).first)
+        let entry = try BodyExtrasEntry(json: JSONValue.decode(Data(contentsOf: VersionHistory.extrasURL(of: version.url))))
+        XCTAssertEqual(entry.extras, extras)
+        XCTAssertEqual(entry.codeLanguageIDs, ["zig-nightly"])
+        XCTAssertEqual(entry.bodySHA256, firstDigest)
+
+        advance(minutes: 1)
+        try store.restoreVersion(version)
+        XCTAssertEqual(store.bodyExtras[id], extras)
+        XCTAssertEqual(NoteStore.codeLanguageIDs(of: store.body(for: id)), ["zig-nightly"])
+
+        // A note with no extras gets an extras file with empty extras.
+        let plain = store.createNote(in: nil, initial: NSAttributedString(string: "one")).id
+        store.flush()
+        edit(store, plain, "two")
+        let plainVersion = try XCTUnwrap(store.versions(of: plain).first)
+        let plainEntry = try BodyExtrasEntry(json: JSONValue.decode(Data(contentsOf: VersionHistory.extrasURL(of: plainVersion.url))))
+        XCTAssertEqual(plainEntry.extras, .empty)
+        XCTAssertEqual(try store.history.load(plainVersion).extras, .empty)
+    }
+
+    func testSyncApplyVersionKeepsReplacedExtras() throws {
+        let b = makeStore("b")
+        let id = UUID()
+        let extras = ContainerExtras(frontMatter: "title: Local")
+        var prepared = try NoteStore.prepareRemoteNote(RawMetaSupport.notePayload(id, revision: UUID(), text: "Shared\nbefore"),
+                                                       storage: b.bodyStorage)
+        prepared.extras = extras
+        try b.applyPreparedRemoteNote(prepared)
+
+        try b.applyRemote(RawMetaSupport.notePayload(id, revision: UUID(), text: "Shared\nafter"))
+        let version = try XCTUnwrap(b.versions(of: id).first)
+        let loaded = try b.history.load(version)
+        XCTAssertEqual(loaded.text.string, "Shared\nbefore")
+        XCTAssertEqual(loaded.extras, extras)
     }
 
     func testVersionLabels() {

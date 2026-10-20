@@ -112,7 +112,7 @@ struct VersionHistorySheet: View {
     private func loadPreview() {
         guard let version = selected else { preview = nil; errorMessage = nil; return }
         do {
-            preview = try store.history.load(version)
+            preview = try store.history.load(version).text
             errorMessage = nil
         } catch {
             preview = nil

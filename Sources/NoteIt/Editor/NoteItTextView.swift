@@ -160,6 +160,12 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         }
     }
 
+    override func becomeFirstResponder() -> Bool {
+        guard super.becomeFirstResponder() else { return false }
+        OpenEditorRegistry.shared.markActive(self)
+        return true
+    }
+
     override func didChangeText() {
         normalizePendingEdits()
         codeStyler.flush(typing: true)

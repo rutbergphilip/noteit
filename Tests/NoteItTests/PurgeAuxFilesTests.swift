@@ -62,6 +62,9 @@ final class PurgeAuxFilesTests: XCTestCase {
         let store = makeStore()
         try apply(store, S.notePayload(id, revision: UUID(), text: "Remote\nbody", extra: ["futureField": "kept"]),
                   extras: frontMatter)
+        let version = try XCTUnwrap(store.history.record(NSAttributedString(string: "Older"), extras: frontMatter, of: id))
+        let history = store.history.directory(for: id)
+        let versionExtras = VersionHistory.extrasURL(of: version.url)
         store.moveToRecentlyDeleted([id])
         store.flush()
         let raw = store.rawMetaFileURL(id, kind: .notes)
@@ -69,6 +72,7 @@ final class PurgeAuxFilesTests: XCTestCase {
         let sidecar = store.bodyExtrasFileURL(id)
         XCTAssertTrue(fm.fileExists(atPath: raw.path))
         XCTAssertTrue(fm.fileExists(atPath: sidecar.path))
+        XCTAssertTrue(fm.fileExists(atPath: versionExtras.path))
 
         let saved = try breakLibrary(store)
         store.deleteNow([id])
@@ -78,6 +82,10 @@ final class PurgeAuxFilesTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: raw.path))
         XCTAssertTrue(fm.fileExists(atPath: body.path))
         XCTAssertTrue(fm.fileExists(atPath: sidecar.path))
+        XCTAssertTrue(fm.fileExists(atPath: version.url.path), "Version History stays after a failed save")
+        XCTAssertTrue(fm.fileExists(atPath: versionExtras.path))
+        store.purgeExpiredDeletedNotes()
+        XCTAssertTrue(fm.fileExists(atPath: versionExtras.path), "pruning keeps a purge's history until it is saved")
         XCTAssertTrue(trashItems(store).isEmpty)
 
         // The tombstone was written before the failed save, so a relaunch finishes the deletion; the files go
@@ -90,6 +98,7 @@ final class PurgeAuxFilesTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: raw.path))
         XCTAssertFalse(fm.fileExists(atPath: body.path))
         XCTAssertFalse(fm.fileExists(atPath: sidecar.path))
+        XCTAssertFalse(fm.fileExists(atPath: history.path))
         XCTAssertEqual(trashItems(relaunched).count, 1)
 
         // Had the tombstone not landed either, the note comes back with its raw meta, which still merges.
@@ -114,8 +123,11 @@ final class PurgeAuxFilesTests: XCTestCase {
         store.moveToRecentlyDeleted([id])
         store.flush()
         XCTAssertTrue(fm.fileExists(atPath: sidecar.path), "the sidecar stays until the delete's flush")
+        let version = try XCTUnwrap(store.history.record(NSAttributedString(string: "Older"), extras: frontMatter, of: id))
+        XCTAssertTrue(fm.fileExists(atPath: VersionHistory.extrasURL(of: version.url).path))
         store.deleteNow([id])
         XCTAssertFalse(fm.fileExists(atPath: sidecar.path))
+        XCTAssertFalse(fm.fileExists(atPath: store.history.directory(for: id).path), "Version History goes with the body")
         XCTAssertFalse(try libraryLists(store, id))
         XCTAssertFalse(fm.fileExists(atPath: store.bodyURL(for: id).path))
         XCTAssertEqual(trashItems(store).count, 1)

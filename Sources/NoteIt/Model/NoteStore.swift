@@ -21,8 +21,14 @@ final class NoteStore: ObservableObject {
     @Published var searchText: String = "" {
         didSet { if searchText != oldValue { editingNoteID = nil } }
     }
-    /// Last note whose content was replaced by sync; the editor reloads it when it's open.
-    @Published var externallyUpdatedNoteID: UUID?
+    /// Last note whose content was replaced outside its editor (sync, editBody); the editor reloads it when it's
+    /// open, and read-only observers get the saved body.
+    @Published var externallyUpdatedNoteID: UUID? {
+        didSet {
+            guard let id = externallyUpdatedNoteID, OpenEditorRegistry.shared.hasObservers(for: id) else { return }
+            OpenEditorRegistry.shared.notifyObservers(of: id, body: body(for: id))
+        }
+    }
 
     /// Journal local deletions to `sync-deletions.json`; set by the sync controller while sync is configured.
     static var syncJournalEnabled = false
@@ -100,6 +106,8 @@ final class NoteStore: ObservableObject {
     var bodyWriteInterruption: BodyWriteStep?
     /// Test hook: makes step 3 of the body-extras sidecar write fail.
     var failsBodyExtrasFinish = false
+    /// Test hook: when set, `editBody` calls it instead of `history.record` to keep the current body.
+    var recordVersionOverride: ((NSAttributedString, UUID) -> NoteVersion?)?
     /// Called with every body-extras problem that is logged while reading a sidecar.
     var bodyExtrasNoticeHandler: ((UUID, BodyExtrasNotice) -> Void)?
     /// Set when library.json was unreadable and could not be backed up: never overwrite it.
@@ -108,6 +116,8 @@ final class NoteStore: ObservableObject {
     /// Mirrored to `tombstones.json`; an ID leaves it only once its body is gone AND a saved
     /// library.json is known not to list it, so an interrupted deletion is finished (not resurrected).
     private var pendingTrash: Set<UUID> = []
+    /// Purged notes whose files (body, raw meta, sidecar, Version History) are not deleted yet.
+    var notesAwaitingFileDeletion: Set<UUID> { pendingTrash }
     /// Note IDs in library.json as last read or written; nil when unknown (missing/unreadable/unsaved).
     private(set) var libraryNoteIDsOnDisk: Set<UUID>?
     /// Notebook IDs in library.json as last read or written; nil when unknown.
@@ -277,12 +287,17 @@ final class NoteStore: ObservableObject {
         bodyWriteBlocked.contains(id)
     }
 
-    func updateBody(_ id: UUID, _ text: NSAttributedString) {
+    /// Stores a local edit. A non-nil `extras` replaces `bodyExtras[id]` in the same body write (only NoteStore's own
+    /// code passes it); a change of extras alone is a stored change too.
+    func updateBody(_ id: UUID, _ text: NSAttributedString, extras: ContainerExtras? = nil) {
         // A direct commit is newer than any snapshot still waiting for its turn.
         stagedEditorBodies[id] = nil
         // Notes in Recently Deleted are read-only.
         guard let index = noteIndex(id), notes[index].deletedAt == nil else { return }
-        if body(for: id).isEqual(to: text) { return }
+        let textUnchanged = body(for: id).isEqual(to: text)
+        let extrasChanged = extras.map { $0 != (bodyExtras[id] ?? .empty) } ?? false
+        if textUnchanged, !extrasChanged { return }
+        if let extras, extrasChanged { setBodyExtras(extras, for: id) }
 
         let snapshot = text.copy() as? NSAttributedString ?? NSAttributedString(attributedString: text)
         bodyCache[id] = snapshot
@@ -302,6 +317,7 @@ final class NoteStore: ObservableObject {
         hasUnannouncedLocalChange = true
         scheduleSave()
         dispatchDerivedIndexes(.changed(meta, snapshot))
+        postLocalNoteChange(id, .edited)
     }
 
     /// For editor commits made inside a SwiftUI view update. Sync calls `commitStagedEditorBody` before it
@@ -472,7 +488,7 @@ final class NoteStore: ObservableObject {
     // MARK: - Notes
 
     @discardableResult
-    func createNote(in notebookID: UUID?, initial: NSAttributedString? = nil) -> NoteMeta {
+    func createNote(in notebookID: UUID?, initial: NSAttributedString? = nil, postsLocalChange: Bool = true) -> NoteMeta {
         let now = Date()
         let body = initial ?? NSAttributedString()
         var meta = NoteMeta(
@@ -496,6 +512,7 @@ final class NoteStore: ObservableObject {
         hasUnannouncedLocalChange = true
         scheduleSave()
         dispatchDerivedIndexes(.changed(meta, body))
+        if postsLocalChange { postLocalNoteChange(meta.id, .created) }
         return meta
     }
 
@@ -554,7 +571,6 @@ final class NoteStore: ObservableObject {
             unversionedLocalBodies.remove(id)
             setBodyExtras(nil, for: id)
             bodyReadOnlyReasons[id] = nil
-            history.removeHistory(of: id)
             appliedRemoteRevisions.notes[id.uuidString] = nil
             pendingTrash.insert(id)
             dispatchDerivedIndexes(.removed(id))
@@ -1062,7 +1078,7 @@ final class NoteStore: ObservableObject {
             return true
         }
         do {
-            history.recordSavedBody(at: bodyURL(for: id), of: id)
+            history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id)
             let extras = bodyExtras[id] ?? .empty
             let temp = try bodyStorage.prepareTemp(text, extras: extras, for: id)
             try installPreparedBody(temp, text: text, extras: extras, for: meta)
@@ -1158,7 +1174,7 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    /// Moves tombstoned bodies to `.trash` and deletes their raw meta and body-extras files, then drops tombstones
+    /// Moves tombstoned bodies to `.trash` and deletes their raw meta, body-extras files and Version History, then drops tombstones
     /// whose files are gone and which the saved library.json is known not to list. Also drains the raw meta
     /// deletion queue of other record kinds.
     private func trashPendingBodies() {
@@ -1181,6 +1197,12 @@ final class NoteStore: ObservableObject {
                 try removeBodyExtrasFile(id)
             } catch {
                 NSLog("NoteIt: failed to delete the body-extras file of deleted note \(id): \(error)")
+                continue
+            }
+            do {
+                try history.deleteHistory(of: id)
+            } catch {
+                NSLog("NoteIt: failed to delete the version history of deleted note \(id): \(error)")
                 continue
             }
             pendingTrash.remove(id)
@@ -1394,7 +1416,8 @@ final class NoteStore: ObservableObject {
             throw error
         }
         if prepared.replacesDifferentBody {
-            history.recordSavedBody(at: bodyURL(for: id), of: id, force: unversionedLocalBodies.contains(id))
+            history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id,
+                                    force: unversionedLocalBodies.contains(id))
         }
         try installPreparedBody(prepared.tempBody, text: prepared.body, extras: prepared.extras, for: prepared.meta)
         setBodyExtras(prepared.extras, for: id)

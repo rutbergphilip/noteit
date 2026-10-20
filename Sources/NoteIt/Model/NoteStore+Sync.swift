@@ -117,7 +117,7 @@ extension NoteStore {
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
         let suffix = " (conflict — \(name), \(Self.conflictDateFormatter.string(from: payload.modifiedAt)))"
         let body = Self.appendingToTitleLine(try Self.deserializeBody(data), suffix)
-        let created = createNote(in: remote.notebookID, initial: body)
+        let created = createNote(in: remote.notebookID, initial: body, postsLocalChange: false)
         updateSyncCreatedNote(created.id) { meta in
             meta.isPinned = remote.isPinned
             meta.createdAt = remote.createdAt

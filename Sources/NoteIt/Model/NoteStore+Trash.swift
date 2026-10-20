@@ -37,7 +37,10 @@ extension NoteStore {
             moved.append(id)
         }
         guard !moved.isEmpty else { return [] }
-        for id in moved { if let meta = note(with: id) { dispatchDerivedIndexes(.metadata(meta)) } }
+        for id in moved {
+            if let meta = note(with: id) { dispatchDerivedIndexes(.metadata(meta)) }
+            postLocalNoteChange(id, .deleted)
+        }
         commitUserMetadataChange()
         if let undoManager {
             undoManager.registerUndo(withTarget: self) { store in
@@ -93,7 +96,8 @@ extension NoteStore {
             return TrashPolicy.isExpired(deletedAt: deletedAt, now: now)
         }.map(\.id)
         if !expired.isEmpty { deleteNotes(expired) }
-        history.pruneAll(keeping: Set(notes.map(\.id)))
+        // A purged note keeps its history until its removal is saved (see trashPendingBodies).
+        history.pruneAll(keeping: Set(notes.map(\.id)).union(notesAwaitingFileDeletion))
         return expired.count
     }
 

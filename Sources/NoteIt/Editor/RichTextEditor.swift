@@ -50,6 +50,7 @@ struct RichTextEditor: NSViewRepresentable {
         textView.formattingDidChange = { [weak coordinator] in coordinator?.controller.refresh() }
         coordinator.load()
         coordinator.observeLifecycle()
+        OpenEditorRegistry.shared.register(textView, for: coordinator.noteID)
         #if DEBUG
         EditorSelfTest.startIfRequested()
         StoreSelfTest.startIfRequested()
@@ -73,6 +74,7 @@ struct RichTextEditor: NSViewRepresentable {
             coordinator.commit(deferred: true)
             coordinator.noteID = noteID
             coordinator.load()
+            if let textView = coordinator.textView { OpenEditorRegistry.shared.register(textView, for: noteID) }
         }
     }
 
@@ -80,6 +82,7 @@ struct RichTextEditor: NSViewRepresentable {
         // Runs inside a SwiftUI view update: snapshot now, publish to the store on the next turn.
         coordinator.commit(deferred: true)
         coordinator.stopObserving()
+        if let textView = coordinator.textView { OpenEditorRegistry.shared.unregister(textView) }
         if coordinator.controller.textView === coordinator.textView {
             coordinator.controller.textView = nil
         }
@@ -90,6 +93,7 @@ struct RichTextEditor: NSViewRepresentable {
         var noteID: UUID
         var controller: EditorController
         weak var textView: NoteItTextView?
+        let store: NoteStore
         private let undo = UndoManager()
         private var isLoading = false
         private var remoteUpdates: AnyCancellable?
@@ -100,9 +104,11 @@ struct RichTextEditor: NSViewRepresentable {
         /// Number of `NoteStore.updateBody` calls made by editors (self-test instrumentation).
         static var storeCommitCount = 0
 
-        init(noteID: UUID, controller: EditorController) {
+        /// `store` is replaced in tests; the app's editors use `NoteStore.shared`.
+        init(noteID: UUID, controller: EditorController, store: NoteStore? = nil) {
             self.noteID = noteID
             self.controller = controller
+            self.store = store ?? .shared
         }
 
         func load() {
@@ -111,7 +117,7 @@ struct RichTextEditor: NSViewRepresentable {
             hasPendingChanges = false
             isLoading = true
             defer { isLoading = false }
-            let body = NoteStore.shared.body(for: noteID)
+            let body = store.body(for: noteID)
             textView.storage.setAttributedString(body)
             NoteItTextView.refreshTableColors(in: textView.storage)
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
@@ -145,7 +151,7 @@ struct RichTextEditor: NSViewRepresentable {
                 commit()
                 return
             }
-            let body = NoteStore.shared.body(for: noteID)
+            let body = store.body(for: noteID)
             if body.isEqual(to: textView.attributedString()) { return }
             let selection = textView.selectedRange()
             let origin = scrollView.contentView.bounds.origin
@@ -176,9 +182,9 @@ struct RichTextEditor: NSViewRepresentable {
             let id = noteID
             let snapshot = NSAttributedString(attributedString: textView.attributedString())
             if deferred {
-                NoteStore.shared.stageEditorCommit(id, snapshot)
+                store.stageEditorCommit(id, snapshot)
             } else {
-                NoteStore.shared.updateBody(id, snapshot)
+                store.updateBody(id, snapshot)
             }
         }
 
@@ -207,7 +213,7 @@ struct RichTextEditor: NSViewRepresentable {
             nc.addObserver(self, selector: #selector(syncWillApplyRemote), name: .noteItSyncWillApplyRemote, object: nil)
             nc.addObserver(self, selector: #selector(willExportNote), name: .noteItWillExportNote, object: nil)
             // Synchronous (no main-queue hop), so no keystroke can land between the store update and the reload.
-            remoteUpdates = NoteStore.shared.$externallyUpdatedNoteID
+            remoteUpdates = store.$externallyUpdatedNoteID
                 .dropFirst()
                 .sink { [weak self] id in
                     MainActor.assumeIsolated {
@@ -245,7 +251,7 @@ struct RichTextEditor: NSViewRepresentable {
         @objc private func willTerminate(_ notification: Notification) {
             let hadChanges = hasPendingChanges
             commit()
-            if hadChanges { NoteStore.shared.flush() }
+            if hadChanges { store.flush() }
         }
 
         // MARK: NSTextViewDelegate
