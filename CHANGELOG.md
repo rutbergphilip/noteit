@@ -7,6 +7,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+- New libraries start with a refreshed welcome note, and no longer include a sample shortcuts note or Shortcuts notebook.
+
 ## [0.5.0] - 2026-10-20
 
 ### Added

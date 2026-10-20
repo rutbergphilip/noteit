@@ -79,6 +79,16 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertEqual(store?.rootURL, current)
     }
 
+    func testSeedCreatesInboxIdeasAndOnePinnedWelcomeNote() throws {
+        let store = try XCTUnwrap(NoteStore(location: LibraryLocation(url: current, seedsFreshLibrary: true)))
+        XCTAssertEqual(store.notebooks.map(\.name), ["Inbox", "Ideas"])
+        XCTAssertEqual(store.notes.count, 1)
+        let welcome = try XCTUnwrap(store.notes.first)
+        XCTAssertEqual(welcome.title, "Welcome to NoteIt")
+        XCTAssertTrue(welcome.isPinned)
+        XCTAssertEqual(welcome.notebookID, store.notebooks.first?.id)
+    }
+
     func testExistingNoteItLibraryIsOpenedWithoutSeeding() throws {
         makeLibrary(at: current, title: "Mine")
         let before = titles(NoteStore(rootURL: current))
