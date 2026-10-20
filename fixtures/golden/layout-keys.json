@@ -1,0 +1,154 @@
+{
+  "generator": "spec",
+  "keys": [
+    {
+      "action": "reseal",
+      "key": "inkwell/v1/notebooks/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.json",
+      "prefix": "inkwell/v1/notebooks/",
+      "valid": true
+    },
+    {
+      "action": "reseal",
+      "key": "inkwell/v1/notes/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.meta",
+      "prefix": "inkwell/v1/notes/",
+      "valid": true
+    },
+    {
+      "action": "reseal",
+      "key": "inkwell/v1/notes/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.body",
+      "prefix": "inkwell/v1/notes/",
+      "valid": true
+    },
+    {
+      "action": "reseal",
+      "key": "inkwell/v1/tombstones/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.json",
+      "prefix": "inkwell/v1/tombstones/",
+      "valid": true
+    },
+    {
+      "action": "reseal",
+      "key": "inkwell/v1/devices/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.json",
+      "prefix": "inkwell/v1/devices/",
+      "valid": true
+    },
+    {
+      "action": "skip",
+      "key": "inkwell/v1/manifest.json",
+      "prefix": null,
+      "valid": true
+    },
+    {
+      "action": "skip",
+      "key": "inkwell/.canary/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F",
+      "prefix": null,
+      "valid": true
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/notes/6a1c8e8c-3f55-4c3a-9f7e-1d2b3c4d5e6f.meta",
+      "prefix": "inkwell/v1/notes/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/notes/.",
+      "prefix": "inkwell/v1/notes/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/notes/..",
+      "prefix": "inkwell/v1/notes/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/notes//6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.meta",
+      "prefix": null,
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/notes/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F copy.meta",
+      "prefix": "inkwell/v1/notes/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/notes/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F%20.meta",
+      "prefix": "inkwell/v1/notes/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/notes/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F+1.meta",
+      "prefix": "inkwell/v1/notes/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/notes/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.meta",
+      "prefix": null,
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.json",
+      "prefix": null,
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "inkwell/v1/attachments/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.bin",
+      "prefix": null,
+      "valid": false
+    }
+  ],
+  "listPrefixes": [
+    {
+      "allowed": true,
+      "prefix": "inkwell/v1/notebooks/"
+    },
+    {
+      "allowed": true,
+      "prefix": "inkwell/v1/notes/"
+    },
+    {
+      "allowed": true,
+      "prefix": "inkwell/v1/tombstones/"
+    },
+    {
+      "allowed": true,
+      "prefix": "inkwell/v1/devices/"
+    },
+    {
+      "allowed": true,
+      "prefix": "inkwell/.canary/"
+    },
+    {
+      "allowed": true,
+      "prefix": "inkwell/v1/"
+    },
+    {
+      "allowed": true,
+      "prefix": "inkwell/"
+    },
+    {
+      "allowed": false,
+      "prefix": ""
+    },
+    {
+      "allowed": false,
+      "prefix": "inkwell/v2/"
+    },
+    {
+      "allowed": false,
+      "prefix": "inkwell/v1/notes"
+    },
+    {
+      "allowed": false,
+      "prefix": "other/"
+    }
+  ],
+  "version": 1
+}

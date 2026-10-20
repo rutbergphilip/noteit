@@ -72,6 +72,21 @@ final class ModelCodingTests: XCTestCase {
         XCTAssertEqual(note.displayTitle, "Plan")
     }
 
+    func testOwnedCodingKeysMatchEncodedKeys() throws {
+        let note = try decoder.decode(NoteMeta.self, from: Data(fullNote.utf8))
+        XCTAssertNotNil(note.notebookID)
+        XCTAssertNotNil(note.revision)
+        XCTAssertNotNil(note.conflictOriginalID)
+        let noteKeys = try XCTUnwrap(JSONSerialization.jsonObject(with: try encoder.encode(note)) as? [String: Any]).keys
+        XCTAssertEqual(Set(noteKeys), NoteMeta.ownedCodingKeys)
+
+        let notebook = try decoder.decode(Notebook.self, from: Data(fullNotebook.utf8))
+        XCTAssertNotNil(notebook.revision)
+        XCTAssertNotNil(notebook.modifiedAt)
+        let notebookKeys = try XCTUnwrap(JSONSerialization.jsonObject(with: try encoder.encode(notebook)) as? [String: Any]).keys
+        XCTAssertEqual(Set(notebookKeys), Notebook.ownedCodingKeys)
+    }
+
     private func assertSameKeys(_ json: String, _ encoded: Data, file: StaticString = #filePath, line: UInt = #line) throws {
         let original = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let roundTripped = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])

@@ -94,7 +94,14 @@ final class NoteStore: ObservableObject {
     /// library.json is known not to list it, so an interrupted deletion is finished (not resurrected).
     private var pendingTrash: Set<UUID> = []
     /// Note IDs in library.json as last read or written; nil when unknown (missing/unreadable/unsaved).
-    private var libraryNoteIDsOnDisk: Set<UUID>?
+    private(set) var libraryNoteIDsOnDisk: Set<UUID>?
+    /// Notebook IDs in library.json as last read or written; nil when unknown.
+    private(set) var libraryNotebookIDsOnDisk: Set<UUID>?
+    /// The revision of the last remote meta applied per record, saved in library.json (see NoteStore+RawMeta).
+    var appliedRemoteRevisions = AppliedRemoteRevisions()
+    /// Raw meta files of removed records (other than notes), deleted once the removal is saved; mirrored to
+    /// `sync-meta-raw/pending-deletions.json` with the tombstones.
+    var rawMetaDeletionQueue: [RawMetaKind: Set<UUID>] = [:]
     /// Note the user is currently typing in; selection reconciliation won't yank it.
     private var editingNoteID: UUID?
     /// Local deletions not yet pushed by sync, mirrored to `sync-deletions.json`.
@@ -505,6 +512,7 @@ final class NoteStore: ObservableObject {
             failedBodies.remove(id)
             unversionedLocalBodies.remove(id)
             history.removeHistory(of: id)
+            appliedRemoteRevisions.notes[id.uuidString] = nil
             pendingTrash.insert(id)
         }
         bodyAccessOrder.removeAll { removed.contains($0) }
@@ -628,7 +636,11 @@ final class NoteStore: ObservableObject {
     func deleteNotebook(_ id: UUID, at date: Date = Date()) {
         let affected = notes.filter { $0.notebookID == id && $0.deletedAt == nil }.map(\.id)
         for noteID in affected { handOverPendingEdits(noteID) }
-        if notebook(with: id) != nil { journalSyncDeletion(id, kind: .notebook) }
+        if notebook(with: id) != nil {
+            journalSyncDeletion(id, kind: .notebook)
+            appliedRemoteRevisions.notebooks[id.uuidString] = nil
+            queueRawMetaDeletion(id, kind: .notebooks)
+        }
         notebooks.removeAll { $0.id == id }
         for index in notes.indices where notes[index].notebookID == id && notes[index].deletedAt == nil {
             notes[index].deletedAt = date
@@ -849,6 +861,7 @@ final class NoteStore: ObservableObject {
         // Tombstoned notes are filtered from the library below; their bodies are trashed by flush()
         // only after a library save (or the library just read) confirms they're gone.
         loadTombstones()
+        loadRawMetaDeletionQueue()
         loadSyncDeletionJournal()
 
         if fm.fileExists(atPath: libraryURL.path) {
@@ -859,7 +872,9 @@ final class NoteStore: ObservableObject {
                 let library = try LibraryCoding.decode(raw)
                 notebooks = library.notebooks
                 notes = library.notes
+                appliedRemoteRevisions = library.appliedRemoteRevisions ?? AppliedRemoteRevisions()
                 libraryNoteIDsOnDisk = Set(library.notes.map(\.id))
+                libraryNotebookIDsOnDisk = Set(library.notebooks.map(\.id))
                 let undeleted = Set(notes.map(\.id).filter(tombstoned))
                 if !undeleted.isEmpty {
                     // A deletion whose library save didn't land: complete it (tombstones stay until it's saved).
@@ -869,7 +884,7 @@ final class NoteStore: ObservableObject {
                 }
                 markInitialized()
                 finishLoad()
-                if libraryDirty || !pendingTrash.isEmpty { flush() }
+                if libraryDirty || hasPendingAuxDeletions { flush() }
                 return
             } catch {
                 NSLog("NoteIt: failed to read library.json (\(error))")
@@ -1011,8 +1026,8 @@ final class NoteStore: ObservableObject {
         if libraryDirty || !fm.fileExists(atPath: libraryURL.path) {
             saveLibrary()
         }
-        // Bodies of deleted notes move to .trash only once their removal is persisted.
-        if !libraryDirty, !pendingTrash.isEmpty { trashPendingBodies() }
+        // Bodies (and raw meta files) of deleted records go only once their removal is persisted.
+        if !libraryDirty, hasPendingAuxDeletions { trashPendingBodies() }
         if searchIndexDirty { saveSearchIndex() }
         indexSaveWorkItem?.cancel()
         indexSaveWorkItem = nil
@@ -1024,7 +1039,7 @@ final class NoteStore: ObservableObject {
         }
 
         let retryable = dirtyBodies.subtracting(bodyWriteBlocked)
-        if !retryable.isEmpty || libraryDirty || !pendingTrash.isEmpty {
+        if !retryable.isEmpty || libraryDirty || hasPendingAuxDeletions {
             scheduleSave(after: 5)
         }
     }
@@ -1052,11 +1067,20 @@ final class NoteStore: ObservableObject {
             copy.revision = old.revision
             return copy
         }
+        let noteKeys = Set(persisted.map(\.id.uuidString))
+        let notebookKeys = Set(notebooks.map(\.id.uuidString))
+        var applied = appliedRemoteRevisions
+        applied.notes = applied.notes.filter { noteKeys.contains($0.key) }
+        applied.notebooks = applied.notebooks.filter { notebookKeys.contains($0.key) }
         do {
-            let data = try Self.encoder.encode(LibraryFile(version: 1, notebooks: notebooks, notes: persisted))
+            let file = LibraryFile(version: 1, notebooks: notebooks, notes: persisted,
+                                   appliedRemoteRevisions: applied.isEmpty ? nil : applied)
+            let data = try Self.encoder.encode(file)
             try data.write(to: libraryURL, options: .atomic)
+            appliedRemoteRevisions = applied
             persistedMeta = Dictionary(persisted.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             libraryNoteIDsOnDisk = Set(persisted.map(\.id))
+            libraryNotebookIDsOnDisk = Set(notebooks.map(\.id))
             libraryDirty = false
             debugCrashPoint("after-library-save")
             return true
@@ -1088,8 +1112,9 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    /// Moves tombstoned bodies to `.trash`, then drops tombstones whose body is gone and which the
-    /// saved library.json is known not to list.
+    /// Moves tombstoned bodies to `.trash` and deletes their raw meta files, then drops tombstones whose body
+    /// and raw file are gone and which the saved library.json is known not to list. Also drains the raw meta
+    /// deletion queue of other record kinds.
     private func trashPendingBodies() {
         let fm = FileManager.default
         let before = pendingTrash
@@ -1106,10 +1131,22 @@ final class NoteStore: ObservableObject {
                 }
             }
             guard let listed = libraryNoteIDsOnDisk, !listed.contains(id) else { continue }
+            do {
+                try removeRawMetaFile(id, kind: .notes)
+            } catch {
+                NSLog("NoteIt: failed to delete the sync meta copy of deleted note \(id): \(error)")
+                continue
+            }
             pendingTrash.remove(id)
         }
         debugCrashPoint("after-trash")
         if pendingTrash != before { saveTombstones() }
+        drainRawMetaDeletionQueue()
+    }
+
+    /// Records that still owe a deletion on disk after their removal is saved.
+    private var hasPendingAuxDeletions: Bool {
+        !pendingTrash.isEmpty || !rawMetaDeletionQueue.isEmpty
     }
 
     // MARK: Tombstones
@@ -1150,6 +1187,7 @@ final class NoteStore: ObservableObject {
         } catch {
             NSLog("NoteIt: failed to save tombstones: \(error)")
         }
+        saveRawMetaDeletionQueue()
     }
 
     // MARK: - Sync support
@@ -1263,6 +1301,8 @@ final class NoteStore: ObservableObject {
         var body: NSAttributedString
         var folded: String
         var tempBody: URL
+        /// The decrypted meta, kept in sync-meta-raw/ so fields this build doesn't know survive a re-export.
+        var rawMeta: RawMeta
         /// The body on disk differs from the incoming one, so it may be kept as a version before being replaced.
         var replacesDifferentBody = false
 
@@ -1284,6 +1324,7 @@ final class NoteStore: ObservableObject {
             replaces = (try? readBody(at: current)).map { !$0.isEqual(to: body) } ?? true
         }
         return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp,
+                                  rawMeta: RawMeta(sourceRevision: payload.revision, meta: payload.meta),
                                   replacesDifferentBody: replaces)
     }
 
@@ -1295,6 +1336,13 @@ final class NoteStore: ObservableObject {
         if bodyWriteBlocked.contains(id) {
             prepared.discard()
             throw SyncApplyError.bodyWriteBlocked(id)
+        }
+        // The raw copy goes first; if it can't be written the record isn't applied, and the next pass retries.
+        do {
+            try setLastRemoteMeta(prepared.rawMeta, for: id, kind: .notes)
+        } catch {
+            prepared.discard()
+            throw error
         }
         if prepared.replacesDifferentBody {
             history.recordSavedBody(at: bodyURL(for: id), of: id, force: unversionedLocalBodies.contains(id))
@@ -1318,6 +1366,7 @@ final class NoteStore: ObservableObject {
         } else {
             notes.append(prepared.meta)
         }
+        appliedRemoteRevisions.notes[id.uuidString] = prepared.rawMeta.sourceRevision
         searchIndex[id] = prepared.folded
         searchIndexDirty = true
         clearSyncDeletion(id)
@@ -1329,12 +1378,14 @@ final class NoteStore: ObservableObject {
         if selectedNoteID == nil { reconcileSelection() }
     }
 
+    /// `remote.revision` is recorded as applied; its raw meta must already be written (see `applyRemote`).
     func applyRemoteNotebook(_ remote: Notebook) {
         if let index = notebooks.firstIndex(where: { $0.id == remote.id }) {
             notebooks[index] = remote
         } else {
             notebooks.append(remote)
         }
+        appliedRemoteRevisions.notebooks[remote.id.uuidString] = remote.revision
         clearSyncDeletion(remote.id)
         libraryDirty = true
         persistRemoteApply()
@@ -1346,6 +1397,8 @@ final class NoteStore: ObservableObject {
         clearSyncDeletion(id)
         guard notebook(with: id) != nil else { return }
         notebooks.removeAll { $0.id == id }
+        appliedRemoteRevisions.notebooks[id.uuidString] = nil
+        queueRawMetaDeletion(id, kind: .notebooks)
         for index in notes.indices where notes[index].notebookID == id && notes[index].deletedAt == nil {
             notes[index].notebookID = nil
         }
@@ -1364,7 +1417,7 @@ final class NoteStore: ObservableObject {
     /// their own debounced save; the search index save is coalesced.
     private func persistRemoteApply() {
         if libraryDirty || !FileManager.default.fileExists(atPath: libraryURL.path) { saveLibrary() }
-        if !libraryDirty, !pendingTrash.isEmpty { trashPendingBodies() }
+        if !libraryDirty, hasPendingAuxDeletions { trashPendingBodies() }
         if searchIndexDirty { scheduleIndexSave() }
         trimBodyCache()
         if libraryDirty, saveWorkItem == nil { scheduleSave(after: 5) }

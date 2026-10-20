@@ -42,20 +42,25 @@ extension NoteStore {
         return try Self.completeExport(payload, source)
     }
 
-    /// Everything but the note body, which `completeExport` serializes (off the main actor in the adapter).
+    /// Everything but the note body, which `completeExport` serializes (off the main actor in the adapter). The meta
+    /// keeps fields from the last applied remote meta that this build doesn't know (`RawMetaOverlay`).
     func exportPlan(id: UUID, kind: RecordKind, deviceID: String) throws -> (RecordPayload, ExportBody?) {
         assignMissingRevisions()
         switch kind {
         case .notebook:
             guard let nb = notebook(with: id), let revision = nb.revision else { throw NoteStoreSyncError.notFound(id) }
+            let meta = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .notebooks))
+                .merged(with: try Self.encoder.encode(nb), ownedKeys: Notebook.ownedCodingKeys)
             return (RecordPayload(id: id, kind: .notebook, revision: revision, modifiedAt: nb.modifiedAt ?? .distantPast,
-                                  deviceID: deviceID, meta: try Self.encoder.encode(nb)), nil)
+                                  deviceID: deviceID, meta: meta), nil)
         case .note:
             guard let meta = note(with: id), let revision = meta.revision else { throw NoteStoreSyncError.notFound(id) }
             // An unreadable body loads as empty; never push that over a good remote copy.
             if loadError(for: id) != nil { throw NoteStoreSyncError.unreadableBody(id) }
+            let merged = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .notes))
+                .merged(with: try Self.encoder.encode(meta), ownedKeys: NoteMeta.ownedCodingKeys)
             return (RecordPayload(id: id, kind: .note, revision: revision, modifiedAt: meta.updatedAt,
-                                  deviceID: deviceID, meta: try Self.encoder.encode(meta)), exportBodySource(id))
+                                  deviceID: deviceID, meta: merged), exportBodySource(id))
         }
     }
 
@@ -85,6 +90,8 @@ extension NoteStore {
             var nb = try Self.decodeMeta(Notebook.self, payload)
             nb.revision = payload.revision
             nb.modifiedAt = payload.modifiedAt
+            // The raw copy goes first; if it can't be written the record isn't applied, and the next pass retries.
+            try setLastRemoteMeta(RawMeta(sourceRevision: payload.revision, meta: payload.meta), for: nb.id, kind: .notebooks)
             applyRemoteNotebook(nb)
         case .note:
             try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, notesURL: notesURL))
