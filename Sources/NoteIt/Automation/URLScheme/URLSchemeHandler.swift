@@ -164,7 +164,7 @@ final class URLSchemeHandler: NSObject {
             }
             try concealFromWeb(error, callback: callback, question: question)
         }
-        try askFirst("A link wants to create a note in “\(notebookName ?? "NoteIt")”.")
+        try askFirst("A link wants to create a note in “\(notebookName ?? "NoteIt")”.", callback: callback)
         let meta = try service.create(title: title, body: text, format: .text, notebook: ref, tags: tags, pinned: false)
         if open {
             environment.showNote(meta.id, nil)
@@ -187,7 +187,7 @@ final class URLSchemeHandler: NSObject {
             }
             try concealFromWeb(error, callback: callback, question: question)
         }
-        try askFirst("A link wants to add text to “\(meta.displayTitle)”.")
+        try askFirst("A link wants to add text to “\(meta.displayTitle)”.", callback: callback)
         let result = try await service.append(meta.id, text: text, format: .text, position: position, timestamp: timestamp,
                                         ifRevision: nil)
         succeed(callback, note: result)
@@ -218,7 +218,7 @@ final class URLSchemeHandler: NSObject {
     /// `not_changed`, so the page sees the same as for Don't Allow or a later failure.
     private func concealFromWeb(_ error: AutomationError, callback: XCallback, question: String) throws -> Never {
         guard Self.hasWebCallback(callback) else { throw error }
-        try askFirst(question)
+        try askFirst(question, callback: callback)
         throw ConcealedFailure(error: error)
     }
 
@@ -232,8 +232,9 @@ final class URLSchemeHandler: NSObject {
         guard environment.dailyAvailable() else { throw .dailyNotesUnavailable }
     }
 
-    private func askFirst(_ question: String) throws(AutomationError) {
-        guard !defaults.bool(forKey: PrefKey.urlSchemeChangesWithoutAsking) else { return }
+    /// Links with a web callback always ask, so a page never learns about a note without the user's consent.
+    private func askFirst(_ question: String, callback: XCallback) throws(AutomationError) {
+        guard Self.hasWebCallback(callback) || !defaults.bool(forKey: PrefKey.urlSchemeChangesWithoutAsking) else { return }
         guard environment.confirm(question) else { throw .cancelled }
     }
 

@@ -125,6 +125,7 @@ final class URLSchemeHandlerTests: XCTestCase {
         defaults.set(true, forKey: PrefKey.urlSchemeChangesWithoutAsking)
         await open(handler, "noteit://x-callback-url/new?text=x&x-success=https://example.com/ok")
         await open(handler, "noteit://x-callback-url/new?title=T&x-success=app://ok")
+        XCTAssertEqual(questions, ["A link wants to create a note in “NoteIt”."], "a web link asks even with the setting on")
         XCTAssertEqual(callbacks.count, 2)
         XCTAssertEqual(callbacks[0], URL(string: "https://example.com/ok"))
         let items = URLComponents(url: callbacks[1], resolvingAgainstBaseURL: false)?.queryItems ?? []
@@ -184,8 +185,9 @@ final class URLSchemeHandlerTests: XCTestCase {
         let failing = ["append?id=\(UUID().uuidString)&text=x", "append?id=\(locked.uuidString)&text=x",
                        "append?id=\(deleted.uuidString)&text=x", "append?title=Nothing&text=x", "append?title=Secret&text=x",
                        "new?notebook=Nowhere&text=x", "new?notebook=\(UUID().uuidString)&text=x"]
-        for allow in [false, true] {
+        for (allow, withoutAsking) in [(false, false), (true, false), (false, true), (true, true)] {
             answer = allow
+            defaults.set(withoutAsking, forKey: PrefKey.urlSchemeChangesWithoutAsking)
             for link in failing + ["append?id=\(plain.uuidString)&text=x", "new?notebook=Inbox&text=x"] {
                 questions = []
                 callbacks = []
