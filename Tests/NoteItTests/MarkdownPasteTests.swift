@@ -127,6 +127,20 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertFalse(editor(body("")).pasteMarkdown(from: pasteboard(plain: compose)))
     }
 
+    func testYAMLListsOfMapsStayPlain() {
+        let actions = "steps:\n  - uses: actions/checkout@v4\n  - name: Build\n    run: make\n"
+        let ansible = "- name: Install\n  apt: name=nginx\n- name: Start\n  service: name=nginx state=started\n"
+        for text in [actions, ansible] {
+            XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(text), text)
+        }
+        let meeting = "Attendees: Ann, Bo\n- Agenda item one\n- Agenda item two\n"
+        let shopping = "- Milk: 2 litres\n- Bread: one loaf\n- Eggs\n"
+        let lowercase = "- milk: 2 litres\n- bread: one loaf\n- eggs\n"
+        for text in [meeting, shopping, lowercase] {
+            XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(text), text)
+        }
+    }
+
     func testEverydayMarkdownStillConverts() throws {
         let readme = "## Install\n\nRun this in the project folder:\n\n```sh\nnpm ci\n```\n"
         let answer = "**Short answer:** yes, it works.\n\n1. Open the settings.\n2. Turn it on.\n\n### Why\nIt saves time.\n"
@@ -167,6 +181,21 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: ns.range(of: "charger").location)))
         XCTAssertTrue(EditorStyle.isBold(try XCTUnwrap(font(view, at: "train"))))
         XCTAssertFalse(view.string.contains("**"))
+    }
+
+    func testFrontMatterNeedsYAMLKeyLines() {
+        func count(_ text: String) -> Int { MarkdownPasteDetector.frontMatterLineCount(MarkdownReader.lines(of: text)) }
+        for line in ["See https://example.com for details", "**Note:** x", "  indented: first", "- item"] {
+            XCTAssertEqual(count("---\n\(line)\n---\nBody\n"), 0, line)
+        }
+        XCTAssertEqual(count("---\ntitle: x\ntags: [a, b]\n# comment\n\naliases:\n  - y\n- z\n---\nBody\n"), 9)
+
+        let note = "---\nSee https://example.com for details\n---\n## Next\n- a\n- b\n"
+        XCTAssertTrue(MarkdownPasteDetector.looksLikeMarkdown(note))
+        let view = editor(body(""))
+        XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: note)))
+        XCTAssertEqual(kind(view, of: "Next"), .heading)
+        XCTAssertNotNil(view.marker(ofParagraph: view.paragraphRange(at: (view.string as NSString).range(of: "b", options: .backwards).location)))
     }
 
     func testPathologicalInputsAreFast() {

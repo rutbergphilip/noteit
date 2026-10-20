@@ -85,8 +85,12 @@ enum MarkdownPasteDetector {
         var hasKey = false
         for line in lines[1..<end] {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
-            if trimmed.isEmpty || trimmed.hasPrefix("#") || trimmed.hasPrefix("- ") || line.first == " " || line.first == "\t" { continue }
-            guard let colon = trimmed.firstIndex(of: ":"), colon != trimmed.startIndex else { return 0 }
+            if trimmed.isEmpty || trimmed.hasPrefix("#") { continue }
+            if trimmed.hasPrefix("- ") || line.first == " " || line.first == "\t" {
+                guard hasKey else { return 0 }
+                continue
+            }
+            guard yamlKey(line) != nil else { return 0 }
             hasKey = true
         }
         return hasKey ? end + 1 : 0
@@ -104,20 +108,27 @@ enum MarkdownPasteDetector {
         let inComment = lines.contains { $0.contains("/*") || $0.contains("*/") }
         let nonBlank = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         guard !nonBlank.isEmpty else { return false }
-        // Less-indented lines before the current one, each with whether it is a bare `key:` that opens a YAML map.
+        // Less-indented lines before the current one, each with whether it opens a YAML map: a bare `key:` or a `- key:` item.
         var outer: [(indent: Int, opensMap: Bool)] = []
         var codeLike = 0
         for line in nonBlank {
             let indent = line.prefix { $0 == " " || $0 == "\t" }.count
             while let last = outer.last, last.indent >= indent { outer.removeLast() }
-            let key = yamlKey(line)
-            let config = if let key {
-                indent == 0 ? key.lowercase : outer.last?.opensMap == true
-            } else {
-                matches(envLine, line)
-            }
-            outer.append((indent, key?.opensMap == true))
             let trimmed = line.trimmingCharacters(in: .whitespaces)
+            let config: Bool
+            let opensMap: Bool
+            if trimmed.hasPrefix("- ") {
+                // `- key: value` starts a map in a YAML list; the item counts as config only under a YAML parent.
+                opensMap = yamlKey(String(trimmed.dropFirst(2)))?.lowercase == true
+                config = opensMap && outer.last?.opensMap == true
+            } else if let key = yamlKey(line) {
+                config = indent == 0 ? key.lowercase : outer.last?.opensMap == true
+                opensMap = key.opensMap
+            } else {
+                config = matches(envLine, line)
+                opensMap = false
+            }
+            outer.append((indent, opensMap))
             if config || ["{", "}", ";", "):"].contains(where: trimmed.hasSuffix) || codeStarts.contains(where: trimmed.hasPrefix)
                 || (inComment && matches(commentStar, line)) || isPathOrGlob(trimmed) {
                 codeLike += 1
