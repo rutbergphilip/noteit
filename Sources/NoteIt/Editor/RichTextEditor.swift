@@ -146,15 +146,24 @@ struct RichTextEditor: NSViewRepresentable {
         /// Sync replaced this note in the store. Without local edits, show the new text (keeping selection and
         /// scroll). With uncommitted edits, keep them and commit: they get a new revision, so nothing is lost.
         private func remoteUpdateArrived() {
-            guard let textView, let scrollView = textView.enclosingScrollView else { return }
+            guard textView?.enclosingScrollView != nil else { return }
             if hasPendingChanges {
                 commit()
                 return
             }
+            reloadIfStale()
+        }
+
+        /// Without pending edits, shows the store's body when it differs from the text (keeping selection and
+        /// scroll); the old undo steps no longer apply, so they're dropped. editBody uses it so another editor's
+        /// save isn't overwritten with this editor's older text.
+        func reloadIfStale() {
+            guard let textView, !hasPendingChanges else { return }
             let body = store.body(for: noteID)
             if body.isEqual(to: textView.attributedString()) { return }
+            let scrollView = textView.enclosingScrollView
             let selection = textView.selectedRange()
-            let origin = scrollView.contentView.bounds.origin
+            let origin = scrollView?.contentView.bounds.origin
             isLoading = true
             defer { isLoading = false }
             textView.storage.setAttributedString(body)
@@ -165,8 +174,10 @@ struct RichTextEditor: NSViewRepresentable {
             let location = min(selection.location, length)
             textView.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
             if let container = textView.textContainer { textView.layoutManager?.ensureLayout(for: container) }
-            scrollView.contentView.scroll(to: origin)
-            scrollView.reflectScrolledClipView(scrollView.contentView)
+            if let scrollView, let origin {
+                scrollView.contentView.scroll(to: origin)
+                scrollView.reflectScrolledClipView(scrollView.contentView)
+            }
             textView.needsDisplay = true
             controller.refresh()
         }

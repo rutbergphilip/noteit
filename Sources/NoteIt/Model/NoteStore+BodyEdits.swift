@@ -49,7 +49,8 @@ extension NoteStore {
     /// organise plan; built in foundations Task 4.5.
     ///
     /// Open note: every open editor first commits its pending edits in registration order, the active one last (its
-    /// text wins); then with `.recordCurrent` the current body is recorded once, the most recent editor's text
+    /// text wins), and that editor reloads the saved body if its text is older (another editor saved since); then
+    /// with `.recordCurrent` the current body is recorded once, the most recent editor's text
     /// storage is edited as one undoable change named `actionName` and saved, and every other open editor reloads the
     /// saved body as it does an external change. Closed note: pending edits are handed over, the current body is
     /// recorded once with `.recordCurrent`, and `edit` is applied to a copy, stored, flushed and announced through
@@ -100,6 +101,8 @@ extension NoteStore {
         }
         coordinator.commit()
         handOverPendingEdits(id)
+        // Another editor's plain save doesn't reload this one, so start from the saved body, not older text.
+        coordinator.reloadIfStale()
 
         let current = view.attributedString()
         let edited = NSMutableAttributedString(attributedString: current)

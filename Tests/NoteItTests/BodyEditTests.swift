@@ -551,4 +551,34 @@ final class BodyEditTests: XCTestCase {
         XCTAssertEqual(store.body(for: id).string, "Shared\nadded")
         XCTAssertEqual(store.versions(of: id).count, 1)
     }
+
+    func testStaleActiveEditorStartsFromTheSavedBody() throws {
+        let store = makeStore()
+        let id = savedNote(store, "one")
+        store.updateBody(id, NSAttributedString(string: "two"))
+        store.flush()
+        let first = try XCTUnwrap(store.versions(of: id).first)
+        let a = harness.open(store, id)
+        let b = harness.open(store, id)
+        OpenEditorRegistry.shared.markActive(a.view)
+        EditorHarness.type(" typed", in: a.view)
+        a.coordinator.commit()
+        store.flush()
+        XCTAssertEqual(b.view.string, "two", "a plain editor save doesn't reload the other editor")
+
+        OpenEditorRegistry.shared.markActive(b.view)
+        clock.addTimeInterval(60)
+        try store.restoreVersion(first)
+        let undo = try XCTUnwrap(b.view.undoManager)
+        EditorHarness.settle(undo)
+        XCTAssertEqual(store.body(for: id).string, "one")
+        XCTAssertEqual(a.view.string, "one")
+        XCTAssertEqual(try versionTexts(store, id).first, "two typed", "the saved body is the recorded version")
+
+        undo.undo()
+        XCTAssertEqual(b.view.string, "two typed")
+        XCTAssertFalse(undo.canUndo, "the restore was one undo step")
+        b.coordinator.commit()
+        XCTAssertEqual(store.body(for: id).string, "two typed")
+    }
 }
