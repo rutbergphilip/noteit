@@ -1,0 +1,46 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "attrs": {
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "Title",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {
+          "level": 2
+        },
+        "content": [
+          {
+            "text": "Heading",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {
+          "level": 3
+        },
+        "content": [
+          {
+            "text": "Subheading",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

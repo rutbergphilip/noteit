@@ -1,0 +1,95 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#C2F0B3"
+                },
+                "type": "highlight"
+              }
+            ],
+            "text": "Green",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#BFDEFF"
+                },
+                "type": "highlight"
+              }
+            ],
+            "text": "Blue",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#FFCCE0"
+                },
+                "type": "highlight"
+              }
+            ],
+            "text": "Pink",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#E0CFFF"
+                },
+                "type": "highlight"
+              }
+            ],
+            "text": "Purple",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#FFD9AD"
+                },
+                "type": "highlight"
+              }
+            ],
+            "text": "Orange",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

@@ -1,0 +1,27 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#FFED8C"
+                },
+                "type": "highlight"
+              }
+            ],
+            "text": "highlighted",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

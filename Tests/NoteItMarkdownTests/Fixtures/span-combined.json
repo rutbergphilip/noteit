@@ -1,0 +1,33 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#DB332E"
+                },
+                "type": "textColor"
+              },
+              {
+                "attrs": {
+                  "delta": 4
+                },
+                "type": "fontSize"
+              }
+            ],
+            "text": "both",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

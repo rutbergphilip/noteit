@@ -1,0 +1,31 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "content": [
+          {
+            "text": "Above",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "type": "horizontalRule"
+      },
+      {
+        "content": [
+          {
+            "text": "Below",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

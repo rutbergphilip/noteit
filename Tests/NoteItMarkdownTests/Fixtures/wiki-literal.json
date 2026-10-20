@@ -1,0 +1,19 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "content": [
+          {
+            "text": "[[not a link]]",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

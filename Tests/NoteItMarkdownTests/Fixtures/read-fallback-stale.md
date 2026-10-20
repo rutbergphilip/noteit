@@ -1,0 +1,4 @@
+<!-- noteit: doc=eyJhdHRycyI6eyJsYW5ndWFnZSI6InN3aWZ0In0sImNvbnRlbnQiOlt7InRleHQiOiJsZXQgIiwidHlwZSI6InRleHQifSx7Im1hcmtzIjpbeyJ0eXBlIjoiYm9sZCJ9XSwidGV4dCI6IngiLCJ0eXBlIjoidGV4dCJ9LHsidGV4dCI6IiA9IDEiLCJ0eXBlIjoidGV4dCJ9XSwidHlwZSI6ImNvZGVCbG9jayJ9 -->
+```swift
+let x = 2
+```

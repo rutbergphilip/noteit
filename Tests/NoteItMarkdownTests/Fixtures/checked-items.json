@@ -1,0 +1,52 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "attrs": {
+          "checked": true,
+          "kind": "task",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "bought milk",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "checked": false,
+          "kind": "task",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "call mum",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "checked": true,
+          "kind": "task",
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "find number",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

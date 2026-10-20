@@ -1,0 +1,105 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "one",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "two",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "nested",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "ordered",
+          "level": 0,
+          "number": 1
+        },
+        "content": [
+          {
+            "text": "first",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "ordered",
+          "level": 0,
+          "number": 2
+        },
+        "content": [
+          {
+            "text": "second",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "checked": false,
+          "kind": "task",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "todo",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "checked": true,
+          "kind": "task",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "done",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

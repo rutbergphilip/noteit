@@ -1,0 +1,127 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "level 0",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "level 1",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 2
+        },
+        "content": [
+          {
+            "text": "level 2",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 3
+        },
+        "content": [
+          {
+            "text": "level 3",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 4
+        },
+        "content": [
+          {
+            "text": "level 4",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 5
+        },
+        "content": [
+          {
+            "text": "level 5",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 6
+        },
+        "content": [
+          {
+            "text": "level 6",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 7
+        },
+        "content": [
+          {
+            "text": "level 7",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 8
+        },
+        "content": [
+          {
+            "text": "level 8",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

@@ -80,7 +80,8 @@ let package = Package(
         .testTarget(
             name: "NoteItMarkdownTests",
             dependencies: ["NoteItMarkdown", "NoteItDocTestSupport"],
-            path: "Tests/NoteItMarkdownTests"
+            path: "Tests/NoteItMarkdownTests",
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "NoteItDocAppKitTests",

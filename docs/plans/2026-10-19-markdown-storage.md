@@ -461,11 +461,11 @@ Moved to foundations (docs/plans/2026-10-19-foundations.md), program §2 step 4.
 
 ### Task 2.2: Block and inline parser
 
-**Files:** `Sources/NoteItMarkdown/{BlockParser,InlineParser,AttachmentPaths}.swift`, `Tests/NoteItMarkdownTests/{CodecGoldenTests,ForeignMarkdownTests}.swift`, `Tests/NoteItMarkdownTests/Fixtures/`
+**Files:** `Sources/NoteItMarkdown/{BlockParser,InlineParser,WikiLinks,AttachmentPaths,MarkdownCodec}.swift`, `Tests/NoteItMarkdownTests/{CodecGoldenTests,ForeignMarkdownTests,AttachmentPathsTests}.swift`, `Tests/NoteItMarkdownTests/Support/MarkdownFixtures.swift`, `Tests/NoteItMarkdownTests/Fixtures/` (test target resources)
 
 - [ ] Write the golden fixtures, one `.md`/`.json` pair per row of spec §3.2's table, plus: block attribute comments (each key), rich-block fallback (valid and stale payload), nested lists 0–8, checked items, tables with widths, images with and without width, non-image attachments, hard breaks, every highlight and text colour from `EditorStyle`, combined `span` colour + size, heading levels 4–6, literal footnotes, and wiki links (`[[Name]]`, `[[Name|text]]`, `[[Name#Heading]]`, `[[Work/Plan]]`, an unresolved name, `\[[` as literal text).
 - [ ] Foreign fixtures in `Fixtures/foreign/`: an Obsidian note (wikilinks, `![[image.png]]` resolved from `_attachments/`, callouts kept as quotes), a Bear export, an iA Writer note, CRLF line endings, tabs for indentation.
-- [ ] `CodecGoldenTests.testParse`: `parse(md).body == json` for every pair, with a fixed `resolveNoteLink` table for the wiki-link fixtures. A stale fallback payload is ignored and the visible block wins. Golden `noteit-doc` fixtures are loaded with `NoteItDocTestSupport`'s fixtures loader.
+- [ ] `CodecGoldenTests.testParse`: `parse(md).body == json` for every pair (fixtures named `read-…` are parse-only: headings 4–6, stale payload, footnotes, unknown keys, `\|` in a cell), with a fixed `resolveNoteLink` table for the wiki-link fixtures. A stale fallback payload is ignored and the visible block wins. Golden `noteit-doc` fixtures are loaded with `NoteItDocTestSupport`'s fixtures loader.
 - [ ] Implement the CommonMark block structure (ATX headings, paragraphs, fenced code, lists, task items, quotes, thematic breaks, GFM tables, HTML comment lines) keeping a `SourceMap`, and inline parsing (delimiter runs per CommonMark, code spans, links and autolinks, `==`, `<u>`, `<mark style>`, `<span style data-size>`, wiki links through `resolveNoteLink` into `noteit://note/<UUID>` or `noteit://note?title=`; other HTML stays text).
 - [ ] Verify: `swift test --filter CodecGoldenTests/testParse` and `ForeignMarkdownTests` → 0 failures.
 

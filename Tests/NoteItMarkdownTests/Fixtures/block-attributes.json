@@ -1,0 +1,74 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "attrs": {
+          "align": "center",
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "Centred title",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "attrs": {
+          "align": "center"
+        },
+        "content": [
+          {
+            "text": "Centred.",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "indent": 2
+        },
+        "content": [
+          {
+            "text": "Indented.",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "align": "right",
+          "indent": 1
+        },
+        "content": [
+          {
+            "text": "Both.",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "align": "justify",
+          "kind": "bullet",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "item",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

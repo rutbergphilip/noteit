@@ -1,0 +1,104 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "attrs": {
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "Trip notes",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "content": [
+          {
+            "text": "A ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "type": "italic"
+              }
+            ],
+            "text": "quick",
+            "type": "text"
+          },
+          {
+            "text": " list with ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ],
+            "text": "strong",
+            "type": "text"
+          },
+          {
+            "text": " words.",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "first",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "second",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "level": 2
+        },
+        "content": [
+          {
+            "text": "Section",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "content": [
+          {
+            "text": "indented code",
+            "type": "text"
+          }
+        ],
+        "type": "codeBlock"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}
