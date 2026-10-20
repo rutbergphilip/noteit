@@ -107,7 +107,7 @@ enum BodyStorageContract {
             let storage = make(root)
             let written = try write(storage, "Same\ntext")
             let installed = noteMeta(notebook: nil)
-            let temp = try storage.prepareTemp(NSAttributedString(string: "Same\ntext"), extras: .empty, for: installed.id)
+            let temp = try storage.prepareTemp(NSAttributedString(string: "Same\ntext"), extras: .empty, meta: installed)
             try storage.installTemp(temp, for: installed, notebook: nil)
             XCTAssertFalse(FileManager.default.fileExists(atPath: temp.path), "temp left behind", file: file, line: line)
             let a = try storage.read(written.id), b = try storage.read(installed.id)

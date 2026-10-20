@@ -24,8 +24,8 @@ final class CountingRTFDStorage: NoteBodyStorage, @unchecked Sendable {
     func writeMetadataOnly(for note: NoteMeta, notebook: Notebook?) throws {
         try base.writeMetadataOnly(for: note, notebook: notebook)
     }
-    func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, for id: UUID) throws -> URL {
-        try base.prepareTemp(text, extras: extras, for: id)
+    func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, meta: NoteMeta) throws -> URL {
+        try base.prepareTemp(text, extras: extras, meta: meta)
     }
     func installTemp(_ temp: URL, for note: NoteMeta, notebook: Notebook?) throws {
         installs += 1

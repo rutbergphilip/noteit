@@ -1084,7 +1084,7 @@ final class NoteStore: ObservableObject {
         do {
             history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id)
             let extras = bodyExtras[id] ?? .empty
-            let temp = try bodyStorage.prepareTemp(text, extras: extras, for: id)
+            let temp = try bodyStorage.prepareTemp(text, extras: extras, meta: meta)
             try installPreparedBody(temp, text: text, extras: extras, for: meta)
             dirtyBodies.remove(id)
             recoveredSnapshots[id] = nil
@@ -1395,7 +1395,7 @@ final class NoteStore: ObservableObject {
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
         let body = try deserializeBody(data)
         applyDerivedFields(to: &meta, from: body)
-        let temp = try storage.prepareTemp(body, extras: .empty, for: payload.id)
+        let temp = try storage.prepareTemp(body, extras: .empty, meta: meta)
         var replaces = false
         if FileManager.default.fileExists(atPath: storage.fileURL(for: payload.id).path) {
             replaces = (try? storage.read(payload.id)).map { !$0.text.isEqual(to: body) } ?? true
@@ -1409,10 +1409,24 @@ final class NoteStore: ObservableObject {
     /// first; nothing changes in memory if that fails. library.json is saved before returning; the search
     /// index is saved later (it is rebuildable).
     func applyPreparedRemoteNote(_ prepared: PreparedRemoteNote) throws {
+        var prepared = prepared
         let id = prepared.meta.id
         if bodyWriteBlocked.contains(id) {
             prepared.discard()
             throw SyncApplyError.bodyWriteBlocked(id)
+        }
+        // An RTFD body carries no front matter, so the unknown keys stay on this Mac (spec §3.3).
+        var extras = prepared.extras
+        if prepared.bodyIsRTFD { extras.frontMatter = storedFrontMatter(id) }
+        if extras != prepared.extras, bodyStorage.kind != .rtfd {
+            do {
+                let temp = try bodyStorage.prepareTemp(prepared.body, extras: extras, meta: prepared.meta)
+                prepared.discard()
+                prepared.tempBody = temp
+            } catch {
+                prepared.discard()
+                throw error
+            }
         }
         // The raw copy goes first; if it can't be written the record isn't applied, and the next pass retries.
         do {
@@ -1425,9 +1439,6 @@ final class NoteStore: ObservableObject {
             history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id,
                                     force: unversionedLocalBodies.contains(id))
         }
-        // An RTFD body carries no front matter, so the unknown keys stay on this Mac (spec §3.3).
-        var extras = prepared.extras
-        if prepared.bodyIsRTFD { extras.frontMatter = storedFrontMatter(id) }
         try installPreparedBody(prepared.tempBody, text: prepared.body, extras: extras, for: prepared.meta)
         setBodyExtras(extras, for: id)
         if prepared.replacesDifferentBody { unversionedLocalBodies.remove(id) }

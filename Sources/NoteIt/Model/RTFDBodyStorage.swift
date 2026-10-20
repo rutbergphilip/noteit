@@ -41,13 +41,13 @@ final class RTFDBodyStorage: NoteBodyStorage, @unchecked Sendable {
     }
 
     func write(_ text: NSAttributedString, extras: ContainerExtras, for note: NoteMeta, notebook: Notebook?) throws {
-        let temp = try prepareTemp(text, extras: extras, for: note.id)
+        let temp = try prepareTemp(text, extras: extras, meta: note)
         try installTemp(temp, for: note, notebook: notebook)
     }
 
     func writeMetadataOnly(for note: NoteMeta, notebook: Notebook?) throws {}
 
-    func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, for id: UUID) throws -> URL {
+    func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, meta: NoteMeta) throws -> URL {
         try Self.writeTempBody(text, in: contentRootURL)
     }
 

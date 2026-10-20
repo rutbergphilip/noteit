@@ -40,7 +40,8 @@ final class BodyCodecTests: XCTestCase {
         let text = try fullNote()
         for codec in BodyCodec.allCases {
             let url = dir.appendingPathComponent("note.\(codec.fileExtension)")
-            try codec.write(text, to: url)
+            try codec.write(text, meta: NoteMeta(id: UUID(), title: "", preview: "", isPinned: false, createdAt: Date(),
+                                                 updatedAt: Date(), tags: []), to: url)
             let read = try codec.read(at: url)
             XCTAssertTrue(BodyCodec.semanticallyEqual(read.text, text), "\(codec)")
             XCTAssertEqual(read.extras, .empty, "\(codec)")

@@ -18,6 +18,12 @@ final class BodyCodecMarkdownTests: XCTestCase {
         try? fm.removeItem(at: dir)
     }
 
+    /// The file at `url` after its front matter and the blank line that follows it.
+    private func bodyText(_ url: URL) throws -> String {
+        let text = try String(contentsOf: url, encoding: .utf8)
+        return String(text[try FrontMatter.read(text).bodyStart...].drop { $0 == "\n" })
+    }
+
     private func blockCount(_ text: NSAttributedString) throws -> Int {
         guard case .doc(let blocks) = try BodyCodec.noteItDoc(of: text).doc else { return 1 }
         return blocks.count
@@ -60,8 +66,9 @@ final class BodyCodecMarkdownTests: XCTestCase {
         let text = SeedData.welcomeBody()
         let extras = ContainerExtras(frontMatter: "aliases:\n  - Welcome")
         let url = dir.appendingPathComponent("note.md")
-        try BodyCodec.markdown.write(text, extras: extras, to: url)
-        XCTAssertEqual(try BodyCodec.markdown.data(of: text, extras: extras), try Data(contentsOf: url))
+        let note = meta(UUID())
+        try BodyCodec.markdown.write(text, extras: extras, meta: note, to: url)
+        XCTAssertEqual(try BodyCodec.markdown.data(of: text, extras: extras, meta: note), try Data(contentsOf: url))
     }
 
     func testImagesAreWrittenBesideTheFile() throws {
@@ -75,7 +82,7 @@ final class BodyCodecMarkdownTests: XCTestCase {
         let text = NSMutableAttributedString(attributedString: EditorStyle.paragraph("Image:", kind: .body))
         text.insert(NSAttributedString(attachment: attachment), at: 6)
         let url = dir.appendingPathComponent("note.md")
-        try BodyCodec.markdown.write(text, to: url)
+        try BodyCodec.markdown.write(text, meta: meta(UUID()), to: url)
         let markdown = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(markdown.contains("](_attachments/"), markdown)
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: dir.appendingPathComponent("_attachments").path).count, 1)
@@ -93,8 +100,8 @@ final class BodyCodecMarkdownTests: XCTestCase {
         view.setSelectedRange(NSRange(location: 6, length: 0))
         view.insertText("x", replacementRange: view.selectedRange())
         view.insertLineBreak(nil)
-        try BodyCodec.markdown.write(view.attributedString(), to: url)
-        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "One 2\nx\\\nthree four\n")
+        try BodyCodec.markdown.write(view.attributedString(), meta: meta(UUID()), to: url)
+        XCTAssertEqual(try bodyText(url), "One 2\nx\\\nthree four\n")
     }
 
     func testTypingOverASoftBreakWritesAHardBreak() throws {
@@ -110,8 +117,8 @@ final class BodyCodecMarkdownTests: XCTestCase {
         XCTAssertEqual(view.string, "One twox\u{2028}ree four\n")
         XCTAssertNil(view.storage.attribute(.noteItSoftBreak, at: 7, effectiveRange: nil))
         XCTAssertNil(view.storage.attribute(.noteItSoftBreak, at: 8, effectiveRange: nil))
-        try BodyCodec.markdown.write(view.attributedString(), to: url)
-        XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), "One twox\\\nree four\n")
+        try BodyCodec.markdown.write(view.attributedString(), meta: meta(UUID()), to: url)
+        XCTAssertEqual(try bodyText(url), "One twox\\\nree four\n")
     }
 
     func testManyLineBreaksExportQuickly() throws {
@@ -230,7 +237,7 @@ final class BodyCodecMarkdownTests: XCTestCase {
             text.insert(NSAttributedString(attachment: attachment), at: 7)
         }
         let url = dir.appendingPathComponent("note.md")
-        try BodyCodec.markdown.write(text, to: url)
+        try BodyCodec.markdown.write(text, meta: meta(UUID()), to: url)
         let read = try BodyCodec.markdown.read(at: url).text
         let markdown = try String(contentsOf: url, encoding: .utf8)
         XCTAssertEqual(Set(try BodyCodec.noteItDoc(of: read).attachments.values.map(\.name)), ["my%20photo.png", "my photo.png"], markdown)

@@ -31,9 +31,9 @@ final class ExtrasSpyStorage: NoteBodyStorage, @unchecked Sendable {
     func writeMetadataOnly(for note: NoteMeta, notebook: Notebook?) throws {
         try base.writeMetadataOnly(for: note, notebook: notebook)
     }
-    func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, for id: UUID) throws -> URL {
+    func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, meta: NoteMeta) throws -> URL {
         writtenExtras.append(extras)
-        return try base.prepareTemp(text, extras: extras, for: id)
+        return try base.prepareTemp(text, extras: extras, meta: meta)
     }
     func installTemp(_ temp: URL, for note: NoteMeta, notebook: Notebook?) throws {
         try base.installTemp(temp, for: note, notebook: notebook)
@@ -45,6 +45,49 @@ final class ExtrasSpyStorage: NoteBodyStorage, @unchecked Sendable {
     func fileURL(for id: UUID) -> URL { base.fileURL(for: id) }
     func recoveryCopy(_ text: NSAttributedString, for id: UUID, in directory: URL) throws -> URL {
         try base.recoveryCopy(text, for: id, in: directory)
+    }
+    func renameNotebook(_ notebook: Notebook, from oldName: String) throws {}
+    func removeNotebook(_ notebook: Notebook) throws {}
+}
+
+/// A minimal Markdown store: one `<id>.md` file per note, written with `BodyCodec.markdown`.
+final class MarkdownTestStorage: NoteBodyStorage, @unchecked Sendable {
+    let contentRootURL: URL
+
+    init(rootURL: URL) {
+        contentRootURL = rootURL.appendingPathComponent("markdown", isDirectory: true)
+    }
+
+    var kind: LibraryFormatKind { .markdown }
+    func idsOnDisk() -> [UUID] {
+        ((try? FileManager.default.contentsOfDirectory(at: contentRootURL, includingPropertiesForKeys: nil)) ?? [])
+            .compactMap { $0.pathExtension == "md" ? UUID(uuidString: $0.deletingPathExtension().lastPathComponent) : nil }
+    }
+    func read(_ id: UUID) throws -> StoredBody {
+        let url = fileURL(for: id)
+        guard FileManager.default.fileExists(atPath: url.path) else { throw CocoaError(.fileReadNoSuchFile) }
+        return try BodyCodec.markdown.read(at: url)
+    }
+    func write(_ text: NSAttributedString, extras: ContainerExtras, for note: NoteMeta, notebook: Notebook?) throws {
+        try installTemp(try prepareTemp(text, extras: extras, meta: note), for: note, notebook: notebook)
+    }
+    func writeMetadataOnly(for note: NoteMeta, notebook: Notebook?) throws {}
+    func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, meta: NoteMeta) throws -> URL {
+        try FileManager.default.createDirectory(at: contentRootURL, withIntermediateDirectories: true)
+        let temp = contentRootURL.appendingPathComponent(".\(UUID().uuidString).md.tmp")
+        try BodyCodec.markdown.write(text, extras: extras, meta: meta, to: temp)
+        return temp
+    }
+    func installTemp(_ temp: URL, for note: NoteMeta, notebook: Notebook?) throws {
+        guard rename(temp.path, fileURL(for: note.id).path) == 0 else { throw POSIXError(.EIO) }
+    }
+    func moveToTrash(_ id: UUID) throws { try? FileManager.default.removeItem(at: fileURL(for: id)) }
+    func recover(_ id: UUID) throws -> StoredBody? { nil }
+    func removePermanently(_ id: UUID) throws { try? FileManager.default.removeItem(at: fileURL(for: id)) }
+    func revisionInputURL(for id: UUID) -> URL? { fileURL(for: id) }
+    func fileURL(for id: UUID) -> URL { contentRootURL.appendingPathComponent("\(id.uuidString).md") }
+    func recoveryCopy(_ text: NSAttributedString, for id: UUID, in directory: URL) throws -> URL {
+        throw CocoaError(.featureUnsupported)
     }
     func renameNotebook(_ notebook: Notebook, from oldName: String) throws {}
     func removeNotebook(_ notebook: Notebook) throws {}
@@ -372,6 +415,31 @@ final class BodyExtrasTests: XCTestCase {
         XCTAssertEqual(relaunched.bodyExtras[id], noKeys)
         XCTAssertEqual(try readSidecar(relaunched, id).current.extras, noKeys)
         XCTAssertNil(makeStore().storedFrontMatter(id))
+    }
+
+    func testMarkdownStoreWritesOwnedAndKeptKeys() throws {
+        let aliases = ContainerExtras(frontMatter: "aliases: [Local]")
+        let store = makeStore(storage: MarkdownTestStorage(rootURL: root))
+        let id = try saveNote(store, NSAttributedString(string: "Title\nbody"), extras: aliases)
+        let file = { (try? String(contentsOf: store.bodyStorage.fileURL(for: id), encoding: .utf8)) ?? "" }
+        XCTAssertTrue(file().hasPrefix("---\nid: \(id.uuidString)\ncreated: "), file())
+        XCTAssertTrue(file().contains("\naliases: [Local]\n---\n"), file())
+
+        try apply(store, id, "Remote\nfirst", extras: .empty, rtfd: true)
+        XCTAssertTrue(file().hasPrefix("---\nid: \(id.uuidString)\ncreated: 2026-01-01T00:00:00Z\n"), file())
+        XCTAssertTrue(file().contains("\naliases: [Local]\n---\n"), file())
+        XCTAssertEqual(store.bodyExtras[id], aliases)
+
+        let relaunched = makeStore(storage: MarkdownTestStorage(rootURL: root))
+        XCTAssertNil(relaunched.bodyExtras[id])
+        XCTAssertEqual(relaunched.storedFrontMatter(id), "aliases: [Local]")
+        try apply(relaunched, id, "Remote\nsecond", extras: .empty, rtfd: true)
+        XCTAssertTrue(file().contains("\naliases: [Local]\n---\n"), file())
+
+        try apply(relaunched, id, "Remote\nthird", extras: .empty)
+        XCTAssertTrue(file().hasPrefix("---\nid: \(id.uuidString)\n"), file())
+        XCTAssertFalse(file().contains("aliases"), file())
+        XCTAssertEqual(try relaunched.bodyStorage.read(id).text.string.trimmingCharacters(in: .newlines), "Remote\nthird")
     }
 
     // MARK: Helpers

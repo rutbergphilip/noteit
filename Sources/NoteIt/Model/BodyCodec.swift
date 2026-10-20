@@ -50,8 +50,8 @@ enum BodyCodec: String, CaseIterable, Sendable {
 
     /// Replaces `url` atomically. `.rtfd` ignores `extras`; `.noteItDoc` writes one file with the attachments and
     /// `extras` inside; `.markdown` writes the attachments to `_attachments/` beside the file and front matter with
-    /// the keys NoteIt owns taken from `meta` (none without it) followed by `extras.frontMatter`. Only `.markdown`
-    /// reads `meta`.
+    /// the keys NoteIt owns taken from `meta` followed by `extras.frontMatter`. Only `.markdown` reads `meta`, and
+    /// requires it.
     func write(_ text: NSAttributedString, extras: ContainerExtras = .empty, meta: NoteMeta? = nil, to url: URL) throws {
         switch self {
         case .rtfd:
@@ -60,6 +60,7 @@ enum BodyCodec: String, CaseIterable, Sendable {
         case .noteItDoc:
             try data(of: text, extras: extras).write(to: url, options: .atomic)
         case .markdown:
+            assert(meta != nil, "a library Markdown file is written with the note's metadata")
             let container = try Self.noteItDoc(of: text, extras: extras)
             let folder = url.deletingLastPathComponent().appendingPathComponent(AttachmentPaths.folder, isDirectory: true)
             for (sha, attachment) in container.attachments {
@@ -85,6 +86,7 @@ enum BodyCodec: String, CaseIterable, Sendable {
         case .noteItDoc:
             return try Self.noteItDoc(of: text, extras: extras).encoded()
         case .markdown:
+            assert(meta != nil, "a library Markdown file is written with the note's metadata")
             return Data(Self.markdown(of: try Self.noteItDoc(of: text, extras: extras), frontMatter: Self.frontMatter(meta, extras: extras),
                                       profile: .library).utf8)
         }
@@ -156,6 +158,13 @@ enum BodyCodec: String, CaseIterable, Sendable {
 // MARK: Markdown
 
 extension BodyCodec {
+    /// The unknown front matter keys of the Markdown file at `url`, read without parsing its body.
+    static func markdownFrontMatterExtra(at url: URL) throws -> String? {
+        guard let text = String(data: try Data(contentsOf: url), encoding: .utf8) else { throw MarkdownError.notUTF8 }
+        let extra = try FrontMatter.read(text).0.extra
+        return extra.isEmpty ? nil : extra
+    }
+
     /// `text` as a standalone Markdown file; images and attachments point into `_attachments/`.
     static func markdown(of text: NSAttributedString, profile: MarkdownProfile) throws -> String {
         markdown(of: try noteItDoc(of: text), profile: profile)

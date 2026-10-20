@@ -38,8 +38,9 @@ protocol NoteBodyStorage: AnyObject, Sendable {
     func write(_ text: NSAttributedString, extras: ContainerExtras, for note: NoteMeta, notebook: Notebook?) throws
     /// RTFD: no-op.
     func writeMetadataOnly(for note: NoteMeta, notebook: Notebook?) throws
-    /// Safe off the main actor.
-    func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, for id: UUID) throws -> URL
+    /// Safe off the main actor. `meta` is the note the body is for; Markdown writes the front matter keys NoteIt
+    /// owns from it (spec §3.3).
+    func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, meta: NoteMeta) throws -> URL
     func installTemp(_ temp: URL, for note: NoteMeta, notebook: Notebook?) throws
     /// RTFD: `<rootURL>/.trash/<id>-<timestamp>.rtfd`.
     func moveToTrash(_ id: UUID) throws
