@@ -10,6 +10,20 @@ final class RateLimiterTests: XCTestCase {
         func advance(_ seconds: TimeInterval) { lock.withLock { time += seconds } }
     }
 
+    func testClockGoingBackwardsDoesNotRefill() {
+        let clock = Clock()
+        let limiter = RateLimiter(rules: [.general: .init(perSecond: 1, burst: 2)], now: { clock.now })
+        XCTAssertNil(limiter.consume(client: "a", bucket: .general))
+        XCTAssertNil(limiter.consume(client: "a", bucket: .general))
+        clock.advance(-10)
+        XCTAssertNotNil(limiter.consume(client: "a", bucket: .general))
+        clock.advance(10)
+        XCTAssertNotNil(limiter.consume(client: "a", bucket: .general))
+        clock.advance(1)
+        XCTAssertNil(limiter.consume(client: "a", bucket: .general))
+        XCTAssertNotNil(limiter.consume(client: "a", bucket: .general))
+    }
+
     func testBucketBurstThenRefill() {
         let clock = Clock()
         let limiter = RateLimiter(rules: [.general: .init(perSecond: 2, burst: 3)], now: { clock.now })

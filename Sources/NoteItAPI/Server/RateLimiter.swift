@@ -53,7 +53,7 @@ public final class RateLimiter: @unchecked Sendable {
             var state = buckets[key] ?? Bucket(tokens: rule.burst, updated: time)
             let elapsed = max(0, time.timeIntervalSince(state.updated))
             state.tokens = min(rule.burst, state.tokens + elapsed * rule.perSecond)
-            state.updated = time
+            state.updated = max(state.updated, time)
             refilled.append((key, state, rule))
         }
         let wait = refilled.filter { $0.1.tokens < 1 }
