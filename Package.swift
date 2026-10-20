@@ -8,7 +8,8 @@ let package = Package(
         .executable(name: "NoteIt", targets: ["NoteIt"]),
         .library(name: "NoteItCore", targets: ["NoteItCore"]),
         .library(name: "NoteItSync", targets: ["NoteItSync"]),
-        .library(name: "NoteItDoc", targets: ["NoteItDoc"])
+        .library(name: "NoteItDoc", targets: ["NoteItDoc"]),
+        .library(name: "NoteItAPI", targets: ["NoteItAPI"])
     ],
     dependencies: [
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0")
@@ -37,6 +38,16 @@ let package = Package(
             name: "NoteItSync",
             path: "Sources/NoteItSync"
         ),
+        .target(
+            name: "NoteItAPI",
+            dependencies: ["NoteItCore", "NoteItSync"],
+            path: "Sources/NoteItAPI"
+        ),
+        .executableTarget(
+            name: "NoteItCLI",
+            dependencies: ["NoteItAPI", "NoteItSync"],
+            path: "Sources/NoteItCLI"
+        ),
         .executableTarget(
             name: "NoteIt",
             dependencies: [
@@ -44,6 +55,7 @@ let package = Package(
                 "NoteItDoc",
                 "NoteItDocAppKit",
                 "NoteItSync",
+                "NoteItAPI",
                 .product(name: "Sparkle", package: "Sparkle")
             ],
             path: "Sources/NoteIt",
@@ -73,6 +85,11 @@ let package = Package(
             name: "NoteItTests",
             dependencies: ["NoteIt", "NoteItCore", "NoteItDoc", "NoteItDocAppKit", "NoteItSync"],
             path: "Tests/NoteItTests"
+        ),
+        .testTarget(
+            name: "NoteItAPITests",
+            dependencies: ["NoteItAPI", "NoteItCore", "NoteItSync"],
+            path: "Tests/NoteItAPITests"
         )
     ]
 )

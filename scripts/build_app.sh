@@ -51,9 +51,46 @@ SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
 # ditto keeps the framework's symlinks intact.
 ditto "$SPARKLE_SRC" "$SPARKLE"
 RPATH="@executable_path/../Frameworks"
-if ! otool -l "$APP/Contents/MacOS/$APP_NAME" | grep -F "path $RPATH " >/dev/null; then
-    install_name_tool -add_rpath "$RPATH" "$APP/Contents/MacOS/$APP_NAME"
-fi
+add_rpath() {
+    if ! otool -l "$1" | grep -F "path $RPATH " >/dev/null; then
+        install_name_tool -add_rpath "$RPATH" "$1"
+    fi
+}
+add_rpath "$APP/Contents/MacOS/$APP_NAME"
+
+# Helpers and extensions embedded in the app, one row each (program §10):
+#   "<path in bundle>|<source path relative to $BIN_DIR>|<build step script or empty>|<entitlements path or empty>"
+# The path in bundle always starts with Contents/. Later plans add rows; the main app is never a row.
+# Planned rows:
+#   Contents/Helpers/noteit                  automation (the CLI, built as NoteItCLI)
+#   Contents/PlugIns/NoteItShare.appex       automation (the Share extension)
+#   Contents/Helpers/NoteItPluginHost        plugins
+#   Contents/PlugIns/NoteItClipper.appex     web-clipper (the Safari extension)
+EMBEDS=()
+# Rows that were copied, as "<path in bundle>|<entitlements path or empty>", for signing.
+EMBEDDED=()
+
+echo "==> Embedding helpers and extensions"
+for row in ${EMBEDS[@]+"${EMBEDS[@]}"}; do
+    IFS='|' read -r embed_path embed_source embed_step embed_entitlements <<< "$row"
+    if [[ "$embed_path" != Contents/* ]]; then
+        echo "error: embeds row path must start with Contents/: $row" >&2
+        exit 1
+    fi
+    if [[ -n "$embed_step" ]]; then
+        "$ROOT/$embed_step"
+    fi
+    if [[ ! -e "$BIN_DIR/$embed_source" ]]; then
+        echo "Skipping $embed_path: $embed_source not built"
+        continue
+    fi
+    mkdir -p "$(dirname "$APP/$embed_path")"
+    ditto "$BIN_DIR/$embed_source" "$APP/$embed_path"
+    if [[ -f "$APP/$embed_path" ]] && file -b "$APP/$embed_path" | grep -q "Mach-O"; then
+        add_rpath "$APP/$embed_path"
+    fi
+    EMBEDDED+=("$embed_path|$embed_entitlements")
+done
 
 VERSION="${NOTEIT_VERSION:-${INKWELL_VERSION:-0.1.0}}"
 BUILD_NUMBER="${NOTEIT_BUILD:-${INKWELL_BUILD:-$(date +%Y%m%d%H%M)}}"
@@ -98,29 +135,46 @@ RESOURCE_BUNDLE="$(dirname "$BIN")/${APP_NAME}_${APP_NAME}.bundle"
 [[ -d "$RESOURCE_BUNDLE" ]] || { echo "error: missing $RESOURCE_BUNDLE" >&2; exit 1; }
 ditto "$RESOURCE_BUNDLE" "$APP/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
 
+# Signs inside-out with the flags given, without --deep: Sparkle's pieces in the order its documentation gives,
+# then the embedded rows deepest path first, then the app last with its own entitlements.
+sign_inside_out() {
+    local flags=("$@")
+    local sparkle_b="$SPARKLE/Versions/B"
+    for xpc in "$sparkle_b"/XPCServices/*.xpc; do
+        if [[ "$(basename "$xpc")" == "Downloader.xpc" ]]; then
+            codesign "${flags[@]}" --preserve-metadata=entitlements "$xpc"
+        else
+            codesign "${flags[@]}" "$xpc"
+        fi
+    done
+    codesign "${flags[@]}" "$sparkle_b/Autoupdate"
+    codesign "${flags[@]}" "$sparkle_b/Updater.app"
+    codesign "${flags[@]}" "$SPARKLE"
+    local entry embed_path embed_entitlements
+    while IFS= read -r entry; do
+        [[ -n "$entry" ]] || continue
+        IFS='|' read -r embed_path embed_entitlements <<< "${entry#*$'\t'}"
+        if [[ -n "$embed_entitlements" ]]; then
+            codesign "${flags[@]}" --entitlements "$ROOT/$embed_entitlements" "$APP/$embed_path"
+        else
+            codesign "${flags[@]}" "$APP/$embed_path"
+        fi
+    done < <(for entry in ${EMBEDDED[@]+"${EMBEDDED[@]}"}; do
+        depth="$(tr -cd '/' <<< "${entry%%|*}" | wc -c | tr -d ' ')"
+        printf '%s\t%s\n' "$depth" "$entry"
+    done | sort -t $'\t' -k1,1nr)
+    codesign "${flags[@]}" --entitlements "$ENTITLEMENTS" "$APP"
+}
+
 if [[ "$DISTRIBUTION_SIGNING" == "1" ]]; then
     echo "==> Codesigning for distribution ($SIGN_IDENTITY, hardened runtime)"
     SIGN_FLAGS=(--force --options runtime --sign "$SIGN_IDENTITY")
     # Ad-hoc signatures can't carry a secure timestamp.
     [[ "$SIGN_IDENTITY" == "-" ]] || SIGN_FLAGS+=(--timestamp)
-    # Inside-out, in the order Sparkle's documentation gives; no --deep.
-    SPARKLE_B="$SPARKLE/Versions/B"
-    for xpc in "$SPARKLE_B"/XPCServices/*.xpc; do
-        if [[ "$(basename "$xpc")" == "Downloader.xpc" ]]; then
-            codesign "${SIGN_FLAGS[@]}" --preserve-metadata=entitlements "$xpc"
-        else
-            codesign "${SIGN_FLAGS[@]}" "$xpc"
-        fi
-    done
-    codesign "${SIGN_FLAGS[@]}" "$SPARKLE_B/Autoupdate"
-    codesign "${SIGN_FLAGS[@]}" "$SPARKLE_B/Updater.app"
-    codesign "${SIGN_FLAGS[@]}" "$SPARKLE"
-    codesign "${SIGN_FLAGS[@]}" --entitlements "$ENTITLEMENTS" "$APP"
+    sign_inside_out "${SIGN_FLAGS[@]}"
 else
     echo "==> Codesigning (ad-hoc)"
-    codesign --force --deep -s - "$APP"
-    # --deep would hand the app's entitlements to Sparkle's helpers too, so the app is re-signed on its own.
-    codesign --force -s - --entitlements "$ENTITLEMENTS" "$APP"
+    sign_inside_out --force -s -
 fi
 codesign --verify --deep --strict "$APP"
 

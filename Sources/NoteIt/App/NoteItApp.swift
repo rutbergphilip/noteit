@@ -19,7 +19,7 @@ struct NoteItApp: App {
         .defaultSize(width: 1120, height: 720)
         .windowToolbarStyle(.unified(showsTitle: true))
         .commands { NoteItCommands() }
-        .commands { RecentlyDeletedCommands() }
+        .commands { NoteCommands() }
         .commands { ExportCommands() }
         .commands { ImportCommands() }
 

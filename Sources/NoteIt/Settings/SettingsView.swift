@@ -2,12 +2,47 @@ import SwiftUI
 
 /// NoteIt › Settings… (⌘,)
 struct SettingsView: View {
-    enum Tab: String, Hashable { case general, shortcuts, editor, sync, about }
+    /// Program §9's Settings tabs, in order. Hidden tabs are reserved for their owners, who flip `isAvailable` in the
+    /// task that builds the tab. Foundations Task 6.3.
+    enum Tab: String, Hashable, CaseIterable {
+        case general, shortcuts, editor, sync, data, sharing, smart, integrations, plugins, about
+
+        /// False until the owner builds the tab: data (markdown-storage), sharing, smart (private-ai),
+        /// integrations (automation) and plugins.
+        var isAvailable: Bool {
+            switch self {
+            case .general, .shortcuts, .editor, .sync, .about: true
+            case .data, .sharing, .smart, .integrations, .plugins: false
+            }
+        }
+
+        var symbol: String {
+            switch self {
+            case .general: "gearshape"
+            case .shortcuts: "command"
+            case .editor: "textformat"
+            case .sync: "arrow.triangle.2.circlepath.icloud"
+            case .data: "externaldrive"
+            case .sharing: "person.2"
+            case .smart: "sparkles"
+            case .integrations: "point.3.connected.trianglepath.dotted"
+            case .plugins: "puzzlepiece.extension"
+            case .about: "info.circle"
+            }
+        }
+
+        /// The tab a stored or requested raw value opens: General when it's unknown or not available yet.
+        static func resolved(_ rawValue: String) -> Tab {
+            Tab(rawValue: rawValue)?.availableOrGeneral ?? .general
+        }
+
+        var availableOrGeneral: Tab { isAvailable ? self : .general }
+    }
 
     @AppStorage(SettingsTabRouter.key) private var tabRaw = Tab.general.rawValue
 
     private var tab: Binding<Tab> {
-        Binding(get: { Tab(rawValue: tabRaw) ?? .general }, set: { tabRaw = $0.rawValue })
+        Binding(get: { Tab.resolved(tabRaw) }, set: { tabRaw = $0.availableOrGeneral.rawValue })
     }
 
     var body: some View {
@@ -31,7 +66,7 @@ struct SettingsView: View {
         .frame(width: Tokens.Size.settingsWidth)
         .onReceive(NotificationCenter.default.publisher(for: .noteItShowSettingsTab)) { note in
             if let raw = note.object as? String {
-                tabRaw = (Tab(rawValue: raw) ?? .general).rawValue
+                tabRaw = Tab.resolved(raw).rawValue
             }
         }
     }
@@ -42,7 +77,9 @@ struct SettingsView: View {
 enum SettingsTabRouter {
     static let key = "settingsTab"
 
+    /// A tab that isn't available yet opens General.
     static func show(_ tab: SettingsView.Tab, using openSettings: OpenSettingsAction? = nil) {
+        let tab = tab.availableOrGeneral
         UserDefaults.standard.set(tab.rawValue, forKey: key)
         NotificationCenter.default.post(name: .noteItShowSettingsTab, object: tab.rawValue)
         SettingsOpener.open(using: openSettings)
@@ -50,7 +87,8 @@ enum SettingsTabRouter {
 }
 
 extension Notification.Name {
-    /// Object: "general" | "shortcuts" | "editor" | "sync" | "about".
+    /// Object: a `SettingsView.Tab` raw value: "general" | "shortcuts" | "editor" | "sync" | "data" | "sharing" |
+    /// "smart" | "integrations" | "plugins" | "about". One that isn't available yet (or unknown) opens General.
     static let noteItShowSettingsTab = Notification.Name("noteItShowSettingsTab")
 }
 
