@@ -35,8 +35,11 @@ struct BlockParser {
         return result
     }
 
+    /// Quotes nested deeper than this read their remaining `>` as text, so nesting can't exhaust the stack.
+    static let maxQuoteDepth = 32
+
     /// Blocks with their ranges. Empty paragraphs from blank lines get the range of their blank line.
-    mutating func parseBlocks(_ lines: [SourceLine]) -> [(DocNode, Range<String.Index>)] {
+    mutating func parseBlocks(_ lines: [SourceLine], quoteDepth: Int = 0) -> [(DocNode, Range<String.Index>)] {
         var units: [Unit] = []
         var blanks: [[Range<String.Index>]] = [[]]
         var i = 0
@@ -60,6 +63,12 @@ struct BlockParser {
                 continue
             }
             if let attrs = BlockAttributes.parse(comment: line.text) {
+                if let payload = attrs.payload, case .unknown = payload {
+                    add(Unit(nodes: [payload], range: line.range))
+                    pending = nil
+                    i += 1
+                    continue
+                }
                 pending = attrs
                 pendingStart = line.range.lowerBound
                 i += 1
@@ -92,7 +101,7 @@ struct BlockParser {
             } else if Self.isThematicBreak(line.text) {
                 produced = [Unit(nodes: [.horizontalRule], range: start..<line.range.upperBound)]
                 i += 1
-            } else if Self.quoteContent(line.text) != nil {
+            } else if quoteDepth < Self.maxQuoteDepth, Self.quoteContent(line.text) != nil {
                 var inner: [SourceLine] = []
                 var j = i
                 while j < lines.count, !lines[j].isBlank {
@@ -105,7 +114,7 @@ struct BlockParser {
                     }
                     j += 1
                 }
-                let paragraphs = Self.quoteParagraphs(parseBlocks(inner).map(\.0))
+                let paragraphs = Self.quoteParagraphs(parseBlocks(inner, quoteDepth: quoteDepth + 1).map(\.0))
                 produced = [Unit(nodes: [.blockquote(indent: attrs.indent, content: paragraphs)], range: start..<lines[j - 1].range.upperBound)]
                 i = j
             } else if let item = ListItemLine(line.text),
@@ -589,10 +598,8 @@ enum RichBlock {
         var base64 = text.replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
         while base64.count % 4 != 0 { base64 += "=" }
         guard let data = Data(base64Encoded: base64), let node = try? JSONDecoder().decode(DocNode.self, from: data) else { return nil }
-        switch node {
-        case .doc, .unknown: return nil
-        default: return node
-        }
+        if case .doc = node { return nil }
+        return node
     }
 
     /// The visible text of blocks with whitespace collapsed: what must match for a payload to be used.
