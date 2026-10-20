@@ -2,16 +2,20 @@ import AppKit
 import Carbon.HIToolbox
 import SwiftUI
 
-/// File menu items for Recently Deleted and Version History.
-struct RecentlyDeletedCommands: Commands {
+/// The note group of the File menu (program §9 order).
+struct NoteCommands: Commands {
+    /// Program §9's note group, as command IDs. Owners insert their buttons at their place in this order.
+    /// "Empty Recently Deleted…" follows the group and isn't part of it. Foundations Task 6.4.
+    static let order: [String] = ["togglePin", "lockNote", "removeLock", "lockAllNotes", "versionHistory", "deleteNote"]
+
     var body: some Commands {
         CommandGroup(after: .newItem) {
-            RecentlyDeletedMenuItems()
+            NoteMenuItems()
         }
     }
 }
 
-private struct RecentlyDeletedMenuItems: View {
+private struct NoteMenuItems: View {
     @ObservedObject private var store = NoteStore.shared
 
     private var selectedNote: NoteMeta? { store.note(with: store.selectedNoteID) }
