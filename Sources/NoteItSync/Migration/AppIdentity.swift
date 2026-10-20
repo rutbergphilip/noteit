@@ -7,6 +7,12 @@ public enum AppIdentity {
     /// Application Support folder name.
     public static let dataFolderName = "NoteIt"
     public static let keychainService = bundleID + ".sync"
+    /// The `noteit://` URL scheme. Added for the automation plan in foundations Task 5.1.
+    public static let urlScheme = "noteit"
+    /// Keychain service holding the Local API's client records (automation).
+    public static let localAPIKeychainService = bundleID + ".local-api"
+    /// Keychain service holding the `noteit` command's token (automation).
+    public static let cliKeychainService = bundleID + ".cli"
 
     /// Identifiers of the app's former name, Inkwell. Read only to migrate existing users.
     public enum Legacy {
