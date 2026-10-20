@@ -191,6 +191,23 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(String(repeating: "- item\n", count: 30_000)))
     }
 
+    func testVeryLongLinePastesWithoutConversion() {
+        let longLine = String(repeating: "*_[(`|#", count: 100_000 / 7)
+        let text = "- one\n- two\n" + longLine
+        let view = editor(body(""))
+        let start = Date()
+        XCTAssertFalse(view.pasteMarkdown(from: pasteboard(plain: text)))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        XCTAssertEqual(view.string, "")
+
+        let paragraph = String(repeating: "word ", count: 800)
+        let markdown = "## Notes\n- one\n- two\n\n" + paragraph + "\n"
+        let converted = editor(body(""))
+        XCTAssertTrue(converted.pasteMarkdown(from: pasteboard(plain: markdown)))
+        XCTAssertEqual(kind(converted, of: "Notes"), .heading)
+        XCTAssertTrue(converted.string.contains(paragraph.trimmingCharacters(in: .whitespaces)))
+    }
+
     func testNoteWithHeadingAndListConverts() {
         let view = editor(body(""))
         XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "## Groceries\n- milk\n- eggs\n")))

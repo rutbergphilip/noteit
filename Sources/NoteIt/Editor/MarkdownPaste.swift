@@ -5,6 +5,8 @@ import NoteItSync
 enum MarkdownPasteDetector {
     /// Longer pastes skip detection and paste as plain text.
     static let maxLength = 200_000
+    /// Converting a line longer than this can stall the main thread, so such pastes stay plain text.
+    static let maxLineLength = 5_000
 
     // Every pattern here runs in linear time: runs are possessive and can't overlap what follows them.
     private static func regex(_ pattern: String) -> NSRegularExpression {
@@ -60,6 +62,19 @@ enum MarkdownPasteDetector {
         let inComment = joined.contains("/**") || joined.contains("*/")
         let items = outside.filter { matches(listItem, $0) && !(inComment && matches(commentStar, $0)) }
         return items.count >= 2
+    }
+
+    static func hasLine(longerThan limit: Int, in text: String) -> Bool {
+        var run = 0
+        for unit in text.utf16 {
+            if unit == 0x0A || unit == 0x0D || unit == 0x2028 || unit == 0x2029 || unit == 0x85 {
+                run = 0
+            } else {
+                run += 1
+                if run > limit { return true }
+            }
+        }
+        return false
     }
 
     /// The lines of a leading `---` YAML block such as an Obsidian note's front matter, or 0.
@@ -282,6 +297,7 @@ extension NoteItTextView {
         let lines = MarkdownReader.lines(of: plain)
         let frontMatter = MarkdownPasteDetector.frontMatterLineCount(lines)
         let markdown = lines.dropFirst(frontMatter).joined(separator: "\n")
+        guard !MarkdownPasteDetector.hasLine(longerThan: MarkdownPasteDetector.maxLineLength, in: markdown) else { return false }
         let converted = NSMutableAttributedString(attributedString: MarkdownReader.attributedString(from: markdown, resolveImage: { _ in nil }))
         guard converted.length > 0 else { return false }
         if frontMatter > 0 {
