@@ -18,6 +18,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - A code block at the top of a note is no longer cut off.
+- Upgrading two Macs at the same time could undo edits made on the first one right after the upgrade.
 
 ## [0.4.0] - 2026-10-20
 

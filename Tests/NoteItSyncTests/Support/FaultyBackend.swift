@@ -17,6 +17,7 @@ actor FaultyBackend: StorageBackend {
     private var deleteFaults: [(fragment: String, fault: Fault)] = []
     private var ignoreDeleteConditions = false
     private var getError: StorageError?
+    private var putsBeforeFailure: Int?
 
     init(_ inner: InMemoryBackend) { self.inner = inner }
 
@@ -26,6 +27,8 @@ actor FaultyBackend: StorageBackend {
     func onNextDelete(keyContaining fragment: String, _ fault: Fault) { deleteFaults.append((fragment, fault)) }
     /// Simulates a provider that accepts but ignores `If-Match` on deletes.
     func ignoreDeleteIfMatch() { ignoreDeleteConditions = true }
+    /// Lets `k` more puts through, then fails every put before it reaches storage (a connection that drops).
+    func failPuts(after k: Int) { putsBeforeFailure = k }
     func rejectGets(with error: StorageError = .unauthorized("denied")) { getError = error }
 
     func list(prefix: String) async throws -> [RemoteObject] { try await inner.list(prefix: prefix) }
@@ -37,6 +40,10 @@ actor FaultyBackend: StorageBackend {
 
     @discardableResult
     func put(_ key: String, data: Data, ifMatch: String?, ifNoneMatch: Bool) async throws -> String {
+        if let remaining = putsBeforeFailure {
+            if remaining == 0 { throw StorageError.network("injected after the allowed puts") }
+            putsBeforeFailure = remaining - 1
+        }
         if let index = putFaults.firstIndex(where: { key.contains($0.fragment) }) {
             let fault = putFaults.remove(at: index).fault
             switch fault {

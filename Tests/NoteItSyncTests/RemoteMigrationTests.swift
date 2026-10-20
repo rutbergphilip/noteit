@@ -123,4 +123,76 @@ final class RemoteMigrationTests: XCTestCase {
         let check = try cipher.open(try XCTUnwrap(manifest.encryption).keyCheck, context: SyncEngine.keyCheckContext)
         XCTAssertEqual(check, Data("noteit-key-check".utf8))
     }
+
+    private func seedLegacyStore(_ backend: InMemoryBackend, notes: Int) async throws -> [String: Data] {
+        var objects = ["inkwell/v1/manifest.json": try legacyManifest(passphrase: "pw"), "inkwell/v1/devices/mac.json": Data([9])]
+        for index in 0..<notes {
+            objects[String(format: "inkwell/v1/notes/%03d.meta", index)] = Data([UInt8(index), 1])
+        }
+        for (key, data) in objects {
+            try await backend.put(key, data: data, ifMatch: nil, ifNoneMatch: true)
+        }
+        return objects
+    }
+
+    func testSlowerMigratorKeepsObjectsWrittenAfterTheFirstMigrationFinished() async throws {
+        let inner = InMemoryBackend()
+        _ = try await seedLegacyStore(inner, notes: 3)
+        let newer = Data("edited on A".utf8)
+        let deviceB = FaultyBackend(inner)
+        // B has listed the legacy store; before its first write, A migrates and syncs an edit.
+        await deviceB.onNextPut(keyContaining: RemoteLayout.root, .before({
+            _ = try? await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
+            _ = try? await inner.put("noteit/v1/notes/001.meta", data: newer, ifMatch: nil, ifNoneMatch: false)
+        }))
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(deviceB, log: { _ in })
+        XCTAssertTrue(migrated)
+        let kept = try await inner.get("noteit/v1/notes/001.meta").data
+        XCTAssertEqual(kept, newer)
+    }
+
+    func testInterruptedCopyResumesWithoutRewritingCopiedObjects() async throws {
+        let inner = InMemoryBackend()
+        let legacy = try await seedLegacyStore(inner, notes: 5)
+        let flaky = FaultyBackend(inner)
+        await flaky.failPuts(after: 2)
+        do {
+            try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, log: { _ in })
+            XCTFail("expected the copy to be interrupted")
+        } catch StorageError.network {}
+        let partial = try await inner.list(prefix: RemoteLayout.root)
+        XCTAssertEqual(partial.count, 2)
+        XCTAssertFalse(partial.contains { $0.key == RemoteLayout.manifest() })
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
+        XCTAssertTrue(migrated)
+        var copied: [String: Data] = [:]
+        for object in try await inner.list(prefix: RemoteLayout.root) {
+            copied[RemoteLayout.legacyRoot + object.key.dropFirst(RemoteLayout.root.count)] = try await inner.get(object.key).data
+        }
+        XCTAssertEqual(copied, legacy)
+        let after = try await inner.list(prefix: RemoteLayout.root)
+        for object in partial {
+            XCTAssertEqual(after.first { $0.key == object.key }?.etag, object.etag, "\(object.key) was rewritten")
+        }
+    }
+
+    func testCopyStopsOnceAnotherDeviceWritesTheManifest() async throws {
+        let inner = InMemoryBackend()
+        _ = try await seedLegacyStore(inner, notes: RemoteMigration.manifestCheckInterval + 10)
+        let otherManifest = Data("written by another device".utf8)
+        let flaky = FaultyBackend(inner)
+        await flaky.onNextPut(keyContaining: "noteit/v1/notes/005.meta", .before({
+            _ = try? await inner.put(RemoteLayout.manifest(), data: otherManifest, ifMatch: nil, ifNoneMatch: true)
+        }))
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, log: { _ in })
+        XCTAssertTrue(migrated)
+        let copied = try await inner.list(prefix: RemoteLayout.root).map(\.key)
+        XCTAssertLessThan(copied.count, RemoteMigration.manifestCheckInterval + 1, "the copy went on after the manifest appeared")
+        XCTAssertFalse(copied.contains("noteit/v1/notes/055.meta"))
+        let manifest = try await inner.get(RemoteLayout.manifest()).data
+        XCTAssertEqual(manifest, otherManifest)
+    }
 }
