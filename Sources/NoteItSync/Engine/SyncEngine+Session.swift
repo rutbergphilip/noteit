@@ -63,14 +63,19 @@ extension SyncEngine {
             throw StorageError.invalidResponse("Unreadable manifest")
         }
         try checkOpenable(manifest, supported: current.supported)
-        if let rekey = manifest.rekey, rekey.deviceID != currentDeviceID {
-            if rekey.isStale(at: now) { throw SyncError.rekeyIncomplete(done: 0, total: 0) }
-            throw SyncError.rekeyInProgress(deviceName: rekey.deviceName)
-        }
+        try checkNoForeignRekey(manifest, currentDeviceID: currentDeviceID, now: now)
         guard try keyID(of: manifest) == current.keyID else {
             throw SyncError.keyChanged(byDevice: manifest.keyring?.changedBy ?? "")
         }
         return current.replacing(manifest: manifest, etag: etag)
+    }
+
+    /// A `rekey` started by another device stops the caller: `rekeyInProgress` while it is fresh, else
+    /// `rekeyIncomplete` (sync-security fills in the real counts). One started by `currentDeviceID` doesn't.
+    static func checkNoForeignRekey(_ manifest: Manifest, currentDeviceID: String?, now: Date) throws {
+        guard let rekey = manifest.rekey, rekey.deviceID != currentDeviceID else { return }
+        if rekey.isStale(at: now) { throw SyncError.rekeyIncomplete(done: 0, total: 0) }
+        throw SyncError.rekeyInProgress(deviceName: rekey.deviceName)
     }
 
     /// The key a manifest's records are sealed with: the keyring's, else the legacy block's, else nil (plain).

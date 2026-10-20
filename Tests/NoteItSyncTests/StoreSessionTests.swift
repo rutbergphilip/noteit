@@ -448,6 +448,67 @@ final class StoreSessionTests: XCTestCase {
         XCTAssertEqual(after, before, "nothing is sealed with the old key after the key changed")
     }
 
+    /// A store whose manifest carries a rekey by `deviceID`, and a session opened after it was set.
+    private func rekeyingStore(deviceID: String, updatedAt: Date) async throws -> (InMemoryBackend, StoreSession) {
+        let backend = InMemoryBackend()
+        let first = try await connect(backend, .passphrase(pass)).session
+        var m = try await manifest(backend)
+        m.rekey = Rekey(fromKeyID: first.keyID, toKeyID: "0123456789abcdef", startedAt: updatedAt, updatedAt: updatedAt,
+                        deviceID: deviceID, deviceName: "\(deviceID) Mac")
+        try await putManifest(m, backend)
+        return (backend, try await connect(backend, .passphrase(pass), create: false).session)
+    }
+
+    func testFreshSessionStopsOnForeignRekey() async throws {
+        let (backend, session) = try await rekeyingStore(deviceID: "OTHER", updatedAt: Date())
+        let store = FakeLocalStore()
+        _ = await store.create(title: "one")
+        let engine = engine(backend, StoreSessionRef(session), store, id: "A")
+        let before = try await snapshot(backend)
+        await assertThrows(.rekeyInProgress(deviceName: "OTHER Mac")) { try await engine.sync() }
+        await assertThrows(.rekeyInProgress(deviceName: "OTHER Mac")) { try await engine.sync() }
+        let after = try await snapshot(backend)
+        XCTAssertEqual(after, before, "nothing is written while another device rekeys")
+    }
+
+    func testFreshSessionReportsStaleForeignRekey() async throws {
+        let (backend, session) = try await rekeyingStore(deviceID: "OTHER", updatedAt: Date().addingTimeInterval(-Rekey.staleAfter - 1))
+        let store = FakeLocalStore()
+        _ = await store.create(title: "one")
+        let before = try await snapshot(backend)
+        await assertThrows(.rekeyIncomplete(done: 0, total: 0)) {
+            try await self.engine(backend, StoreSessionRef(session), store, id: "A").sync()
+        }
+        let after = try await snapshot(backend)
+        XCTAssertEqual(after, before)
+    }
+
+    func testOwnRekeyDoesNotStopPass() async throws {
+        let (backend, session) = try await rekeyingStore(deviceID: "A", updatedAt: Date())
+        let store = FakeLocalStore()
+        let note = await store.create(title: "one")
+        _ = try await engine(backend, StoreSessionRef(session), store, id: "A").sync()
+        let keys = try await backend.list(prefix: "").map(\.key)
+        XCTAssertTrue(keys.contains(RemoteLayout.meta(.note, note)))
+    }
+
+    func testAdoptedSessionStopsOnForeignRekey() async throws {
+        let backend = InMemoryBackend()
+        _ = try await connect(backend, nil, encrypted: false)
+        var m = try await manifest(backend)
+        m.rekey = Rekey(fromKeyID: nil, toKeyID: "0123456789abcdef", startedAt: Date(), updatedAt: Date(),
+                        deviceID: "OTHER", deviceName: "Other Mac")
+        try await putManifest(m, backend)
+        let store = FakeLocalStore()
+        _ = await store.create(title: "one")
+        let engine = SyncEngine(backend: backend, cipher: PassthroughCipher(), local: store,
+                                stateURL: dir.appendingPathComponent("A.json"), deviceID: "A", deviceName: "A")
+        let before = try await snapshot(backend)
+        await assertThrows(.rekeyInProgress(deviceName: "Other Mac")) { try await engine.sync() }
+        let after = try await snapshot(backend)
+        XCTAssertEqual(after, before)
+    }
+
     func testBodyEncodingFollowsFeatureNotVersion() async throws {
         let backend = InMemoryBackend()
         let keyringSession = try await connect(backend, .passphrase(pass), initial: [.keyring]).session

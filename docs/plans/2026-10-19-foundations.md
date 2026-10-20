@@ -1440,6 +1440,7 @@ Moved from sync-security Task 0.2 and the session half of web-app Task 0.4.
   - The old `init(backend:cipher:…)` becomes a convenience that wraps a plain v1 session.
   - Every seal and open reads `session.current.cipher`.
   - At the start of each pass, `backend.get(RemoteLayout.manifest())` gives an ETag; if it differs from the session's, `refreshedSession` runs and the ref is replaced. `SyncState.keyID` is set from the session.
+  - Every pass then applies the same foreign-`rekey` rule to `session.current.manifest`, whether or not the ETag changed (a session from `connectSession` or adopted around a caller's cipher already holds the manifest), before it reads or writes any record. A `rekey` whose `deviceID` is the engine's own doesn't stop the pass.
 - [ ] `SyncController`:
   - `Session` gains `store: StoreSessionRef`.
   - `ensureSession` calls `connectSession` with `.dataKey` from `Keychain` (new account `syncDataKey`) when present, otherwise `.passphrase`, and with `deviceName` set to the name it gives `SyncEngine.init`. After a passphrase connect, it saves `session.dataKey` to `syncDataKey` when it is non-nil (a keyring store); a v1 or plain session saves nothing.
@@ -1464,6 +1465,7 @@ Moved from sync-security Task 0.2 and the session half of web-app Task 0.4.
   - `testRefreshThrowsKeyChanged`;
   - `testRefreshThrowsRekeyInProgress`;
   - `testStaleRekeyReportsIncomplete`;
+  - `testFreshSessionStopsOnForeignRekey`, `testFreshSessionReportsStaleForeignRekey`, `testAdoptedSessionStopsOnForeignRekey` (nothing written), `testOwnRekeyDoesNotStopPass`;
   - `testRunningEngineSeesNewFeature` (a manifest change between passes reaches `session.current.features`);
   - `testBodyEncodingFollowsFeatureNotVersion` (`formatVersion` 2 with only `keyring` → `.rtfd`; a `StoreSession` built directly with `noteit-doc`, not through `connectSession`, → `.noteItDocV1`);
   - `testDeviceWritesSupportedFeatures` (`["keyring"]`, with `appVersion`);

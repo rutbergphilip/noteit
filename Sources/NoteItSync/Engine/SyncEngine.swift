@@ -238,6 +238,9 @@ public actor SyncEngine {
         // A missing manifest means the store was wiped; syncing against it would delete everything.
         guard let manifestETag = index.manifestETag else { throw StorageError.notFound(RemoteLayout.manifest()) }
         try await refreshSession(listedETag: manifestETag)
+        // Checked on every pass, not only when the manifest changed: a session opened by connectSession, or one
+        // adopted from a caller's cipher, already holds the manifest with another device's rekey.
+        try Self.checkNoForeignRekey(session.current.manifest, currentDeviceID: deviceID, now: now())
 
         state = SyncState.load(from: stateURL)
         state.keyID = session.current.keyID
