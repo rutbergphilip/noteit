@@ -39,6 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = artwork
         }
         NoteStore.shared.startRecentlyDeletedMaintenance()
+        AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
         PasteAndMatchStyleShortcut.install()
         let center = NotificationCenter.default
@@ -96,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         NoteStore.shared.flush()
+        AutomationService.shared.staged.removeAll()
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

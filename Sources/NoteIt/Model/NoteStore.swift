@@ -62,7 +62,8 @@ final class NoteStore: ObservableObject {
     private var dirtyBodies: Set<UUID> = []
     private(set) var libraryDirty = false
     private var saveWorkItem: DispatchWorkItem?
-    private var isLoading = false
+    /// True while `load()` reads the library; automation answers `.notReady` meanwhile.
+    private(set) var isLoading = false
 
     /// Folded (case/diacritic/width-insensitive) plain text per note, persisted to `search-index.json`.
     private var searchIndex: [UUID: String] = [:]
