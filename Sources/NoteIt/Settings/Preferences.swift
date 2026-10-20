@@ -20,6 +20,12 @@ enum PrefKey {
     static let dailyNoteTitleFormat = "dailyNoteTitleFormat"
     /// Settings › Integrations › Links: `noteit://new` and `append` links run without asking. Off by default.
     static let urlSchemeChangesWithoutAsking = "urlSchemeChangesWithoutAsking"
+    /// Settings › Integrations › Local API. Off by default.
+    static let localAPIEnabled = "localAPIEnabled"
+    /// 0 means automatic (47600–47609).
+    static let localAPIPort = "localAPIPort"
+    /// `[client id: Date]`, written at most once a minute per client.
+    static let localAPIClientLastUsed = "localAPIClientLastUsed"
 }
 
 enum PrefDefault {

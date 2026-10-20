@@ -538,4 +538,35 @@ final class AutomationServiceTests: XCTestCase {
         let id = UUID()
         XCTAssertEqual(AutomationService.link(for: id).absoluteString, "noteit://note/\(id.uuidString)")
     }
+
+    func testClientsIssueListRevoke() throws {
+        let (service, _) = makeService()
+        let registry = ClientRegistry(store: InMemoryClientStore())
+        let revoked = LockedIDs()
+        registry.onRevoke = { revoked.append($0) }
+        service.clients = AutomationClients(registry: registry)
+
+        let (client, token) = try service.clients.issue(name: "  Shortcuts  ", kind: .script, scopes: [.write, .read], origin: nil)
+        XCTAssertEqual(client.name, "Shortcuts")
+        XCTAssertEqual(client.scopes, [.read, .write])
+        XCTAssertTrue(token.hasPrefix("nit_"))
+        XCTAssertEqual(registry.authenticate(bearer: "Bearer \(token)")?.id, client.id)
+        XCTAssertEqual(service.clients.list().map(\.id), [client.id])
+
+        try service.clients.revoke(client.id)
+        XCTAssertEqual(service.clients.list(), [])
+        XCTAssertEqual(revoked.ids, [client.id])
+        XCTAssertNil(registry.authenticate(bearer: "Bearer \(token)"))
+        assertThrows(.notFound) { try service.clients.revoke(client.id) }
+        assertThrows(.invalidInput("Give the token a name.")) {
+            try service.clients.issue(name: " ", kind: .script, scopes: [.read], origin: nil)
+        }
+    }
+}
+
+private final class LockedIDs: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [UUID] = []
+    var ids: [UUID] { lock.withLock { stored } }
+    func append(_ id: UUID) { lock.withLock { stored.append(id) } }
 }

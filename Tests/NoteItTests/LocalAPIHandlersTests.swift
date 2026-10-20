@@ -519,4 +519,140 @@ final class LocalAPIHandlersTests: XCTestCase {
             XCTAssertEqual(errorCode(response), "bad_request")
         }
     }
+
+    // MARK: Controller
+
+    private var controllers: [LocalAPIController] = []
+
+    private func makeController(defaults: UserDefaults? = nil, store: NoteStore? = nil) -> (LocalAPIController, NoteStore) {
+        let store = store ?? NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
+        let service = AutomationService(store: store, defaults: defaults ?? self.defaults,
+                                        staged: StagedUploads(directory: root.appendingPathComponent("staged")),
+                                        dailyNotesAvailable: { false }, isLoading: { false })
+        let controller = LocalAPIController(service: service, defaults: defaults ?? self.defaults,
+                                            clientStore: InMemoryClientStore(),
+                                            discoveryDirectory: root.appendingPathComponent("discovery-\(controllers.count)"),
+                                            automaticPorts: [0], routeRegistry: LocalAPIRouteRegistry(), appVersion: "9.9",
+                                            showsPairingWindow: false)
+        controllers.append(controller)
+        addTeardownBlock { @MainActor in controller.shutDown() }
+        return (controller, store)
+    }
+
+    private func discovery(_ index: Int) throws -> DiscoveryFile {
+        let url = root.appendingPathComponent("discovery-\(index)").appendingPathComponent(DiscoveryFile.fileName)
+        return try APIJSON.decoder().decode(DiscoveryFile.self, from: Data(contentsOf: url))
+    }
+
+    func testControllerWritesDiscoveryWhenOff() async throws {
+        let (controller, _) = makeController()
+        await controller.settle()
+        XCTAssertEqual(controller.status, .off)
+        let file = try discovery(0)
+        XCTAssertFalse(file.apiEnabled)
+        XCTAssertNil(file.port)
+        XCTAssertNil(file.baseURL)
+        XCTAssertEqual(file.appVersion, "9.9")
+        XCTAssertEqual(file.pid, ProcessInfo.processInfo.processIdentifier)
+        controller.shutDown()
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("discovery-0/\(DiscoveryFile.fileName)").path))
+    }
+
+    func testControllerStartsAndStopsOnPrefChange() async throws {
+        let (controller, store) = makeController()
+        let legacy = addNote(store, "Before sync")
+        store.notes[store.noteIndex(legacy)!].revision = nil
+        defaults.set(true, forKey: PrefKey.localAPIEnabled)
+        controller.reconcile()
+        await controller.settle()
+        guard case .on(let port) = controller.status else { return XCTFail("\(controller.status)") }
+        XCTAssertNotNil(store.notes.first { $0.id == legacy }?.revision)
+        var file = try discovery(0)
+        XCTAssertTrue(file.apiEnabled)
+        XCTAssertEqual(file.port, port)
+        XCTAssertEqual(file.baseURL?.absoluteString, "http://127.0.0.1:\(port)/v1")
+        let (data, response) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/ping")!)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(try APIJSON.decoder().decode(PingDTO.self, from: data).appVersion, "9.9")
+
+        defaults.set(false, forKey: PrefKey.localAPIEnabled)
+        controller.reconcile()
+        await controller.settle()
+        XCTAssertEqual(controller.status, .off)
+        file = try discovery(0)
+        XCTAssertFalse(file.apiEnabled)
+        do {
+            _ = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/ping")!)
+            XCTFail("Still listening")
+        } catch {}
+    }
+
+    func testPinnedPortInUseReportsStatus() async throws {
+        let (first, _) = makeController()
+        defaults.set(true, forKey: PrefKey.localAPIEnabled)
+        first.reconcile()
+        await first.settle()
+        guard case .on(let port) = first.status else { return XCTFail("\(first.status)") }
+
+        let otherSuite = "noteit-localapi-\(UUID().uuidString)"
+        let other = try XCTUnwrap(UserDefaults(suiteName: otherSuite))
+        defer { other.removePersistentDomain(forName: otherSuite) }
+        other.set(true, forKey: PrefKey.localAPIEnabled)
+        other.set(Int(port), forKey: PrefKey.localAPIPort)
+        let (second, _) = makeController(defaults: other)
+        await second.settle()
+        XCTAssertEqual(second.status, .portInUse(port))
+        XCTAssertFalse(try discovery(1).apiEnabled)
+    }
+
+    func testChangesFlowFromStoreToHub() async throws {
+        let (controller, store) = makeController()
+        let start = controller.hub.currentCursor
+        let id = addNote(store, "Fresh")
+        var changes: [ChangeDTO] = []
+        for _ in 0..<40 {
+            if case .success(let page) = controller.hub.changes(since: start, limit: 50), !page.changes.isEmpty {
+                changes = page.changes
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(changes.map(\.id), [id])
+        XCTAssertEqual(changes.first?.kind, .note)
+        XCTAssertEqual(changes.first?.op, .created)
+    }
+
+    func testKeychainClientStoreRoundTrip() throws {
+        let secrets = MemorySecrets()
+        let store = KeychainClientStore(secrets: secrets, service: "test.local-api")
+        XCTAssertEqual(store.load(), [])
+        let registry = ClientRegistry(store: store)
+        let (record, token) = try registry.issue(name: "CLI", kind: .cli, scopes: [.read], origin: nil)
+        XCTAssertEqual(secrets.labels["test.local-api/clients"], "NoteIt Local API")
+        XCTAssertEqual(KeychainClientStore(secrets: secrets, service: "test.local-api").load(), [record])
+        XCTAssertFalse(secrets.values["test.local-api/clients"]!.contains(token))
+        try registry.revoke(record.id)
+        XCTAssertNil(secrets.values["test.local-api/clients"])
+    }
+}
+
+private final class MemorySecrets: LabeledSecretStore {
+    var values: [String: String] = [:]
+    var labels: [String: String] = [:]
+
+    func read(service: String, account: String) -> String? { values["\(service)/\(account)"] }
+
+    func write(_ value: String, service: String, account: String) throws {
+        try write(value, service: service, account: account, label: "NoteIt Sync")
+    }
+
+    func write(_ value: String, service: String, account: String, label: String) throws {
+        values["\(service)/\(account)"] = value
+        labels["\(service)/\(account)"] = label
+    }
+
+    func remove(service: String, account: String) throws {
+        values["\(service)/\(account)"] = nil
+        labels["\(service)/\(account)"] = nil
+    }
 }

@@ -100,6 +100,7 @@ Debug builds only:
 | `NOTEIT_SYNC_INTERVAL=<seconds>` | Replaces both sync intervals and the 15 s backoff base, and logs each pass that changed something |
 | `NOTEIT_DEBUG_EDIT_AFTER=<seconds>` | After the delay, appends "Edited on *device* at *time*" to the selected or first note, as if typed. Handy for testing two instances |
 | `NOTEIT_DEBUG_UPDATE_CREDENTIALS=<seconds>:<accessKey>:<secret>` | After the delay, runs *Update Credentials…* without the UI |
+| `NOTEIT_LOCAL_API_DEBUG=1` | With `NOTEIT_DATA_DIR`, turns the Local API on without touching `UserDefaults`, keeps paired clients in memory instead of the Keychain, and prints one token with every scope to stderr as `NOTEIT_LOCAL_API_TOKEN=nit_…`. `local-api.json` goes in the data folder |
 | `NOTEIT_APP_SUPPORT_DIR=<folder>` | Stands in for `~/Library/Application Support`, to try the Inkwell → NoteIt migration safely |
 | `NOTEIT_DEBUG_LEGACY_BUNDLE_ID=<bundle id>` | Treats another running app as Inkwell, to test the "Quit Inkwell" prompt |
 

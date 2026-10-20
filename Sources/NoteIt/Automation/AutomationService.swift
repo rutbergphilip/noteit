@@ -23,6 +23,8 @@ final class AutomationService {
     let now: () -> Date
     private let dailyNotesAvailable: () -> Bool
     private let isLoading: () -> Bool
+    /// In-process issue, list and revoke, through the Local API server's client registry.
+    lazy var clients: AutomationClients = LocalAPIController.shared.clients
 
     init(store: NoteStore, defaults: UserDefaults = .standard, staged: StagedUploads, now: @escaping () -> Date = Date.init,
          dailyNotesAvailable: @escaping () -> Bool = { DailyNotes.isAvailable }, isLoading: (() -> Bool)? = nil) {

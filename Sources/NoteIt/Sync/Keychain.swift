@@ -48,8 +48,13 @@ enum Keychain {
     }
 }
 
+/// A `SecretStore` that names the items it adds, as Keychain Access shows them.
+protocol LabeledSecretStore: SecretStore {
+    func write(_ value: String, service: String, account: String, label: String) throws
+}
+
 /// `SecretStore` over the login keychain's generic passwords.
-struct SecItemStore: SecretStore {
+struct SecItemStore: LabeledSecretStore {
     func read(service: String, account: String) -> String? {
         var query = Self.baseQuery(service: service, account: account)
         query[kSecReturnData as String] = true
@@ -60,6 +65,10 @@ struct SecItemStore: SecretStore {
     }
 
     func write(_ value: String, service: String, account: String) throws {
+        try write(value, service: service, account: account, label: "NoteIt Sync")
+    }
+
+    func write(_ value: String, service: String, account: String, label: String) throws {
         let query = Self.baseQuery(service: service, account: account)
         let update: [String: Any] = [
             kSecValueData as String: Data(value.utf8),
@@ -69,7 +78,7 @@ struct SecItemStore: SecretStore {
         if status == errSecItemNotFound {
             var add = query
             add.merge(update) { _, new in new }
-            add[kSecAttrLabel as String] = "NoteIt Sync"
+            add[kSecAttrLabel as String] = label
             status = SecItemAdd(add as CFDictionary, nil)
         }
         guard status == errSecSuccess else { throw Keychain.Failure(status: status) }
