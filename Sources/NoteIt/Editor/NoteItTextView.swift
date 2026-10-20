@@ -857,6 +857,14 @@ final class NoteItLayoutManager: NSLayoutManager {
         typesetter = CodeCardTypesetter()
     }
 
+    /// Counts the spacing `CodeCardTypesetter` adds above a leading code block, so views sized from this
+    /// rect's height keep their last line.
+    override func usedRect(for container: NSTextContainer) -> NSRect {
+        let used = super.usedRect(for: container)
+        guard used.minY > 0 else { return used }
+        return NSRect(x: used.minX, y: 0, width: used.width, height: used.maxY)
+    }
+
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         guard let ts = textStorage, ts.length > 0, let tc = textContainers.first else {
             super.drawBackground(forGlyphRange: glyphsToShow, at: origin)

@@ -289,6 +289,38 @@ final class CodeStylingTests: XCTestCase {
         XCTAssertEqual(top.characterIndexForInsertion(at: NSPoint(x: line.maxX + 1, y: line.midY)), "let a = 1".utf16.count)
     }
 
+    private func lastLineMaxY(_ lm: NSLayoutManager) -> CGFloat {
+        lm.lineFragmentRect(forGlyphAt: max(lm.numberOfGlyphs - 1, 0), effectiveRange: nil).maxY
+    }
+
+    private static let longNote = (1...40).map { "Line \($0)" }.joined(separator: "\n\n")
+
+    func testPrintViewKeepsLastLineOfNoteStartingWithCode() {
+        let body = NSMutableAttributedString(attributedString: MarkdownReader.attributedString(from: "```swift\nlet a = 1\n```\n\n" + Self.longNote))
+        while body.string.hasSuffix("\n") { body.deleteCharacters(in: NSRange(location: body.length - 1, length: 1)) }
+        let view = NoteExporter.printView(for: body, printInfo: NoteExporter.printInfo())
+        let lm = view.layoutManager!
+        XCTAssertGreaterThan(lm.lineFragmentUsedRect(forGlyphAt: 0, effectiveRange: nil).minY, 0)
+        XCTAssertGreaterThanOrEqual(view.frame.height, lastLineMaxY(lm))
+    }
+
+    func testEditorBottomPaddingOfNoteStartingWithCode() throws {
+        func padding(_ markdown: String) throws -> CGFloat {
+            let (scrollView, textView) = NoteItTextView.make()
+            scrollView.frame = NSRect(x: 0, y: 0, width: 600, height: 400)
+            textView.setFrameSize(NSSize(width: 600, height: 400))
+            textView.storage.setAttributedString(MarkdownReader.attributedString(from: markdown))
+            textView.normalizePendingEdits()
+            let lm = try XCTUnwrap(textView.layoutManager)
+            lm.ensureLayout(for: try XCTUnwrap(textView.textContainer))
+            textView.sizeToFit()
+            return textView.frame.height - textView.textContainerOrigin.y - max(lastLineMaxY(lm), lm.extraLineFragmentRect.maxY)
+        }
+        let top = try padding("```swift\nlet a = 1\n```\n\n" + Self.longNote + "\n")
+        let later = try padding("Intro\n\n```swift\nlet a = 1\n```\n\n" + Self.longNote + "\n")
+        XCTAssertEqual(top, later, accuracy: 1)
+    }
+
     func testAutomaticHasNoSentinel() {
         let ps = EditorStyle.attributes(for: .code)[.paragraphStyle] as? NSParagraphStyle
         XCTAssertNil(EditorStyle.codeLanguage(of: ps))
