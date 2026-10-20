@@ -112,6 +112,7 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
     case exportNote
     case print
     case copyAsMarkdown
+    case copyNoteLink
     case versionHistory
     case deleteNote
 
@@ -130,6 +131,7 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
         case .exportNote: "Export Note As…"
         case .print: "Print…"
         case .copyAsMarkdown: "Copy as Markdown"
+        case .copyNoteLink: "Copy Note Link"
         case .versionHistory: "Version History…"
         case .deleteNote: "Delete Note"
         }
@@ -147,6 +149,7 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
         case .exportNote: MenuShortcut("s", [.command, .shift])
         case .print: MenuShortcut("p", .command)
         case .copyAsMarkdown: MenuShortcut("c", [.command, .option, .shift])
+        case .copyNoteLink: MenuShortcut("l", [.command, .control])
         case .versionHistory: MenuShortcut("y", [.command, .option])
         case .deleteNote: MenuShortcut(.delete, .command)
         }
@@ -165,6 +168,7 @@ enum MenuShortcuts {
     static var exportNote: MenuShortcut? { current(.exportNote) }
     static var print: MenuShortcut? { current(.print) }
     static var copyAsMarkdown: MenuShortcut? { current(.copyAsMarkdown) }
+    static var copyNoteLink: MenuShortcut? { current(.copyNoteLink) }
     static var versionHistory: MenuShortcut? { current(.versionHistory) }
     static var deleteNote: MenuShortcut? { current(.deleteNote) }
     /// SwiftUI's own Settings… item; listed so the palette can show it. It can't be changed.

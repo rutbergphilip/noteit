@@ -7,6 +7,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- `noteit://` links. Open a note, search, or create and add to notes from Shortcuts, Raycast, Alfred, scripts and web pages. Links that create or add to a note ask first; you can turn that off in Settings › Integrations.
+- Copy Note Link (⌃⌘L) in the Edit menu copies a link to the current note.
+
 ### Changed
 
 - New libraries start with a refreshed welcome note, and no longer include a sample shortcuts note or Shortcuts notebook.

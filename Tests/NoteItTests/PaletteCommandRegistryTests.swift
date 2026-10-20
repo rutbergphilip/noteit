@@ -63,6 +63,23 @@ final class PaletteCommandRegistryTests: XCTestCase {
         XCTAssertTrue(noteCommandIDs.isSubset(of: all))
     }
 
+    func testPaletteHasCopyNoteLinkOnlyWithNote() throws {
+        let store = makeStore()
+        let id = addNote(store, "Alpha")
+        store.selectedNoteID = nil
+        XCTAssertFalse(availableIDs(store).contains("copyNoteLink"))
+        XCTAssertTrue(availableIDs(store).contains("integrationsSettings"))
+
+        store.selectedNoteID = id
+        XCTAssertTrue(availableIDs(store).contains("copyNoteLink"))
+        XCTAssertEqual(try XCTUnwrap(command("copyNoteLink", in: store)).info.shortcut, "⌃⌘L")
+
+        store.moveToRecentlyDeleted([id])
+        store.selection = .recentlyDeleted
+        store.selectedNoteID = id
+        XCTAssertFalse(availableIDs(store).contains("copyNoteLink"))
+    }
+
     func testNoteCommandsAreAvailableWithASelectedNote() {
         let store = makeStore()
         store.selectedNoteID = addNote(store, "Alpha")
@@ -118,7 +135,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
 
         let expected: Set<String> = [
             "newNote", "newNotebook", "searchNotes", "find", "findReplace", "export", "print", "copyMarkdown",
-            "deleteNote", "showRecentlyDeleted", "import", "settings",
+            "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings",
         ]
         XCTAssertEqual(availableIDs(store), expected)
         XCTAssertEqual(try XCTUnwrap(command("deleteNote", in: store)).info.title, "Delete Now…")
@@ -138,6 +155,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
             "export": MenuShortcutCommand.exportNote.defaultShortcut,
             "print": MenuShortcutCommand.print.defaultShortcut,
             "copyMarkdown": MenuShortcutCommand.copyAsMarkdown.defaultShortcut,
+            "copyNoteLink": MenuShortcutCommand.copyNoteLink.defaultShortcut,
             "versionHistory": MenuShortcutCommand.versionHistory.defaultShortcut,
             "deleteNote": MenuShortcutCommand.deleteNote.defaultShortcut,
             "settings": MenuShortcuts.settings,
@@ -184,7 +202,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
         let paletteIDs: [MenuShortcutCommand: String] = [
             .newNote: "newNote", .newNotebook: "newNotebook", .searchNotes: "searchNotes", .find: "find",
             .findAndReplace: "findReplace", .exportNote: "export", .print: "print", .copyAsMarkdown: "copyMarkdown",
-            .versionHistory: "versionHistory", .deleteNote: "deleteNote",
+            .copyNoteLink: "copyNoteLink", .versionHistory: "versionHistory", .deleteNote: "deleteNote",
         ]
         for (command, id) in paletteIDs {
             XCTAssertEqual(titles[id], command.title, id)

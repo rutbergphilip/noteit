@@ -150,7 +150,10 @@ final class AutomationService {
         guard !isLoading() else { return nil }
         let folded = NoteStore.fold(title.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !folded.isEmpty else { return nil }
-        return store.notes(for: .allNotes, search: "").first { NoteStore.fold($0.displayTitle) == folded }.map(visible)
+        return store.notes(for: .allNotes, search: "")
+            .filter { NoteStore.fold($0.displayTitle) == folded }
+            .max { $0.updatedAt < $1.updatedAt }
+            .map(visible)
     }
 
     // MARK: Listing and search

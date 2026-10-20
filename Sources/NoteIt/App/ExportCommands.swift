@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// File › Export…, Share and Print, and Edit › Copy as Markdown.
+/// File › Export…, Share and Print, and Edit › Copy as Markdown and Copy Note Link.
 struct ExportCommands: Commands {
     var body: some Commands {
         CommandGroup(after: .importExport) {
@@ -13,6 +13,7 @@ struct ExportCommands: Commands {
 
         CommandGroup(after: .pasteboard) {
             CopyAsMarkdownMenuItem()
+            CopyNoteLinkMenuItem()
         }
     }
 }
@@ -66,5 +67,18 @@ private struct CopyAsMarkdownMenuItem: View {
         Button("Copy as Markdown") { ExportActions.copyAsMarkdown() }
             .menuShortcut(.copyAsMarkdown)
             .disabled(store.note(with: store.selectedNoteID) == nil)
+    }
+}
+
+private struct CopyNoteLinkMenuItem: View {
+    @ObservedObject private var store = NoteStore.shared
+
+    var body: some View {
+        let note = store.note(with: store.selectedNoteID)
+        Button("Copy Note Link") {
+            if let note { CopyNoteLink.perform(noteID: note.id) }
+        }
+        .menuShortcut(.copyNoteLink)
+        .disabled(note == nil || note?.deletedAt != nil)
     }
 }

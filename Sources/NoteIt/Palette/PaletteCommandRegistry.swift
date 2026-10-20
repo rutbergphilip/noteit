@@ -53,6 +53,9 @@ enum PaletteCommandRegistry {
                 WindowRouter.showMainWindow()
                 ExportActions.copyAsMarkdown()
             },
+            command("copyNoteLink", "Copy Note Link", symbol: "link", shortcut: shortcuts.current(.copyNoteLink)?.display, keywords: ["url", "clipboard"], available: hasLiveNote) {
+                if let liveNote { CopyNoteLink.perform(noteID: liveNote.id, store: store) }
+            },
             command("versionHistory", "Version History…", symbol: "clock.arrow.circlepath", shortcut: shortcuts.current(.versionHistory)?.display, keywords: ["revisions", "restore"], available: hasLiveNote) {
                 if let liveNote { NoteMenuActions.showVersionHistory(of: liveNote) }
             },
@@ -76,6 +79,10 @@ enum PaletteCommandRegistry {
             },
             command("settings", "Settings…", symbol: "gearshape", shortcut: MenuShortcuts.settings.display, keywords: ["preferences", "options"]) {
                 SettingsOpener.open()
+            },
+            command("integrationsSettings", "Integrations Settings…", symbol: SettingsView.Tab.integrations.symbol, shortcut: nil,
+                    keywords: ["links", "url", "automation", "preferences"]) {
+                SettingsTabRouter.show(.integrations)
             },
         ]
 

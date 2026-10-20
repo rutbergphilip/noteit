@@ -18,6 +18,8 @@ enum PrefKey {
     static let dailyNotesNotebookID = "dailyNotesNotebookID"
     /// A `DailyTitleFormat` raw value for new daily notes; unset means `iso`.
     static let dailyNoteTitleFormat = "dailyNoteTitleFormat"
+    /// Settings › Integrations › Links: `noteit://new` and `append` links run without asking. Off by default.
+    static let urlSchemeChangesWithoutAsking = "urlSchemeChangesWithoutAsking"
 }
 
 enum PrefDefault {

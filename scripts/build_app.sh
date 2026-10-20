@@ -125,6 +125,8 @@ plist_str SUPublicEDKey "xK/MPK9UYC+zcyvc1/b1PUdPShY7k4F3+NGyaFF1B4o="
 plist_str NSAppleEventsUsageDescription "NoteIt reads your notes from the Notes app when you choose to import them, and the address of the page you're viewing in your browser when you capture selected text."
 # Services › Capture to NoteIt, for selected text in any app (handled by CaptureServiceProvider).
 plutil -replace NSServices -json '[{"NSMenuItem":{"default":"Capture to NoteIt"},"NSMessage":"captureService","NSPortName":"NoteIt","NSSendTypes":["public.utf8-plain-text","NSStringPboardType"],"NSRequiredContext":{}}]' "$PLIST"
+# noteit:// links (handled by URLSchemeHandler).
+plutil -replace CFBundleURLTypes -json '[{"CFBundleURLName":"'"$BUNDLE_ID"'","CFBundleURLSchemes":["noteit"]}]' "$PLIST"
 plutil -lint "$PLIST"
 
 echo "==> Building AppIcon.icns"

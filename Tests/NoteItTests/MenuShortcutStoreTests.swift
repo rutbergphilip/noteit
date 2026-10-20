@@ -142,6 +142,15 @@ final class MenuShortcutStoreTests: XCTestCase {
         XCTAssertEqual(evaluate(MenuShortcut("o", .command), for: .find, in: store), .accept(warning: nil))
     }
 
+    func testCopyNoteLinkDefaultShortcutHasNoConflict() {
+        let store = makeStore()
+        let shortcut = MenuShortcutCommand.copyNoteLink.defaultShortcut
+        XCTAssertEqual(shortcut.display, "⌃⌘L")
+        XCTAssertNil(MenuShortcutRules.reservedName(for: shortcut))
+        XCTAssertEqual(evaluate(shortcut, for: .copyNoteLink, in: store), .accept(warning: nil))
+        XCTAssertEqual(evaluate(shortcut, for: .print, in: store), .reject("⌃⌘L is already used for “Copy Note Link”."))
+    }
+
     func testACommandCanKeepItsOwnShortcut() {
         XCTAssertEqual(evaluate(MenuShortcut("f", [.command, .option]), for: .find, in: makeStore()), .accept(warning: nil))
     }

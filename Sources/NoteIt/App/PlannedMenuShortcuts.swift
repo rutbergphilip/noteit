@@ -12,7 +12,6 @@ enum PlannedMenuShortcuts {
     }
 
     static let rows: [Row] = [
-        Row(command: "copyNoteLink", owner: "automation", shortcut: MenuShortcut("l", [.control, .command])),
         Row(command: "lockNote", owner: "sync-security", shortcut: nil),
         Row(command: "removeLock", owner: "sync-security", shortcut: nil),
         Row(command: "lockAllNotes", owner: "sync-security", shortcut: MenuShortcut("l", [.option, .control, .command])),

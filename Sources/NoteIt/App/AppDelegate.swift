@@ -29,7 +29,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             PrefKey.showMenuBarIcon: true,
             PrefKey.editorFontSize: PrefDefault.editorFontSize,
             PrefKey.captureIncludesBrowserLinks: true,
+            PrefKey.urlSchemeChangesWithoutAsking: false,
         ])
+        URLSchemeHandler.shared.install()
         applyActivationPolicy()
     }
 
