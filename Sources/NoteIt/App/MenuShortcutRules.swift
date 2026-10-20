@@ -145,6 +145,7 @@ enum MenuShortcutRules {
         (MenuShortcut("x", .command), "Cut"),
         (MenuShortcut("z", .command), "Undo"),
         (MenuShortcut("z", [.command, .shift]), "Redo"),
+        (MenuShortcut("v", [.command, .shift]), "Paste and Match Style"),
         (MenuShortcut("v", [.command, .option, .shift]), "Paste and Match Style"),
         (MenuShortcut("`", .command), "Cycle Through Windows"),
         (MenuShortcut("/", [.command, .shift]), "Help"),

@@ -83,6 +83,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
 
     /// Copies and drags carry the saved form too, so inline code shown in the text font stays code.
     override func writeSelection(to pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if type == Self.ownCopyType { return pboard.setData(Data(), forType: type) }
         guard type == .rtf || type == .rtfd else { return super.writeSelection(to: pboard, type: type) }
         let ranges = selectedRanges.map(\.rangeValue).filter { $0.length > 0 && NSMaxRange($0) <= storage.length }
         guard !ranges.isEmpty else { return super.writeSelection(to: pboard, type: type) }
@@ -98,6 +99,18 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             return super.writeSelection(to: pboard, type: type)
         }
         return pboard.setData(data, forType: type)
+    }
+
+    override var writablePasteboardTypes: [NSPasteboard.PasteboardType] {
+        super.writablePasteboardTypes + [Self.ownCopyType]
+    }
+
+    override func paste(_ sender: Any?) {
+        if !pasteMarkdown(from: .general) { super.paste(sender) }
+    }
+
+    override func pasteAsPlainText(_ sender: Any?) {
+        if !pastePlainText(from: .general) { super.pasteAsPlainText(sender) }
     }
 
     // MARK: Layout
@@ -499,7 +512,18 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             perform(command)
             return true
         }
+        if window?.firstResponder === self, Self.isPasteAndMatchStyle(event) {
+            pasteAsPlainText(nil)
+            return true
+        }
         return super.performKeyEquivalent(with: event)
+    }
+
+    /// ⇧⌘V, and ⌥⇧⌘V as before.
+    static func isPasteAndMatchStyle(_ event: NSEvent) -> Bool {
+        let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
+        guard flags == [.command, .shift] || flags == [.command, .shift, .option] else { return false }
+        return (event.characters(byApplyingModifiers: []) ?? event.charactersIgnoringModifiers ?? "").lowercased() == "v"
     }
 
     override func insertText(_ string: Any, replacementRange: NSRange) {

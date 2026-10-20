@@ -40,6 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NoteStore.shared.startRecentlyDeletedMaintenance()
         _ = AppUpdater.shared
+        PasteAndMatchStyleShortcut.install()
         let center = NotificationCenter.default
 
         // Notification callbacks never assume main-actor isolation: they hop with a Task instead, because
