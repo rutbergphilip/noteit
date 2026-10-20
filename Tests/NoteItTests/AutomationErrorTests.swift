@@ -4,7 +4,8 @@ import NoteItAPI
 
 final class AutomationErrorTests: XCTestCase {
     private let all: [AutomationError] = [
-        .notFound, .noteDeleted, .noteUnreadable, .noteLocked, .notReady, .notebookNotFound, .invalidInput("Bad title."),
+        .notFound, .noteTitleNotFound, .noteDeleted, .noteUnreadable, .noteLocked, .notReady, .notebookNotFound,
+        .notebookNameNotFound, .invalidInput("Bad title."),
         .revisionMismatch(current: UUID()), .formatUnavailable("rtf"), .tooLarge, .dailyNotesUnavailable, .cancelled,
         .versionNotSaved,
     ]
@@ -23,6 +24,16 @@ final class AutomationErrorTests: XCTestCase {
         XCTAssertEqual(AutomationError.cancelled.callbackCode, "cancelled")
         XCTAssertEqual(AutomationError.versionNotSaved.apiCode.httpStatus, 500)
         XCTAssertEqual(AutomationError.versionNotSaved.message, "Couldn't save a version of the note, so it wasn't changed.")
+    }
+
+    func testNotFoundMessagesSayWhatWasLookedUp() {
+        XCTAssertEqual(AutomationError.noteTitleNotFound.message, "No note with that title.")
+        XCTAssertEqual(AutomationError.notebookNotFound.message, "No notebook with that id.")
+        XCTAssertEqual(AutomationError.notebookNameNotFound.message, "No notebook with that name.")
+        for error in [AutomationError.noteTitleNotFound, .notebookNameNotFound] {
+            XCTAssertEqual(error.apiCode, .notFound)
+            XCTAssertEqual(error.callbackCode, "not_found")
+        }
     }
 
     func testLockedAndNotReadyStatuses() {

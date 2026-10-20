@@ -141,6 +141,14 @@ final class URLSchemeHandlerTests: XCTestCase {
         XCTAssertTrue(notices.isEmpty)
     }
 
+    func testAppendToMissingTitleSaysTitle() {
+        let (handler, _) = makeHandler()
+        open(handler, "noteit://x-callback-url/append?title=Nothing&text=x&x-error=app://err")
+        let items = URLComponents(url: callbacks[0], resolvingAgainstBaseURL: false)?.queryItems ?? []
+        XCTAssertEqual(items.first { $0.name == "errorCode" }?.value, "not_found")
+        XCTAssertEqual(items.first { $0.name == "errorMessage" }?.value, "No note with that title.")
+    }
+
     func testLockedNoteRefusesAppendWithoutAsking() {
         let (handler, store) = makeHandler()
         let id = store.createNote(in: nil, initial: NSAttributedString(string: "Secret")).id

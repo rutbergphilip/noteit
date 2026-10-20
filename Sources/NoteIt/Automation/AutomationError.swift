@@ -4,13 +4,14 @@ import NoteItAPI
 /// Every automation surface's errors, mapped per surface: an `APIErrorCode` for the Local API, `errorCode` and
 /// `errorMessage` for x-callback-url, `message` for Shortcuts and the Share extension.
 enum AutomationError: Error, Equatable {
-    case notFound, noteDeleted, noteUnreadable, noteLocked, notReady, notebookNotFound, invalidInput(String),
+    case notFound, noteTitleNotFound, noteDeleted, noteUnreadable, noteLocked, notReady, notebookNotFound, notebookNameNotFound,
+         invalidInput(String),
          revisionMismatch(current: UUID?), formatUnavailable(String), tooLarge, dailyNotesUnavailable, cancelled,
          versionNotSaved
 
     var apiCode: APIErrorCode {
         switch self {
-        case .notFound, .notebookNotFound: .notFound
+        case .notFound, .noteTitleNotFound, .notebookNotFound, .notebookNameNotFound: .notFound
         case .noteDeleted: .noteDeleted
         case .noteUnreadable: .noteUnreadable
         case .noteLocked: .noteLocked
@@ -32,11 +33,13 @@ enum AutomationError: Error, Equatable {
     var message: String {
         switch self {
         case .notFound: "No note with that id."
+        case .noteTitleNotFound: "No note with that title."
         case .noteDeleted: "That note is in Recently Deleted."
         case .noteUnreadable: "That note couldn't be read, so it can't be changed."
         case .noteLocked: "That note is locked."
         case .notReady: "NoteIt is still opening your notes. Try again in a moment."
-        case .notebookNotFound: "No notebook with that name."
+        case .notebookNotFound: "No notebook with that id."
+        case .notebookNameNotFound: "No notebook with that name."
         case .invalidInput(let text): text
         case .revisionMismatch: "That note was changed since you read it."
         case .formatUnavailable: "That format isn't available in this version."

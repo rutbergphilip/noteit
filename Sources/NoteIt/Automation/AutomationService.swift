@@ -270,7 +270,7 @@ final class AutomationService {
         case .name(let name):
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard let match = store.sortedNotebooks.first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) else {
-                throw .notebookNotFound
+                throw .notebookNameNotFound
             }
             return match.id
         }

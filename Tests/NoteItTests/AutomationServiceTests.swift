@@ -82,7 +82,7 @@ final class AutomationServiceTests: XCTestCase {
 
     func testCreateUnknownNotebookThrows() {
         let (service, _) = makeService()
-        assertThrows(.notebookNotFound) { try service.create(title: "A", body: "", format: .text, notebook: .name("Nope"), tags: [], pinned: false) }
+        assertThrows(.notebookNameNotFound) { try service.create(title: "A", body: "", format: .text, notebook: .name("Nope"), tags: [], pinned: false) }
         assertThrows(.notebookNotFound) { try service.create(title: "A", body: "", format: .text, notebook: .id(UUID()), tags: [], pinned: false) }
     }
 

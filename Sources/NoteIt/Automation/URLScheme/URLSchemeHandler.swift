@@ -172,7 +172,7 @@ final class URLSchemeHandler: NSObject {
         case .id(let id):
             meta = try service.note(id)
         case .title(let title):
-            guard let match = service.findByTitle(title) else { throw .notFound }
+            guard let match = service.findByTitle(title) else { throw .noteTitleNotFound }
             meta = match
         case .daily:
             guard let daily = try service.daily(date: service.now(), create: true) else { throw .notFound }
