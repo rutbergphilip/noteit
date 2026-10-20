@@ -2261,17 +2261,16 @@ Runs after every other wave 0 task is merged.
 **Files:**
 - Modify: `docs/roadmap.md`
 
-- [ ] Add one ticked item at the end of the "Now: trust and switching" list: `- [x] **Shared groundwork.** The building blocks that links, Markdown storage, automation and the iPhone app build on. Only two things change in the app: Settings › General scrolls when its window is short, and restoring a version of an open note can be undone in one step.`
-- [ ] Change no other item. Wave 1 plans tick their own items.
-- [ ] Plain user wording: no wave numbers, task numbers or type names.
+- [ ] Under `### Wave 0: foundations`, tick the existing `- [ ] **Foundations.**` item (`- [x]`). Its text already names both user-visible changes; keep it as it is.
+- [ ] Add no item and change no other item. Wave 1 plans tick their own items.
 
 **Verify:**
-- `grep -c '^- \[x\] \*\*Shared groundwork\.\*\*' docs/roadmap.md` → `1`.
-- `grep 'Shared groundwork' docs/roadmap.md | grep -E 'wave|Task [0-9]|NoteIt(Core|Doc|Sync|API)'` → no output.
-- `grep 'Shared groundwork' docs/roadmap.md | grep 'Settings › General scrolls' | grep -c 'undone in one step'` → `1`: both user-visible changes are named.
-- `git diff --stat docs/roadmap.md` → `1 file changed, 1 insertion(+)`.
+- `grep -c '^- \[x\] \*\*Foundations\.\*\*' docs/roadmap.md` → `1`.
+- `grep -c '^- \[ \] \*\*Foundations\.\*\*' docs/roadmap.md` → `0`.
+- `grep '^- \[x\] \*\*Foundations\.\*\*' docs/roadmap.md | grep 'General settings tab scrolls' | grep -c 'undone in one step'` → `1`: both user-visible changes are named.
+- `git diff --stat docs/roadmap.md` → `1 file changed, 1 insertion(+), 1 deletion(-)`.
 
-**Commit:** `docs: roadmap records the shared groundwork`
+**Commit:** `docs: tick foundations in roadmap wave 0`
 
 ## Self-review
 
@@ -2357,7 +2356,7 @@ Runs after every other wave 0 task is merged.
   - Settings › General is a scrolling grouped form with the same controls in the same order, at its previous window size or larger (6.5);
   - Restore Version in an open note becomes one Undo step, because it goes through `editBody` (4.5).
 - The other differences are outside the app's UI:
-  - `docs/roadmap.md` has one new ticked item that names the two changes above (6.6);
+  - `docs/roadmap.md` ticks the wave 0 Foundations item, which names the two changes above (6.6);
   - on disk, raw meta files appear under `sync-meta-raw/notes/` and `sync-meta-raw/notebooks/` in the data folder, and the device records gain `platform`, `appVersion` and `supportedFeatures`, which older builds ignore; every new version gets a `<version>.extras.json` beside it in `history/`, which older builds ignore. v1 manifests stay byte-identical.
 
 ### Open issues
