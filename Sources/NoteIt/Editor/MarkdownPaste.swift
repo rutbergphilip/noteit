@@ -100,21 +100,26 @@ enum MarkdownPasteDetector {
         return !sawRich
     }
 
-    /// No links, lines, bold or italic, lists, tables or attachments, and a single font family.
+    /// No links, strikethrough, lists, tables or attachments, and a single font family. Bold, italic and
+    /// underline count as syntax styling in a monospaced font, and as formatting otherwise.
     static func carriesOnlyColour(_ text: NSAttributedString) -> Bool {
         var families = Set<String>()
+        var allMonospaced = true
+        var emphasis = false
         var onlyColour = true
         text.enumerateAttributes(in: NSRange(location: 0, length: text.length)) { attrs, _, stop in
-            let underline = (attrs[.underlineStyle] as? Int ?? 0) != 0
-            let strikethrough = (attrs[.strikethroughStyle] as? Int ?? 0) != 0
             let style = attrs[.paragraphStyle] as? NSParagraphStyle
-            var styled = attrs[.link] != nil || attrs[.attachment] != nil || underline || strikethrough
+            let strikethrough = (attrs[.strikethroughStyle] as? Int ?? 0) != 0
+            var styled = attrs[.link] != nil || attrs[.attachment] != nil || strikethrough
                 || style?.textLists.isEmpty == false || style?.textBlocks.isEmpty == false
+            emphasis = emphasis || (attrs[.underlineStyle] as? Int ?? 0) != 0
             if let font = attrs[.font] as? NSFont {
-                styled = styled || !font.fontDescriptor.symbolicTraits.isDisjoint(with: [.bold, .italic])
+                emphasis = emphasis || !font.fontDescriptor.symbolicTraits.isDisjoint(with: [.bold, .italic])
+                allMonospaced = allMonospaced && EditorStyle.isMonospaced(font)
                 families.insert(font.familyName ?? font.fontName)
             }
-            if styled || families.count > 1 {
+            styled = styled || families.count > 1 || (emphasis && !allMonospaced)
+            if styled {
                 onlyColour = false
                 stop.pointee = true
             }

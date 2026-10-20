@@ -221,7 +221,25 @@ final class MarkdownPasteTests: XCTestCase {
 
         let bold = NSMutableAttributedString(string: source, attributes: [.font: plainFont])
         bold.addAttribute(.font, value: NSFont(name: "Helvetica-Bold", size: 12)!, range: (source as NSString).range(of: "it"))
-        XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(bold)))
+        XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(bold)), "bold in a proportional font is formatting")
+
+        let mono = NSFont(name: "Menlo-Regular", size: 12)!
+        let syntaxBold = NSMutableAttributedString(string: source, attributes: [.font: mono])
+        syntaxBold.addAttribute(.font, value: NSFont(name: "Menlo-Bold", size: 12)!, range: (source as NSString).range(of: "it"))
+        syntaxBold.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: (source as NSString).range(of: "docs"))
+        XCTAssertTrue(editor(body("")).pasteMarkdown(from: try rtfPasteboard(syntaxBold)), "bold in a code font is syntax colouring")
+
+        let monoStruck = NSMutableAttributedString(string: source, attributes: [.font: mono])
+        monoStruck.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: 4))
+        XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(monoStruck)))
+
+        let monoLinked = NSMutableAttributedString(string: source, attributes: [.font: mono])
+        monoLinked.addAttribute(.link, value: URL(string: "https://example.com")!, range: (source as NSString).range(of: "docs"))
+        XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(monoLinked)))
+
+        let monoMixed = NSMutableAttributedString(string: source, attributes: [.font: mono])
+        monoMixed.addAttribute(.font, value: NSFont(name: "Courier-Bold", size: 12)!, range: (source as NSString).range(of: "it"))
+        XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(monoMixed)))
 
         let underlined = NSMutableAttributedString(string: source, attributes: [.font: plainFont])
         underlined.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: 4))
@@ -230,6 +248,25 @@ final class MarkdownPasteTests: XCTestCase {
         let mixed = NSMutableAttributedString(string: source, attributes: [.font: plainFont])
         mixed.addAttribute(.font, value: NSFont(name: "Times-Roman", size: 12)!, range: NSRange(location: 0, length: 4))
         XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(mixed)))
+    }
+
+    func testSourceCopiedFromVSCodeIsConverted() {
+        let source = "# Heading\n- item one\n- item **two**\n"
+        let html = """
+        <meta charset='utf-8'><div style="color: #d4d4d4;background-color: #1e1e1e;font-family: Menlo, Monaco, 'Courier New', monospace;\
+        font-weight: normal;font-size: 12px;line-height: 18px;white-space: pre;">\
+        <div><span style="color: #569cd6;font-weight: bold;"># Heading</span></div>\
+        <div><span style="color: #d4d4d4;">- item one</span></div>\
+        <div><span style="color: #d4d4d4;">- item </span><span style="color: #569cd6;font-weight: bold;">**two**</span></div>\
+        </div>
+        """
+        let pb = pasteboard()
+        pb.setString(source, forType: .string)
+        pb.setData(Data(html.utf8), forType: .html)
+        let view = editor(body(""))
+        XCTAssertTrue(view.pasteMarkdown(from: pb))
+        XCTAssertEqual(kind(view, of: "Heading"), .title)
+        XCTAssertFalse(view.string.contains("**"))
     }
 
     func testWindowsLineEndingsAndTablesKeepTheLineAfter() {
