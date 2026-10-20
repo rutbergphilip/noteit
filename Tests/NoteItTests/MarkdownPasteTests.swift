@@ -205,6 +205,33 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertTrue(view.string.hasSuffix("\n"))
     }
 
+    private func rtfPasteboard(_ text: NSAttributedString) throws -> NSPasteboard {
+        let pb = pasteboard()
+        pb.setString(text.string, forType: .string)
+        pb.setData(try XCTUnwrap(text.rtf(from: NSRange(location: 0, length: text.length))), forType: .rtf)
+        return pb
+    }
+
+    func testRichTextWithMeaningIsNotConverted() throws {
+        let source = "1. Read the [docs](https://example.com)\n2. Ship **it**\n"
+        let plainFont = NSFont(name: "Helvetica", size: 12)!
+        let linked = NSMutableAttributedString(string: source, attributes: [.font: plainFont])
+        linked.addAttribute(.link, value: URL(string: "https://example.com")!, range: (source as NSString).range(of: "docs"))
+        XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(linked)))
+
+        let bold = NSMutableAttributedString(string: source, attributes: [.font: plainFont])
+        bold.addAttribute(.font, value: NSFont(name: "Helvetica-Bold", size: 12)!, range: (source as NSString).range(of: "it"))
+        XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(bold)))
+
+        let underlined = NSMutableAttributedString(string: source, attributes: [.font: plainFont])
+        underlined.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: 4))
+        XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(underlined)))
+
+        let mixed = NSMutableAttributedString(string: source, attributes: [.font: plainFont])
+        mixed.addAttribute(.font, value: NSFont(name: "Times-Roman", size: 12)!, range: NSRange(location: 0, length: 4))
+        XCTAssertFalse(editor(body("")).pasteMarkdown(from: try rtfPasteboard(mixed)))
+    }
+
     func testWindowsLineEndingsAndTablesKeepTheLineAfter() {
         let view = editor(body("Intro"))
         XCTAssertTrue(view.pasteMarkdown(from: pasteboard(plain: "# Title\r\n")))

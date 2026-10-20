@@ -82,7 +82,7 @@ enum MarkdownPasteDetector {
     }
 
     /// Whether the pasteboard's rich text, if any, is only the plain text with colours on it (an editor or
-    /// terminal copying source) rather than rendered content such as a web page.
+    /// terminal copying source) rather than rendered content such as a web page or a rich-text document.
     static func richTextIsSource(on pboard: NSPasteboard, plain: String) -> Bool {
         let types = pboard.types ?? []
         let rich: [(NSPasteboard.PasteboardType, NSAttributedString.DocumentType)] = [(.rtfd, .rtfd), (.rtf, .rtf), (.html, .html)]
@@ -93,11 +93,33 @@ enum MarkdownPasteDetector {
             var options: [NSAttributedString.DocumentReadingOptionKey: Any] = [.documentType: documentType]
             if documentType == .html { options[.characterEncoding] = String.Encoding.utf8.rawValue }
             if let rendered = try? NSAttributedString(data: data, options: options, documentAttributes: nil) {
-                return sameText(rendered.string, plain)
+                return sameText(rendered.string, plain) && carriesOnlyColour(rendered)
             }
         }
         if types.contains(NSPasteboard.PasteboardType("Apple Web Archive pasteboard type")) { return false }
         return !sawRich
+    }
+
+    /// No links, lines, bold or italic, lists, tables or attachments, and a single font family.
+    static func carriesOnlyColour(_ text: NSAttributedString) -> Bool {
+        var families = Set<String>()
+        var onlyColour = true
+        text.enumerateAttributes(in: NSRange(location: 0, length: text.length)) { attrs, _, stop in
+            let underline = (attrs[.underlineStyle] as? Int ?? 0) != 0
+            let strikethrough = (attrs[.strikethroughStyle] as? Int ?? 0) != 0
+            let style = attrs[.paragraphStyle] as? NSParagraphStyle
+            var styled = attrs[.link] != nil || attrs[.attachment] != nil || underline || strikethrough
+                || style?.textLists.isEmpty == false || style?.textBlocks.isEmpty == false
+            if let font = attrs[.font] as? NSFont {
+                styled = styled || !font.fontDescriptor.symbolicTraits.isDisjoint(with: [.bold, .italic])
+                families.insert(font.familyName ?? font.fontName)
+            }
+            if styled || families.count > 1 {
+                onlyColour = false
+                stop.pointee = true
+            }
+        }
+        return onlyColour
     }
 
     static func sameText(_ a: String, _ b: String) -> Bool {
