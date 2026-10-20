@@ -124,10 +124,12 @@ final class RemoteMigrationTests: XCTestCase {
         XCTAssertEqual(check, Data("noteit-key-check".utf8))
     }
 
+    private static func noteID(_ index: Int) -> String { String(format: "00000000-0000-0000-0000-%012d", index) }
+
     private func seedLegacyStore(_ backend: InMemoryBackend, notes: Int) async throws -> [String: Data] {
         var objects = ["inkwell/v1/manifest.json": try legacyManifest(passphrase: "pw"), "inkwell/v1/devices/mac.json": Data([9])]
         for index in 0..<notes {
-            objects[String(format: "inkwell/v1/notes/%03d.meta", index)] = Data([UInt8(index), 1])
+            objects["inkwell/v1/notes/\(Self.noteID(index)).meta"] = Data([UInt8(index), 1])
         }
         for (key, data) in objects {
             try await backend.put(key, data: data, ifMatch: nil, ifNoneMatch: true)
@@ -143,12 +145,12 @@ final class RemoteMigrationTests: XCTestCase {
         // B has listed the legacy store; before its first write, A migrates and syncs an edit.
         await deviceB.onNextPut(keyContaining: RemoteLayout.root, .before({
             _ = try? await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
-            _ = try? await inner.put("noteit/v1/notes/001.meta", data: newer, ifMatch: nil, ifNoneMatch: false)
+            _ = try? await inner.put("noteit/v1/notes/\(Self.noteID(1)).meta", data: newer, ifMatch: nil, ifNoneMatch: false)
         }))
 
         let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(deviceB, log: { _ in })
         XCTAssertTrue(migrated)
-        let kept = try await inner.get("noteit/v1/notes/001.meta").data
+        let kept = try await inner.get("noteit/v1/notes/\(Self.noteID(1)).meta").data
         XCTAssertEqual(kept, newer)
     }
 
@@ -183,14 +185,14 @@ final class RemoteMigrationTests: XCTestCase {
         _ = try await seedLegacyStore(inner, notes: 60)
         let otherManifest = Data("written by another device".utf8)
         let flaky = FaultyBackend(inner)
-        await flaky.onNextPut(keyContaining: "noteit/v1/notes/005.meta", .before({
+        await flaky.onNextPut(keyContaining: "noteit/v1/notes/\(Self.noteID(5)).meta", .before({
             _ = try? await inner.put(RemoteLayout.manifest(), data: otherManifest, ifMatch: nil, ifNoneMatch: true)
         }))
 
         let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, log: { _ in })
         XCTAssertTrue(migrated)
         let copied = try await inner.list(prefix: RemoteLayout.root).map(\.key)
-        let expected = ["noteit/v1/devices/mac.json", "noteit/v1/manifest.json"] + (0...5).map { String(format: "noteit/v1/notes/%03d.meta", $0) }
+        let expected = ["noteit/v1/devices/mac.json", "noteit/v1/manifest.json"] + (0...5).map { "noteit/v1/notes/\(Self.noteID($0)).meta" }
         XCTAssertEqual(copied, expected, "005 was created as the manifest appeared; an identical copy is kept, nothing after it")
         let manifest = try await inner.get(RemoteLayout.manifest()).data
         XCTAssertEqual(manifest, otherManifest)
@@ -201,18 +203,18 @@ final class RemoteMigrationTests: XCTestCase {
         _ = try await seedLegacyStore(inner, notes: 10)
         let deviceB = FaultyBackend(inner)
         // B has checked for the manifest and is about to create 004; meanwhile A finishes, syncs and deletes 004.
-        await deviceB.onNextPut(keyContaining: "noteit/v1/notes/004.meta", .before({
+        await deviceB.onNextPut(keyContaining: "noteit/v1/notes/\(Self.noteID(4)).meta", .before({
             _ = try? await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
-            _ = try? await inner.put("noteit/v1/tombstones/004.json", data: Data("deleted on A".utf8), ifMatch: nil, ifNoneMatch: false)
-            try? await inner.delete("noteit/v1/notes/004.meta")
+            _ = try? await inner.put("noteit/v1/tombstones/\(Self.noteID(4)).json", data: Data("deleted on A".utf8), ifMatch: nil, ifNoneMatch: false)
+            try? await inner.delete("noteit/v1/notes/\(Self.noteID(4)).meta")
         }))
 
         let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(deviceB, log: { _ in })
         XCTAssertTrue(migrated)
         let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
-        XCTAssertFalse(keys.contains("noteit/v1/notes/004.meta"), "a deleted note came back")
-        XCTAssertTrue(keys.contains("noteit/v1/tombstones/004.json"))
-        XCTAssertTrue(keys.contains("noteit/v1/notes/003.meta"), "an identical copy was rolled back")
+        XCTAssertFalse(keys.contains("noteit/v1/notes/\(Self.noteID(4)).meta"), "a deleted note came back")
+        XCTAssertTrue(keys.contains("noteit/v1/tombstones/\(Self.noteID(4)).json"))
+        XCTAssertTrue(keys.contains("noteit/v1/notes/\(Self.noteID(3)).meta"), "an identical copy was rolled back")
     }
 
     func testSlowerMigratorKeepsCopiesTheFinishingMigratorSkipped() async throws {
@@ -220,7 +222,7 @@ final class RemoteMigrationTests: XCTestCase {
         let legacy = try await seedLegacyStore(inner, notes: 10)
         let deviceB = FaultyBackend(inner)
         // B creates 003; A then copies the rest, skips B's identical 003 and writes the manifest.
-        await deviceB.onNextPut(keyContaining: "noteit/v1/notes/003.meta", .after({
+        await deviceB.onNextPut(keyContaining: "noteit/v1/notes/\(Self.noteID(3)).meta", .after({
             _ = try? await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
         }))
 
@@ -238,16 +240,68 @@ final class RemoteMigrationTests: XCTestCase {
         _ = try await seedLegacyStore(inner, notes: 10)
         let edited = Data("edited on A".utf8)
         let deviceB = FaultyBackend(inner)
-        await deviceB.onNextPut(keyContaining: "noteit/v1/notes/003.meta", .after({
+        await deviceB.onNextPut(keyContaining: "noteit/v1/notes/\(Self.noteID(3)).meta", .after({
             _ = try? await inner.put(RemoteLayout.manifest(), data: Data("A".utf8), ifMatch: nil, ifNoneMatch: true)
-            _ = try? await inner.put("noteit/v1/notes/003.meta", data: edited, ifMatch: nil, ifNoneMatch: false)
+            _ = try? await inner.put("noteit/v1/notes/\(Self.noteID(3)).meta", data: edited, ifMatch: nil, ifNoneMatch: false)
         }))
 
         let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(deviceB, log: { _ in })
         XCTAssertTrue(migrated)
-        let kept = try await inner.get("noteit/v1/notes/003.meta").data
+        let kept = try await inner.get("noteit/v1/notes/\(Self.noteID(3)).meta").data
         XCTAssertEqual(kept, edited)
         let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
-        XCTAssertFalse(keys.contains("noteit/v1/notes/004.meta"), "the copy went on after the manifest appeared")
+        XCTAssertFalse(keys.contains("noteit/v1/notes/\(Self.noteID(4)).meta"), "the copy went on after the manifest appeared")
+    }
+
+    func testTombstoneLeftByAnInterruptedCopyDoesNotHideANoteRestoredSince() async throws {
+        let inner = InMemoryBackend()
+        let id = UUID().uuidString
+        try await inner.put("inkwell/v1/manifest.json", data: try legacyManifest(passphrase: "pw"), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put("inkwell/v1/tombstones/\(id).json", data: Data("deleted".utf8), ifMatch: nil, ifNoneMatch: true)
+        let flaky = FaultyBackend(inner)
+        await flaky.failPuts(after: 1)
+        do {
+            try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, log: { _ in })
+            XCTFail("expected the copy to be interrupted")
+        } catch StorageError.network {}
+        let partial = try await inner.list(prefix: RemoteLayout.root).map(\.key)
+        XCTAssertEqual(partial, ["noteit/v1/tombstones/\(id).json"])
+
+        // An Inkwell device restores the note before the next attempt.
+        try await inner.delete("inkwell/v1/tombstones/\(id).json")
+        try await inner.put("inkwell/v1/notes/\(id).meta", data: Data("meta".utf8), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put("inkwell/v1/notes/\(id).body", data: Data("body".utf8), ifMatch: nil, ifNoneMatch: true)
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
+        XCTAssertTrue(migrated)
+        let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
+        XCTAssertFalse(keys.contains("noteit/v1/tombstones/\(id).json"))
+        let meta = try await inner.get("noteit/v1/notes/\(id).meta").data
+        let body = try await inner.get("noteit/v1/notes/\(id).body").data
+        XCTAssertEqual(meta, Data("meta".utf8))
+        XCTAssertEqual(body, Data("body".utf8))
+    }
+
+    func testRollbackCoversSyncToolDuplicatesOfADeletedNote() async throws {
+        let inner = InMemoryBackend()
+        _ = try await seedLegacyStore(inner, notes: 3)
+        let id = Self.noteID(9)
+        let duplicate = "noteit/v1/notes/\(id) 2.meta"
+        try await inner.put("inkwell/v1/notes/\(id).meta", data: Data([9]), ifMatch: nil, ifNoneMatch: true)
+        try await inner.put("inkwell/v1/notes/\(id) 2.meta", data: Data([9]), ifMatch: nil, ifNoneMatch: true)
+        let deviceB = FaultyBackend(inner)
+        // B is about to create the duplicate; meanwhile A finishes, syncs and deletes the note.
+        await deviceB.onNextPut(keyContaining: duplicate, .before({
+            _ = try? await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
+            _ = try? await inner.put(RemoteLayout.tombstone(UUID(uuidString: id)!), data: Data("deleted on A".utf8), ifMatch: nil, ifNoneMatch: false)
+            try? await inner.delete("noteit/v1/notes/\(id).meta")
+            try? await inner.delete(duplicate)
+        }))
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(deviceB, log: { _ in })
+        XCTAssertTrue(migrated)
+        let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
+        XCTAssertFalse(keys.contains(duplicate), "a duplicate of a deleted note came back")
+        XCTAssertFalse(keys.contains("noteit/v1/notes/\(id).meta"))
     }
 }

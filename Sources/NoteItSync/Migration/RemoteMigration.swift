@@ -8,9 +8,10 @@ import Foundation
 /// Several devices may migrate at once, and once one of them writes the manifest it starts syncing under
 /// the new root. So objects are only created, never blindly replaced, and the manifest is checked before
 /// every create. Once it appears the copy stops. A note or notebook deleted under the new root keeps its
-/// tombstone (written before its meta and body are deleted), so its objects are not created while one exists,
-/// and those created since the last check that saw no manifest are deleted again (unless changed since).
-/// Other copies are kept: they are identical to what the finishing device copied or skipped.
+/// tombstone (written before its meta and body are deleted), so its objects created since the last check that
+/// saw no manifest are deleted again (unless changed since). Other copies are kept: they are identical to what
+/// the finishing device copied or skipped. Before the manifest exists nothing syncs under the new root, so
+/// tombstones there that differ from the legacy ones are left over from an interrupted copy and are removed.
 public enum RemoteMigration {
     /// Returns whether a legacy store was copied, by this device or another one during the copy.
     /// Does nothing when `noteit/v1/` already has a manifest.
@@ -20,6 +21,11 @@ public enum RemoteMigration {
         let legacyManifest = RemoteLayout.legacyRoot + "manifest.json"
         let objects = try await backend.list(prefix: RemoteLayout.legacyRoot)
         guard objects.contains(where: { $0.key == legacyManifest }) else { return false }
+
+        if try await removeStaleTombstones(in: backend) {
+            log("NoteItSync: another device finished copying \(RemoteLayout.legacyRoot) first")
+            return true
+        }
 
         var copied = 0
         var unconfirmed: [(key: String, etag: String, tombstone: String)] = []
@@ -50,7 +56,6 @@ public enum RemoteMigration {
             }
             if try await manifestAppeared() { return true }
             let tombstone = tombstoneKey(for: key)
-            if let tombstone, try await tombstoneDeleted(tombstone, in: backend) { continue }
             switch try await copy(data, to: key, in: backend) {
             case .created(let etag):
                 if let tombstone { unconfirmed.append((key, etag, tombstone)) }
@@ -77,10 +82,32 @@ public enum RemoteMigration {
     private static func tombstoneKey(for key: String) -> String? {
         for folder in ["notes/", "notebooks/"] where key.hasPrefix(RemoteLayout.root + folder) {
             let name = key.dropFirst((RemoteLayout.root + folder).count)
-            guard !name.contains("/"), let stem = name.split(separator: ".").first else { return nil }
-            return RemoteLayout.root + "tombstones/\(stem).json"
+            guard !name.contains("/"), let id = UUID(uuidString: String(name.prefix(36))) else { return nil }
+            return RemoteLayout.tombstone(id)
         }
         return nil
+    }
+
+    /// Returns whether the manifest appeared, which ends the cleanup.
+    private static func removeStaleTombstones(in backend: StorageBackend) async throws -> Bool {
+        for object in try await backend.list(prefix: RemoteLayout.root + "tombstones/") {
+            let current: (data: Data, etag: String)
+            do {
+                current = try await backend.get(object.key)
+            } catch StorageError.notFound {
+                continue
+            }
+            let legacy = RemoteLayout.legacyRoot + object.key.dropFirst(RemoteLayout.root.count)
+            do {
+                if try await backend.get(legacy).data == current.data { continue }
+            } catch StorageError.notFound {}
+            if try await exists(RemoteLayout.manifest(), in: backend) { return true }
+            do {
+                try await backend.delete(object.key, ifMatch: current.etag)
+            } catch StorageError.notFound {
+            } catch StorageError.preconditionFailed {}
+        }
+        return false
     }
 
     private static func tombstoneDeleted(_ tombstone: String, in backend: StorageBackend) async throws -> Bool {
