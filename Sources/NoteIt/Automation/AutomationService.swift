@@ -171,11 +171,7 @@ final class AutomationService {
         var start = 0
         if let cursor {
             guard let position = ListCursor(cursor) else { throw .invalidInput("That cursor isn't valid.") }
-            if let index = notes.firstIndex(where: { $0.id == position.id }) {
-                start = index + 1
-            } else {
-                start = notes.firstIndex { position.precedes($0, pinnedFirst: sort == .list) } ?? notes.count
-            }
+            start = notes.firstIndex { position.precedes($0, pinnedFirst: sort == .list) } ?? notes.count
         }
         let page = Array(notes[start..<min(notes.count, start + min(limit, Self.maxListLimit))])
         let more = start + page.count < notes.count
@@ -382,11 +378,10 @@ final class AutomationService {
         return "#" + digits.uppercased()
     }
 
-    /// Pinned first for `.list`, then most recently updated, then by id, so pages never overlap.
+    /// Pinned first for `.list`, then most recently updated (to the millisecond, as in `ListCursor`), then by id, so
+    /// pages never overlap.
     static func precedes(_ a: NoteMeta, _ b: NoteMeta, pinnedFirst: Bool) -> Bool {
-        if pinnedFirst, a.isPinned != b.isPinned { return a.isPinned }
-        if a.updatedAt != b.updatedAt { return a.updatedAt > b.updatedAt }
-        return a.id.uuidString < b.id.uuidString
+        ListCursor(a).sorts(before: ListCursor(b), pinnedFirst: pinnedFirst)
     }
 
     /// The text around the first query term: 60 characters before and 100 after, cut on word boundaries.
@@ -418,12 +413,15 @@ final class AutomationService {
     }
 }
 
-/// `base64url("<updatedAt ms>|<UUID>")` of the last note on a page.
+/// `base64url("<pinned 0|1>|<updatedAt ms>|<UUID>")`: the sort position of the last note on a page. The next page
+/// starts after this position, wherever that note has moved since.
 struct ListCursor: Equatable {
+    var pinned: Bool
     var updatedAtMilliseconds: Int64
     var id: UUID
 
     init(_ meta: NoteMeta) {
+        pinned = meta.isPinned
         updatedAtMilliseconds = Int64((meta.updatedAt.timeIntervalSince1970 * 1000).rounded(.down))
         id = meta.id
     }
@@ -433,22 +431,27 @@ struct ListCursor: Equatable {
         while base64.count % 4 != 0 { base64 += "=" }
         guard let data = Data(base64Encoded: base64), let text = String(data: data, encoding: .utf8) else { return nil }
         let parts = text.split(separator: "|", omittingEmptySubsequences: false)
-        guard parts.count == 2, let ms = Int64(parts[0]), let id = UUID(uuidString: String(parts[1])) else { return nil }
+        guard parts.count == 3, parts[0] == "0" || parts[0] == "1", let ms = Int64(parts[1]),
+              let id = UUID(uuidString: String(parts[2])) else { return nil }
+        pinned = parts[0] == "1"
         updatedAtMilliseconds = ms
         self.id = id
     }
 
     var encoded: String {
-        Data("\(updatedAtMilliseconds)|\(id.uuidString)".utf8).base64EncodedString()
+        Data("\(pinned ? 1 : 0)|\(updatedAtMilliseconds)|\(id.uuidString)".utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
     }
 
-    /// True when `meta` sorts after this position; used when the cursor's note left the list.
+    func sorts(before other: ListCursor, pinnedFirst: Bool) -> Bool {
+        if pinnedFirst, pinned != other.pinned { return pinned }
+        if updatedAtMilliseconds != other.updatedAtMilliseconds { return updatedAtMilliseconds > other.updatedAtMilliseconds }
+        return id.uuidString < other.id.uuidString
+    }
+
+    /// True when `meta` sorts after this position.
     func precedes(_ meta: NoteMeta, pinnedFirst: Bool) -> Bool {
-        let ms = Int64((meta.updatedAt.timeIntervalSince1970 * 1000).rounded(.down))
-        if pinnedFirst, meta.isPinned { return false }
-        if ms != updatedAtMilliseconds { return ms < updatedAtMilliseconds }
-        return meta.id.uuidString > id.uuidString
+        sorts(before: ListCursor(meta), pinnedFirst: pinnedFirst)
     }
 }

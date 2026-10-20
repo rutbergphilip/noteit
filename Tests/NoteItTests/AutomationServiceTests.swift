@@ -272,6 +272,44 @@ final class AutomationServiceTests: XCTestCase {
         }
     }
 
+    private func page(_ service: AutomationService, limit: Int, after cursor: String?) throws -> ([UUID], String?) {
+        let page = try service.list(notebook: nil, tag: nil, query: nil, updatedSince: nil, deleted: .exclude, sort: .list,
+                                    limit: limit, cursor: cursor)
+        return (page.notes.map(\.id), page.nextCursor)
+    }
+
+    func testEditingLastNoteOfPageBetweenPagesGivesNoDuplicates() throws {
+        let (service, store) = makeService()
+        for index in 0..<10 {
+            let id = store.createNote(in: nil, initial: NSAttributedString(string: "Note \(index)")).id
+            store.notes[store.noteIndex(id)!].updatedAt = clock.addingTimeInterval(-Double(index))
+        }
+        var (seen, cursor) = try page(service, limit: 4, after: nil)
+        store.notes[store.noteIndex(seen[3])!].updatedAt = clock.addingTimeInterval(60)
+        while let next = cursor {
+            let (ids, after) = try page(service, limit: 4, after: next)
+            seen += ids
+            cursor = after
+        }
+        XCTAssertEqual(seen.count, 10)
+        XCTAssertEqual(Set(seen).count, 10)
+    }
+
+    func testDeletingPinnedCursorNoteSkipsNothing() throws {
+        let (service, store) = makeService()
+        var pinned: [UUID] = []
+        for index in 0..<6 {
+            let id = store.createNote(in: nil, initial: NSAttributedString(string: "Note \(index)")).id
+            store.notes[store.noteIndex(id)!].updatedAt = clock.addingTimeInterval(-Double(index))
+            if index < 3 { store.togglePin(id); pinned.append(id) }
+        }
+        let (first, cursor) = try page(service, limit: 1, after: nil)
+        XCTAssertEqual(first, [pinned[0]])
+        try service.moveToRecentlyDeleted(pinned[0])
+        let (second, _) = try page(service, limit: 2, after: cursor)
+        XCTAssertEqual(second, [pinned[1], pinned[2]])
+    }
+
     func testListUpdatedSince() throws {
         let (service, store) = makeService()
         let old = store.createNote(in: nil, initial: NSAttributedString(string: "Old")).id
