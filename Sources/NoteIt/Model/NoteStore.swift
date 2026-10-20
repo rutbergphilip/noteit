@@ -246,7 +246,7 @@ final class NoteStore: ObservableObject {
     }
 
     func plainText(for id: UUID) -> String {
-        body(for: id).string
+        BodyCodec.plainText(of: body(for: id))
     }
 
     /// Non-nil when the note's body file exists but could not be read. The original was backed up

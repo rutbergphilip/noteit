@@ -110,7 +110,7 @@ enum NoteExporter {
             }
             try Data(export.markdown.utf8).write(to: url, options: .atomic)
         case .html:
-            try Data(HTMLWriter.write(body, title: title).utf8).write(to: url, options: .atomic)
+            try Data(BodyCodec.html(of: body, title: title).utf8).write(to: url, options: .atomic)
         case .pdf:
             try pdfData(body, title: title).write(to: url, options: .atomic)
         case .rtfd:
@@ -124,33 +124,7 @@ enum NoteExporter {
 
     /// Plain text with list markers as `- `, `1. `, `☐ ` and `☑ `, and tables as tab-separated rows.
     static func plainText(_ body: NSAttributedString) -> String {
-        var lines: [String] = []
-        for block in NoteBlocks.parse(body) {
-            switch block {
-            case .paragraph(_, _, let runs):
-                lines.append(text(runs))
-            case .listItem(let marker, let level, _, let runs):
-                let prefix: String
-                switch marker {
-                case .bullet: prefix = "- "
-                case .numbered(let n): prefix = "\(n). "
-                case .checkbox(let checked): prefix = (checked ? EditorStyle.checkedBox : EditorStyle.uncheckedBox) + " "
-                }
-                lines.append(String(repeating: "  ", count: level) + prefix + text(runs))
-            case .code(let code, _):
-                lines.append(code)
-            case .divider:
-                lines.append("---")
-            case .table(let rows):
-                lines.append(rows.map { $0.map { text($0).replacingOccurrences(of: "\n", with: " ") }.joined(separator: "\t") }.joined(separator: "\n"))
-            }
-        }
-        return lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
-    }
-
-    private static func text(_ runs: [InlineRun]) -> String {
-        NoteBlocks.plainText(runs).replacingOccurrences(of: NoteBlocks.lineBreak, with: "\n")
-            .trimmingCharacters(in: .whitespaces)
+        BodyCodec.plainText(of: body)
     }
 
     // MARK: Notebooks

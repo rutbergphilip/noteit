@@ -113,7 +113,7 @@ final class VersionHistoryTests: XCTestCase {
         advance(minutes: 1)
         try store.restoreVersion(original)
 
-        XCTAssertEqual(store.plainText(for: id), "Original\nfirst draft")
+        XCTAssertEqual(store.plainText(for: id), "Original\nfirst draft\n")
         XCTAssertEqual(store.note(with: id)?.title, "Original")
         XCTAssertNotEqual(store.note(with: id)?.revision, revision, "a restore syncs like an edit")
         XCTAssertEqual(store.externallyUpdatedNoteID, id)
@@ -142,7 +142,7 @@ final class VersionHistoryTests: XCTestCase {
         let version = try XCTUnwrap(store.versions(of: id).first)
         store.moveToRecentlyDeleted([id])
         try store.restoreVersion(version)
-        XCTAssertEqual(store.plainText(for: id), "two")
+        XCTAssertEqual(store.plainText(for: id), "two\n")
     }
 
     func testPermanentDeleteRemovesHistory() throws {
@@ -185,7 +185,7 @@ final class VersionHistoryTests: XCTestCase {
         a.flush()
         try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
 
-        XCTAssertEqual(b.plainText(for: id), "Shared\nafter")
+        XCTAssertEqual(b.plainText(for: id), "Shared\nafter\n")
         XCTAssertEqual(try texts(b, id), ["Shared\nlocal", "Shared\nbefore"])
     }
 
@@ -203,7 +203,7 @@ final class VersionHistoryTests: XCTestCase {
             try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
         }
 
-        XCTAssertEqual(b.plainText(for: id), "Shared\n12")
+        XCTAssertEqual(b.plainText(for: id), "Shared\n12\n")
         XCTAssertEqual(try texts(b, id), ["Shared\n0"])
 
         advance(minutes: 11)

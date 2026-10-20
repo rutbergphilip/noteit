@@ -84,7 +84,7 @@ final class RecentlyDeletedTests: XCTestCase {
         store.updateBody(id, NSAttributedString(string: "Changed"))
         store.togglePin(id)
         store.moveNote(id, to: UUID())
-        XCTAssertEqual(store.plainText(for: id), "Frozen")
+        XCTAssertEqual(store.plainText(for: id), "Frozen\n")
         XCTAssertEqual(store.note(with: id)?.isPinned, false)
         XCTAssertNil(store.note(with: id)?.notebookID)
     }
