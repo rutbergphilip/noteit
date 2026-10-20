@@ -74,16 +74,40 @@ private struct InlineScanner {
         var node: Int
         var sourceStart: Int
         var image: Bool
-        var active = true
-        var delimiterBottom: Int
+        var delimiterBottom: Int?
+        var spanBottom: Int
     }
+
+    /// An entry of CommonMark's delimiter stack, kept as a doubly linked list over `delimiters`.
+    struct DelimiterEntry {
+        var node: Int
+        var prev: Int?
+        var next: Int?
+    }
+
+    /// A mark over `nodes[start..<end]`, applied once scanning is done.
+    struct Span {
+        var start: Int
+        var end: Int
+        var mark: Mark
+    }
+
+    /// Nested images copy their alt source, so deeper `![` is read as `!` and a plain bracket.
+    static let maxOpenImages = 4
 
     let chars: [Character]
     let resolveNoteLink: (String) -> UUID?
     var refs: [AttachmentRef] = []
     var nodes: [Node] = []
-    var delimiters: [Int] = []
+    var delimiters: [DelimiterEntry] = []
+    var delimiterTop: Int?
+    var spans: [Span] = []
     var brackets: [Bracket] = []
+    /// Non-image brackets below this index can't make a link any more: links don't nest.
+    var linkFloor = 0
+    var openImages = 0
+    var backtickRuns: [Int: [Int]]?
+    var bareURLBlockedUntil = 0
     var buffer = ""
     var i = 0
 
@@ -138,7 +162,8 @@ private struct InlineScanner {
             }
         }
         flush()
-        processEmphasis(bottom: 0)
+        processEmphasis(bottom: nil)
+        applySpans()
         processTags()
     }
 
@@ -165,27 +190,43 @@ private struct InlineScanner {
     private mutating func scanCodeSpan() {
         var run = 0
         while i + run < chars.count, chars[i + run] == "`" { run += 1 }
-        var j = i + run
-        while j < chars.count {
-            if chars[j] == "`" {
-                var closing = 0
-                while j + closing < chars.count, chars[j + closing] == "`" { closing += 1 }
-                if closing == run {
-                    var content = String(chars[(i + run)..<j]).replacingOccurrences(of: "\n", with: " ")
-                    if content.count >= 2, content.first == " ", content.last == " ", content.contains(where: { $0 != " " }) {
-                        content = String(content.dropFirst().dropLast())
-                    }
-                    appendText(content, marks: [.code])
-                    i = j + closing
-                    return
-                }
-                j += closing
-            } else {
-                j += 1
-            }
+        if backtickRuns == nil { backtickRuns = Self.backtickRuns(in: chars) }
+        let starts = backtickRuns?[run] ?? []
+        var low = 0
+        var high = starts.count
+        while low < high {
+            let mid = (low + high) / 2
+            if starts[mid] < i + run { low = mid + 1 } else { high = mid }
         }
-        buffer += String(repeating: "`", count: run)
-        i += run
+        guard low < starts.count else {
+            buffer += String(repeating: "`", count: run)
+            i += run
+            return
+        }
+        let j = starts[low]
+        var content = String(chars[(i + run)..<j]).replacingOccurrences(of: "\n", with: " ")
+        if content.count >= 2, content.first == " ", content.last == " ", content.contains(where: { $0 != " " }) {
+            content = String(content.dropFirst().dropLast())
+        }
+        appendText(content, marks: [.code])
+        i = j + run
+    }
+
+    /// Start offsets of every maximal backtick run, by run length, so finding a closer doesn't rescan the line.
+    private static func backtickRuns(in chars: [Character]) -> [Int: [Int]] {
+        var runs: [Int: [Int]] = [:]
+        var j = 0
+        while j < chars.count {
+            guard chars[j] == "`" else {
+                j += 1
+                continue
+            }
+            var length = 0
+            while j + length < chars.count, chars[j + length] == "`" { length += 1 }
+            runs[length, default: []].append(j)
+            j += length
+        }
+        return runs
     }
 
     private mutating func scanEntity() {
@@ -294,6 +335,7 @@ private struct InlineScanner {
     // MARK: Bare URLs (GFM extended autolinks)
 
     private mutating func scanBareURL() -> Bool {
+        guard i >= bareURLBlockedUntil else { return false }
         if i > 0 {
             let previous = chars[i - 1]
             guard previous.isWhitespace || "*_~(".contains(previous) else { return false }
@@ -303,13 +345,19 @@ private struct InlineScanner {
         guard let prefix else { return false }
         var end = i
         while end < chars.count, !chars[end].isWhitespace, chars[end] != "<" { end += 1 }
+        let runEnd = end
+        var opening = 0
+        var closing = 0
+        for c in chars[i..<end] {
+            if c == "(" { opening += 1 } else if c == ")" { closing += 1 }
+        }
         while end > i {
             let last = chars[end - 1]
             if "?!.,:*_~'\"".contains(last) {
                 end -= 1
-            } else if last == ")" {
-                let span = chars[i..<end]
-                if span.filter({ $0 == ")" }).count > span.filter({ $0 == "(" }).count { end -= 1 } else { break }
+            } else if last == ")", closing > opening {
+                closing -= 1
+                end -= 1
             } else {
                 break
             }
@@ -317,7 +365,11 @@ private struct InlineScanner {
         let text = String(chars[i..<end])
         guard text.count > prefix.count, text.dropFirst(prefix.count).contains(where: { $0.isLetter || $0.isNumber }) else { return false }
         let href = prefix == "www." ? "http://" + text : text
-        guard LinkPolicy.allows(href) else { return false }
+        guard LinkPolicy.allows(href) else {
+            // Later starts in the same run are suffixes of this one; trying each would be quadratic.
+            bareURLBlockedUntil = runEnd
+            return false
+        }
         appendText(text, marks: [.link(href: href)])
         i = end
         return true
@@ -355,10 +407,22 @@ private struct InlineScanner {
     // MARK: Links and images
 
     private mutating func pushBracket(image: Bool) {
+        if image, openImages >= Self.maxOpenImages {
+            buffer.append("!")
+            i += 1
+            return
+        }
         flush()
         nodes.append(Node(text: image ? "![" : "[", isBracket: true))
-        brackets.append(Bracket(node: nodes.count - 1, sourceStart: i, image: image, delimiterBottom: delimiters.count))
+        brackets.append(Bracket(node: nodes.count - 1, sourceStart: i, image: image, delimiterBottom: delimiterTop,
+                                spanBottom: spans.count))
+        if image { openImages += 1 }
         i += image ? 2 : 1
+    }
+
+    private mutating func popBracket() {
+        if brackets.removeLast().image { openImages -= 1 }
+        linkFloor = min(linkFloor, brackets.count)
     }
 
     private mutating func closeBracket() {
@@ -367,15 +431,16 @@ private struct InlineScanner {
             i += 1
             return
         }
-        guard bracket.active, let (destination, end) = LinkDestination.parse(chars, at: i + 1) else {
-            brackets.removeLast()
+        let active = bracket.image || brackets.count - 1 >= linkFloor
+        guard active, let (destination, end) = LinkDestination.parse(chars, at: i + 1) else {
+            popBracket()
             buffer.append("]")
             i += 1
             return
         }
         flush()
         processEmphasis(bottom: bracket.delimiterBottom)
-        brackets.removeLast()
+        popBracket()
         let inner = (bracket.node + 1)..<nodes.count
         if bracket.image {
             let rawAlt = String(chars[(bracket.sourceStart + 2)..<i])
@@ -384,22 +449,25 @@ private struct InlineScanner {
             let ref = AttachmentRef(path: path, displayName: name, width: width.map { Int($0.rounded()) })
             refs.append(ref)
             let mimeSource = MIMEType.fileExtension(of: name) != nil ? name : path
+            spans.removeSubrange(bracket.spanBottom...)
             nodes.removeSubrange(inner)
             nodes[bracket.node] = Node(atom: .image(sha: path, name: name, mime: MIMEType.forName(mimeSource), width: width))
         } else {
             switch LinkTarget(destination: destination, resolveNoteLink: resolveNoteLink) {
             case .href(let href):
-                for index in inner { addMark(.link(href: href), to: index) }
+                spans.append(Span(start: inner.lowerBound, end: inner.upperBound, mark: .link(href: href)))
                 nodes[bracket.node] = Node()
-                for index in brackets.indices where !brackets[index].image { brackets[index].active = false }
             case .attachment(let path):
                 let name = Self.plainText(nodes[inner])
                 refs.append(AttachmentRef(path: path, displayName: name, width: nil))
+                spans.removeSubrange(bracket.spanBottom...)
                 nodes.removeSubrange(inner)
                 nodes[bracket.node] = Node(atom: .attachment(sha: path, name: name, mime: MIMEType.forName(name.isEmpty ? path : name)))
             case .none:
                 nodes[bracket.node] = Node()
             }
+            // Whatever it points at, this is a link, and a link can't contain one (nested names were quadratic).
+            linkFloor = brackets.count
         }
         i = end
     }
@@ -454,66 +522,99 @@ private struct InlineScanner {
         flush()
         nodes.append(Node(text: String(repeating: c, count: count),
                           delimiter: Delimiter(char: c, count: count, originalCount: count, canOpen: canOpen, canClose: canClose)))
-        delimiters.append(nodes.count - 1)
+        delimiters.append(DelimiterEntry(node: nodes.count - 1, prev: delimiterTop, next: nil))
+        if let top = delimiterTop { delimiters[top].next = delimiters.count - 1 }
+        delimiterTop = delimiters.count - 1
         i += count
     }
 
-    /// CommonMark's "process emphasis" over `delimiters[bottom...]`; afterwards those delimiters are gone.
-    private mutating func processEmphasis(bottom: Int) {
-        var closerPosition = bottom
-        while closerPosition < delimiters.count {
-            let closerNode = delimiters[closerPosition]
-            guard let closer = nodes[closerNode].delimiter, closer.canClose else {
-                closerPosition += 1
+    /// CommonMark's "process emphasis" over the delimiters above `bottom` (all of them when nil); afterwards those
+    /// delimiters are gone. `openersBottom` keeps a failed search from being repeated, so this is linear.
+    private mutating func processEmphasis(bottom: Int?) {
+        var first: Int?
+        var cursor = delimiterTop
+        while let entry = cursor, entry != bottom {
+            first = entry
+            cursor = delimiters[entry].prev
+        }
+        var openersBottom = [Int?](repeating: bottom, count: 16)
+        var closerEntry = first
+        while let closer = closerEntry {
+            let closerNode = delimiters[closer].node
+            let closing = nodes[closerNode].delimiter!
+            guard closing.canClose else {
+                closerEntry = delimiters[closer].next
                 continue
             }
-            var openerPosition: Int?
-            var position = closerPosition - 1
-            while position >= bottom {
-                if let opener = nodes[delimiters[position]].delimiter, opener.char == closer.char, opener.canOpen,
-                   Self.canPair(opener, closer) {
-                    openerPosition = position
+            let key = Self.openersBottomKey(closing)
+            var found: Int?
+            var candidate = delimiters[closer].prev
+            while let entry = candidate, entry != bottom, entry != openersBottom[key] {
+                if let opener = nodes[delimiters[entry].node].delimiter, opener.char == closing.char, opener.canOpen,
+                   Self.canPair(opener, closing) {
+                    found = entry
                     break
                 }
-                position -= 1
+                candidate = delimiters[entry].prev
             }
-            guard let openerPosition else {
-                if !closer.canOpen {
-                    delimiters.remove(at: closerPosition)
-                } else {
-                    closerPosition += 1
-                }
+            guard let openerEntry = found else {
+                openersBottom[key] = delimiters[closer].prev
+                closerEntry = delimiters[closer].next
+                if !closing.canOpen { removeDelimiter(closer, &openersBottom) }
                 continue
             }
-            let openerNode = delimiters[openerPosition]
+            let openerNode = delimiters[openerEntry].node
             let opener = nodes[openerNode].delimiter!
             let used: Int
             let mark: Mark
-            switch closer.char {
+            switch closing.char {
             case "~":
-                used = closer.count
+                used = closing.count
                 mark = .strike
             case "=":
                 used = 2
                 mark = .highlight(MarkdownStyle.yellowHighlight)
             default:
-                used = opener.count >= 2 && closer.count >= 2 ? 2 : 1
+                used = opener.count >= 2 && closing.count >= 2 ? 2 : 1
                 mark = used == 2 ? .bold : .italic
             }
-            for index in (openerNode + 1)..<closerNode { addMark(mark, to: index) }
-            delimiters.removeSubrange((openerPosition + 1)..<closerPosition)
-            closerPosition = openerPosition + 1
+            spans.append(Span(start: openerNode + 1, end: closerNode, mark: mark))
+            var between = delimiters[openerEntry].next
+            while let entry = between, entry != closer {
+                between = delimiters[entry].next
+                removeDelimiter(entry, &openersBottom)
+            }
             nodes[openerNode].delimiter!.count -= used
             nodes[closerNode].delimiter!.count -= used
             if nodes[openerNode].delimiter!.count == 0 {
-                delimiters.remove(at: openerPosition)
-                closerPosition -= 1
+                removeDelimiter(openerEntry, &openersBottom)
             }
             if nodes[closerNode].delimiter!.count == 0 {
-                delimiters.remove(at: closerPosition)
+                closerEntry = delimiters[closer].next
+                removeDelimiter(closer, &openersBottom)
             }
         }
-        delimiters.removeSubrange(min(bottom, delimiters.count)...)
+        if let bottom { delimiters[bottom].next = nil }
+        delimiterTop = bottom
+    }
+
+    private mutating func removeDelimiter(_ entry: Int, _ openersBottom: inout [Int?]) {
+        let prev = delimiters[entry].prev
+        let next = delimiters[entry].next
+        if let prev { delimiters[prev].next = next }
+        if let next { delimiters[next].prev = prev } else { delimiterTop = prev }
+        for key in openersBottom.indices where openersBottom[key] == entry { openersBottom[key] = prev }
+    }
+
+    /// Closers that share a key fail on the same openers: same character, and for `*`/`_` the same can-open and
+    /// length mod 3 (the rule of 3), for `~` the same length.
+    private static func openersBottomKey(_ closer: Delimiter) -> Int {
+        switch closer.char {
+        case "*": (closer.canOpen ? 3 : 0) + closer.originalCount % 3
+        case "_": 6 + (closer.canOpen ? 3 : 0) + closer.originalCount % 3
+        case "~": 12 + min(closer.count, 2)
+        default: 15
+        }
     }
 
     private static func canPair(_ opener: Delimiter, _ closer: Delimiter) -> Bool {
@@ -537,24 +638,84 @@ private struct InlineScanner {
         nodes[index].marks.append(mark)
     }
 
+    /// Marks that don't depend on order: emphasis marks of one rank are all equal and links never overlap.
+    private mutating func applySpans() {
+        var depths: [[Int]?] = Array(repeating: nil, count: 9)
+        var marks: [Mark?] = Array(repeating: nil, count: 9)
+        for span in spans where span.start < span.end {
+            if case .link = span.mark {
+                for index in span.start..<span.end { addMark(span.mark, to: index) }
+                continue
+            }
+            let rank = MarkOrder.rank(span.mark)
+            if depths[rank] == nil { depths[rank] = Array(repeating: 0, count: nodes.count + 1) }
+            marks[rank] = span.mark
+            depths[rank]![span.start] += 1
+            depths[rank]![span.end] -= 1
+        }
+        for rank in depths.indices {
+            guard let changes = depths[rank], let mark = marks[rank] else { continue }
+            var depth = 0
+            for index in nodes.indices {
+                depth += changes[index]
+                if depth > 0 { addMark(mark, to: index) }
+            }
+        }
+        spans = []
+    }
+
     // MARK: Tags
 
     private mutating func processTags() {
         var open: [Int] = []
+        var openByName: [String: [(position: Int, node: Int)]] = [:]
+        var matched: [(start: Int, end: Int, marks: [Mark])] = []
         for index in nodes.indices {
             guard let tag = nodes[index].tag else { continue }
             if !tag.closing {
+                openByName[tag.name, default: []].append((open.count, index))
                 open.append(index)
                 continue
             }
-            guard let position = open.lastIndex(where: { nodes[$0].tag!.name == tag.name }) else { continue }
-            let opener = open[position]
-            for inner in (opener + 1)..<index {
-                for mark in nodes[opener].tag!.marks { addMark(mark, to: inner) }
+            var position: Int?
+            while let last = openByName[tag.name]?.last {
+                openByName[tag.name]!.removeLast()
+                if last.position < open.count, open[last.position] == last.node {
+                    position = last.position
+                    break
+                }
             }
+            guard let position else { continue }
+            let opener = open[position]
+            if opener + 1 < index { matched.append((opener + 1, index, nodes[opener].tag!.marks)) }
             nodes[opener] = Node()
             nodes[index] = Node()
             open.removeSubrange(position...)
+        }
+        applyNested(matched)
+    }
+
+    /// Matched tags nest properly, and the innermost tag wins a rank, as if each were applied as it closed.
+    private mutating func applyNested(_ ranges: [(start: Int, end: Int, marks: [Mark])]) {
+        guard !ranges.isEmpty else { return }
+        let order = ranges.indices.sorted { ranges[$0].start != ranges[$1].start ? ranges[$0].start < ranges[$1].start : ranges[$0].end > ranges[$1].end }
+        var active: [Int] = []
+        var byRank: [[Mark]] = Array(repeating: [], count: 9)
+        var next = 0
+        for index in nodes.indices {
+            while let top = active.last, ranges[top].end <= index {
+                for mark in ranges[top].marks { byRank[MarkOrder.rank(mark)].removeLast() }
+                active.removeLast()
+            }
+            while next < order.count, ranges[order[next]].start == index {
+                for mark in ranges[order[next]].marks { byRank[MarkOrder.rank(mark)].append(mark) }
+                active.append(order[next])
+                next += 1
+            }
+            guard !active.isEmpty else { continue }
+            for marks in byRank {
+                if let mark = marks.last { addMark(mark, to: index) }
+            }
         }
     }
 
@@ -562,20 +723,26 @@ private struct InlineScanner {
 
     func flattened() -> [Inline] {
         var result: [Inline] = []
+        var run = ""
+        var runMarks: [Mark] = []
         for node in nodes {
             if let atom = node.atom {
+                if !run.isEmpty { result.append(.text(run, marks: runMarks)) }
+                run = ""
                 result.append(atom)
                 continue
             }
             let text = node.delimiter.map { String(repeating: $0.char, count: $0.count) } ?? node.text
             guard !text.isEmpty else { continue }
             let marks = MarkOrder.canonical(node.marks)
-            if case .text(let previous, let previousMarks)? = result.last, previousMarks == marks {
-                result[result.count - 1] = .text(previous + text, marks: marks)
-            } else {
-                result.append(.text(text, marks: marks))
+            if marks != runMarks {
+                if !run.isEmpty { result.append(.text(run, marks: runMarks)) }
+                run = ""
+                runMarks = marks
             }
+            run += text
         }
+        if !run.isEmpty { result.append(.text(run, marks: runMarks)) }
         return result
     }
 }
@@ -616,6 +783,9 @@ enum LinkTarget {
 }
 
 enum LinkDestination {
+    /// cmark's limit; also keeps `[a](` repeated from rescanning the rest of the paragraph at every `]`.
+    static let maxParenDepth = 32
+
     /// Parses `(destination "title")` starting at `start`, which must be `(`. Returns the unescaped destination and
     /// the index after `)`.
     static func parse(_ chars: [Character], at start: Int) -> (String, Int)? {
@@ -648,7 +818,10 @@ enum LinkDestination {
                     continue
                 }
                 if c.isWhitespace { break }
-                if c == "(" { depth += 1 }
+                if c == "(" {
+                    depth += 1
+                    if depth > maxParenDepth { return nil }
+                }
                 if c == ")" {
                     if depth == 0 { break }
                     depth -= 1
@@ -661,6 +834,7 @@ enum LinkDestination {
         if j < chars.count, let closing: Character = ["\"": "\"", "'": "'", "(": ")"][chars[j]] {
             j += 1
             while j < chars.count, chars[j] != closing {
+                if closing == ")", chars[j] == "(" { return nil }
                 if chars[j] == "\\" { j += 1 }
                 j += 1
             }

@@ -131,9 +131,10 @@ public enum MarkdownCodec {
         var shas: [String: String] = [:]
         var data: [String: Data] = [:]
         var unresolved: [AttachmentRef] = []
-        for ref in parsed.attachmentRefs where shas[ref.path] == nil {
+        var tried: Set<String> = []
+        for ref in parsed.attachmentRefs where tried.insert(ref.path).inserted {
             guard let bytes = read(ref.path), !bytes.isEmpty, AttachmentLimit.allows(byteCount: bytes.count) else {
-                if !unresolved.contains(where: { $0.path == ref.path }) { unresolved.append(ref) }
+                unresolved.append(ref)
                 continue
             }
             let sha = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
@@ -156,15 +157,7 @@ public enum MarkdownCodec {
                     return inline
                 }
             }
-            var merged: [Inline] = []
-            for inline in kept {
-                if case .text(let text, let marks) = inline, case .text(let previous, marks)? = merged.last {
-                    merged[merged.count - 1] = .text(previous + text, marks: marks)
-                } else {
-                    merged.append(inline)
-                }
-            }
-            return merged
+            return kept.mergingTextRuns()
         }
         var body = parsed.body
         body.doc = doc

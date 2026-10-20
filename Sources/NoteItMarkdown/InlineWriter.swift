@@ -142,13 +142,9 @@ struct InlineWriter {
                 continue
             }
             if profile == .portable { marks.removeAll { if case .fontSize = $0 { true } else { false } } }
-            if case .text(let previous, let previousMarks)? = result.last, previousMarks == marks {
-                result[result.count - 1] = .text(previous + text, marks: marks)
-            } else if !text.isEmpty {
-                result.append(.text(text, marks: marks))
-            }
+            result.append(.text(text, marks: marks))
         }
-        return result
+        return result.mergingTextRuns()
     }
 
     static func isLink(_ mark: Mark) -> Bool {
@@ -407,5 +403,30 @@ struct InlineWriter {
             }
         }
         return prefix + String(chars) + suffix
+    }
+}
+
+extension Array where Element == Inline {
+    /// Adjacent text runs with equal marks joined and empty ones dropped. Linear: `previous + text` per run is not.
+    func mergingTextRuns() -> [Inline] {
+        var result: [Inline] = []
+        var run: (text: String, marks: [Mark])?
+        for inline in self {
+            guard case .text(let text, let marks) = inline else {
+                if let run { result.append(.text(run.text, marks: run.marks)) }
+                run = nil
+                result.append(inline)
+                continue
+            }
+            guard !text.isEmpty else { continue }
+            if run?.marks == marks {
+                run!.text += text
+            } else {
+                if let run { result.append(.text(run.text, marks: run.marks)) }
+                run = (text, marks)
+            }
+        }
+        if let run { result.append(.text(run.text, marks: run.marks)) }
+        return result
     }
 }

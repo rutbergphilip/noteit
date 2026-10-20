@@ -61,9 +61,16 @@ struct MarkdownWriter {
         }
         if profile == .library {
             var attempts = units.count * 3 + 3
+            var checks = 0
+            let doublings = Int.bitWidth - units.count.leadingZeroBitCount + 1
             while attempts > 0, let bad = firstMismatch(units, trailing: trailing) {
                 attempts -= 1
-                guard degrade(&units, at: bad) else { break }
+                checks += 1
+                // Each check parses the whole document, so after a few single steps the steps widen: first to the
+                // preserved units nearby, which only lose their original bytes, then to any unit.
+                let widening = max(0, checks - 8)
+                let width = 1 << min(widening <= doublings ? widening : widening - doublings, 30)
+                guard degrade(&units, at: bad, width: width, onlyPreserved: widening <= doublings) else { break }
             }
         }
         let body = assemble(units, trailing: trailing).text
@@ -163,13 +170,37 @@ struct MarkdownWriter {
         return blocks.count < expected.count ? expected[blocks.count].1 : units.count - 1
     }
 
-    /// One step down for the unit at `index`, or for an earlier unit when this one is already a fallback.
-    private func degrade(_ units: inout [Unit], at index: Int) -> Bool {
-        var target = index
-        while target >= 0, units[target].mode == .fallback || units[target].nodes.first == .horizontalRule {
-            target -= 1
+    /// One step down for the unit at `index`, or for an earlier unit when this one is already a fallback; with a
+    /// `width` above 1, also for up to that many more units on either side (only preserved ones if `onlyPreserved`).
+    private func degrade(_ units: inout [Unit], at index: Int, width: Int, onlyPreserved: Bool) -> Bool {
+        func canStep(_ target: Int) -> Bool {
+            units[target].mode != .fallback && units[target].nodes.first != .horizontalRule
         }
-        guard target >= 0 else { return false }
+        func isExtra(_ target: Int) -> Bool {
+            guard canStep(target) else { return false }
+            if !onlyPreserved { return true }
+            if case .preserved = units[target].mode { return true }
+            return false
+        }
+        var first = index
+        while first >= 0, !canStep(first) { first -= 1 }
+        guard first >= 0 else { return false }
+        var targets = [first]
+        var lower = first - 1
+        while lower >= max(0, first - width + 1) {
+            if isExtra(lower) { targets.append(lower) }
+            lower -= 1
+        }
+        var upper = first + 1
+        while upper < min(units.count, index + width) {
+            if isExtra(upper) { targets.append(upper) }
+            upper += 1
+        }
+        for target in targets.sorted(by: >) { step(&units, at: target) }
+        return true
+    }
+
+    private func step(_ units: inout [Unit], at target: Int) {
         switch units[target].mode {
         case .preserved:
             units[target].mode = standaloneMode(units[target])
@@ -180,7 +211,6 @@ struct MarkdownWriter {
             }
             units.replaceSubrange(target...target, with: split)
         }
-        return true
     }
 
     // MARK: Assembly
@@ -487,16 +517,10 @@ struct MarkdownWriter {
                     result.append(.hardBreak)
                 case .text(let text, var marks):
                     if profile == .portable { marks.removeAll { if case .fontSize = $0 { true } else { false } } }
-                    marks = MarkOrder.canonical(marks)
-                    guard !text.isEmpty else { continue }
-                    if case .text(let previous, let previousMarks)? = result.last, previousMarks == marks {
-                        result[result.count - 1] = .text(previous + text, marks: marks)
-                    } else {
-                        result.append(.text(text, marks: marks))
-                    }
+                    result.append(.text(text, marks: MarkOrder.canonical(marks)))
                 }
             }
-            return result
+            return result.mergingTextRuns()
         }
     }
 }
