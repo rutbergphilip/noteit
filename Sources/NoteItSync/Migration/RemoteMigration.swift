@@ -7,9 +7,10 @@ import Foundation
 ///
 /// Several devices may migrate at once, and once one of them writes the manifest it starts syncing under
 /// the new root. So objects are only created, never blindly replaced, and the manifest is checked before
-/// every create. Once it appears the copy stops, and the objects created since the last check that saw no
-/// manifest are deleted again (unless changed since): a slower device must not undo edits or deletions
-/// made under the new root.
+/// every create. Once it appears the copy stops. A note or notebook deleted under the new root keeps its
+/// tombstone (written before its meta and body are deleted), so its objects are not created while one exists,
+/// and those created since the last check that saw no manifest are deleted again (unless changed since).
+/// Other copies are kept: they are identical to what the finishing device copied or skipped.
 public enum RemoteMigration {
     /// Returns whether a legacy store was copied, by this device or another one during the copy.
     /// Does nothing when `noteit/v1/` already has a manifest.
@@ -21,13 +22,14 @@ public enum RemoteMigration {
         guard objects.contains(where: { $0.key == legacyManifest }) else { return false }
 
         var copied = 0
-        var unconfirmed: [(key: String, etag: String)] = []
+        var unconfirmed: [(key: String, etag: String, tombstone: String)] = []
         func manifestAppeared() async throws -> Bool {
             guard try await exists(RemoteLayout.manifest(), in: backend) else {
                 unconfirmed.removeAll()
                 return false
             }
             for object in unconfirmed {
+                guard try await tombstoneDeleted(object.tombstone, in: backend) else { continue }
                 do {
                     try await backend.delete(object.key, ifMatch: object.etag)
                 } catch StorageError.notFound {
@@ -47,9 +49,11 @@ public enum RemoteMigration {
                 continue  // Deleted by another device since the listing.
             }
             if try await manifestAppeared() { return true }
+            let tombstone = tombstoneKey(for: key)
+            if let tombstone, try await tombstoneDeleted(tombstone, in: backend) { continue }
             switch try await copy(data, to: key, in: backend) {
             case .created(let etag):
-                unconfirmed.append((key, etag))
+                if let tombstone { unconfirmed.append((key, etag, tombstone)) }
                 copied += 1
             case .replaced: copied += 1
             case .skipped: break
@@ -67,6 +71,32 @@ public enum RemoteMigration {
         }
         log("NoteItSync: copied \(copied) object(s) from \(RemoteLayout.legacyRoot) to \(RemoteLayout.root)")
         return true
+    }
+
+    /// The tombstone of the note or notebook `key` belongs to; nil for objects that are not per record.
+    private static func tombstoneKey(for key: String) -> String? {
+        for folder in ["notes/", "notebooks/"] where key.hasPrefix(RemoteLayout.root + folder) {
+            let name = key.dropFirst((RemoteLayout.root + folder).count)
+            guard !name.contains("/"), let stem = name.split(separator: ".").first else { return nil }
+            return RemoteLayout.root + "tombstones/\(stem).json"
+        }
+        return nil
+    }
+
+    private static func tombstoneDeleted(_ tombstone: String, in backend: StorageBackend) async throws -> Bool {
+        let current: Data
+        do {
+            current = try await backend.get(tombstone).data
+        } catch StorageError.notFound {
+            return false
+        }
+        // A byte-for-byte copy of a legacy tombstone records no deletion made under the new root.
+        let legacy = RemoteLayout.legacyRoot + tombstone.dropFirst(RemoteLayout.root.count)
+        do {
+            return try await backend.get(legacy).data != current
+        } catch StorageError.notFound {
+            return true
+        }
     }
 
     private enum CopyResult { case created(etag: String), replaced, skipped, storeMigrated }

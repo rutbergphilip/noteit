@@ -190,33 +190,47 @@ final class RemoteMigrationTests: XCTestCase {
         let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(flaky, log: { _ in })
         XCTAssertTrue(migrated)
         let copied = try await inner.list(prefix: RemoteLayout.root).map(\.key)
-        let expected = ["noteit/v1/devices/mac.json", "noteit/v1/manifest.json"] + (0..<5).map { String(format: "noteit/v1/notes/%03d.meta", $0) }
-        XCTAssertEqual(copied, expected, "005 was created after the manifest appeared and must be rolled back")
+        let expected = ["noteit/v1/devices/mac.json", "noteit/v1/manifest.json"] + (0...5).map { String(format: "noteit/v1/notes/%03d.meta", $0) }
+        XCTAssertEqual(copied, expected, "005 was created as the manifest appeared; an identical copy is kept, nothing after it")
         let manifest = try await inner.get(RemoteLayout.manifest()).data
         XCTAssertEqual(manifest, otherManifest)
     }
 
     func testSlowerMigratorDoesNotBringBackObjectsDeletedUnderTheNewRoot() async throws {
         let inner = InMemoryBackend()
-        let legacy = try await seedLegacyStore(inner, notes: 10)
-        // A copied 007 earlier, then finishes, syncs and deletes the note while B is still copying.
-        try await inner.put("noteit/v1/notes/007.meta", data: try XCTUnwrap(legacy["inkwell/v1/notes/007.meta"]), ifMatch: nil, ifNoneMatch: true)
-        let snapshot = SnapshotBox()
+        _ = try await seedLegacyStore(inner, notes: 10)
         let deviceB = FaultyBackend(inner)
-        await deviceB.onNextPut(keyContaining: "noteit/v1/notes/003.meta", .after({
-            _ = try? await inner.put(RemoteLayout.manifest(), data: Data("A".utf8), ifMatch: nil, ifNoneMatch: true)
-            try? await inner.delete("noteit/v1/notes/007.meta")
-            await snapshot.set((try? await inner.list(prefix: RemoteLayout.root)) ?? [])
+        // B has checked for the manifest and is about to create 004; meanwhile A finishes, syncs and deletes 004.
+        await deviceB.onNextPut(keyContaining: "noteit/v1/notes/004.meta", .before({
+            _ = try? await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
+            _ = try? await inner.put("noteit/v1/tombstones/004.json", data: Data("deleted on A".utf8), ifMatch: nil, ifNoneMatch: false)
+            try? await inner.delete("noteit/v1/notes/004.meta")
         }))
 
         let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(deviceB, log: { _ in })
         XCTAssertTrue(migrated)
         let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
-        XCTAssertFalse(keys.contains("noteit/v1/notes/007.meta"), "a deleted note came back")
-        let before = Set(await snapshot.objects)
+        XCTAssertFalse(keys.contains("noteit/v1/notes/004.meta"), "a deleted note came back")
+        XCTAssertTrue(keys.contains("noteit/v1/tombstones/004.json"))
+        XCTAssertTrue(keys.contains("noteit/v1/notes/003.meta"), "an identical copy was rolled back")
+    }
+
+    func testSlowerMigratorKeepsCopiesTheFinishingMigratorSkipped() async throws {
+        let inner = InMemoryBackend()
+        let legacy = try await seedLegacyStore(inner, notes: 10)
+        let deviceB = FaultyBackend(inner)
+        // B creates 003; A then copies the rest, skips B's identical 003 and writes the manifest.
+        await deviceB.onNextPut(keyContaining: "noteit/v1/notes/003.meta", .after({
+            _ = try? await RemoteMigration.migrateLegacyStoreIfNeeded(inner, log: { _ in })
+        }))
+
+        let migrated = try await RemoteMigration.migrateLegacyStoreIfNeeded(deviceB, log: { _ in })
+        XCTAssertTrue(migrated)
+        var copied: [String: Data] = [:]
         for object in try await inner.list(prefix: RemoteLayout.root) {
-            XCTAssertTrue(before.contains(object), "\(object.key) was written after the manifest appeared")
+            copied[RemoteLayout.legacyRoot + object.key.dropFirst(RemoteLayout.root.count)] = try await inner.get(object.key).data
         }
+        XCTAssertEqual(copied, legacy, "the migrated store lost an object")
     }
 
     func testRollbackKeepsObjectsChangedByAnotherDevice() async throws {
@@ -236,9 +250,4 @@ final class RemoteMigrationTests: XCTestCase {
         let keys = try await inner.list(prefix: RemoteLayout.root).map(\.key)
         XCTAssertFalse(keys.contains("noteit/v1/notes/004.meta"), "the copy went on after the manifest appeared")
     }
-}
-
-private actor SnapshotBox {
-    var objects: [RemoteObject] = []
-    func set(_ objects: [RemoteObject]) { self.objects = objects }
 }
