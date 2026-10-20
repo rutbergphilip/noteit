@@ -80,6 +80,18 @@ final class DocSchemaTests: XCTestCase {
         guard case .unknown = try roundTrip(mark) else { return XCTFail("expected unknown") }
     }
 
+    func testNonFiniteWidthsFailToDecode() {
+        let image = #"{"content":[{"attrs":{"mime":"image/png","name":"a.png","sha":"ab","width":WIDTH},"type":"image"}],"type":"paragraph"}"#
+        let table = #"{"attrs":{"columnWidths":[50,WIDTH]},"content":[],"type":"table"}"#
+        for node in [image, table] {
+            for width in ["1e999", "-1e999"] {
+                let body = #"{"attachments":{},"doc":{"content":["# + node.replacingOccurrences(of: "WIDTH", with: width)
+                    + #"],"type":"doc"},"format":"noteit-doc","version":1}"#
+                XCTAssertThrowsError(try BodyContainer.decode(Data(body.utf8)), "\(width) in \(node)")
+            }
+        }
+    }
+
     func testCodableMatchesTheCodec() throws {
         let node = DocNode.listItem(kind: .task, level: 1, number: nil, checked: false, align: nil,
                                     content: [.text("a", marks: [.link(href: "https://x.y")])])

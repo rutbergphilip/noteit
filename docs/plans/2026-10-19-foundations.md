@@ -1175,7 +1175,11 @@ Moved from web-app Task 0.1, plus the `AttachmentLimit` type from web-app Task 0
   - a colour that doesn't match `^#[0-9A-Fa-f]{6}$`;
   - a `fontSize` delta outside the [8, 96] range;
   - an attachment key that isn't the SHA-256 of its data;
-  - a link whose `LinkPolicy.allows` is false.
+  - a link whose `LinkPolicy.allows` is false;
+  - an image or attachment whose name is empty or only whitespace;
+  - an image width or table column width that isn't a finite number above 0, or `columnWidths` whose count isn't the table's column count (its longest row).
+
+  A width token that overflows to infinity (such as `1e999`) fails to decode.
 - [ ] `LinkPolicy.schemes` is `["http", "https", "mailto", "tel", "noteit"]`. A `noteit:` href is allowed only when `NoteLink(url:)` or `URLCommand.parse` accepts it. Until Task 5.3 lands, the check is "scheme is noteit and host is note".
 - [ ] Move the seven sentinel values (`bodySentinel` through `subheadingSentinel`) into `BlockSentinels` as `Double`. `EditorStyle` keeps its names as `CGFloat(BlockSentinels.x)`.
 - [ ] Add `ImagePolicy` as frozen: a pure `String`-backed enum with no ImageIO or AppKit code. `NoteItDocAppKit` applies it (Task 2.3).

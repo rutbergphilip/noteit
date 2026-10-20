@@ -1,5 +1,6 @@
 import AppKit
 import NoteItDoc
+import UniformTypeIdentifiers
 
 /// noteit-doc → NSAttributedString, with the attributes the editor itself would write. Built in foundations
 /// Task 2.3; the rules are web-app spec §3.3.
@@ -107,10 +108,12 @@ struct DocImporter {
                 out.append(NSAttributedString(string: string, attributes: attributes(for: marks, kind: kind, base: baseAttrs)))
             case .hardBreak:
                 out.append(NSAttributedString(string: "\u{2028}", attributes: baseAttrs))
-            case .image(let sha, let name, _, let width):
-                out.append(try attachmentString(sha: sha, name: name, width: width, attributes: baseAttrs))
-            case .attachment(let sha, let name, _):
-                out.append(try attachmentString(sha: sha, name: name, width: nil, attributes: baseAttrs))
+            case .image(let sha, let name, let mime, let width):
+                out.append(try attachmentString(sha: sha, name: Self.fileName(name, mime: mime, fallback: "image"), width: width,
+                                                attributes: baseAttrs))
+            case .attachment(let sha, let name, let mime):
+                out.append(try attachmentString(sha: sha, name: Self.fileName(name, mime: mime, fallback: "attachment"), width: nil,
+                                                attributes: baseAttrs))
             }
         }
         if checked, out.length > start {
@@ -155,6 +158,14 @@ struct DocImporter {
         if DocParagraphModel.isItalic(converted) { return converted }
         let descriptor = font.fontDescriptor.withSymbolicTraits(font.fontDescriptor.symbolicTraits.union(.italic))
         return NSFont(descriptor: descriptor, size: font.pointSize) ?? converted
+    }
+
+    /// `FileWrapper` raises an Objective-C exception for an empty `preferredFilename`, so a blank name (which
+    /// `DocValidation` reports as read-only) gets a default one with the mime's extension.
+    static func fileName(_ name: String, mime: String, fallback: String) -> String {
+        guard name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return name }
+        guard let ext = UTType(mimeType: mime)?.preferredFilenameExtension else { return fallback }
+        return fallback + "." + ext
     }
 
     private func attachmentString(sha: String, name: String, width: Double?, attributes: [NSAttributedString.Key: Any]) throws -> NSAttributedString {

@@ -83,7 +83,7 @@ struct JSONFields {
         switch members[key] {
         case nil, .null?: return nil
         case .number(let token)?:
-            guard let value = Double(token) else { throw DocDecodingError("\(context): \(key) is out of range") }
+            guard let value = Double(token), value.isFinite else { throw DocDecodingError("\(context): \(key) is out of range") }
             return value
         default: throw DocDecodingError("\(context): \(key) must be a number")
         }

@@ -63,7 +63,14 @@ public enum DocValidation: Equatable, Sendable {
         case .listItem(_, let level, _, _, _, let content):
             guard listLevels.contains(level) else { throw Failure(reason: "List level \(level) is out of range") }
             try checkInlines(content)
-        case .table(_, let rows):
+        case .table(let columnWidths, let rows):
+            if let columnWidths {
+                let columns = rows.map(\.count).max() ?? 0
+                guard columnWidths.count == columns else {
+                    throw Failure(reason: "The table has \(columns) columns but \(columnWidths.count) column widths")
+                }
+                for width in columnWidths { try checkWidth(width, of: "Column") }
+            }
             for cell in rows.joined() { try checkParagraphs(cell.content) }
         case .unknown(let type, _):
             throw Failure(reason: "Unknown content \(type)")
@@ -84,9 +91,26 @@ public enum DocValidation: Equatable, Sendable {
 
     private static func checkInlines(_ content: [Inline]) throws {
         for inline in content {
-            guard case .text(_, let marks) = inline else { continue }
-            for mark in marks { try checkMark(mark) }
+            switch inline {
+            case .text(_, let marks):
+                for mark in marks { try checkMark(mark) }
+            case .image(_, let name, _, let width):
+                try checkName(name, of: "An image")
+                if let width { try checkWidth(width, of: "Image") }
+            case .attachment(_, let name, _):
+                try checkName(name, of: "An attachment")
+            case .hardBreak:
+                break
+            }
         }
+    }
+
+    private static func checkName(_ name: String, of item: String) throws {
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw Failure(reason: "\(item) has no name") }
+    }
+
+    private static func checkWidth(_ width: Double, of item: String) throws {
+        guard width.isFinite, width > 0 else { throw Failure(reason: "\(item) width \(width) isn't a positive number") }
     }
 
     private static func checkMark(_ mark: Mark) throws {

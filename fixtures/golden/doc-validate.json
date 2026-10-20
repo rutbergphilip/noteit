@@ -437,6 +437,323 @@
         "readOnly": "version"
       },
       "name": "newer version"
+    },
+    {
+      "container": {
+        "attachments": {
+          "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881": {
+            "data": "eA==",
+            "mime": "image/png",
+            "name": ""
+          }
+        },
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "attrs": {
+                    "mime": "image/png",
+                    "name": "",
+                    "sha": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+                  },
+                  "type": "image"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": {
+        "readOnly": "attachment name"
+      },
+      "name": "image without a name"
+    },
+    {
+      "container": {
+        "attachments": {
+          "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881": {
+            "data": "eA==",
+            "mime": "text/plain",
+            "name": "  "
+          }
+        },
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "attrs": {
+                    "mime": "text/plain",
+                    "name": "  ",
+                    "sha": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881"
+                  },
+                  "type": "attachment"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": {
+        "readOnly": "attachment name"
+      },
+      "name": "attachment with a blank name"
+    },
+    {
+      "container": {
+        "attachments": {
+          "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881": {
+            "data": "eA==",
+            "mime": "image/png",
+            "name": "x.png"
+          }
+        },
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "attrs": {
+                    "mime": "image/png",
+                    "name": "x.png",
+                    "sha": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+                    "width": 240
+                  },
+                  "type": "image"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "image width"
+    },
+    {
+      "container": {
+        "attachments": {
+          "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881": {
+            "data": "eA==",
+            "mime": "image/png",
+            "name": "x.png"
+          }
+        },
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "attrs": {
+                    "mime": "image/png",
+                    "name": "x.png",
+                    "sha": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+                    "width": 0
+                  },
+                  "type": "image"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": {
+        "readOnly": "image width"
+      },
+      "name": "image width zero"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "attrs": {
+                "columnWidths": [
+                  40,
+                  60
+                ]
+              },
+              "content": [
+                {
+                  "content": [
+                    {
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "x",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    },
+                    {
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "x",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "table column widths"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "attrs": {
+                "columnWidths": [
+                  120,
+                  -20
+                ]
+              },
+              "content": [
+                {
+                  "content": [
+                    {
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "x",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    },
+                    {
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "x",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": {
+        "readOnly": "column widths"
+      },
+      "name": "negative column width"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "attrs": {
+                "columnWidths": [
+                  100
+                ]
+              },
+              "content": [
+                {
+                  "content": [
+                    {
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "x",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    },
+                    {
+                      "content": [
+                        {
+                          "content": [
+                            {
+                              "text": "x",
+                              "type": "text"
+                            }
+                          ],
+                          "type": "paragraph"
+                        }
+                      ],
+                      "type": "tableCell"
+                    }
+                  ],
+                  "type": "tableRow"
+                }
+              ],
+              "type": "table"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": {
+        "readOnly": "column widths"
+      },
+      "name": "column widths count mismatch"
     }
   ],
   "generator": "spec",

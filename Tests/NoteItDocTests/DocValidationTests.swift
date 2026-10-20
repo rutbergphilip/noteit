@@ -95,4 +95,46 @@ final class DocValidationTests: XCTestCase {
         }
         XCTAssertEqual(LinkPolicy.schemes, ["http", "https", "mailto", "tel", "noteit"])
     }
+
+    func testImageOrAttachmentNeedsAName() {
+        func inline(_ item: Inline) -> BodyContainer {
+            container([.paragraph(align: nil, indent: nil, content: [item])])
+        }
+        XCTAssertEqual(DocValidation.validate(inline(.image(sha: "ab", name: "a.png", mime: "image/png", width: nil))), .valid)
+        XCTAssertEqual(DocValidation.validate(inline(.attachment(sha: "ab", name: "c.pdf", mime: "application/pdf"))), .valid)
+        for name in ["", " ", "\n\t"] {
+            XCTAssertTrue(isReadOnly(inline(.image(sha: "ab", name: name, mime: "image/png", width: nil))), name.debugDescription)
+            XCTAssertTrue(isReadOnly(inline(.attachment(sha: "ab", name: name, mime: "application/pdf"))), name.debugDescription)
+        }
+        let nested = BodyContainer(doc: .doc([.listItem(kind: .bullet, level: 0, number: nil, checked: nil, align: nil,
+                                                        content: [.attachment(sha: "ab", name: "", mime: "application/pdf")])]))
+        XCTAssertTrue(isReadOnly(nested))
+    }
+
+    func testImageWidthMustBeFiniteAndPositive() {
+        func image(width: Double?) -> BodyContainer {
+            container([.paragraph(align: nil, indent: nil, content: [.image(sha: "ab", name: "a.png", mime: "image/png", width: width)])])
+        }
+        XCTAssertEqual(DocValidation.validate(image(width: 120.5)), .valid)
+        XCTAssertEqual(DocValidation.validate(image(width: nil)), .valid)
+        for width in [0, -1, .infinity, -.infinity, .nan] as [Double] {
+            XCTAssertTrue(isReadOnly(image(width: width)), "\(width)")
+        }
+    }
+
+    func testColumnWidthsMustBeFinitePositiveAndOnePerColumn() {
+        let cell = TableCell(header: false, content: [paragraph(marks: [])])
+        func table(_ widths: [Double]?, rows: [[TableCell]]) -> BodyContainer {
+            container([.table(columnWidths: widths, rows: rows)])
+        }
+        XCTAssertEqual(DocValidation.validate(table([40, 60], rows: [[cell, cell], [cell, cell]])), .valid)
+        XCTAssertEqual(DocValidation.validate(table([40, 60], rows: [[cell, cell], [cell]])), .valid)
+        XCTAssertEqual(DocValidation.validate(table(nil, rows: [[cell]])), .valid)
+        for width in [0, -5, .infinity, .nan] as [Double] {
+            XCTAssertTrue(isReadOnly(table([50, width], rows: [[cell, cell]])), "\(width)")
+        }
+        XCTAssertTrue(isReadOnly(table([100], rows: [[cell, cell]])))
+        XCTAssertTrue(isReadOnly(table([30, 30, 40], rows: [[cell, cell]])))
+        XCTAssertTrue(isReadOnly(table([100], rows: [])))
+    }
 }

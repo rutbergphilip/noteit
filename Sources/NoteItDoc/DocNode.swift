@@ -113,6 +113,7 @@ extension DocNode {
                     guard case .number(let token) = item, let value = Double(token) else {
                         throw DocDecodingError("table: columnWidths must hold numbers")
                     }
+                    guard value.isFinite else { throw DocDecodingError("table: columnWidths is out of range") }
                     return value
                 }
             default: throw DocDecodingError("table: columnWidths must be an array")
