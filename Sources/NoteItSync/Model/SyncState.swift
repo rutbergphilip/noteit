@@ -1,5 +1,22 @@
 import Foundation
 
+/// One uncommitted or in-doubt doc-body version of a note. Declared and persisted by foundations Task 3.1; web-app
+/// Task 0.4 writes it, sync-security reads its count. The sealed body bytes live in `PendingBodies/<ID>.<VERSION>`.
+public struct PendingBody: Codable, Sendable, Equatable {
+    public enum Phase: String, Codable, Sendable { case uploading, committing, inDoubt }
+    public var version: UUID
+    public var tag: String
+    public var phase: Phase
+    public var envelope: RemoteEnvelope
+
+    public init(version: UUID, tag: String, phase: Phase, envelope: RemoteEnvelope) {
+        self.version = version
+        self.tag = tag
+        self.phase = phase
+        self.envelope = envelope
+    }
+}
+
 /// Per-device sync base state: what each record looked like at the last successful sync.
 public struct SyncState: Codable, Sendable, Equatable {
     public struct Base: Codable, Sendable, Equatable {
@@ -27,10 +44,15 @@ public struct SyncState: Codable, Sendable, Equatable {
     public var pendingPushes: [UUID: UUID] = [:]
     /// Sync-tool conflict files this device couldn't use, by key, with when it first listed them.
     public var sidecarFirstSeen: [String: Date] = [:]
+    /// The store's key ID, from the session (nil for unencrypted stores).
+    public var keyID: String?
+    /// The one uncommitted or in-doubt doc-body version per note; a separate map keeps old state files decodable.
+    public var pendingBodyVersions: [UUID: PendingBody] = [:]
 
     public init(
         bases: [UUID: Base] = [:], knownTombstones: Set<UUID> = [], lastDeviceWrite: Date? = nil,
-        tombstoneDates: [UUID: Date] = [:], pendingPushes: [UUID: UUID] = [:], sidecarFirstSeen: [String: Date] = [:]
+        tombstoneDates: [UUID: Date] = [:], pendingPushes: [UUID: UUID] = [:], sidecarFirstSeen: [String: Date] = [:],
+        keyID: String? = nil, pendingBodyVersions: [UUID: PendingBody] = [:]
     ) {
         self.bases = bases
         self.knownTombstones = knownTombstones
@@ -38,10 +60,12 @@ public struct SyncState: Codable, Sendable, Equatable {
         self.tombstoneDates = tombstoneDates
         self.pendingPushes = pendingPushes
         self.sidecarFirstSeen = sidecarFirstSeen
+        self.keyID = keyID
+        self.pendingBodyVersions = pendingBodyVersions
     }
 
     private enum CodingKeys: String, CodingKey {
-        case bases, knownTombstones, lastDeviceWrite, tombstoneDates, pendingPushes, sidecarFirstSeen
+        case bases, knownTombstones, lastDeviceWrite, tombstoneDates, pendingPushes, sidecarFirstSeen, keyID, pendingBodyVersions
     }
 
     // Every key is optional so state files written by older builds keep their bases.
@@ -53,6 +77,8 @@ public struct SyncState: Codable, Sendable, Equatable {
         tombstoneDates = try c.decodeIfPresent([UUID: Date].self, forKey: .tombstoneDates) ?? [:]
         pendingPushes = try c.decodeIfPresent([UUID: UUID].self, forKey: .pendingPushes) ?? [:]
         sidecarFirstSeen = try c.decodeIfPresent([String: Date].self, forKey: .sidecarFirstSeen) ?? [:]
+        keyID = try c.decodeIfPresent(String.self, forKey: .keyID)
+        pendingBodyVersions = try c.decodeIfPresent([UUID: PendingBody].self, forKey: .pendingBodyVersions) ?? [:]
     }
 
     /// Missing or corrupt files yield an empty state.

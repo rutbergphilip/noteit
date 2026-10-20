@@ -39,7 +39,7 @@ public struct RecordPayload: Sendable {
 }
 
 /// Stored sealed at the record's meta key.
-public struct RemoteEnvelope: Codable, Sendable {
+public struct RemoteEnvelope: Codable, Sendable, Equatable {
     public var id: UUID
     public var kind: RecordKind
     public var revision: UUID
@@ -78,14 +78,32 @@ public struct Tombstone: Codable, Sendable, Hashable {
     }
 }
 
+/// Where a device runs (foundations step 3). `DeviceInfo.platform` holds the raw value as a string, so a value
+/// from a newer app survives.
+public enum DevicePlatform: String, Codable, Sendable, CaseIterable {
+    case mac, ios, web
+}
+
 public struct DeviceInfo: Codable, Sendable, Hashable {
     public var deviceID: String
     public var name: String
     public var lastSync: Date
+    /// A `DevicePlatform` raw value; nil for older apps.
+    public var platform: String?
+    public var appVersion: String?
+    /// `StoreFeature` raw values this app reads; nil counts as none.
+    public var supportedFeatures: [String]?
+    /// The rekey id (`Rekey.toKeyID`) this device acknowledged; written by sync-security.
+    public var rekeyAck: String?
 
-    public init(deviceID: String, name: String, lastSync: Date) {
+    public init(deviceID: String, name: String, lastSync: Date, platform: String? = nil, appVersion: String? = nil,
+                supportedFeatures: [String]? = nil, rekeyAck: String? = nil) {
         self.deviceID = deviceID
         self.name = name
         self.lastSync = lastSync
+        self.platform = platform
+        self.appVersion = appVersion
+        self.supportedFeatures = supportedFeatures
+        self.rekeyAck = rekeyAck
     }
 }

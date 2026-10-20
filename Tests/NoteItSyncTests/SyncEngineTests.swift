@@ -690,12 +690,12 @@ final class SyncEngineTests: XCTestCase {
 
     func testConnectRejectsNewerFormat() async throws {
         let backend = InMemoryBackend()
-        try await backend.put(RemoteLayout.manifest(), data: try SyncEngine.encode(Manifest(formatVersion: 2)), ifMatch: nil, ifNoneMatch: true)
+        try await backend.put(RemoteLayout.manifest(), data: try SyncEngine.encode(Manifest(formatVersion: 3)), ifMatch: nil, ifNoneMatch: true)
         do {
             _ = try await SyncEngine.connect(backend: backend, passphrase: "pw", encryptNew: true, makeCipher: XORTestCipher.factory)
             XCTFail("expected unsupportedFormat")
         } catch let error as SyncError {
-            XCTAssertEqual(error, .unsupportedFormat(2))
+            XCTAssertEqual(error, .unsupportedFormat(3))
         }
     }
 

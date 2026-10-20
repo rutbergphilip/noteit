@@ -554,7 +554,8 @@ final class SyncController: ObservableObject {
             status = .needsPassphrase
             pause()
             return nil
-        case SyncError.unsupportedFormat, SyncError.encryptionMismatch, SyncError.invalidManifest,
+        case SyncError.unsupportedFormat, SyncError.unsupportedFeature, SyncError.encryptionMismatch, SyncError.invalidManifest,
+             SyncError.featureDeclined, SyncError.rekeyIncomplete, SyncError.rekeyBlocked,
              SyncSetupError.storageReset, SyncSetupError.missingField, SyncSetupError.invalidEndpoint, SyncSetupError.insecureEndpoint,
              StorageError.insecureConnectionBlocked:
             status = .error(Self.describe(error))
@@ -695,8 +696,12 @@ final class SyncController: ObservableObject {
         guard let manifest = try? JSONDecoder().decode(Manifest.self, from: data) else {
             throw StorageError.invalidResponse("Unreadable manifest")
         }
-        if manifest.formatVersion > 1 { return .unsupported(manifest.formatVersion) }
-        return manifest.encryption == nil ? .plaintext : .encrypted
+        do {
+            try SyncEngine.checkOpenable(manifest)
+        } catch is SyncError {
+            return .unsupported(manifest.formatVersion)
+        }
+        return manifest.encryption == nil && manifest.keyring == nil ? .plaintext : .encrypted
     }
 
     // MARK: - Messages
@@ -709,8 +714,20 @@ final class SyncController: ObservableObject {
             return "Enter the passphrase used on your other Mac."
         case SyncError.wrongPassphrase:
             return "That passphrase doesn't match. Use the one you chose when you first set up sync."
-        case SyncError.unsupportedFormat:
+        case SyncError.unsupportedFormat, SyncError.unsupportedFeature:
             return "This library was created by a newer version of NoteIt. Update NoteIt to keep syncing."
+        case SyncError.featureDeclined(let feature):
+            return "Turning on “\(feature)” for the sync library was cancelled."
+        case SyncError.keyChanged(let device):
+            return "The sync key was changed on \(device.isEmpty ? "another device" : device)."
+        case SyncError.rekeyInProgress(let device):
+            return "\(device.isEmpty ? "Another device" : device) is changing the sync key. NoteIt will try again."
+        case SyncError.rekeyIncomplete:
+            return "A change of the sync key didn't finish."
+        case SyncError.rekeyBlocked:
+            return "The sync key can't be changed right now."
+        case SyncError.manifestChangedConcurrently:
+            return "Another device changed the sync library's settings at the same time. NoteIt will try again."
         case SyncError.encryptionMismatch:
             return "This location already holds an unencrypted NoteIt library. Turn off encryption to join it, or choose another location."
         case SyncError.invalidManifest(let detail):

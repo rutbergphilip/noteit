@@ -48,6 +48,29 @@ public struct SyncReport: Sendable, Equatable {
 
 public enum SyncError: Error, Equatable, Sendable {
     case wrongPassphrase, passphraseRequired, unsupportedFormat(Int), encryptionMismatch, invalidManifest(String)
+    // foundations step 3; each owner plan replaces the app's text for its cases.
+    case unsupportedFeature(String)
+    case featureDeclined(String)
+    case keyChanged(byDevice: String)
+    case rekeyInProgress(deviceName: String)
+    case rekeyIncomplete(done: Int, total: Int)
+    case rekeyBlocked(RekeyBlocker)
+    case manifestChangedConcurrently
+}
+
+/// A device whose record says it can't read a feature (foundations step 3; shown by the feature's owner plan).
+public struct FeatureBlocker: Sendable, Equatable {
+    public var deviceID: String
+    public var deviceName: String
+    public var appVersion: String?
+    public var lastSync: Date?
+
+    public init(deviceID: String, deviceName: String, appVersion: String? = nil, lastSync: Date? = nil) {
+        self.deviceID = deviceID
+        self.deviceName = deviceName
+        self.appVersion = appVersion
+        self.lastSync = lastSync
+    }
 }
 
 /// Runs sync passes against one remote store. Passes are serialized; each one resumes from the
@@ -69,6 +92,8 @@ public actor SyncEngine {
     static let deviceWriteInterval: TimeInterval = 10 * 60
     static let tombstoneRetention: TimeInterval = 30 * 24 * 60 * 60
     static let sidecarRetention: TimeInterval = 30 * 24 * 60 * 60
+    /// The highest `formatVersion` this build opens (foundations step 3).
+    public static let maxFormatVersion = 2
 
     private let backend: StorageBackend
     private let cipher: SyncCipher
@@ -76,6 +101,7 @@ public actor SyncEngine {
     private let stateURL: URL
     private let deviceID: String
     private let deviceName: String
+    private let appVersion: String?
     private let now: @Sendable () -> Date
 
     private var state = SyncState()
@@ -85,13 +111,15 @@ public actor SyncEngine {
         self.init(backend: backend, cipher: cipher, local: local, stateURL: stateURL, deviceID: deviceID, deviceName: deviceName, now: { Date() })
     }
 
-    init(backend: StorageBackend, cipher: SyncCipher, local: SyncLocalStore, stateURL: URL, deviceID: String, deviceName: String, now: @escaping @Sendable () -> Date) {
+    init(backend: StorageBackend, cipher: SyncCipher, local: SyncLocalStore, stateURL: URL, deviceID: String, deviceName: String,
+         appVersion: String? = nil, now: @escaping @Sendable () -> Date) {
         self.backend = backend
         self.cipher = cipher
         self.local = local
         self.stateURL = stateURL
         self.deviceID = deviceID
         self.deviceName = deviceName
+        self.appVersion = appVersion
         self.now = now
     }
 
@@ -178,8 +206,29 @@ public actor SyncEngine {
         return manifest
     }
 
+    /// The one gate for opening a store (program §4), shared by the engine and the app's inspection.
+    public static func checkOpenable(_ manifest: Manifest, supported: Set<StoreFeature> = StoreFeature.supported) throws {
+        guard manifest.formatVersion <= maxFormatVersion else { throw SyncError.unsupportedFormat(manifest.formatVersion) }
+        let names = manifest.features ?? []
+        var features: Set<StoreFeature> = []
+        for name in names {
+            guard let feature = StoreFeature(rawValue: name), supported.contains(feature) else {
+                throw SyncError.unsupportedFeature(name)
+            }
+            features.insert(feature)
+        }
+        if !names.isEmpty, manifest.formatVersion != 2 {
+            throw SyncError.invalidManifest("features without formatVersion 2")
+        }
+        for feature in StoreFeature.allCases where features.contains(feature) {
+            for required in feature.requires where !features.contains(required) {
+                throw SyncError.invalidManifest("\(feature.rawValue) without \(required.rawValue)")
+            }
+        }
+    }
+
     private static func openExisting(_ manifest: Manifest, passphrase: String?, encryptNew: Bool, makeCipher: CipherFactory) throws -> SyncCipher {
-        guard manifest.formatVersion <= 1 else { throw SyncError.unsupportedFormat(manifest.formatVersion) }
+        try checkOpenable(manifest)
         guard let encryption = manifest.encryption else {
             // Never silently downgrade a user who asked for encryption to a plaintext store.
             if encryptNew { throw SyncError.encryptionMismatch }
@@ -671,7 +720,9 @@ public actor SyncEngine {
     private func writeDeviceRecordIfDue() async throws {
         let date = now()
         if let last = state.lastDeviceWrite, date.timeIntervalSince(last) < Self.deviceWriteInterval, date >= last { return }
-        let info = DeviceInfo(deviceID: deviceID, name: deviceName, lastSync: date)
+        let supported = StoreFeature.supported.map(\.rawValue).sorted()
+        let info = DeviceInfo(deviceID: deviceID, name: deviceName, lastSync: date, platform: DevicePlatform.mac.rawValue,
+                              appVersion: appVersion, supportedFeatures: supported.isEmpty ? nil : supported)
         try await backend.put(RemoteLayout.device(deviceID), data: try seal(try Self.encode(info), key: RemoteLayout.device(deviceID)), ifMatch: nil, ifNoneMatch: false)
         state.lastDeviceWrite = date
         try saveState()
@@ -828,6 +879,9 @@ struct RemoteIndex {
                 else { sidecar(name.hasSuffix(".meta") ? .meta(.note) : name.contains(".body") ? .body : .other) }
             case "tombstones":
                 if let id = id(".json") { tombstones[id] = object.etag }
+            case "keys":
+                // Key files (sync-security, sharing) are not records.
+                break
             default:
                 break
             }
