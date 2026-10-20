@@ -14,16 +14,21 @@ final class PaletteCommandRegistryTests: XCTestCase {
 
     private var shortcutSuite = ""
     private var menuShortcuts: MenuShortcutStore!
+    private var prefsSuite = ""
+    private var prefs: UserDefaults!
 
     override func setUpWithError() throws {
         shortcutSuite = "noteit-palette-shortcuts-\(UUID().uuidString)"
         menuShortcuts = MenuShortcutStore(defaults: UserDefaults(suiteName: shortcutSuite)!)
+        prefsSuite = "noteit-palette-prefs-\(UUID().uuidString)"
+        prefs = UserDefaults(suiteName: prefsSuite)
         base = fm.temporaryDirectory.appendingPathComponent("noteit-palette-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
     }
 
     override func tearDownWithError() throws {
         UserDefaults(suiteName: shortcutSuite)?.removePersistentDomain(forName: shortcutSuite)
+        prefs.removePersistentDomain(forName: prefsSuite)
         menuShortcuts = nil
         try? fm.removeItem(at: base)
     }
@@ -41,11 +46,11 @@ final class PaletteCommandRegistryTests: XCTestCase {
     }
 
     private func availableIDs(_ store: NoteStore) -> Set<String> {
-        Set(PaletteCommandRegistry.availableCommands(for: store).map(\.info.id))
+        Set(PaletteCommandRegistry.availableCommands(for: store, defaults: prefs).map(\.info.id))
     }
 
     private func command(_ id: String, in store: NoteStore) -> PaletteCommand? {
-        PaletteCommandRegistry.commands(for: store).first { $0.info.id == id }
+        PaletteCommandRegistry.commands(for: store, defaults: prefs).first { $0.info.id == id }
     }
 
     func testNoteCommandsNeedASelectedNote() {
@@ -135,7 +140,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
 
         let expected: Set<String> = [
             "newNote", "newNotebook", "searchNotes", "find", "findReplace", "export", "print", "copyMarkdown",
-            "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings",
+            "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn",
         ]
         XCTAssertEqual(availableIDs(store), expected)
         XCTAssertEqual(try XCTUnwrap(command("deleteNote", in: store)).info.title, "Delete Now…")
@@ -221,5 +226,22 @@ final class PaletteCommandRegistryTests: XCTestCase {
         store.selectedNoteID = addNote(store, "Alpha")
         let ids = PaletteCommandRegistry.commands(for: store).map(\.info.id)
         XCTAssertEqual(ids.count, Set(ids).count)
+    }
+
+    func testLocalAPIToggleCommandFollowsSetting() throws {
+        let store = makeStore()
+        XCTAssertTrue(availableIDs(store).contains("localAPIOn"))
+        XCTAssertFalse(availableIDs(store).contains("localAPIOff"))
+
+        try XCTUnwrap(command("localAPIOn", in: store)).perform()
+        XCTAssertTrue(prefs.bool(forKey: PrefKey.localAPIEnabled))
+        XCTAssertFalse(availableIDs(store).contains("localAPIOn"))
+        let off = try XCTUnwrap(command("localAPIOff", in: store))
+        XCTAssertTrue(off.isAvailable)
+        XCTAssertEqual(off.info.title, "Turn Local API Off")
+
+        off.perform()
+        XCTAssertFalse(prefs.bool(forKey: PrefKey.localAPIEnabled))
+        XCTAssertEqual(try XCTUnwrap(command("localAPIOn", in: store)).info.title, "Turn Local API On")
     }
 }

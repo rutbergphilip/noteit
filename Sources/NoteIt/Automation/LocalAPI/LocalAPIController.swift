@@ -20,6 +20,8 @@ final class LocalAPIController: ObservableObject {
     static let shared = LocalAPIController.makeShared()
 
     @Published private(set) var status: Status = .off
+    /// Bumped when a client pairs or is revoked, so Settings can refresh its list.
+    @Published private(set) var clientsGeneration = 0
 
     let registry: ClientRegistry
     let hub: ChangeHub
@@ -74,6 +76,11 @@ final class LocalAPIController: ObservableObject {
         feedSubscription = feed.subscribe { [hub] changes in
             for change in changes { hub.publish(kind: change.kind, id: change.id, op: change.op, at: change.at) }
         }
+        let revoked = registry.onRevoke
+        registry.onRevoke = { [weak self] id in
+            revoked?(id)
+            Task { @MainActor in self?.clientsGeneration += 1 }
+        }
         if showsPairingWindow {
             pairing.onEvent = { [weak self] event in
                 Task { @MainActor in self?.handlePairing(event) }
@@ -98,6 +105,10 @@ final class LocalAPIController: ObservableObject {
     var pinnedPort: UInt16? {
         let value = defaults.integer(forKey: PrefKey.localAPIPort)
         return (1024...65535).contains(value) ? UInt16(value) : nil
+    }
+
+    func clientsDidChange() {
+        clientsGeneration += 1
     }
 
     /// Waits for every pending start or stop.
@@ -179,6 +190,7 @@ final class LocalAPIController: ObservableObject {
                         grant: { [weak self] scopes in self?.pairing.setGrantedScopes(scopes, for: request.id) },
                         expire: { [weak self] in _ = self?.pairing.current })
         case .finished(let id, let success):
+            if success { clientsGeneration += 1 }
             if success { pairingWindow?.showPaired(id) } else { pairingWindow?.close(id) }
         case .cancelled(let id, let reason):
             if reason == PairingBroker.tooManyAttemptsReason {

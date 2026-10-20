@@ -10,11 +10,12 @@ struct PaletteCommand {
 /// the same code as its menu item.
 @MainActor
 enum PaletteCommandRegistry {
-    static func commands(for store: NoteStore) -> [PaletteCommand] {
-        commands(for: store, shortcuts: .shared)
+    static func commands(for store: NoteStore, defaults: UserDefaults = .standard) -> [PaletteCommand] {
+        commands(for: store, shortcuts: .shared, defaults: defaults)
     }
 
-    static func commands(for store: NoteStore, shortcuts: MenuShortcutStore) -> [PaletteCommand] {
+    static func commands(for store: NoteStore, shortcuts: MenuShortcutStore, defaults: UserDefaults = .standard) -> [PaletteCommand] {
+        let localAPIEnabled = defaults.bool(forKey: PrefKey.localAPIEnabled)
         let note = store.note(with: store.selectedNoteID)
         let liveNote = note?.deletedAt == nil ? note : nil
         let hasNote = note != nil
@@ -84,6 +85,14 @@ enum PaletteCommandRegistry {
                     keywords: ["links", "url", "automation", "preferences"]) {
                 SettingsTabRouter.show(.integrations)
             },
+            command("localAPIOn", "Turn Local API On", symbol: "network", shortcut: nil,
+                    keywords: ["automation", "integrations", "server", "cli"], available: !localAPIEnabled) {
+                defaults.set(true, forKey: PrefKey.localAPIEnabled)
+            },
+            command("localAPIOff", "Turn Local API Off", symbol: "network.slash", shortcut: nil,
+                    keywords: ["automation", "integrations", "server", "cli"], available: localAPIEnabled) {
+                defaults.set(false, forKey: PrefKey.localAPIEnabled)
+            },
         ]
 
         if let liveNote {
@@ -97,8 +106,8 @@ enum PaletteCommandRegistry {
         return list
     }
 
-    static func availableCommands(for store: NoteStore) -> [PaletteCommand] {
-        commands(for: store).filter(\.isAvailable)
+    static func availableCommands(for store: NoteStore, defaults: UserDefaults = .standard) -> [PaletteCommand] {
+        commands(for: store, defaults: defaults).filter(\.isAvailable)
     }
 
     private static func command(_ id: String, _ title: String, symbol: String, shortcut: String?, keywords: [String],

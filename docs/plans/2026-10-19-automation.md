@@ -701,6 +701,7 @@ Steps:
 - [ ] Test: `testLocalAPIToggleCommandFollowsSetting` in `PaletteCommandRegistryTests` (only the command that matches the current `localAPIEnabled` value is listed).
 - [ ] Manual: `swift run NoteIt --debug-open-settings --debug-settings-tab integrations` with `NOTEIT_DATA_DIR`; pair with `curl` (start, read the code from the window, complete); the client appears; **Revoke** makes the next `curl` return `401 token_revoked`.
 - [ ] Verify: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter PaletteCommandRegistryTests` → `Executed <n> tests, with 0 failures`; `NOTEIT_VERSION=x-test NOTEIT_BUILD=99999999999999 NOTEIT_INSTALL_DIR="$PWD/.selftest/app" ./scripts/build_app.sh` succeeds (exit 0).
+- Note (T13 as built): the palette has two commands, `localAPIOn` (**Turn Local API On**, listed while the API is off) and `localAPIOff` (**Turn Local API Off**, listed while it's on); `PaletteCommandRegistry.commands`/`availableCommands` take a `defaults:` parameter (default `.standard`) so tests use their own suite. `SettingsView.swift` needed no change, since Integrations was already available. The status line reads **Starting…** while the switch is on and the server hasn't bound yet, and **Couldn't start: …** for other failures. **Revoke All…** uses `AutomationClients.revokeAll()`. New tokens get kind `script`.
 - [ ] Commit `feat(local-api): add Integrations settings`.
 
 #### Task 14: OpenAPI document
