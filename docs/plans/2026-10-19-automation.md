@@ -360,8 +360,8 @@ public final class LocalHTTPServer: @unchecked Sendable {
                 ping: @escaping @Sendable () -> PingDTO, limits: HTTPParserLimits = .init(),
                 routeRegistry: LocalAPIRouteRegistry = .shared)                                                      // T10: injectable so tests never touch .shared
     /// Tries each port in order and returns the bound one. Port 0 = ephemeral (tests).
-    public func start(ports: [UInt16]) async throws -> UInt16
-    public func stop()
+    public func start(ports: [UInt16]) async throws -> UInt16                                                         // .alreadyRunning while running or another start is pending
+    public func stop()                                                                                               // also cancels a pending start, which throws .stopped
 }
 
 // NoteItAPI/Client/NoteItAPIClient.swift

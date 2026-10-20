@@ -1,6 +1,6 @@
 import Darwin
 import Foundation
-import NoteItAPI
+@testable import NoteItAPI
 import XCTest
 
 private struct EchoResponder: LocalAPIResponder {
@@ -311,6 +311,65 @@ final class LocalHTTPServerTests: XCTestCase {
         harness.server.stop()
         XCTAssertTrue(client.isClosedByPeer())
         XCTAssertNil(RawHTTPClient(port: harness.port), "nothing listens after stop")
+    }
+
+    func testStopDuringStartLeavesNothingListening() async throws {
+        let probe = try await start()
+        let port = probe.port
+        probe.server.stop()
+
+        let clients = ClientRegistry(store: InMemoryClientStore())
+        let server = LocalHTTPServer(registry: clients, pairing: PairingBroker(registry: clients), changes: ChangeHub(),
+                                     limiter: RateLimiter(), responder: EchoResponder(),
+                                     ping: { PingDTO(name: "NoteIt", apiVersion: 1, appVersion: "1", capabilities: []) },
+                                     routeRegistry: LocalAPIRouteRegistry())
+        servers.append(server)
+        server.listenerStarted = { [unowned server] in server.stop() }
+        do {
+            _ = try await server.start(ports: [port])
+            XCTFail("stop() should cancel the pending start")
+        } catch {
+            XCTAssertEqual(error as? LocalHTTPServerError, .stopped)
+        }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertNil(RawHTTPClient(port: port, timeout: 1), "nothing listens after stop")
+
+        server.listenerStarted = nil
+        let restarted = try await server.start(ports: [port])
+        XCTAssertEqual(restarted, port)
+    }
+
+    func testConcurrentStartIsRejected() async throws {
+        let clients = ClientRegistry(store: InMemoryClientStore())
+        let server = LocalHTTPServer(registry: clients, pairing: PairingBroker(registry: clients), changes: ChangeHub(),
+                                     limiter: RateLimiter(), responder: EchoResponder(),
+                                     ping: { PingDTO(name: "NoteIt", apiVersion: 1, appVersion: "1", capabilities: []) },
+                                     routeRegistry: LocalAPIRouteRegistry())
+        servers.append(server)
+        let second = Locked<Task<UInt16, Error>?>(nil)
+        server.listenerStarted = { [unowned server] in
+            server.listenerStarted = nil
+            second.mutate { $0 = Task { try await server.start(ports: [0]) } }
+        }
+        let port = try await server.start(ports: [0])
+        XCTAssertNotEqual(port, 0)
+        do {
+            _ = try await XCTUnwrap(second.value).value
+            XCTFail("the second start should fail")
+        } catch {
+            XCTAssertEqual(error as? LocalHTTPServerError, .alreadyRunning)
+        }
+        await assertSecondStartFails(server)
+        XCTAssertNotNil(RawHTTPClient(port: port))
+    }
+
+    private func assertSecondStartFails(_ server: LocalHTTPServer) async {
+        do {
+            _ = try await server.start(ports: [0])
+            XCTFail("already running")
+        } catch {
+            XCTAssertEqual(error as? LocalHTTPServerError, .alreadyRunning)
+        }
     }
 
     func testPortFallbackSkipsBusyPort() async throws {

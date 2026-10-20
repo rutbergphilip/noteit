@@ -11,6 +11,8 @@ public protocol LocalAPIResponder: Sendable {
 public enum LocalHTTPServerError: Error, Equatable, Sendable {
     case noPorts
     case alreadyRunning
+    /// `stop()` was called before a pending `start(ports:)` finished.
+    case stopped
     case portInUse(UInt16)
     case failed(String)
 }
@@ -37,9 +39,14 @@ public final class LocalHTTPServer: @unchecked Sendable {
 
     var idleTimeout: TimeInterval = 30
     var heartbeatInterval: TimeInterval = 15
+    /// Tests: runs on the queue right after a listener starts and before it's ready.
+    var listenerStarted: (() -> Void)?
 
     // Touched on `queue` only.
     private var listener: NWListener?
+    /// Set while `start(ports:)` runs; `stop()` clears it so the pending start gives up.
+    private var startToken: UUID?
+    private var pendingListener: NWListener?
     private var connections: [ObjectIdentifier: Connection] = [:]
     private var port: UInt16 = 0
 
@@ -80,12 +87,23 @@ public final class LocalHTTPServer: @unchecked Sendable {
 
     /// Tries each port in order and returns the bound one. Port 0 = ephemeral (tests). Throws `.portInUse(port)`
     /// when the last port tried was taken.
+    /// Throws `.alreadyRunning` while running or while another start is pending, and `.stopped` when `stop()` is
+    /// called before binding finishes.
     public func start(ports: [UInt16]) async throws -> UInt16 {
-        guard onQueue({ listener == nil }) else { throw LocalHTTPServerError.alreadyRunning }
+        let token = UUID()
+        let claimed = onQueue { () -> Bool in
+            guard listener == nil, startToken == nil else { return false }
+            startToken = token
+            return true
+        }
+        guard claimed else { throw LocalHTTPServerError.alreadyRunning }
+        defer { onQueue { if startToken == token { startToken = nil } } }
         var lastError = LocalHTTPServerError.noPorts
         for port in ports {
             do {
-                return try await bind(port)
+                return try await bind(port, token: token)
+            } catch LocalHTTPServerError.stopped {
+                throw LocalHTTPServerError.stopped
             } catch let error as LocalHTTPServerError {
                 lastError = error
             }
@@ -97,6 +115,9 @@ public final class LocalHTTPServer: @unchecked Sendable {
     /// `503 api_disabled`.
     public func stop() {
         onQueue {
+            startToken = nil
+            pendingListener?.cancel()
+            pendingListener = nil
             listener?.cancel()
             listener = nil
             for connection in connections.values { connection.shutDown() }
@@ -105,7 +126,7 @@ public final class LocalHTTPServer: @unchecked Sendable {
 
     // MARK: - Listening
 
-    private func bind(_ port: UInt16) async throws -> UInt16 {
+    private func bind(_ port: UInt16, token: UUID) async throws -> UInt16 {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1",
                                                      port: port == 0 ? .any : NWEndpoint.Port(rawValue: port) ?? .any)
@@ -117,29 +138,52 @@ public final class LocalHTTPServer: @unchecked Sendable {
             throw Self.mapError(error, port: port)
         }
         return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, Error>) in
-            let once = Once()
-            listener.stateUpdateHandler = { [weak self, weak listener] state in
-                guard let self, let listener, !once.done else { return }
-                switch state {
-                case .ready:
-                    once.done = true
-                    let bound = listener.port?.rawValue ?? port
-                    self.listener = listener
-                    self.port = bound
-                    continuation.resume(returning: bound)
-                case .failed(let error), .waiting(let error):
-                    once.done = true
-                    listener.cancel()
-                    continuation.resume(throwing: Self.mapError(error, port: port))
-                case .cancelled:
-                    once.done = true
-                    continuation.resume(throwing: LocalHTTPServerError.failed("The listener was cancelled."))
-                default:
-                    break
+            queue.async { [self] in
+                guard startToken == token else {
+                    return continuation.resume(throwing: LocalHTTPServerError.stopped)
                 }
+                pendingListener = listener
+                let once = Once()
+                // Holds the listener until it settles, so a cancel from `stop()` still resumes the continuation.
+                listener.stateUpdateHandler = { [weak self] state in
+                    guard !once.done else { return }
+                    guard let self else {
+                        once.done = true
+                        listener.cancel()
+                        return continuation.resume(throwing: LocalHTTPServerError.stopped)
+                    }
+                    let current = self.startToken == token && self.pendingListener === listener
+                    defer { if once.done { listener.stateUpdateHandler = nil } }
+                    switch state {
+                    case .ready:
+                        once.done = true
+                        guard current else {
+                            listener.cancel()
+                            return continuation.resume(throwing: LocalHTTPServerError.stopped)
+                        }
+                        let bound = listener.port?.rawValue ?? port
+                        self.pendingListener = nil
+                        self.listener = listener
+                        self.port = bound
+                        continuation.resume(returning: bound)
+                    case .failed(let error), .waiting(let error):
+                        once.done = true
+                        listener.cancel()
+                        if current { self.pendingListener = nil }
+                        continuation.resume(throwing: current ? Self.mapError(error, port: port) : LocalHTTPServerError.stopped)
+                    case .cancelled:
+                        once.done = true
+                        if current { self.pendingListener = nil }
+                        continuation.resume(throwing: current ? LocalHTTPServerError.failed("The listener was cancelled.")
+                                                              : LocalHTTPServerError.stopped)
+                    default:
+                        break
+                    }
+                }
+                listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+                listener.start(queue: queue)
+                listenerStarted?()
             }
-            listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
-            listener.start(queue: queue)
         }
     }
 
