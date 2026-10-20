@@ -1094,7 +1094,7 @@ Moved from mobile Task 0.2.
 - [ ] `CaptureTitle` takes `firstLine(of:)`, `singleLine(_:)` and `truncatedTitle(_:)` from `CaptureFormatter`, with the same bodies and limits. `CaptureFormatter` calls them and keeps `maxTitleLength`/`titleScanLimit` as forwarders.
 - [ ] `LibraryCodingTests`:
   - A `library.json` literal round-trips byte-for-byte through `LibraryCoding`.
-  - A truncated file salvages its notebooks.
+  - A file whose notes no longer decode still salvages its notebooks; a truncated file has nothing to salvage.
   - Unknown top-level keys don't stop decoding.
 - [ ] `TrashPolicyTests`: the strings for 0, 1, 3, 29 and 31 days, matching the current `deletionSummary` output, plus `isExpired` at exactly 30 days.
 - [ ] `CaptureTitleTests`: a blank first line, a line longer than 60 characters cut at a word boundary, and text longer than 4,096 characters.
