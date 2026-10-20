@@ -311,7 +311,6 @@ final class SyncController: ObservableObject {
     /// Stops syncing and forgets the destination. Notes on this Mac are never touched.
     func disconnect() async {
         let oldStateURL = configuration.map { stateURL(for: $0) }
-        let oldMigrationRecord = configuration.map { migrationRecord(for: $0).url }
         deactivate()
         configuration = nil
         status = .notConfigured
@@ -332,9 +331,6 @@ final class SyncController: ObservableObject {
         let fm = FileManager.default
         if let oldStateURL, configuration.map({ stateURL(for: $0) }) != oldStateURL {
             try? fm.removeItem(at: oldStateURL)
-        }
-        if let oldMigrationRecord, configuration.map({ migrationRecord(for: $0).url }) != oldMigrationRecord {
-            try? fm.removeItem(at: oldMigrationRecord)
         }
         if configuration == nil {
             try? fm.removeItem(at: legacyStateURL)

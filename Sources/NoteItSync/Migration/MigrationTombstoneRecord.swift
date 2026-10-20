@@ -1,7 +1,8 @@
 import Foundation
 
-/// The tombstones this device's `RemoteMigration` created under `noteit/v1/tombstones/`, by key, with the etag of
-/// the put. Kept on this device only, so an interrupted copy can tell its own leftovers from other devices' deletions.
+/// The tombstones this device's `RemoteMigration` copies under `noteit/v1/tombstones/`, by key, with the SHA-256 hex
+/// of the bytes put, saved before the put. Kept on this device only, so an interrupted copy can tell its own leftovers
+/// from other devices' deletions. Entries whose put never happened, or that no longer match, are ignored.
 public protocol MigrationTombstoneRecord: AnyObject, Sendable {
     func load() -> [String: String]
     /// An empty record clears it.
