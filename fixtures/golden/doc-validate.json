@@ -1,0 +1,444 @@
+{
+  "cases": [
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "https://example.com/path?q=1"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "https link"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "http://example.com"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "http link"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "mailto:someone@example.com"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "mailto link"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "tel:+15551234567"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "tel link"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "noteit://note/8F14E45F-CEEA-467A-9575-5E4F0C6B7A21"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "note link"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "noteit://note/8F14E45F-CEEA-467A-9575-5E4F0C6B7A21?heading=Intro"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "note link with heading"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "noteit://note?title=Plan"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "note link by title"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "javascript:alert(1)"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": {
+        "readOnly": "link scheme"
+      },
+      "name": "javascript link"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "data:text/html,x"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": {
+        "readOnly": "link scheme"
+      },
+      "name": "data link"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "marks": [
+                    {
+                      "attrs": {
+                        "href": "noteit://settings"
+                      },
+                      "type": "link"
+                    }
+                  ],
+                  "text": "link",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": {
+        "readOnly": "noteit link host"
+      },
+      "name": "noteit link to another host"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "attrs": {
+                "tone": "info"
+              },
+              "content": [
+                {
+                  "type": "paragraph"
+                }
+              ],
+              "type": "callout"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": {
+        "readOnly": "unknown node"
+      },
+      "name": "unknown node"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "content": [
+                {
+                  "text": "x",
+                  "type": "text"
+                }
+              ],
+              "type": "paragraph"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "futureKey": {
+          "n": 9007199254740993,
+          "s": "kept"
+        },
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "unknown top-level key"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "attrs": {
+                "level": 1
+              },
+              "content": [
+                {
+                  "text": "Title",
+                  "type": "text"
+                }
+              ],
+              "type": "heading"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "frontMatter": "title: Plan\ntags: [work]",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "front matter"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [
+            {
+              "attrs": {
+                "language": "not-a-known-language"
+              },
+              "content": [
+                {
+                  "text": "x = 1",
+                  "type": "text"
+                }
+              ],
+              "type": "codeBlock"
+            }
+          ],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 1
+      },
+      "expect": "valid",
+      "name": "code block language"
+    },
+    {
+      "container": {
+        "attachments": {},
+        "doc": {
+          "content": [],
+          "type": "doc"
+        },
+        "format": "noteit-doc",
+        "version": 2
+      },
+      "expect": {
+        "readOnly": "version"
+      },
+      "name": "newer version"
+    }
+  ],
+  "generator": "spec",
+  "version": 1
+}

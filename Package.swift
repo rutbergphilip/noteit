@@ -24,6 +24,11 @@ let package = Package(
             path: "Sources/NoteItDoc"
         ),
         .target(
+            name: "NoteItDocTestSupport",
+            dependencies: ["NoteItDoc"],
+            path: "Tests/Support/NoteItDocTestSupport"
+        ),
+        .target(
             name: "NoteItSync",
             path: "Sources/NoteItSync"
         ),
@@ -45,7 +50,7 @@ let package = Package(
         ),
         .testTarget(
             name: "NoteItDocTests",
-            dependencies: ["NoteItDoc"],
+            dependencies: ["NoteItDoc", "NoteItDocTestSupport"],
             path: "Tests/NoteItDocTests"
         ),
         .testTarget(
