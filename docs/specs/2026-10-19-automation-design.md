@@ -58,7 +58,7 @@ Rules for every write:
 - While the library is still loading, operations return `notReady`.
 - Body changes go through `editBody`, which handles a note open in an editor (main window, floating note or cheat sheet), keeps undo working, and marks the note for saving. Automation doesn't call `handOverPendingEdits` or `updateBody` itself.
 - Writes are normal local changes: they bump `revision`, post `noteItLocalChange` (edits through `editBody` and note creation or deletion also post `localNoteChange`) and sync like typing.
-- Text limits: 1 MB of text per write, 25 MB per attachment (the same cap as Markdown import images).
+- Text limits: 1 MB of text per write (title, body and tags together, checked before any parsing), 25 MB per attachment (the same cap as Markdown import images).
 
 Errors are one enum, `AutomationError`, mapped per surface: HTTP status + code (from `APIErrorCode`) for the Local API, `errorCode`/`errorMessage` for x-callback-url, a localized message for Shortcuts and the Share extension.
 
@@ -102,7 +102,7 @@ Safety:
 - **Links that only open or show something never ask:** `open`, `note`, `search`, `daily` (open) and `settings`.
 - **The Share extension's link doesn't ask.** `new?inbox=<UUID>` imports only an item that the Share extension wrote into the app group inbox after the user pressed **Save** (§10), so the user has already confirmed it. Any other `new` link asks as above.
 - No URL action deletes, moves or overwrites anything.
-- `text` is limited to 100 KB in a URL.
+- A link's parameter values (`text`, `title`, `notebook`, `tags` and the rest) are limited to 100 KB together.
 
 ### 4. Shortcuts actions (App Intents)
 

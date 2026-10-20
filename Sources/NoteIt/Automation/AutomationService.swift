@@ -48,6 +48,7 @@ final class AutomationService {
     func create(title: String?, body: String, format: BodyFormatDTO, notebook: NotebookRef?, tags: [String],
                 pinned: Bool) throws(AutomationError) -> NoteMeta {
         try ensureReady()
+        try Self.checkSize([title ?? "", body] + tags)
         let notebookID = try resolveNotebook(notebook)
         let content = NSMutableAttributedString(attributedString: try attributedBody(from: body, format: format))
         let tagLine = Self.tagLine(tags)
@@ -77,6 +78,7 @@ final class AutomationService {
     func patch(_ id: UUID, title: String?, body: (String, BodyFormatDTO)?, notebookID: UUID??, pinned: Bool?,
                ifRevision: UUID?) throws(AutomationError) -> NoteMeta {
         try ensureReady()
+        try Self.checkSize([title ?? "", body?.0 ?? ""])
         let meta = try existing(id)
         if meta.deletedAt != nil { throw .noteDeleted }
         try checkRevision(meta, ifRevision)
@@ -325,6 +327,15 @@ final class AutomationService {
 
     private func plain(_ text: String) -> NSAttributedString {
         NSAttributedString(string: text, attributes: NoteStore.capturedText(title: "", body: "x").attributes(at: 0, effectiveRange: nil))
+    }
+
+    /// Refuses a write whose text adds up to more than `maxTextBytes`, before any parsing.
+    static func checkSize(_ texts: [String]) throws(AutomationError) {
+        var total = 0
+        for text in texts {
+            total += text.utf8.count
+            if total > maxTextBytes { throw .tooLarge }
+        }
     }
 
     static func tagLine(_ tags: [String]) -> String {

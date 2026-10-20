@@ -339,6 +339,17 @@ final class AutomationServiceTests: XCTestCase {
                                             pinned: false))
     }
 
+    func testTextLimitCountsTitleBodyAndTagsTogether() throws {
+        let (service, _) = makeService()
+        let half = String(repeating: "a", count: AutomationService.maxTextBytes / 2 + 1)
+        assertThrows(.tooLarge) { try service.create(title: half, body: half, format: .text, notebook: nil, tags: [], pinned: false) }
+        assertThrows(.tooLarge) { try service.create(title: nil, body: half, format: .text, notebook: nil, tags: [half], pinned: false) }
+        assertThrows(.tooLarge) { try service.create(title: half, body: half, format: .markdown, notebook: .name("Nope"), tags: [],
+                                                     pinned: false) }
+        let id = try service.create(title: "A", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
+        assertThrows(.tooLarge) { try service.patch(id, title: half, body: (half, .text), notebookID: nil, pinned: nil, ifRevision: nil) }
+    }
+
     func testMarkdownRoundTripThroughNoteItMarkdown() throws {
         let (service, store) = makeService()
         let staged = try service.staged.stage(pngData())

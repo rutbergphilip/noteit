@@ -53,6 +53,7 @@ public enum URLCommand: Equatable, Sendable {
     public static let reservedHosts: Set<String> = ["new", "append", "open", "note", "search", "daily", "settings", "x-callback-url"]
     /// Program §9 Settings tab raw values, in order.
     public static let settingsTabs: [String] = ["general", "shortcuts", "editor", "sync", "data", "sharing", "smart", "integrations", "plugins", "about"]
+    /// The limit for all of a link's parameter values together, in UTF-8 bytes.
     public static let maxTextBytes = 100_000
 
     /// True for the links that change notes and so ask first (`new`, `append`, daily append included). False for
@@ -77,6 +78,8 @@ public enum URLCommand: Equatable, Sendable {
                                  error: callbackURL(named: "x-error", in: items),
                                  cancel: callbackURL(named: "x-cancel", in: items))
         let parameters = items.filter { !$0.name.lowercased().hasPrefix("x-") }
+        let textBytes = parameters.reduce(0) { $0 + ($1.value?.utf8.count ?? 0) }
+        guard textBytes <= maxTextBytes else { return .failure(.tooLarge) }
 
         var action = host
         var path = components.path
@@ -122,7 +125,6 @@ public enum URLCommand: Equatable, Sendable {
                 return .success(.shareInbox(id))
             }
             let text = query["text"] ?? ""
-            guard text.utf8.count <= maxTextBytes else { return .failure(.tooLarge) }
             return .success(.new(title: query.nonEmpty("title"), text: text, notebook: query.nonEmpty("notebook"),
                                  tags: tags(query["tags"]), open: query.bool("open")))
 
@@ -140,7 +142,6 @@ public enum URLCommand: Equatable, Sendable {
                 return .failure(.invalid("target"))
             }
             guard let text = query.nonEmpty("text") else { return .failure(.invalid("text")) }
-            guard text.utf8.count <= maxTextBytes else { return .failure(.tooLarge) }
             let position: AppendPosition
             if let raw = query["position"] {
                 guard let value = AppendPosition(rawValue: raw.lowercased()) else { return .failure(.invalid("position")) }
