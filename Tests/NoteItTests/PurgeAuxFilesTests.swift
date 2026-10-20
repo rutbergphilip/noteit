@@ -4,7 +4,7 @@ import XCTest
 import NoteItCore
 import NoteItSync
 
-/// foundations Task 3.5: per-record files in the data folder go only after the removing library save lands.
+/// foundations Tasks 3.5 and 4.1: per-record files in the data folder go only after the removing library save lands.
 @MainActor
 final class PurgeAuxFilesTests: XCTestCase {
     private var base: URL!
@@ -48,15 +48,27 @@ final class PurgeAuxFilesTests: XCTestCase {
         return library.notes.contains { $0.id == id } || library.notebooks.contains { $0.id == id }
     }
 
+    /// Sync apply whose incoming body carries `extras` (Task 4.1).
+    private func apply(_ store: NoteStore, _ payload: RecordPayload, extras: ContainerExtras) throws {
+        var prepared = try NoteStore.prepareRemoteNote(payload, storage: store.bodyStorage)
+        prepared.extras = extras
+        try store.applyPreparedRemoteNote(prepared)
+    }
+
+    private let frontMatter = ContainerExtras(frontMatter: "title: Remote")
+
     func testFailedLibrarySaveKeepsAuxFiles() throws {
         let id = UUID()
         let store = makeStore()
-        try store.applyRemote(S.notePayload(id, revision: UUID(), text: "Remote\nbody", extra: ["futureField": "kept"]))
+        try apply(store, S.notePayload(id, revision: UUID(), text: "Remote\nbody", extra: ["futureField": "kept"]),
+                  extras: frontMatter)
         store.moveToRecentlyDeleted([id])
         store.flush()
         let raw = store.rawMetaFileURL(id, kind: .notes)
         let body = store.bodyURL(for: id)
+        let sidecar = store.bodyExtrasFileURL(id)
         XCTAssertTrue(fm.fileExists(atPath: raw.path))
+        XCTAssertTrue(fm.fileExists(atPath: sidecar.path))
 
         let saved = try breakLibrary(store)
         store.deleteNow([id])
@@ -65,6 +77,7 @@ final class PurgeAuxFilesTests: XCTestCase {
         XCTAssertNil(store.note(with: id))
         XCTAssertTrue(fm.fileExists(atPath: raw.path))
         XCTAssertTrue(fm.fileExists(atPath: body.path))
+        XCTAssertTrue(fm.fileExists(atPath: sidecar.path))
         XCTAssertTrue(trashItems(store).isEmpty)
 
         // The tombstone was written before the failed save, so a relaunch finishes the deletion; the files go
@@ -76,6 +89,7 @@ final class PurgeAuxFilesTests: XCTestCase {
         XCTAssertFalse(try libraryLists(relaunched, id))
         XCTAssertFalse(fm.fileExists(atPath: raw.path))
         XCTAssertFalse(fm.fileExists(atPath: body.path))
+        XCTAssertFalse(fm.fileExists(atPath: sidecar.path))
         XCTAssertEqual(trashItems(relaunched).count, 1)
 
         // Had the tombstone not landed either, the note comes back with its raw meta, which still merges.
@@ -83,6 +97,8 @@ final class PurgeAuxFilesTests: XCTestCase {
         try fm.removeItem(at: root.appendingPathComponent("tombstones.json"))
         let recovered = makeStore()
         XCTAssertNotNil(recovered.note(with: id))
+        _ = recovered.body(for: id)
+        XCTAssertEqual(recovered.bodyExtras[id], frontMatter)
         S.editNote(recovered, id, "Edited\nbody")
         XCTAssertEqual(try S.exported(recovered, id, .note)["futureField"] as? String, "kept")
     }
@@ -90,10 +106,16 @@ final class PurgeAuxFilesTests: XCTestCase {
     func testAuxFilesRemovedAfterDurableDelete() throws {
         let id = UUID()
         let store = makeStore()
-        try store.applyRemote(S.notePayload(id, revision: UUID(), text: "Remote\nbody", extra: ["futureField": 1]))
+        try apply(store, S.notePayload(id, revision: UUID(), text: "Remote\nbody", extra: ["futureField": 1]),
+                  extras: frontMatter)
         let raw = store.rawMetaFileURL(id, kind: .notes)
+        let sidecar = store.bodyExtrasFileURL(id)
         XCTAssertTrue(fm.fileExists(atPath: raw.path))
-        S.purge(store, id)
+        store.moveToRecentlyDeleted([id])
+        store.flush()
+        XCTAssertTrue(fm.fileExists(atPath: sidecar.path), "the sidecar stays until the delete's flush")
+        store.deleteNow([id])
+        XCTAssertFalse(fm.fileExists(atPath: sidecar.path))
         XCTAssertFalse(try libraryLists(store, id))
         XCTAssertFalse(fm.fileExists(atPath: store.bodyURL(for: id).path))
         XCTAssertEqual(trashItems(store).count, 1)

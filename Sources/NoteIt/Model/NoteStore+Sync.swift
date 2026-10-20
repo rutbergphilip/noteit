@@ -56,7 +56,7 @@ extension NoteStore {
         case .note:
             guard let meta = note(with: id), let revision = meta.revision else { throw NoteStoreSyncError.notFound(id) }
             // An unreadable body loads as empty; never push that over a good remote copy.
-            if loadError(for: id) != nil { throw NoteStoreSyncError.unreadableBody(id) }
+            if hasUnreadableBody(id) { throw NoteStoreSyncError.unreadableBody(id) }
             let merged = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .notes))
                 .merged(with: try Self.encoder.encode(meta), ownedKeys: NoteMeta.ownedCodingKeys)
             return (RecordPayload(id: id, kind: .note, revision: revision, modifiedAt: meta.updatedAt,
@@ -94,7 +94,7 @@ extension NoteStore {
             try setLastRemoteMeta(RawMeta(sourceRevision: payload.revision, meta: payload.meta), for: nb.id, kind: .notebooks)
             applyRemoteNotebook(nb)
         case .note:
-            try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, notesURL: notesURL))
+            try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, storage: bodyStorage))
         }
     }
 

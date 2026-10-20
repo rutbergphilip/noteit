@@ -25,7 +25,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
 
     private let store: NoteStore
     private let deviceID: String
-    private let notesURL: URL
+    private let bodyStorage: NoteBodyStorage
     /// Main-actor state: revisions as of the engine's latest `records()` read, and the on/off switch.
     private var seenRevisions: [UUID: UUID] = [:]
     private var isActive = true
@@ -33,7 +33,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
     init(store: NoteStore, deviceID: String) {
         self.store = store
         self.deviceID = deviceID
-        self.notesURL = store.notesURL
+        self.bodyStorage = store.bodyStorage
     }
 
     @MainActor func deactivate() {
@@ -81,7 +81,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
             }
             return
         }
-        let prepared = try NoteStore.prepareRemoteNote(payload, notesURL: notesURL)
+        let prepared = try NoteStore.prepareRemoteNote(payload, storage: bodyStorage)
         do {
             try await onMain {
                 try requireActive()

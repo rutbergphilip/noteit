@@ -35,7 +35,9 @@ final class NoteStore: ObservableObject {
     static let bodyCacheLimit = 20
 
     nonisolated let rootURL: URL
-    nonisolated var notesURL: URL { rootURL.appendingPathComponent("notes", isDirectory: true) }
+    /// Where the note bodies live (Task 4.1): `RTFDBodyStorage(rootURL:)` in wave 0.
+    nonisolated let bodyStorage: NoteBodyStorage
+    nonisolated var notesURL: URL { bodyStorage.contentRootURL }
     var libraryURL: URL { rootURL.appendingPathComponent("library.json") }
     var searchIndexURL: URL { rootURL.appendingPathComponent("search-index.json") }
     var trashURL: URL { rootURL.appendingPathComponent(".trash", isDirectory: true) }
@@ -85,8 +87,21 @@ final class NoteStore: ObservableObject {
     private var isTerminating = false
     /// Snapshots already written to `recovery/` (avoids duplicate copies across terminate-time flushes).
     private var recoveredSnapshots: [UUID: ObjectIdentifier] = [:]
-    /// Bodies whose unreadable original could not be backed up: never overwrite them.
+    /// Bodies whose unreadable original could not be backed up, or whose body-extras sidecar is unreadable:
+    /// never overwrite them.
     private var bodyWriteBlocked: Set<UUID> = []
+    /// Why a readable body is read-only (`StoredBody.readOnlyReason`); shown like a load error.
+    private var bodyReadOnlyReasons: [UUID: String] = [:]
+    /// The extras of each loaded body, keyed by note ID (Task 4.1). Set from every body read (on an RTFD store from
+    /// the body-extras sidecar) and from sync apply once its body is installed; passed to every body write; dropped
+    /// when the note is purged. Written only via `setBodyExtras(_:for:)` and by NoteStore+BodyEdits.swift.
+    var bodyExtras: [UUID: ContainerExtras] = [:]
+    /// Test hook: stops every body write after that step and throws (see NoteStore+BodyExtras.swift).
+    var bodyWriteInterruption: BodyWriteStep?
+    /// Test hook: makes step 3 of the body-extras sidecar write fail.
+    var failsBodyExtrasFinish = false
+    /// Called with every body-extras problem that is logged while reading a sidecar.
+    var bodyExtrasNoticeHandler: ((UUID, BodyExtrasNotice) -> Void)?
     /// Set when library.json was unreadable and could not be backed up: never overwrite it.
     private var libraryWriteBlocked = false
     /// Deleted notes whose bodies are moved to `.trash` once the library deletion is persisted.
@@ -114,8 +129,10 @@ final class NoteStore: ObservableObject {
         self.init(location: LibraryLocation(url: rootURL, seedsFreshLibrary: true))
     }
 
-    init(location: LibraryLocation) {
+    /// `bodyStorage` nil: `RTFDBodyStorage(rootURL:)`. Tests pass another storage.
+    init(location: LibraryLocation, bodyStorage: NoteBodyStorage? = nil) {
         rootURL = location.url
+        self.bodyStorage = bodyStorage ?? RTFDBodyStorage(rootURL: location.url)
         seedsFreshLibrary = location.seedsFreshLibrary
         history = VersionHistory(rootURL: location.url.appendingPathComponent("history", isDirectory: true))
         load()
@@ -208,16 +225,16 @@ final class NoteStore: ObservableObject {
             return cached
         }
         let url = bodyURL(for: id)
-        let loaded: NSAttributedString
+        var loaded = NSAttributedString()
         if FileManager.default.fileExists(atPath: url.path) {
             do {
-                loaded = try Self.readBody(at: url)
+                let stored = try readStoredBody(id)
+                loaded = stored.text
+                setBodyExtras(stored.extras, for: id)
+                if let reason = stored.readOnlyReason { blockBodyWrites(id, reason: reason) }
             } catch {
-                loaded = NSAttributedString()
                 handleUnreadableBody(id, at: url, error: error)
             }
-        } else {
-            loaded = NSAttributedString()
         }
         bodyCache[id] = loaded
         touchBody(id)
@@ -235,7 +252,17 @@ final class NoteStore: ObservableObject {
     /// Non-nil when the note's body file exists but could not be read. The original was backed up
     /// (unless the message says otherwise) and the note opens empty.
     func loadError(for id: UUID) -> String? {
-        loadErrors[id]
+        loadErrors[id] ?? bodyReadOnlyReasons[id]
+    }
+
+    /// True when the note's body file couldn't be read, so it loaded as empty (not for a read-only reason).
+    func hasUnreadableBody(_ id: UUID) -> Bool {
+        loadErrors[id] != nil
+    }
+
+    /// True while the note has edits not yet written to its body file.
+    func isBodyDirty(_ id: UUID) -> Bool {
+        dirtyBodies.contains(id)
     }
 
     /// The backup of an unreadable body (or the original, if it couldn't be backed up).
@@ -318,7 +345,7 @@ final class NoteStore: ObservableObject {
 
     private func handleUnreadableBody(_ id: UUID, at url: URL, error: Error) {
         guard loadErrors[id] == nil else { return }
-        let backup = Self.uniqueURL(notesURL.appendingPathComponent("\(id.uuidString).rtfd.corrupt-\(Self.timestamp())"))
+        let backup = Self.uniqueURL(url.deletingLastPathComponent().appendingPathComponent("\(url.lastPathComponent).corrupt-\(Self.timestamp())"))
         do {
             try FileManager.default.copyItem(at: url, to: backup)
             loadErrorFiles[id] = backup
@@ -334,6 +361,15 @@ final class NoteStore: ObservableObject {
         DispatchQueue.main.async { [weak self] in self?.objectWillChange.send() }
     }
 
+    /// A readable body that must not be overwritten (its body-extras sidecar is unreadable). Nothing is deleted.
+    private func blockBodyWrites(_ id: UUID, reason: String) {
+        guard !bodyWriteBlocked.contains(id) || bodyReadOnlyReasons[id] == nil else { return }
+        bodyWriteBlocked.insert(id)
+        bodyReadOnlyReasons[id] = reason
+        if loadErrorFiles[id] == nil { loadErrorFiles[id] = bodyExtrasFileURL(id) }
+        DispatchQueue.main.async { [weak self] in self?.objectWillChange.send() }
+    }
+
     // MARK: - Search index
 
     nonisolated static func fold(_ string: String) -> String { TextFold.fold(string) }
@@ -346,15 +382,14 @@ final class NoteStore: ObservableObject {
     /// Indexes notes lacking a (fresh) entry by parsing their RTFD off the main actor.
     private func scheduleIndexRebuild() {
         guard !indexRebuildInFlight else { return }
-        let missing = notes.filter { searchIndex[$0.id] == nil && loadErrors[$0.id] == nil }
-            .map { ($0.id, bodyURL(for: $0.id)) }
+        let missing = notes.filter { searchIndex[$0.id] == nil && loadErrors[$0.id] == nil }.map(\.id)
         guard !missing.isEmpty else { return }
         indexRebuildInFlight = true
+        let storage = bodyStorage
         Task.detached(priority: .utility) { [weak self] in
             var results: [UUID: String] = [:]
-            for (id, url) in missing {
-                guard FileManager.default.fileExists(atPath: url.path),
-                      let text = try? NoteStore.readBody(at: url) else { continue }
+            for id in missing {
+                guard let text = try? storage.read(id).text else { continue }
                 results[id] = NoteStore.fold(text.string)
             }
             let found = results
@@ -511,6 +546,8 @@ final class NoteStore: ObservableObject {
             loadErrorFiles[id] = nil
             failedBodies.remove(id)
             unversionedLocalBodies.remove(id)
+            setBodyExtras(nil, for: id)
+            bodyReadOnlyReasons[id] = nil
             history.removeHistory(of: id)
             appliedRemoteRevisions.notes[id.uuidString] = nil
             pendingTrash.insert(id)
@@ -813,44 +850,23 @@ final class NoteStore: ObservableObject {
     // MARK: - Persistence
 
     nonisolated func bodyURL(for id: UUID) -> URL {
-        notesURL.appendingPathComponent("\(id.uuidString).rtfd", isDirectory: true)
+        bodyStorage.fileURL(for: id)
     }
 
     nonisolated static var encoder: JSONEncoder { LibraryCoding.encoder }
     nonisolated static var decoder: JSONDecoder { LibraryCoding.decoder }
 
+    /// Kept for VersionHistory and tests; forwards to RTFDBodyStorage.
     nonisolated static func readBody(at url: URL) throws -> NSAttributedString {
-        try NSAttributedString(
-            url: url,
-            options: [.documentType: NSAttributedString.DocumentType.rtfd],
-            documentAttributes: nil
-        )
+        try RTFDBodyStorage.readBody(at: url)
     }
 
     nonisolated private static func timestamp() -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyyMMdd-HHmmss"
-        return f.string(from: Date())
+        RTFDBodyStorage.timestamp()
     }
 
     nonisolated private static func uniqueURL(_ url: URL) -> URL {
-        var candidate = url
-        var n = 1
-        while FileManager.default.fileExists(atPath: candidate.path) {
-            candidate = url.deletingLastPathComponent().appendingPathComponent("\(url.lastPathComponent)-\(n)")
-            n += 1
-        }
-        return candidate
-    }
-
-    /// IDs of `notes/<uuid>.rtfd` bodies on disk (ignores temp files and corrupt-backups).
-    private func bodyIDsOnDisk() -> [UUID] {
-        let items = (try? FileManager.default.contentsOfDirectory(at: notesURL, includingPropertiesForKeys: nil)) ?? []
-        return items.compactMap { url in
-            guard url.pathExtension == "rtfd" else { return nil }
-            return UUID(uuidString: url.deletingPathExtension().lastPathComponent)
-        }
+        RTFDBodyStorage.uniqueURL(url)
     }
 
     private func load() {
@@ -899,7 +915,7 @@ final class NoteStore: ObservableObject {
             }
         }
 
-        if !bodyIDsOnDisk().isEmpty {
+        if !bodyStorage.idsOnDisk().isEmpty {
             NSLog("NoteIt: library.json missing; rebuilding from note bodies")
             rebuildFromBodies(recovered: nil)
         } else if seedsFreshLibrary, !fm.fileExists(atPath: firstLaunchMarkerURL.path) {
@@ -949,7 +965,7 @@ final class NoteStore: ObservableObject {
         for meta in recovered?.notes ?? [] { known[meta.id] = meta }
 
         var rebuilt: [NoteMeta] = []
-        for id in bodyIDsOnDisk() where !tombstoned(id) {
+        for id in bodyStorage.idsOnDisk() where !tombstoned(id) {
             if var meta = known[id] {
                 if let nb = meta.notebookID, !notebookIDs.contains(nb) { meta.notebookID = nil }
                 rebuilt.append(meta)
@@ -961,7 +977,7 @@ final class NoteStore: ObservableObject {
             let created = attrs[.creationDate] as? Date ?? modified
             var meta = NoteMeta(id: id, notebookID: nil, title: "", preview: "", isPinned: false,
                                 createdAt: created, updatedAt: modified, tags: [])
-            if let text = try? Self.readBody(at: url) {
+            if let text = try? bodyStorage.read(id).text {
                 Self.applyDerivedFields(to: &meta, from: text)
                 searchIndex[id] = Self.fold(text.string)
                 searchIndexDirty = true
@@ -993,35 +1009,13 @@ final class NoteStore: ObservableObject {
         let fm = FileManager.default
         try? fm.createDirectory(at: notesURL, withIntermediateDirectories: true)
 
-        var written: Set<UUID> = []
         for id in dirtyBodies {
-            guard let text = bodyCache[id] else { written.insert(id); continue }
             if bodyWriteBlocked.contains(id) {
-                NSLog("NoteIt: not saving note \(id): unreadable original could not be backed up")
+                NSLog("NoteIt: not saving note \(id): its files on disk couldn’t be read and are kept as they are")
                 continue
             }
-            do {
-                history.recordSavedBody(at: bodyURL(for: id), of: id)
-                try writeBody(text, to: bodyURL(for: id))
-                written.insert(id)
-                unversionedLocalBodies.insert(id)
-                if failedBodies.remove(id) != nil {
-                    // The library and index held back this note's new metadata/text; persist them now.
-                    libraryDirty = true
-                    searchIndexDirty = true
-                }
-            } catch {
-                let episodeStart = failedBodies.insert(id).inserted
-                NSLog("NoteIt: failed to save note \(id): \(error)")
-                // A note with no body on disk has nothing to fall back on: keep a copy right away
-                // (once per failure episode) instead of only at quit.
-                if episodeStart, !fm.fileExists(atPath: bodyURL(for: id).path) {
-                    writeRecoveryCopy(id, text)
-                }
-            }
+            writePendingBody(id)
         }
-        dirtyBodies.subtract(written)
-        for id in written { recoveredSnapshots[id] = nil }
 
         if libraryDirty || !fm.fileExists(atPath: libraryURL.path) {
             saveLibrary()
@@ -1041,6 +1035,45 @@ final class NoteStore: ObservableObject {
         let retryable = dirtyBodies.subtracting(bodyWriteBlocked)
         if !retryable.isEmpty || libraryDirty || hasPendingAuxDeletions {
             scheduleSave(after: 5)
+        }
+    }
+
+    /// flush's and persistNow's per-note body write: keeps a version of the saved body, then writes the cached text
+    /// with its extras (on an RTFD store through the two-phase body-extras sidecar). Returns false when it failed;
+    /// the note then stays dirty and is retried.
+    @discardableResult
+    private func writePendingBody(_ id: UUID) -> Bool {
+        guard let text = bodyCache[id], let meta = note(with: id) else {
+            dirtyBodies.remove(id)
+            recoveredSnapshots[id] = nil
+            return true
+        }
+        do {
+            history.recordSavedBody(at: bodyURL(for: id), of: id)
+            let extras = bodyExtras[id] ?? .empty
+            let temp = try bodyStorage.prepareTemp(text, extras: extras, for: id)
+            try installPreparedBody(temp, text: text, extras: extras, for: meta)
+            dirtyBodies.remove(id)
+            recoveredSnapshots[id] = nil
+            unversionedLocalBodies.insert(id)
+            if failedBodies.remove(id) != nil {
+                // The library and index held back this note's new metadata/text; persist them now.
+                libraryDirty = true
+                searchIndexDirty = true
+            }
+            return true
+        } catch {
+            let episodeStart = failedBodies.insert(id).inserted
+            NSLog("NoteIt: failed to save note \(id): \(error)")
+            if case BodyExtrasError.unreadableSidecar = error {
+                blockBodyWrites(id, reason: StoredBody.bodyExtrasUnreadable)
+            }
+            // A note with no body on disk has nothing to fall back on: keep a copy right away
+            // (once per failure episode) instead of only at quit.
+            if episodeStart, !FileManager.default.fileExists(atPath: bodyURL(for: id).path) {
+                writeRecoveryCopy(id, text)
+            }
+            return false
         }
     }
 
@@ -1102,9 +1135,7 @@ final class NoteStore: ObservableObject {
     private func writeRecoveryCopy(_ id: UUID, _ text: NSAttributedString) {
         guard recoveredSnapshots[id] != ObjectIdentifier(text) else { return }
         do {
-            try FileManager.default.createDirectory(at: recoveryURL, withIntermediateDirectories: true)
-            let url = Self.uniqueURL(recoveryURL.appendingPathComponent("\(id.uuidString)-\(Self.timestamp()).rtfd"))
-            try writeBody(text, to: url)
+            let url = try bodyStorage.recoveryCopy(text, for: id, in: recoveryURL)
             recoveredSnapshots[id] = ObjectIdentifier(text)
             NSLog("NoteIt: note \(id) couldn’t be saved; wrote a recovery copy to \(url.path)")
         } catch {
@@ -1112,29 +1143,29 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    /// Moves tombstoned bodies to `.trash` and deletes their raw meta files, then drops tombstones whose body
-    /// and raw file are gone and which the saved library.json is known not to list. Also drains the raw meta
+    /// Moves tombstoned bodies to `.trash` and deletes their raw meta and body-extras files, then drops tombstones
+    /// whose files are gone and which the saved library.json is known not to list. Also drains the raw meta
     /// deletion queue of other record kinds.
     private func trashPendingBodies() {
-        let fm = FileManager.default
         let before = pendingTrash
         for id in pendingTrash {
-            let url = bodyURL(for: id)
-            if fm.fileExists(atPath: url.path) {
-                do {
-                    try fm.createDirectory(at: trashURL, withIntermediateDirectories: true)
-                    let dest = Self.uniqueURL(trashURL.appendingPathComponent("\(id.uuidString)-\(Self.timestamp()).rtfd"))
-                    try fm.moveItem(at: url, to: dest)
-                } catch {
-                    NSLog("NoteIt: failed to move deleted note \(id) to trash: \(error)")
-                    continue
-                }
+            do {
+                try bodyStorage.moveToTrash(id)
+            } catch {
+                NSLog("NoteIt: failed to move deleted note \(id) to trash: \(error)")
+                continue
             }
             guard let listed = libraryNoteIDsOnDisk, !listed.contains(id) else { continue }
             do {
                 try removeRawMetaFile(id, kind: .notes)
             } catch {
                 NSLog("NoteIt: failed to delete the sync meta copy of deleted note \(id): \(error)")
+                continue
+            }
+            do {
+                try removeBodyExtrasFile(id)
+            } catch {
+                NSLog("NoteIt: failed to delete the body-extras file of deleted note \(id): \(error)")
                 continue
             }
             pendingTrash.remove(id)
@@ -1213,7 +1244,7 @@ final class NoteStore: ObservableObject {
 
     func missingRevisionInputs() -> [RevisionInput] {
         let noteInputs = notes.filter { $0.revision == nil }.map { meta in
-            RevisionInput(id: meta.id, fields: Self.revisionFields(meta), bodyURL: bodyURL(for: meta.id))
+            RevisionInput(id: meta.id, fields: Self.revisionFields(meta), bodyURL: bodyStorage.revisionInputURL(for: meta.id))
         }
         let notebookInputs = notebooks.filter { $0.revision == nil }.map { nb in
             RevisionInput(id: nb.id, fields: Self.revisionFields(nb), bodyURL: nil)
@@ -1301,6 +1332,9 @@ final class NoteStore: ObservableObject {
         var body: NSAttributedString
         var folded: String
         var tempBody: URL
+        /// The incoming body's extras (`.empty` for an RTFD body); written with it, and kept in `bodyExtras` once
+        /// it is installed.
+        var extras: ContainerExtras = .empty
         /// The decrypted meta, kept in sync-meta-raw/ so fields this build doesn't know survive a re-export.
         var rawMeta: RawMeta
         /// The body on disk differs from the incoming one, so it may be kept as a version before being replaced.
@@ -1311,17 +1345,16 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    nonisolated static func prepareRemoteNote(_ payload: RecordPayload, notesURL: URL) throws -> PreparedRemoteNote {
+    nonisolated static func prepareRemoteNote(_ payload: RecordPayload, storage: NoteBodyStorage) throws -> PreparedRemoteNote {
         var meta = try decodeMeta(NoteMeta.self, payload)
         meta.revision = payload.revision
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
         let body = try deserializeBody(data)
         applyDerivedFields(to: &meta, from: body)
-        let temp = try writeTempBody(body, in: notesURL)
-        let current = notesURL.appendingPathComponent("\(payload.id.uuidString).rtfd", isDirectory: true)
+        let temp = try storage.prepareTemp(body, extras: .empty, for: payload.id)
         var replaces = false
-        if FileManager.default.fileExists(atPath: current.path) {
-            replaces = (try? readBody(at: current)).map { !$0.isEqual(to: body) } ?? true
+        if FileManager.default.fileExists(atPath: storage.fileURL(for: payload.id).path) {
+            replaces = (try? storage.read(payload.id)).map { !$0.text.isEqual(to: body) } ?? true
         }
         return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp,
                                   rawMeta: RawMeta(sourceRevision: payload.revision, meta: payload.meta),
@@ -1347,7 +1380,8 @@ final class NoteStore: ObservableObject {
         if prepared.replacesDifferentBody {
             history.recordSavedBody(at: bodyURL(for: id), of: id, force: unversionedLocalBodies.contains(id))
         }
-        try Self.installBody(prepared.tempBody, at: bodyURL(for: id))
+        try installPreparedBody(prepared.tempBody, text: prepared.body, extras: prepared.extras, for: prepared.meta)
+        setBodyExtras(prepared.extras, for: id)
         if prepared.replacesDifferentBody { unversionedLocalBodies.remove(id) }
         let wasTombstoned = pendingTrash.remove(id) != nil
 
@@ -1361,6 +1395,7 @@ final class NoteStore: ObservableObject {
         recoveredSnapshots[id] = nil
         loadErrors[id] = nil
         loadErrorFiles[id] = nil
+        bodyReadOnlyReasons[id] = nil
         if let index = noteIndex(id) {
             notes[index] = prepared.meta
         } else {
@@ -1433,7 +1468,7 @@ final class NoteStore: ObservableObject {
         if let cached = bodyCache[id] {
             return .text(cached.copy() as? NSAttributedString ?? NSAttributedString(attributedString: cached))
         }
-        return .file(bodyURL(for: id))
+        return .file(bodyStorage.fileURL(for: id))
     }
 
     /// Adjusts metadata of a note just created by sync (e.g. a conflict copy); counts as a local change.
@@ -1500,39 +1535,38 @@ final class NoteStore: ObservableObject {
         }
     }
 
-    /// RTFD is a directory, so write to a sibling temp location then swap it in.
-    private func writeBody(_ text: NSAttributedString, to url: URL) throws {
-        let temp = try Self.writeTempBody(text, in: url.deletingLastPathComponent())
-        try Self.installBody(temp, at: url)
-    }
-
-    /// Writes `text` as RTFD to a hidden temp package in `directory`; safe off the main actor.
+    /// Kept for VersionHistory and tests; forwards to RTFDBodyStorage.
     nonisolated static func writeTempBody(_ text: NSAttributedString, in directory: URL) throws -> URL {
-        let range = NSRange(location: 0, length: text.length)
-        let wrapper = try text.fileWrapper(from: range, documentAttributes: [.documentType: NSAttributedString.DocumentType.rtfd])
-        let temp = directory.appendingPathComponent(".\(UUID().uuidString).rtfd.tmp", isDirectory: true)
-        do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try wrapper.write(to: temp, options: [], originalContentsURL: nil)
-        } catch {
-            try? FileManager.default.removeItem(at: temp)
-            throw error
-        }
-        return temp
+        try RTFDBodyStorage.writeTempBody(text, in: directory)
     }
 
-    /// Atomically moves a temp package from `writeTempBody` into place (removed on failure).
+    /// Kept for VersionHistory and tests; forwards to RTFDBodyStorage.
     nonisolated static func installBody(_ temp: URL, at url: URL) throws {
-        let fm = FileManager.default
-        do {
-            if fm.fileExists(atPath: url.path) {
-                _ = try fm.replaceItemAt(url, withItemAt: temp)
-            } else {
-                try fm.moveItem(at: temp, to: url)
-            }
-        } catch {
-            try? fm.removeItem(at: temp)
-            throw error
+        try RTFDBodyStorage.installBody(temp, at: url)
+    }
+}
+
+/// Why `persistNow` couldn't make the note durable. Owned by the foundations plan (Task 4.1; program §6).
+enum PersistNowError: Error, Equatable {
+    case noteMissing, writeBlocked, bodyNotSaved, libraryNotSaved
+}
+
+extension NoteStore {
+    /// Synchronously writes this note's pending body (through flush's per-note step, so on an RTFD store with its
+    /// two-phase sidecar) and then library.json, and returns only after both are installed by atomic rename.
+    /// Throws PersistNowError on any failure; the note then stays pending and the next flush retries it.
+    /// Other notes, the search index and pending trash moves are left to the scheduled flush. For capture paths
+    /// that remove their source once the note is on disk (foundations Task 4.1; program §6).
+    func persistNow(_ id: UUID) throws {
+        commitStagedEditorBody(id)
+        guard note(with: id) != nil else { throw PersistNowError.noteMissing }
+        if dirtyBodies.contains(id) {
+            if bodyWriteBlocked.contains(id) { throw PersistNowError.writeBlocked }
+            try? FileManager.default.createDirectory(at: notesURL, withIntermediateDirectories: true)
+            guard writePendingBody(id) else { throw PersistNowError.bodyNotSaved }
+        }
+        if libraryDirty || !FileManager.default.fileExists(atPath: libraryURL.path) {
+            guard saveLibrary() else { throw PersistNowError.libraryNotSaved }
         }
     }
 }
