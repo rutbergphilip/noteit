@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 import XCTest
 @testable import NoteIt
 
@@ -278,6 +279,47 @@ final class MarkdownReaderTests: XCTestCase {
         XCTAssertNil(attrs(s, of: "Shopping list")[.link])
     }
 
+    func testWikiLinkWithoutResolverStaysText() {
+        let s = MarkdownReader.attributedString(from: "See [[Atlas]] and ![[Maps]].", resolveWikiLink: nil)
+        XCTAssertEqual(s.string, "See Atlas and Maps.\n")
+        XCTAssertNil(attrs(s, of: "Atlas")[.link])
+    }
+
+    private func linkRead(_ md: String, ids: [String: UUID]) -> NSAttributedString {
+        MarkdownReader.attributedString(from: md, resolveWikiLink: { target, heading in
+            ids[target].map { .note(id: $0, heading: heading) } ?? .unresolved(title: target, heading: heading)
+        })
+    }
+
+    private func noteLink(_ s: NSAttributedString, of text: String) -> NoteLink? {
+        (attrs(s, of: text)[.link] as? URL).flatMap(NoteLink.init(url:))
+    }
+
+    func testWikiLinkResolvedAliasHeading() {
+        let id = UUID()
+        let s = linkRead("[[Atlas]], [[Atlas|the maps]], [[Atlas#Routes]] and [[Atlas#Routes|go]] or [[Later]]", ids: ["Atlas": id])
+        XCTAssertEqual(s.string, "Atlas, the maps, Atlas › Routes and go or Later\n")
+        XCTAssertEqual(noteLink(s, of: "Atlas,"), .note(id: id, heading: nil))
+        XCTAssertEqual(noteLink(s, of: "the maps"), .note(id: id, heading: nil))
+        XCTAssertEqual(noteLink(s, of: "Atlas › Routes"), .note(id: id, heading: "Routes"))
+        XCTAssertEqual(noteLink(s, of: "go"), .note(id: id, heading: "Routes"))
+        XCTAssertEqual(noteLink(s, of: "Later"), .unresolved(title: "Later", heading: nil))
+    }
+
+    func testFolderPathTarget() {
+        let id = UUID()
+        let s = linkRead("See [[Trips/2026/Atlas]] and [[Atlas.md|it]].", ids: ["Atlas": id])
+        XCTAssertEqual(s.string, "See Atlas and it.\n")
+        XCTAssertEqual(noteLink(s, of: "Atlas"), .note(id: id, heading: nil))
+        XCTAssertEqual(noteLink(s, of: "it"), .note(id: id, heading: nil))
+    }
+
+    func testEmbedOfNoteBecomesLink() {
+        let id = UUID()
+        let s = linkRead("![[Atlas]] ![[photo.png]]", ids: ["Atlas": id])
+        XCTAssertEqual(noteLink(s, of: "Atlas"), .note(id: id, heading: nil))
+        XCTAssertNil(attrs(s, of: "photo.png")[.link])
+    }
     // MARK: Front matter
 
     func testFrontMatter() throws {

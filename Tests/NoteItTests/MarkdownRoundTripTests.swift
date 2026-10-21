@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 import XCTest
 @testable import NoteIt
 
@@ -429,8 +430,40 @@ final class MarkdownRoundTripTests: XCTestCase {
         XCTAssertTrue(first.contains("> Quote line one\\\n> quote line two\n>\n> Second quote paragraph"), first)
     }
 
-    func testWikiLinksRoundTripThroughImporter() throws {
-        throw XCTSkip("Needs wiki-link import")
+    func testWikiLinksRoundTripThroughImporter() async throws {
+        let work = Notebook(id: UUID(), name: "Work", symbol: "book", colorHex: "#0A84FF", sortIndex: 0)
+        func meta(_ title: String) -> NoteMeta {
+            NoteMeta(id: UUID(), notebookID: work.id, title: title, preview: "", isPinned: false,
+                     createdAt: Date(), updatedAt: Date(), tags: [])
+        }
+        let atlas = meta("Atlas"), plan = meta("Plan")
+        func body(_ title: String, _ text: String, _ link: NoteLink) -> NSAttributedString {
+            let out = NSMutableAttributedString(attributedString: EditorStyle.paragraph(title, kind: .title))
+            var attrs = EditorStyle.bodyAttributes
+            attrs[.link] = link.url
+            out.append(NSAttributedString(string: text, attributes: attrs))
+            out.append(NSAttributedString(string: "\n", attributes: EditorStyle.bodyAttributes))
+            return out
+        }
+        let bodies = [atlas.id: body("Atlas", "the plan", .note(id: plan.id, heading: "Steps")),
+                      plan.id: body("Plan", "Atlas", .note(id: atlas.id, heading: nil))]
+        let result = try NoteExporter.exportNotebook(work, notes: [atlas, plan], format: .markdown, to: folder) { bodies[$0]! }
+
+        let store = NoteStore(location: LibraryLocation(url: folder.appendingPathComponent("Library", isDirectory: true), seedsFreshLibrary: false))
+        _ = await MarkdownImporter(store: store).run(MarkdownImporter.items(for: [result.folder])) { _ in }
+        let ids = Dictionary(uniqueKeysWithValues: store.notes.map { ($0.title, $0.id) })
+        func links(_ id: UUID?) -> [NoteLink] {
+            guard let id else { return [] }
+            let text = store.body(for: id)
+            var out: [NoteLink] = []
+            text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+                if let url = value as? URL, let link = NoteLink(url: url) { out.append(link) }
+            }
+            return out
+        }
+        XCTAssertEqual(links(ids["Atlas"]), [.note(id: ids["Plan"]!, heading: "Steps")])
+        XCTAssertEqual(links(ids["Plan"]), [.note(id: ids["Atlas"]!, heading: nil)])
+        XCTAssertTrue(store.body(for: ids["Atlas"]!).string.contains("the plan"))
     }
 }
 

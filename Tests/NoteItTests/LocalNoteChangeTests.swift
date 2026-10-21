@@ -103,4 +103,24 @@ final class LocalNoteChangeTests: XCTestCase {
         XCTAssertNil(store.note(with: c))
         XCTAssertTrue(posted.isEmpty, "a remote removal posts nothing")
     }
+
+    func testConflictCopyStillPostsNoLocalNoteChange() throws {
+        let store = makeStore()
+        let remote = UUID()
+        try store.applyRemote(S.notePayload(remote, revision: UUID(), text: "Remote"))
+        store.flush()
+        posted = []
+        let before = Set(store.notes.map(\.id))
+        try store.importConflictCopy(S.notePayload(remote, revision: UUID(), text: "Conflict"), fromDevice: "Other Mac")
+        XCTAssertEqual(Set(store.notes.map(\.id)).subtracting(before).count, 1)
+        XCTAssertTrue(posted.isEmpty)
+    }
+
+    func testCreateNoteWithIDPostsCreatedOnce() {
+        let store = makeStore()
+        let id = UUID()
+        XCTAssertEqual(store.createNote(in: nil, initial: NSAttributedString(string: "New"), id: id).id, id)
+        XCTAssertEqual(posted.map(\.0), [id])
+        XCTAssertEqual(kinds(id), [.created])
+    }
 }

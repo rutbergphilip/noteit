@@ -501,11 +501,13 @@ final class NoteStore: ObservableObject {
     // MARK: - Notes
 
     @discardableResult
-    func createNote(in notebookID: UUID?, initial: NSAttributedString? = nil, postsLocalChange: Bool = true) -> NoteMeta {
+    /// An `id` already used by a note, live or in Recently Deleted, is replaced by a new one.
+    func createNote(in notebookID: UUID?, initial: NSAttributedString? = nil, postsLocalChange: Bool = true,
+                    id: UUID? = nil) -> NoteMeta {
         let now = Date()
         let body = initial ?? NSAttributedString()
         var meta = NoteMeta(
-            id: UUID(),
+            id: id.flatMap { note(with: $0) == nil ? $0 : nil } ?? UUID(),
             notebookID: notebookID,
             title: "",
             preview: "",

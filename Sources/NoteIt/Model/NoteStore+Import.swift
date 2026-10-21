@@ -73,12 +73,12 @@ extension NoteStore {
     /// stamps it with the source's dates.
     @discardableResult
     func createImportedNote(body: NSAttributedString, title: String, notebookID: UUID?,
-                            createdAt: Date?, updatedAt: Date?) -> NoteMeta {
+                            createdAt: Date?, updatedAt: Date?, id: UUID? = nil) -> NoteMeta {
         var text = body
         if body.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !title.isEmpty {
             text = EditorStyle.paragraph(title, kind: .title)
         }
-        var meta = createNote(in: notebookID, initial: text)
+        var meta = createNote(in: notebookID, initial: text, id: id)
         if let index = noteIndex(meta.id) {
             let updated = updatedAt ?? createdAt ?? meta.updatedAt
             notes[index].createdAt = min(createdAt ?? updated, updated)
