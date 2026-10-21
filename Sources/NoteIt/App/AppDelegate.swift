@@ -57,6 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         NoteStore.shared.startWatchingMarkdownFolder()
         NoteStore.shared.askAboutHeldDeletions()
+        DispatchQueue.main.async { PreviousLibrary.askIfDue(dataDir: NoteStore.shared.rootURL) }
         AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
         LinkingAPIRoutes.register(in: .shared, store: NoteStore.shared)

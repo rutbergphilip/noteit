@@ -91,6 +91,8 @@ final class SyncController: ObservableObject {
     private var showSyncingImmediately = false
     private var failures = 0
     private var paused = false
+    /// Set while a library conversion runs (markdown-storage spec §3.6): no pass starts until it is cleared.
+    private(set) var suspendedForLibraryConversion = false
     private var generation = 0
     private var pendingDeviceRename = false
     private var observers: [NSObjectProtocol] = []
@@ -429,6 +431,20 @@ final class SyncController: ObservableObject {
         notesSubscription = nil
     }
 
+    /// Stops the running pass, if any, and keeps sync from starting another until `resumeAfterLibraryConversion()`.
+    /// Bumping the generation also stops a pass that is still connecting before it reaches the engine.
+    func suspendForLibraryConversion() async {
+        suspendedForLibraryConversion = true
+        generation += 1
+        await stopInFlightPass()
+    }
+
+    func resumeAfterLibraryConversion() {
+        guard suspendedForLibraryConversion else { return }
+        suspendedForLibraryConversion = false
+        requestSync(after: 1)
+    }
+
     /// Cancels the running pass (the deactivated adapter refuses further applies) and waits for it to end.
     private func stopInFlightPass() async {
         guard let pass = inFlightPass else { return }
@@ -536,7 +552,7 @@ final class SyncController: ObservableObject {
     }
 
     private var nextDue: Date {
-        paused ? .distantFuture : min(timerDue, localChangeDue ?? .distantFuture)
+        paused || suspendedForLibraryConversion ? .distantFuture : min(timerDue, localChangeDue ?? .distantFuture)
     }
 
     private func runLoop() async {
@@ -573,7 +589,7 @@ final class SyncController: ObservableObject {
 
     /// Returns a retry delay when the pass failed, nil to use the normal interval.
     private func performPass() async -> TimeInterval? {
-        guard let config = configuration else { return nil }
+        guard let config = configuration, !suspendedForLibraryConversion else { return nil }
         let gen = generation
         lastPassStarted = Date()
         passInFlight = true
@@ -600,7 +616,8 @@ final class SyncController: ObservableObject {
             guard gen == generation else { return nil }
             let destination = Destination(backend: session.backend, folder: session.folder, scoped: session.scoped)
             let report = try await withAccess(destination) {
-                try await self.runTrackedPass(session)
+                guard gen == self.generation, !self.suspendedForLibraryConversion else { return SyncReport() }
+                return try await self.runTrackedPass(session)
             }
             guard gen == generation else { return nil }
             let now = Date()

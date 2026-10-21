@@ -23,7 +23,7 @@ struct EditorContainerView: View {
     private var content: some View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
             let writeBlocked = store.isBodyWriteBlocked(id)
-            let readOnly = writeBlocked || note.deletedAt != nil
+            let readOnly = writeBlocked || note.deletedAt != nil || store.libraryConversionInProgress
             VStack(spacing: 0) {
                 EditorHeader(note: note)
                 LinkRenameBanner(tracker: renames)
@@ -37,6 +37,13 @@ struct EditorContainerView: View {
                 }
                 if let deletedAt = note.deletedAt {
                     DeletedNoteBanner(note: note, deletedAt: deletedAt)
+                }
+                if store.libraryConversionInProgress {
+                    Text("Converting your library…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
                 }
                 if let message = store.loadError(for: id) {
                     LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked)

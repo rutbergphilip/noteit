@@ -122,7 +122,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
     }
 
     @MainActor private func requireActive() throws {
-        guard isActive else { throw AdapterError.inactive }
+        guard isActive, !store.isClosedForLibrarySwitch else { throw AdapterError.inactive }
     }
 
     /// The engine records a base right after an apply returns, so the change must be on disk by then.

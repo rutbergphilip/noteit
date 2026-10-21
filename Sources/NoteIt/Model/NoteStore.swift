@@ -141,6 +141,10 @@ final class NoteStore: ObservableObject {
     /// the body-extras sidecar) and from sync apply once its body is installed; passed to every body write; dropped
     /// when the note is purged. Written only via `setBodyExtras(_:for:)` and by NoteStore+BodyEdits.swift.
     var bodyExtras: [UUID: ContainerExtras] = [:]
+    /// Set while a library conversion runs: the editor is read-only and shows "Converting your library…".
+    @Published var libraryConversionInProgress = false
+    /// Set once a conversion has switched the library: this store never writes to disk again.
+    private(set) var isClosedForLibrarySwitch = false
     /// Test hook: stops every body write after that step and throws (see NoteStore+BodyExtras.swift).
     var bodyWriteInterruption: BodyWriteStep?
     /// Test hook: makes step 3 of the body-extras sidecar write fail.
@@ -1136,6 +1140,7 @@ final class NoteStore: ObservableObject {
     }
 
     func scheduleSave(after delay: TimeInterval = 0.5) {
+        guard !isClosedForLibrarySwitch else { return }
         saveWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated { self?.flush() }
@@ -1148,6 +1153,7 @@ final class NoteStore: ObservableObject {
     /// meanwhile the library keeps their last persisted title/preview/date. At termination, bodies that
     /// still can't be saved are written to `recovery/` instead.
     func flush() {
+        guard !isClosedForLibrarySwitch else { return }
         for id in Array(stagedEditorBodies.keys) { commitStagedEditorBody(id) }
         saveWorkItem?.cancel()
         saveWorkItem = nil
@@ -1677,6 +1683,7 @@ final class NoteStore: ObservableObject {
     /// Durable part of a remote apply: library.json (plus deferred trash moves). Pending user edits keep
     /// their own debounced save; the search index save is coalesced.
     private func persistRemoteApply() {
+        guard !isClosedForLibrarySwitch else { return }
         // Notes arrive at their path; only a notebook change moves folders and other notes' files.
         if let storage = markdownStorage, libraryDirty, Set(storage.knownNotebooks) != Set(notebooks) { syncMarkdownLayout() }
         if libraryDirty || !FileManager.default.fileExists(atPath: libraryURL.path) { saveLibrary() }
@@ -1796,7 +1803,21 @@ extension NoteStore {
     /// Throws PersistNowError on any failure; the note then stays pending and the next flush retries it.
     /// Other notes, the search index and pending trash moves are left to the scheduled flush. For capture paths
     /// that remove their source once the note is on disk (foundations Task 4.1; program §6).
+    /// Whether a body or the library still has changes `flush()` hasn't written.
+    var hasUnsavedChanges: Bool {
+        !dirtyBodies.isEmpty || libraryDirty || !stagedEditorBodies.isEmpty
+    }
+
+    /// After a conversion's commit point: the files this store used have moved, so it stops writing.
+    func closeForLibrarySwitch() {
+        isClosedForLibrarySwitch = true
+        saveWorkItem?.cancel()
+        saveWorkItem = nil
+        stopWatchingMarkdownFolder()
+    }
+
     func persistNow(_ id: UUID) throws {
+        guard !isClosedForLibrarySwitch else { throw PersistNowError.libraryNotSaved }
         commitStagedEditorBody(id)
         guard note(with: id) != nil else { throw PersistNowError.noteMissing }
         if dirtyBodies.contains(id) {

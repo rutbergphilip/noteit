@@ -86,7 +86,7 @@ extension NoteStore {
 
     /// Scans the content folder and applies what changed outside NoteIt. Nothing happens while it is missing.
     func rescanMarkdownFolder() {
-        guard let storage = markdownStorage else { return }
+        guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return }
         guard storage.contentRootExists else { return markdownFolderWentMissing() }
         markdownFolderReportedMissing = false
         let result = FolderScanner.scan(contentRoot: storage.contentRootURL, index: storage.index)

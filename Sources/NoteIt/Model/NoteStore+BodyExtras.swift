@@ -204,13 +204,18 @@ extension NoteStore {
 
     /// Sets the IDs on the code paragraphs by position, only when the counts match.
     private func applyingCodeLanguageIDs(_ ids: [String?], to text: NSAttributedString, of id: UUID) -> NSAttributedString {
+        if let applied = Self.applyingCodeLanguageIDs(ids, to: text) { return applied }
+        let count = Self.codeParagraphRanges(in: text).count
+        noteBodyExtras(id, .codeCountMismatch(text: count, entry: ids.count),
+                       "\(count) code paragraph(s) but \(ids.count) stored language ID(s); IDs dropped")
+        return text
+    }
+
+    /// nil when the number of code paragraphs doesn't match `ids`.
+    nonisolated static func applyingCodeLanguageIDs(_ ids: [String?], to text: NSAttributedString) -> NSAttributedString? {
         guard ids.contains(where: { $0 != nil }) else { return text }
-        let ranges = Self.codeParagraphRanges(in: text)
-        guard ranges.count == ids.count else {
-            noteBodyExtras(id, .codeCountMismatch(text: ranges.count, entry: ids.count),
-                           "\(ranges.count) code paragraph(s) but \(ids.count) stored language ID(s); IDs dropped")
-            return text
-        }
+        let ranges = codeParagraphRanges(in: text)
+        guard ranges.count == ids.count else { return nil }
         let result = NSMutableAttributedString(attributedString: text)
         for (range, language) in zip(ranges, ids) {
             guard let language else { continue }
