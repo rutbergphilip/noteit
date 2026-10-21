@@ -43,6 +43,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Sidebar icons turn white on the selected row, so a notebook icon in a colour close to the selection colour (such as a blue notebook) stays visible, including notebooks inside other notebooks, tags and smart folders.
 - With no note open, the editor is now simply blank instead of repeating the note list's “No Notes Yet” and New Note button.
 - Going from Tasks to a notebook, tag or other list no longer leaves a note from elsewhere open; the first note in the list opens instead.
 - A notebook with notebooks inside it now says so under its title (“including nested notebooks”), and notes from those inner notebooks show which notebook they're in.
