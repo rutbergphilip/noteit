@@ -86,8 +86,9 @@ enum MenuShortcutRules {
         if editingKeys.contains(shortcut.key), shortcut != command.defaultShortcut {
             return .reject("Arrow, delete and page keys are kept for moving around and editing text.")
         }
-        if let other = store.command(using: shortcut, excluding: command) {
-            return .reject(alreadyUsed(shortcut, by: other.title))
+        let others = store.commands(using: shortcut, excluding: command)
+        if !others.isEmpty {
+            return .reject(alreadyUsed(shortcut, by: others.map(\.title)))
         }
         if let name = reservedName(for: shortcut) {
             return .reject(alreadyUsed(shortcut, by: name))
@@ -109,7 +110,13 @@ enum MenuShortcutRules {
     ]
 
     private static func alreadyUsed(_ shortcut: MenuShortcut, by name: String) -> String {
-        "\(shortcut.display) is already used for “\(name)”."
+        alreadyUsed(shortcut, by: [name])
+    }
+
+    private static func alreadyUsed(_ shortcut: MenuShortcut, by names: [String]) -> String {
+        let quoted = names.map { "“\($0)”" }
+        let list = quoted.count > 1 ? quoted.dropLast().joined(separator: ", ") + " and " + quoted.last! : quoted.joined()
+        return "\(shortcut.display) is already used for \(list)."
     }
 
     static func reservedName(for shortcut: MenuShortcut) -> String? {

@@ -35,6 +35,24 @@ final class MenuShortcutStoreTests: XCTestCase {
 
     // MARK: - Store
 
+    func testNewCommandDefaultTakenByUserShortcutStartsEmpty() throws {
+        storeJSON(#"{"find":{"key":"k","modifiers":["shift","command"]}}"#)
+        let store = makeStore()
+        XCTAssertNil(store.current(.linkToNote))
+        XCTAssertEqual(store.current(.find), MenuShortcut("k", [.shift, .command]))
+        XCTAssertEqual(store.commands(using: MenuShortcut("k", [.shift, .command])), [.find])
+        let saved = MenuShortcutCoding.decode(try XCTUnwrap(defaults.data(forKey: MenuShortcutStore.defaultsKey)))
+        XCTAssertEqual(saved[.linkToNote], MenuShortcutOverride.noShortcut)
+        XCTAssertNil(makeStore().current(.linkToNote))
+    }
+
+    func testConflictNamesEveryCommandUsingTheShortcut() {
+        storeJSON(#"{"find":{"key":"j","modifiers":["command"]},"print":{"key":"j","modifiers":["command"]}}"#)
+        let store = makeStore()
+        XCTAssertEqual(evaluate(MenuShortcut("j", .command), for: .newNote, in: store),
+                       .reject("⌘J is already used for “\(MenuShortcutCommand.find.title)” and “\(MenuShortcutCommand.print.title)”."))
+    }
+
     func testStartsWithTheDefaults() {
         let store = makeStore()
         for command in MenuShortcutCommand.allCases {
