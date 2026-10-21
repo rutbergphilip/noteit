@@ -86,13 +86,9 @@ struct EditorContainerView: View {
                 }
             }
         } else {
-            EmptyStateView(
-                symbol: "square.and.pencil",
-                title: "No Note Selected",
-                message: "Choose a note from the list, or start something new.",
-                actionTitle: "New Note"
-            ) { store.createNoteInCurrentContext() }
-            .background(Tokens.Color.surfaceEditor)
+            // Blank, like Notes: the list column carries the empty state and its New Note action.
+            Tokens.Color.surfaceEditor
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
