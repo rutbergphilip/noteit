@@ -201,6 +201,64 @@ extension BodyCodec {
         return file.path.hasPrefix(root.path + "/") ? file : nil
     }
 
+    // MARK: A Markdown library's files
+
+    /// A note file of a Markdown library: `text` with original image bytes, its attachments stored in the shared
+    /// `_attachments/` and referred to relative to `notePath`. With `previous`, unchanged blocks keep their bytes.
+    static func libraryMarkdown(of text: NSAttributedString, extras: ContainerExtras, frontMatter: FrontMatter,
+                                notePath: String, attachments: AttachmentStore, links: MarkdownLinkResolver,
+                                previous: ParsedMarkdown?) throws -> (text: String, attachmentNames: [String]) {
+        let container = try noteItDoc(of: text, extras: extras, imagePolicy: .keepOriginal)
+        var names: [String: String] = [:]
+        for (sha, attachment) in container.attachments {
+            names[sha] = try attachments.store(attachment, sha: sha)
+        }
+        var markdown = MarkdownCodec.serialize(container, frontMatter: frontMatter, profile: .library, attachmentPath: { sha in
+            let name = names[sha] ?? AttachmentPaths.fileName(sha256: sha, originalName: container.attachments[sha]?.name ?? "")
+            return AttachmentPaths.relativePath(fromNoteAt: notePath, fileName: name)
+        }, noteLinkName: { links.target(for: $0) }, previous: previous.map(links.withoutStaleLinks))
+        if !markdown.hasSuffix("\n") { markdown += "\n" }
+        return (markdown, Array(Set(names.values)).sorted())
+    }
+
+    /// The body of a library note file parsed from `notePath`. Images and attachments are read from relative
+    /// paths and `file://` URLs inside `contentRoot` and from bare names in `_attachments/`; `unresolved` counts
+    /// the ones that couldn't be read. `attachmentNames` are the files in `_attachments/` it refers to.
+    static func libraryBody(from parsed: ParsedMarkdown, notePath: String, contentRoot: URL)
+        throws -> (body: StoredBody, attachmentNames: [String], unresolved: Int) {
+        var names = Set<String>()
+        let imported = MarkdownCodec.resolvingAttachments(parsed) { path in
+            guard let relative = libraryRelativePath(path, notePath: notePath, contentRoot: contentRoot),
+                  let url = fileInside(contentRoot, path: relative) else { return nil }
+            if relative.hasPrefix(AttachmentPaths.folder + "/"), !relative.dropFirst(AttachmentPaths.folder.count + 1).contains("/") {
+                names.insert(String(relative.dropFirst(AttachmentPaths.folder.count + 1)))
+            }
+            return try? Data(contentsOf: url)
+        }
+        var stored = try attributedString(from: imported.body)
+        var known = imported.frontMatter
+        known.extra = ""
+        stored.frontMatter = known
+        stored.extras.extra = [:]
+        return (stored, names.sorted(), imported.unresolvedImages.count)
+    }
+
+    private static func libraryRelativePath(_ path: String, notePath: String, contentRoot: URL) -> String? {
+        if path.lowercased().hasPrefix("file:") {
+            guard let url = URL(string: path) ?? URL(string: path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""),
+                  url.isFileURL else { return nil }
+            let root = contentRoot.standardizedFileURL.resolvingSymlinksInPath().path + "/"
+            let file = url.standardizedFileURL.resolvingSymlinksInPath().path
+            return file.hasPrefix(root) ? String(file.dropFirst(root.count)) : nil
+        }
+        if let relative = AttachmentPaths.resolve(decoded: path, fromNoteAt: notePath),
+           FileManager.default.fileExists(atPath: contentRoot.appendingPathComponent(relative).path) {
+            return relative
+        }
+        guard !path.contains("/") else { return nil }
+        return AttachmentPaths.folder + "/" + path
+    }
+
     fileprivate static func markdown(of container: BodyContainer, frontMatter: FrontMatter = .empty, profile: MarkdownProfile) -> String {
         MarkdownCodec.serialize(container, frontMatter: frontMatter, profile: profile, attachmentPath: { sha in
             let name = container.attachments[sha]?.name ?? ""

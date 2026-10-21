@@ -55,7 +55,7 @@ enum BodyStorageContract {
             let storage = make(root)
             let meta = try write(storage, "Hello\nworld")
             let stored = try storage.read(meta.id)
-            XCTAssertEqual(stored.text.string, "Hello\nworld", file: file, line: line)
+            XCTAssertEqual(stored.text.string.withoutFinalNewline, "Hello\nworld", file: file, line: line)
             XCTAssertNil(stored.readOnlyReason, file: file, line: line)
         }
     }
@@ -78,7 +78,7 @@ enum BodyStorageContract {
             meta.title = "Renamed"
             meta.notebookID = other.id
             try storage.writeMetadataOnly(for: meta, notebook: other)
-            XCTAssertEqual(try storage.read(meta.id).text.string, "Meta\nbody", file: file, line: line)
+            XCTAssertEqual(try storage.read(meta.id).text.string.withoutFinalNewline, "Meta\nbody", file: file, line: line)
             XCTAssertEqual(Set(storage.idsOnDisk()), ids, file: file, line: line)
 
             let never = noteMeta(notebook: nil)
@@ -127,7 +127,7 @@ enum BodyStorageContract {
             try storage.moveToTrash(meta.id)
             XCTAssertFalse(storage.idsOnDisk().contains(meta.id), file: file, line: line)
             assertNoSuchFile(try storage.read(meta.id), file: file, line: line)
-            XCTAssertEqual(try storage.recover(meta.id)?.text.string, "Second", "newest trashed copy", file: file, line: line)
+            XCTAssertEqual(try storage.recover(meta.id)?.text.string.withoutFinalNewline, "Second", "newest trashed copy", file: file, line: line)
             XCTAssertNil(try storage.recover(UUID()), file: file, line: line)
         }
     }
@@ -179,7 +179,9 @@ enum BodyStorageContract {
             let url = try storage.recoveryCopy(NSAttributedString(string: "Rescued\ntext"), for: id, in: directory)
             XCTAssertEqual(url.deletingLastPathComponent().standardizedFileURL, directory.standardizedFileURL,
                            file: file, line: line)
-            XCTAssertEqual(try RTFDBodyStorage.readBody(at: url).string, "Rescued\ntext", file: file, line: line)
+            let codec: BodyCodec = storage.kind == .rtfd ? .rtfd : .markdown
+            XCTAssertEqual(url.pathExtension, codec.fileExtension, file: file, line: line)
+            XCTAssertEqual(try codec.read(at: url).text.string.withoutFinalNewline, "Rescued\ntext", file: file, line: line)
         }
     }
 
@@ -192,7 +194,7 @@ enum BodyStorageContract {
             let snapshot = storage.kind == .rtfd ? try listing(storage.contentRootURL) : [:]
             book.name = "After"
             XCTAssertNoThrow(try storage.renameNotebook(book, from: "Before"), file: file, line: line)
-            XCTAssertEqual(try storage.read(meta.id).text.string, "In a book", file: file, line: line)
+            XCTAssertEqual(try storage.read(meta.id).text.string.withoutFinalNewline, "In a book", file: file, line: line)
             XCTAssertTrue(storage.idsOnDisk().contains(meta.id), file: file, line: line)
             XCTAssertTrue(FileManager.default.fileExists(atPath: storage.fileURL(for: meta.id).path), file: file, line: line)
             if storage.kind == .rtfd {
@@ -211,7 +213,7 @@ enum BodyStorageContract {
             try storage.removePermanently(removed.id)
             let snapshot = storage.kind == .rtfd ? try listing(storage.contentRootURL) : [:]
             XCTAssertNoThrow(try storage.removeNotebook(gone), file: file, line: line)
-            XCTAssertEqual(try storage.read(other.id).text.string, "Still here", file: file, line: line)
+            XCTAssertEqual(try storage.read(other.id).text.string.withoutFinalNewline, "Still here", file: file, line: line)
             if storage.kind == .rtfd {
                 XCTAssertEqual(try listing(storage.contentRootURL), snapshot, "RTFD remove is a no-op", file: file, line: line)
             }
@@ -274,4 +276,9 @@ enum BodyStorageContract {
         }
         return result
     }
+}
+
+extension String {
+    /// Imported documents end their last paragraph with a newline; the text typed into the editor may not.
+    var withoutFinalNewline: String { hasSuffix("\n") ? String(dropLast()) : self }
 }

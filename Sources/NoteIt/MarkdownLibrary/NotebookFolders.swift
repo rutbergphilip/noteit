@@ -111,10 +111,10 @@ enum NotebookFolders {
         return result
     }
 
-    /// Whether a recorded folder name still belongs to the notebook (its name sanitized, or with a ` 2` suffix).
+    /// Whether a recorded folder name still belongs to the notebook (its name sanitized, or with a ` 2` suffix), case included.
     private static func matches(recorded: String, notebook: Notebook) -> Bool {
-        let base = ExportNaming.sanitized(notebook.name, fallback: "Notebook").lowercased()
-        let name = recorded.lowercased()
+        let base = ExportNaming.sanitized(notebook.name, fallback: "Notebook")
+        let name = recorded
         if name == base { return true }
         guard name.hasPrefix(base + " ") else { return false }
         return Int(name.dropFirst(base.count + 1)) != nil
