@@ -123,6 +123,82 @@ final class CLICompletionTests: XCTestCase {
         XCTAssertTrue(output.hasSuffix("_noteit\n"), output)
     }
 
+    /// A `noteit` on PATH that logs the prefix it's given and prints the candidates starting with it.
+    private func fakeNoteit(in directory: URL) throws -> (path: String, log: URL) {
+        let bin = directory.appendingPathComponent("bin")
+        try FileManager.default.createDirectory(at: bin, withIntermediateDirectories: true)
+        let log = directory.appendingPathComponent("prefixes")
+        let tool = bin.appendingPathComponent("noteit")
+        try Data(#"""
+            #!/bin/sh
+            printf '%s\n' "$3" >> "$NOTEIT_FAKE_LOG"
+            printf 'Work Pro\t2 notes\nit'"'"'s\t1 note\na:b c\t1 note\nhome\t1 note\n' | while IFS= read -r line; do
+                case $line in "$3"*) printf '%s\n' "$line" ;; esac
+            done
+            """#.utf8).write(to: tool)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tool.path)
+        return ("\(bin.path):/usr/bin:/bin", log)
+    }
+
+    func testBashPassesTheUnquotedWordAndHandlesColons() async throws {
+        let directory = try temporaryDirectory()
+        let file = directory.appendingPathComponent("noteit.bash")
+        try Data(await script(.bash).utf8).write(to: file)
+        let (path, log) = try fakeNoteit(in: directory)
+        // bash 3.2 splits COMP_WORDS at spaces only; bash 4 and later also at = and :, as in the second word lists.
+        // Either way readline replaces only the text after the last = or :.
+        let cases: [(line: String, words: [[String]], replies: [String], prefix: String)] = [
+            (#"noteit new --tag Work\ P"#, [["noteit", "new", "--tag", #"Work\ P"#]], ["Work Pro"], "Work P"),
+            (#"noteit new --tag "Work P"#, [["noteit", "new", "--tag", #""Work P"#]], ["Work Pro"], "Work P"),
+            (#"noteit new --tag it\'"#, [["noteit", "new", "--tag", #"it\'"#]], ["it's"], "it'"),
+            ("noteit new --tag=Wo", [["noteit", "new", "--tag=Wo"], ["noteit", "new", "--tag", "=", "Wo"]], ["Work Pro"], "Wo"),
+            ("noteit new --tag a:", [["noteit", "new", "--tag", "a:"], ["noteit", "new", "--tag", "a", ":"]], ["b c"], "a:"),
+            (#"noteit new --tag=a:b\ "#, [["noteit", "new", #"--tag=a:b\ "#],
+                                          ["noteit", "new", "--tag", "=", "a", ":", #"b\ "#]], ["b c"], "a:b "),
+            ("noteit new --tag a:b --tag h", [["noteit", "new", "--tag", "a:b", "--tag", "h"],
+                                              ["noteit", "new", "--tag", "a", ":", "b", "--tag", "h"]], ["home"], "h"),
+        ]
+        for example in cases {
+            for split in example.words {
+                try? FileManager.default.removeItem(at: log)
+                let command = """
+                    source \(CompletionScript.shellQuoted(file.path))
+                    COMP_WORDBREAKS=$'"\\'><=;|&(:'
+                    COMP_WORDS=(\(split.map(CompletionScript.shellQuoted).joined(separator: " "))); COMP_CWORD=\(split.count - 1)
+                    COMP_LINE=\(CompletionScript.shellQuoted(example.line)); COMP_POINT=${#COMP_LINE}
+                    _noteit
+                    printf '%s\\n' "${COMPREPLY[@]}"
+                    """
+                let (status, output) = try run("/bin/bash", ["--noprofile", "--norc", "-c", command],
+                                               environment: ["PATH": path, "NOTEIT_FAKE_LOG": log.path])
+                XCTAssertEqual(status, 0, "\(split): \(output)")
+                XCTAssertEqual(output, example.replies.map { $0 + "\n" }.joined(), "\(split)")
+                let prefixes = (try? String(contentsOf: log, encoding: .utf8)) ?? ""
+                XCTAssertEqual(prefixes, example.prefix + "\n", "\(split)")
+            }
+        }
+    }
+
+    func testZshPassesTheUnquotedPrefix() async throws {
+        let directory = try temporaryDirectory()
+        let file = directory.appendingPathComponent("_noteit")
+        try Data(await script(.zsh).utf8).write(to: file)
+        let (path, log) = try fakeNoteit(in: directory)
+        let command = #"""
+            compdef() { : }
+            _describe() { print -rl -- "${(@P)argv[-1]}" }
+            source "$1"
+            PREFIX='Work\ P' _noteit_values tags
+            PREFIX="it\\'" _noteit_values tags
+            PREFIX='a\:' _noteit_values tags
+            """#
+        let (status, output) = try run("/bin/zsh", ["-fc", command, "zsh", file.path],
+                                       environment: ["PATH": path, "NOTEIT_FAKE_LOG": log.path])
+        XCTAssertEqual(status, 0, output)
+        XCTAssertEqual(output, "Work Pro:2 notes\nit's:1 note\na\\:b c:1 note\n")
+        XCTAssertEqual(try String(contentsOf: log, encoding: .utf8), "Work P\nit'\na:\n")
+    }
+
     func testFishScriptPassesSyntaxCheck() async throws {
         let fish = ["/opt/homebrew/bin/fish", "/usr/local/bin/fish", "/usr/bin/fish"]
             .first { FileManager.default.isExecutableFile(atPath: $0) }
