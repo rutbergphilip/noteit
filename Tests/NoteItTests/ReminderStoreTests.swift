@@ -161,6 +161,19 @@ final class ReminderStoreTests: XCTestCase {
         XCTAssertEqual(ReminderNotifications.authorization(for: .provisional), true)
     }
 
+    func testReturningToTheAppRefreshesNotificationPermission() async {
+        let events = NotificationCenter()
+        var status = UNAuthorizationStatus.denied
+        let notifications = ReminderNotifications(appEvents: events, authorizationStatus: { status })
+        await notifications.refreshAuthorization()
+        XCTAssertEqual(notifications.isAuthorized, false)
+
+        status = .authorized
+        events.post(name: NSApplication.didBecomeActiveNotification, object: nil)
+        for _ in 0..<50 where notifications.isAuthorized != true { await Task.yield() }
+        XCTAssertEqual(notifications.isAuthorized, true)
+    }
+
     func testNotificationsNeedABundledApp() {
         XCTAssertFalse(ReminderNotifications.isSupported(bundleURL: Bundle.main.bundleURL, bundleIdentifier: Bundle.main.bundleIdentifier))
         XCTAssertFalse(ReminderNotifications.isSupported(bundleURL: URL(fileURLWithPath: "/usr/bin/noteit"), bundleIdentifier: "app.noteit"))

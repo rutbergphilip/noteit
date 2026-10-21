@@ -38,10 +38,20 @@ final class ReminderNotifications: NSObject, ObservableObject, ReminderNotifying
     /// Nil until the first request or settings check.
     @Published private(set) var isAuthorized: Bool?
     private var configured = false
+    private let authorizationStatus: (() async -> UNAuthorizationStatus)?
 
-    override init() {
+    /// `authorizationStatus` replaces the system lookup in tests.
+    init(appEvents: NotificationCenter = .default, authorizationStatus: (() async -> UNAuthorizationStatus)? = nil) {
         isAvailable = Self.isSupported(bundleURL: Bundle.main.bundleURL, bundleIdentifier: Bundle.main.bundleIdentifier)
+        self.authorizationStatus = authorizationStatus
         super.init()
+        // Permission is usually changed in System Settings, so look again whenever the user comes back.
+        appEvents.addObserver(self, selector: #selector(appDidBecomeActive),
+                              name: NSApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    @objc private func appDidBecomeActive() {
+        Task { await refreshAuthorization() }
     }
 
     nonisolated static func isSupported(bundleURL: URL, bundleIdentifier: String?) -> Bool {
@@ -74,6 +84,10 @@ final class ReminderNotifications: NSObject, ObservableObject, ReminderNotifying
     }
 
     func refreshAuthorization() async {
+        if let authorizationStatus {
+            isAuthorized = Self.authorization(for: await authorizationStatus())
+            return
+        }
         guard let center else { return }
         let settings = await center.notificationSettings()
         isAuthorized = Self.authorization(for: settings.authorizationStatus)
