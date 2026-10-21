@@ -318,7 +318,7 @@ public actor SyncEngine {
     /// Errors that would fail every request, so the pass stops instead of collecting one per record.
     static func isFatal(_ error: StorageError) -> Bool {
         switch error {
-        case .unauthorized, .clockSkew, .insecureConnectionBlocked, .unavailable: return true
+        case .unauthorized, .clockSkew, .insecureConnectionBlocked, .unavailable, .storeMissing: return true
         default: return false
         }
     }

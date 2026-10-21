@@ -233,11 +233,80 @@ final class FolderUnreachableTests: XCTestCase {
         XCTAssertTrue(created)
         _ = try await backend.get(RemoteLayout.manifest())
 
+        // The store was deleted from a folder still in use (its lock file is left): reset, not offline.
         try FileManager.default.removeItem(at: fresh.appendingPathComponent(RemoteLayout.folder))
+        await assertStoreMissing { try await backend.get(RemoteLayout.manifest()) }
+        await assertStoreMissing { try await backend.put(RemoteLayout.manifest(), data: Data("{}".utf8), ifMatch: nil, ifNoneMatch: true) }
+        // Nothing else there, as in the folder an unmounted share leaves behind: offline.
+        try FileManager.default.removeItem(at: fresh.appendingPathComponent(FolderBackend.lockFileName))
+        try Data().write(to: fresh.appendingPathComponent(".DS_Store"))
         await assertUnavailable { try await backend.get(RemoteLayout.manifest()) }
-        await assertUnavailable { try await backend.put(RemoteLayout.manifest(), data: Data("{}".utf8), ifMatch: nil, ifNoneMatch: true) }
-        let written = try FileManager.default.contentsOfDirectory(atPath: fresh.path).filter { !$0.hasPrefix(".") }
-        XCTAssertEqual(written, [])
+        let written = try FileManager.default.contentsOfDirectory(atPath: fresh.path)
+        XCTAssertEqual(written, [".DS_Store"])
+    }
+
+    func testStoreDeletedFromAFolderInUseStopsWithoutDeletingOrCreating() async throws {
+        let storeA = FakeLocalStore(), storeB = FakeLocalStore()
+        let a = engine("A", store: storeA)
+        for i in 0..<3 { _ = await storeA.create(title: "Note \(i)") }
+        _ = try await a.sync()
+        let stateURL = dir.appendingPathComponent("B.json")
+        let b = SyncEngine(backend: FolderBackend(root: root, store: .existing), cipher: cipher, local: storeB, stateURL: stateURL,
+                           deviceID: "id-B", deviceName: "B")
+        _ = try await b.sync()
+        let titlesBefore = await storeB.titles()
+        let stateBefore = SyncState.load(from: stateURL)
+
+        try FileManager.default.removeItem(at: root.appendingPathComponent(RemoteLayout.folder))
+        try FileManager.default.removeItem(at: root.appendingPathComponent(FolderBackend.lockFileName))
+        try Data("mine".utf8).write(to: root.appendingPathComponent("Readme.txt"))
+        await assertStoreMissing { try await b.sync() }
+
+        let titlesAfter = await storeB.titles()
+        XCTAssertEqual(titlesAfter, titlesBefore)
+        XCTAssertEqual(titlesAfter.count, 3)
+        let journal = await storeB.journaledDeletions()
+        XCTAssertTrue(journal.isEmpty)
+        XCTAssertEqual(SyncState.load(from: stateURL).bases, stateBefore.bases)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["Readme.txt"])
+    }
+
+    /// A share's own root, mounted and empty, with the store deleted: a different volume from its parent.
+    func testStoreDeletedFromAMountedEmptyVolumeIsReset() async throws {
+        let image = dir.appendingPathComponent("share.dmg"), mount = dir.appendingPathComponent("Volume", isDirectory: true)
+        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: false)
+        guard Self.hdiutil(["create", "-quiet", "-size", "2m", "-fs", "HFS+", "-volname", "Notes", "-layout", "NONE", image.path]),
+              Self.hdiutil(["attach", "-quiet", "-nobrowse", "-noverify", "-mountpoint", mount.path, image.path]) else {
+            throw XCTSkip("Can't mount a disk image here")
+        }
+        defer { _ = Self.hdiutil(["detach", "-quiet", "-force", mount.path]) }
+        let before = try FileManager.default.contentsOfDirectory(atPath: mount.path)
+        XCTAssertFalse(before.contains(RemoteLayout.folder))
+        let backend = FolderBackend(root: mount, store: .existing)
+        await assertStoreMissing { try await backend.list(prefix: RemoteLayout.root) }
+        await assertStoreMissing { try await backend.put(RemoteLayout.manifest(), data: Data("{}".utf8), ifMatch: nil, ifNoneMatch: true) }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: mount.path), before)
+    }
+
+    private static func hdiutil(_ arguments: [String]) -> Bool {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
+        process.arguments = arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
+    }
+
+    private func assertStoreMissing(_ work: () async throws -> some Any, file: StaticString = #filePath, line: UInt = #line) async {
+        do {
+            _ = try await work()
+            XCTFail("Expected storeMissing", file: file, line: line)
+        } catch StorageError.storeMissing {
+        } catch {
+            XCTFail("Unexpected \(error)", file: file, line: line)
+        }
     }
 
     private func assertNotFound(_ work: () async throws -> some Any, file: StaticString = #filePath, line: UInt = #line) async {
@@ -252,6 +321,7 @@ final class FolderUnreachableTests: XCTestCase {
 
     func testUnavailableIsFatal() {
         XCTAssertTrue(SyncEngine.isFatal(.unavailable("x")))
+        XCTAssertTrue(SyncEngine.isFatal(.storeMissing("x")))
         XCTAssertFalse(SyncEngine.isFatal(.network("x")))
     }
 

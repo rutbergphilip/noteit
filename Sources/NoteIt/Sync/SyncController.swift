@@ -614,7 +614,7 @@ final class SyncController: ObservableObject {
             credentialsRejected = configuration?.provider.isS3 == true
             pause()
             return nil
-        case StorageError.notFound(let key) where key == RemoteLayout.manifest():
+        case StorageError.notFound(RemoteLayout.manifest()), StorageError.storeMissing:
             status = .error(SyncSetupError.storageReset.errorDescription ?? "")
             pause()
             return nil
@@ -858,7 +858,7 @@ final class SyncController: ObservableObject {
             return "macOS blocked the unencrypted http:// connection. Use an https:// endpoint, or a local address such as nas.local or the NAS's IP address."
         case StorageError.network(let message):
             return "Can't reach the storage: \(message)"
-        case StorageError.notFound(let key) where key == RemoteLayout.manifest():
+        case StorageError.notFound(RemoteLayout.manifest()), StorageError.storeMissing:
             return SyncSetupError.storageReset.errorDescription ?? ""
         case StorageError.notFound:
             return "The bucket or folder wasn't found. Check its name and region."

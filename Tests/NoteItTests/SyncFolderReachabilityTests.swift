@@ -101,6 +101,38 @@ final class SyncFolderReachabilityTests: XCTestCase {
         XCTAssertGreaterThan(calls, 0)
     }
 
+    func testDeletedStoreInAReachableFolderPausesWithReset() async throws {
+        _ = NSApplication.shared
+        let library = folder.deletingLastPathComponent().appendingPathComponent("library", isDirectory: true)
+        let store = NoteStore(location: LibraryLocation(url: library, seedsFreshLibrary: false))
+        let controller = SyncController(store: store, keepsSecretsInMemory: true)
+        try await controller.connect(config, accessKey: nil, secret: nil, passphrase: nil)
+        defer { Task { await controller.disconnect() } }
+        let id = store.createNote(in: nil, initial: NSAttributedString(string: "Keep me")).id
+        let notes = folder.appendingPathComponent(RemoteLayout.root + "/notes")
+        controller.syncNow()
+        var deadline = Date().addingTimeInterval(5)
+        while !((try? FileManager.default.contentsOfDirectory(atPath: notes.path))?.isEmpty == false && controller.status.isIdle),
+              Date() < deadline {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        XCTAssertTrue(controller.status.isIdle, "\(controller.status)")
+
+        try FileManager.default.removeItem(at: folder.appendingPathComponent(RemoteLayout.folder))
+        try Data("mine".utf8).write(to: folder.appendingPathComponent("Readme.txt"))
+        controller.syncNow()
+        let reset = SyncStatus.error(SyncSetupError.storageReset.errorDescription ?? "")
+        deadline = Date().addingTimeInterval(5)
+        while controller.status != reset, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertEqual(controller.status, reset)
+
+        controller.syncNow()
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(controller.status, reset, "sync should stay paused")
+        XCTAssertEqual(store.notes.map(\.id), [id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent(RemoteLayout.folder).path))
+    }
+
     /// State files are named by `storeKey`; it must not change for folders already syncing.
     func testStoreKeyMatchesTheKeyOfEarlierBuilds() throws {
         let base = folder.deletingLastPathComponent()

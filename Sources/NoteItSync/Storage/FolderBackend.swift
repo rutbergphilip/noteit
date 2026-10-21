@@ -10,13 +10,14 @@ import Foundation
 ///
 /// When the root is a share's mount point, an empty local folder can be left at its path after an unmount. So
 /// the root's identity (device and inode) is recorded on first use and a different folder at the same path is
-/// `unavailable`, and with `store` set a root without a NoteIt store in it is too (see `StorePolicy`).
+/// `unavailable`, and with `store` set a root without a NoteIt store in it throws too (see `StorePolicy`).
 public final class FolderBackend: StorageBackend, @unchecked Sendable {
     /// How a root without a NoteIt store (`RemoteLayout.root`, or Inkwell's `legacyRoot`) in it is treated.
     public enum StorePolicy: Sendable {
         /// No store needed; any keys.
         case unchecked
-        /// A missing store means this isn't the folder that was synced: every call throws `unavailable`.
+        /// A missing store throws: `storeMissing` if the root is a mounted volume or holds other files, otherwise
+        /// `unavailable`, as it may be the empty folder left at an unmounted share's mount point.
         case existing
         /// Connecting to a folder: a missing store reads as empty and may be created. Once seen, like `existing`.
         case creatable
@@ -240,21 +241,35 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
             throw code == ENOENT || code == ENOTDIR ? unavailable() : Self.storageError(code, key: root.path)
         }
         guard st.st_mode & S_IFMT == S_IFDIR else { throw unavailable() }
+        let identity = RootIdentity(device: st.st_dev, inode: st.st_ino)
+        let recorded = stateLock.withLock { rootIdentity }
+        if let recorded, recorded != identity { throw unavailable() }
         if store != .unchecked {
             let present = [RemoteLayout.root, RemoteLayout.legacyRoot].contains { isDirectory(root.appendingPathComponent($0).path) }
             let seen = stateLock.withLock {
                 if present { storeSeen = true }
                 return storeSeen
             }
-            if !present, store == .existing || seen { throw unavailable() }
+            if !present, store == .existing || seen {
+                throw try isLiveFolder(device: st.st_dev) ? StorageError.storeMissing(root.lastPathComponent) : unavailable()
+            }
         }
-        let identity = RootIdentity(device: st.st_dev, inode: st.st_ino)
-        let recorded = stateLock.withLock {
+        stateLock.withLock {
             if rootIdentity == nil { rootIdentity = identity }
-            return rootIdentity
         }
-        guard recorded == identity else { throw unavailable() }
     }
+
+    /// Whether a root without its store is a folder in use, so the store was deleted, rather than the empty folder
+    /// an unmounted share leaves at its mount point: a mounted volume, or a folder with something in it.
+    private func isLiveFolder(device: dev_t) throws -> Bool {
+        var parent = stat()
+        let parentPath = (root.path as NSString).deletingLastPathComponent
+        if stat(parentPath, &parent) == 0, parent.st_dev != device { return true }
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: root.path) else { throw unavailable() }
+        return entries.contains { !Self.systemEntries.contains($0) }
+    }
+
+    private static let systemEntries: Set<String> = [".DS_Store", ".localized"]
 
     private func isDirectory(_ path: String) -> Bool {
         var st = stat()
