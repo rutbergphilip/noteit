@@ -9,6 +9,7 @@ struct LibraryLocation: Equatable {
     var seedsFreshLibrary: Bool
     var format: LibraryFormatKind = .rtfd
     var contentRootURL: URL? = nil
+    var renameFilesOnTitleChange: Bool = true
 }
 
 /// Decides, at launch, which library NoteStore opens: the `NOTEIT_DATA_DIR` override, or
@@ -29,6 +30,8 @@ struct LibraryLauncher {
     }
 
     var dataDirectoryOverride: () -> String?
+    /// Debug builds: a content folder that opens the `NOTEIT_DATA_DIR` library as Markdown without a location file.
+    var markdownRootOverride: () -> String? = { nil }
     var baseDirectory: () -> URL
     var isLegacyAppRunning: () -> Bool
     var quitLegacyApp: () -> Bool
@@ -61,6 +64,9 @@ struct LibraryLauncher {
     func decide() -> Decision {
         if let override = dataDirectoryOverride() {
             let url = URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+            if let markdown = markdownRootOverride(), let location = markdownOverride(markdown, dataDir: url) {
+                return .open(location)
+            }
             return applyingLocationFile(to: LibraryLocation(url: url, seedsFreshLibrary: true))
         }
         let result = LibraryMigration.resolve(
@@ -72,6 +78,25 @@ struct LibraryLauncher {
         )
         if result.outcome == .legacyAppRunning { return .quitNoteIt }
         return applyingLocationFile(to: LibraryLocation(url: result.directory, seedsFreshLibrary: result.outcome.allowsSeeding))
+    }
+
+    /// The data folder opened as a Markdown library in `root`; nil (with a log line) when the data folder already
+    /// holds RTFD notes or has a location file of its own, or the folder can't be created.
+    private func markdownOverride(_ root: String, dataDir: URL) -> LibraryLocation? {
+        let content = URL(fileURLWithPath: (root as NSString).expandingTildeInPath, isDirectory: true).standardizedFileURL
+        let notes = dataDir.appendingPathComponent("notes", isDirectory: true)
+        let rtfd = ((try? fileManager.contentsOfDirectory(atPath: notes.path)) ?? []).contains { $0.hasSuffix(".rtfd") }
+        if rtfd || fileManager.fileExists(atPath: LibraryLocationFile.url(dataDir: dataDir).path) {
+            log("NoteIt: ignoring NOTEIT_MARKDOWN_ROOT; \(dataDir.path) already holds a library")
+            return nil
+        }
+        do {
+            try fileManager.createDirectory(at: content, withIntermediateDirectories: true)
+        } catch {
+            log("NoteIt: ignoring NOTEIT_MARKDOWN_ROOT; can't create \(content.path): \(error)")
+            return nil
+        }
+        return LibraryLocation(url: dataDir, seedsFreshLibrary: false, format: .markdown, contentRootURL: content)
     }
 
     /// A Markdown library is never seeded, and neither is a data folder whose location file is damaged.
@@ -95,7 +120,8 @@ struct LibraryLauncher {
         }
         record(check, in: &file, dataDir: location.url)
         guard check.isFolder else { return .contentRootMissing(check.root) }
-        return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false, format: .markdown, contentRootURL: check.root))
+        return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false, format: .markdown, contentRootURL: check.root,
+                                     renameFilesOnTitleChange: file.renameFilesOnTitleChange))
     }
 
     /// Records a moved folder's new path and a recreated bookmark.
@@ -183,6 +209,13 @@ struct LibraryLauncher {
 
     static let live = LibraryLauncher(
         dataDirectoryOverride: { AppEnvironment.nonEmpty("DATA_DIR") },
+        markdownRootOverride: {
+            #if DEBUG
+            return AppEnvironment.nonEmpty("MARKDOWN_ROOT")
+            #else
+            return nil
+            #endif
+        },
         baseDirectory: {
             #if DEBUG
             // Debug-only: stand-in for Application Support, to exercise the migration against fake folders.

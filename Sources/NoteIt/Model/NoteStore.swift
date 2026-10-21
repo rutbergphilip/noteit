@@ -18,7 +18,10 @@ final class NoteStore: ObservableObject {
         didSet { if selection != oldValue { editingNoteID = nil } }
     }
     @Published var selectedNoteID: UUID? {
-        didSet { if selectedNoteID != editingNoteID { editingNoteID = nil } }
+        didSet {
+            if selectedNoteID != editingNoteID { editingNoteID = nil }
+            if selectedNoteID != oldValue, markdownStorage != nil { markdownSelectionChanged(from: oldValue) }
+        }
     }
     @Published var searchText: String = "" {
         didSet { if searchText != oldValue { editingNoteID = nil } }
@@ -114,6 +117,14 @@ final class NoteStore: ObservableObject {
     /// Bodies whose unreadable original could not be backed up, or whose body-extras sidecar is unreadable:
     /// never overwrite them.
     private var bodyWriteBlocked: Set<UUID> = []
+    /// While set, `updateBody` dates the edit with it instead of now (a file edited outside NoteIt).
+    var externalEditDate: Date?
+    /// The idle rename's clock; tests inject one.
+    var markdownClock: () -> Date = Date.init
+    var hasPendingMarkdownRenames = false
+    var markdownScanScheduled = false
+    /// Notes whose files disappeared in a batch the mass-deletion guard holds.
+    var heldMarkdownDeletions: Set<UUID> = []
     /// Why a readable body is read-only (`StoredBody.readOnlyReason`); shown like a load error.
     private var bodyReadOnlyReasons: [UUID: String] = [:]
     /// The extras of each loaded body, keyed by note ID (Task 4.1). Set from every body read (on an RTFD store from
@@ -167,12 +178,21 @@ final class NoteStore: ObservableObject {
         self.init(location: LibraryLocation(url: rootURL, seedsFreshLibrary: true))
     }
 
-    /// `bodyStorage` nil: `RTFDBodyStorage(rootURL:)`. Tests pass another storage.
+    /// `bodyStorage` nil: `MarkdownBodyStorage` for a Markdown location, else `RTFDBodyStorage(rootURL:)`. Tests pass
+    /// another storage.
     init(location: LibraryLocation, bodyStorage: NoteBodyStorage? = nil) {
         rootURL = location.url
-        self.bodyStorage = bodyStorage ?? RTFDBodyStorage(rootURL: location.url)
-        seedsFreshLibrary = location.seedsFreshLibrary
-        history = VersionHistory(rootURL: location.url.appendingPathComponent("history", isDirectory: true))
+        if let bodyStorage {
+            self.bodyStorage = bodyStorage
+        } else if location.format == .markdown, let content = location.contentRootURL {
+            self.bodyStorage = MarkdownBodyStorage(contentRoot: content, dataDir: location.url,
+                                                   renameFilesOnTitleChange: location.renameFilesOnTitleChange)
+        } else {
+            self.bodyStorage = RTFDBodyStorage(rootURL: location.url)
+        }
+        seedsFreshLibrary = location.seedsFreshLibrary && self.bodyStorage.kind == .rtfd
+        history = VersionHistory(rootURL: location.url.appendingPathComponent("history", isDirectory: true),
+                                 format: self.bodyStorage.kind == .rtfd ? .rtfd : .noteItDoc)
         searchIndexer = OrganiseIndexer(fileURL: location.url.appendingPathComponent(OrganiseIndexer.fileName))
         searchIndexer.store = self
         registerDerivedIndex(searchIndexer)
@@ -344,7 +364,7 @@ final class NoteStore: ObservableObject {
 
         var meta = notes[index]
         Self.applyDerivedFields(to: &meta, from: snapshot)
-        meta.updatedAt = Date()
+        meta.updatedAt = externalEditDate ?? Date()
         meta.revision = UUID()
         meta.conflictSource = nil
         meta.conflictOriginalID = nil
@@ -422,6 +442,74 @@ final class NoteStore: ObservableObject {
         }
         // body(for:) can run during a view update; publish the error on the next turn.
         DispatchQueue.main.async { [weak self] in self?.objectWillChange.send() }
+    }
+
+    /// A body that must not be overwritten, shown read-only with `reason`.
+    func blockMarkdownBodyWrites(_ id: UUID, reason: String) {
+        blockBodyWrites(id, reason: reason)
+    }
+
+    /// Lets a note whose file came back be edited again.
+    func unblockMarkdownBodyWrites(_ id: UUID, reason: String) {
+        guard bodyReadOnlyReasons[id] == reason else { return }
+        bodyWriteBlocked.remove(id)
+        bodyReadOnlyReasons[id] = nil
+        loadErrorFiles[id] = nil
+        objectWillChange.send()
+    }
+
+    /// Edits not saved yet: a dirty body or an editor snapshot waiting for its turn.
+    func hasUnsavedBody(_ id: UUID) -> Bool {
+        dirtyBodies.contains(id) || stagedEditorBodies[id] != nil
+    }
+
+    func cachedBody(_ id: UUID) -> NSAttributedString? {
+        bodyCache[id]
+    }
+
+    /// Puts `text` in the body cache as the saved body, when nothing is cached.
+    func seedCachedBody(_ id: UUID, _ text: NSAttributedString) {
+        guard bodyCache[id] == nil else { return }
+        bodyCache[id] = text
+        touchBody(id)
+    }
+
+    /// Drops a clean cached body so the next read loads the file.
+    func dropCachedBody(_ id: UUID) {
+        guard !hasUnsavedBody(id) else { return }
+        bodyCache[id] = nil
+        bodyAccessOrder.removeAll { $0 == id }
+    }
+
+    /// Adds notes read from files at load or by the folder watcher; they are saved like any change.
+    func addLoadedNotes(_ metas: [NoteMeta], bodies: [UUID: NSAttributedString]) {
+        guard !metas.isEmpty else { return }
+        notes.append(contentsOf: metas)
+        for meta in metas {
+            unversionedLocalBodies.insert(meta.id)
+            if let text = bodies[meta.id] { dispatchDerivedIndexes(.changed(meta, text)) }
+        }
+        libraryDirty = true
+        hasUnannouncedLocalChange = true
+    }
+
+    /// Notes moved, renamed or changed outside NoteIt in their metadata only: saved and announced like a user change.
+    func commitOutsideMetadataChange() {
+        libraryDirty = true
+        hasUnannouncedLocalChange = true
+        scheduleSave()
+    }
+
+    /// Keeps the saved body as a version before a write replaces it.
+    private func recordSavedBodyVersion(_ id: UUID, force: Bool = false) {
+        if bodyStorage.kind == .rtfd {
+            history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id, force: force)
+        } else {
+            history.recordSavedBody(reading: { [bodyStorage] in
+                guard let url = bodyStorage.revisionInputURL(for: id), FileManager.default.fileExists(atPath: url.path) else { return nil }
+                return try bodyStorage.read(id)
+            }, of: id, force: force)
+        }
     }
 
     /// A readable body that must not be overwritten (its body-extras sidecar is unreadable). Nothing is deleted.
@@ -911,7 +999,7 @@ final class NoteStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         let fm = FileManager.default
-        try? fm.createDirectory(at: notesURL, withIntermediateDirectories: true)
+        if bodyStorage.kind == .rtfd { try? fm.createDirectory(at: notesURL, withIntermediateDirectories: true) }
         // Tombstoned notes are filtered from the library below; their bodies are trashed by flush()
         // only after a library save (or the library just read) confirms they're gone.
         loadTombstones()
@@ -969,6 +1057,7 @@ final class NoteStore: ObservableObject {
 
     private func finishLoad() {
         for meta in notes { persistedMeta[meta.id] = meta }
+        if markdownStorage != nil { loadMarkdownFolder() }
         unversionedLocalBodies = Set(notes.map(\.id))
         searchIndexer.load(notes: notes)
         selectedNoteID = notes(for: selection, search: "").first?.id
@@ -999,6 +1088,11 @@ final class NoteStore: ObservableObject {
     private func rebuildFromBodies(recovered: PartialLibrary?) {
         let fm = FileManager.default
         notebooks = recovered?.notebooks ?? []
+        if markdownStorage != nil {
+            // The folder scan at the end of the load adds every note file with its front matter and folder.
+            notes = (recovered?.notes ?? []).filter { !tombstoned($0.id) }
+            return
+        }
         let notebookIDs = Set(notebooks.map(\.id))
         var known: [UUID: NoteMeta] = [:]
         for meta in recovered?.notes ?? [] { known[meta.id] = meta }
@@ -1045,7 +1139,7 @@ final class NoteStore: ObservableObject {
         saveWorkItem?.cancel()
         saveWorkItem = nil
         let fm = FileManager.default
-        try? fm.createDirectory(at: notesURL, withIntermediateDirectories: true)
+        if bodyStorage.kind == .rtfd { try? fm.createDirectory(at: notesURL, withIntermediateDirectories: true) }
 
         for id in dirtyBodies {
             if bodyWriteBlocked.contains(id) {
@@ -1055,6 +1149,7 @@ final class NoteStore: ObservableObject {
             writePendingBody(id)
         }
 
+        if markdownStorage != nil { syncMarkdownLayout() }
         if libraryDirty || !fm.fileExists(atPath: libraryURL.path) {
             saveLibrary()
         }
@@ -1072,7 +1167,7 @@ final class NoteStore: ObservableObject {
         }
 
         let retryable = dirtyBodies.subtracting(bodyWriteBlocked)
-        if !retryable.isEmpty || libraryDirty || smartFolderState.dirty || hasPendingAuxDeletions {
+        if !retryable.isEmpty || libraryDirty || smartFolderState.dirty || hasPendingAuxDeletions || hasPendingMarkdownRenames {
             scheduleSave(after: 5)
         }
     }
@@ -1088,7 +1183,7 @@ final class NoteStore: ObservableObject {
             return true
         }
         do {
-            history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id)
+            recordSavedBodyVersion(id)
             let extras = bodyExtras[id] ?? .empty
             let temp = try bodyStorage.prepareTemp(text, extras: extras, meta: meta)
             try installPreparedBody(temp, text: text, extras: extras, for: meta)
@@ -1108,6 +1203,11 @@ final class NoteStore: ObservableObject {
             NSLog("NoteIt: failed to save note \(id): \(error)")
             if case BodyExtrasError.unreadableSidecar = error {
                 blockBodyWrites(id, reason: StoredBody.bodyExtrasUnreadable)
+            }
+            switch error as? MarkdownStorageError {
+            case .unreadable: blockBodyWrites(id, reason: MarkdownBodyStorage.unreadableReason)
+            case .externallyChanged: markdownFolderNeedsScan()
+            case .folderMissing, nil: break
             }
             // A note with no body on disk has nothing to fall back on: keep a copy right away
             // (once per failure episode) instead of only at quit.
@@ -1228,6 +1328,10 @@ final class NoteStore: ObservableObject {
     }
 
     // MARK: Tombstones
+
+    func isTombstoned(_ id: UUID) -> Bool {
+        tombstoned(id)
+    }
 
     private func tombstoned(_ id: UUID) -> Bool {
         pendingTrash.contains(id)
@@ -1466,8 +1570,7 @@ final class NoteStore: ObservableObject {
             throw error
         }
         if prepared.replacesDifferentBody {
-            history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id,
-                                    force: unversionedLocalBodies.contains(id))
+            recordSavedBodyVersion(id, force: unversionedLocalBodies.contains(id))
         }
         do {
             try installPreparedBody(prepared.tempBody, text: prepared.body, extras: extras, for: prepared.meta)

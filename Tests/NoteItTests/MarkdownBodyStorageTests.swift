@@ -23,6 +23,7 @@ final class MarkdownBodyStorageTests: XCTestCase {
     }
 
     static func make(_ root: URL, contentName: String = "content", renames: Bool = true) -> MarkdownBodyStorage {
+        try? FileManager.default.createDirectory(at: root.appendingPathComponent(contentName, isDirectory: true), withIntermediateDirectories: true)
         let storage = MarkdownBodyStorage(contentRoot: root.appendingPathComponent(contentName, isDirectory: true),
                                           dataDir: root.appendingPathComponent("data", isDirectory: true),
                                           renameFilesOnTitleChange: renames)

@@ -223,6 +223,21 @@ final class LibraryLauncherTests: XCTestCase {
                        .open(LibraryLocation(url: dataDir, seedsFreshLibrary: false, format: .markdown, contentRootURL: content)))
     }
 
+    func testMarkdownRootOverrideOpensAFreshDataFolderAsMarkdownOnly() throws {
+        let content = base.appendingPathComponent("md", isDirectory: true)
+        var subject = launcher(override: dataDir.path)
+        subject.markdownRootOverride = { content.path }
+        XCTAssertEqual(subject.decide(),
+                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: false, format: .markdown, contentRootURL: content)))
+        XCTAssertTrue(fm.fileExists(atPath: content.path))
+        XCTAssertFalse(fm.fileExists(atPath: LibraryLocationFile.url(dataDir: dataDir).path))
+
+        _ = makeLibrary(at: dataDir, title: "RTFD")
+        XCTAssertEqual(subject.decide(),
+                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: true, format: .rtfd, contentRootURL: nil)))
+        XCTAssertTrue(logged.contains { $0.contains("ignoring NOTEIT_MARKDOWN_ROOT") })
+    }
+
     func testRenameFilesOnTitleChangeDefaultsToTrue() throws {
         let json = #"{"version":1,"format":"markdown","path":"~/Documents/NoteIt","libraryID":"6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11"}"#
         let file = try JSONDecoder().decode(LibraryLocationFile.self, from: Data(json.utf8))

@@ -10,6 +10,8 @@ enum MarkdownStorageError: Error, Equatable {
     case externallyChanged(UUID)
     /// The file can't be read as Markdown, so NoteIt won't change it.
     case unreadable(UUID)
+    /// The content folder isn't there.
+    case folderMissing
 }
 
 /// A Markdown library: one `.md` file per note in the content folder, notebooks as folders, attachments in
@@ -41,6 +43,8 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     private var previous: [UUID: ParsedMarkdown] = [:]
     private var pendingTemps: [String: String] = [:]
     private var skipped: [URL] = []
+    /// Notes whose file was adopted from outside and not written by NoteIt since.
+    private var acceptedExternal: Set<UUID> = []
 
     init(contentRoot: URL, dataDir: URL, renameFilesOnTitleChange: Bool = true, ledger: WriteLedger = WriteLedger()) {
         contentRootURL = contentRoot.standardizedFileURL
@@ -56,6 +60,17 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
 
     func url(of path: String) -> URL {
         contentRootURL.appendingPathComponent(path, isDirectory: false)
+    }
+
+    var contentRootExists: Bool {
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: contentRootURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+
+    /// Nothing is written while the content folder is gone (an unmounted disk): creating it again would put notes
+    /// on the wrong volume.
+    func requireContentRoot() throws {
+        guard contentRootExists else { throw MarkdownStorageError.folderMissing }
     }
 
     func setSkippedFiles(_ urls: [URL]) {
@@ -85,6 +100,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     /// `.noteit-notebook.json`. Folders of notebooks no longer in the tree are left to `removeNotebook`.
     func reconcileNotebooks() throws {
         try lock.withLock {
+            try requireContentRoot()
             let tree = Array(notebooks.values)
             var firstError: Error?
             for notebook in tree.sorted(by: { depth(of: $0.id) < depth(of: $1.id) }) {
@@ -153,10 +169,14 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     /// Forgets the notebook. Its folder goes to the macOS Trash only when nothing but NoteIt's own file is left in
     /// it; a folder that still holds anything else stays.
     func removeNotebook(_ notebook: Notebook) throws {
+        try removeNotebook(id: notebook.id)
+    }
+
+    func removeNotebook(id: UUID) throws {
         try lock.withLock {
-            notebooks[notebook.id] = nil
-            guard let path = index.notebookFolder(notebook.id) else { return }
-            let sharing = index.allNotebookFolders.contains { $0.key != notebook.id && $0.value.lowercased() == path.lowercased() }
+            notebooks[id] = nil
+            guard let path = index.notebookFolder(id) else { return }
+            let sharing = index.allNotebookFolders.contains { $0.key != id && $0.value.lowercased() == path.lowercased() }
             if !sharing {
                 let folder = url(of: path)
                 let items = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
@@ -164,7 +184,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
                     try trash(folder)
                 }
             }
-            index.setNotebookFolder(nil, for: notebook.id)
+            index.setNotebookFolder(nil, for: id)
         }
     }
 
@@ -243,6 +263,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     }
 
     func prepareTemp(_ text: NSAttributedString, extras: ContainerExtras, meta: NoteMeta) throws -> URL {
+        try requireContentRoot()
         let (path, before) = lock.withLock { (plannedPath(for: meta), previous[meta.id]) }
         let frontMatter = BodyCodec.frontMatter(meta, extras: extras)
         let rendered = try BodyCodec.libraryMarkdown(of: text, extras: extras, frontMatter: frontMatter, notePath: path,
@@ -260,6 +281,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
             lock.withLock { pendingTemps[temp.lastPathComponent] = nil }
         }
         try lock.withLock {
+            try requireContentRoot()
             if let notebook { notebooks[notebook.id] = notebook }
             let renderedPath = pendingTemps[temp.lastPathComponent]
             let existing = try verifiedFile(note.id)
@@ -291,6 +313,10 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
             try Self.move(url(of: old), to: url(of: path))
             index.move(meta.id, to: path)
             currentPath = path
+        }
+        var data = data
+        if acceptedExternal.remove(meta.id) != nil, let existing, onlyDatesDiffer(data, existing: existing) {
+            data = existing
         }
         let sha = AttachmentStore.sha256(data)
         if currentPath == nil || existing.map(AttachmentStore.sha256) != sha {
@@ -384,6 +410,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     /// (re-rendered only when the folder depth changes and the note refers to attachments). Never creates a file.
     func writeMetadataOnly(for note: NoteMeta, notebook: Notebook?) throws {
         try lock.withLock {
+            try requireContentRoot()
             if let notebook { notebooks[notebook.id] = notebook }
             guard let entry = index.entry(note.id) else { return }
             let existing = try verifiedFile(note.id)
@@ -397,11 +424,18 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         }
     }
 
+    /// Whether the idle rename has work for the note.
+    func wantsRename(_ meta: NoteMeta) -> Bool {
+        guard renameFilesOnTitleChange, meta.deletedAt == nil, let entry = index.entry(meta.id) else { return false }
+        return entry.nameTitle != meta.title
+    }
+
     /// Renames the file after the note's title when the library renames files and the title changed since the
     /// name was given. Called by `NoteStore`'s idle rename only.
     @discardableResult
     func renameForTitle(_ meta: NoteMeta) throws -> Bool {
         try lock.withLock {
+            try requireContentRoot()
             guard renameFilesOnTitleChange, meta.deletedAt == nil, let entry = index.entry(meta.id),
                   entry.nameTitle != meta.title else { return false }
             let stem = MarkdownPathIndex.stem(forTitle: meta.title)
@@ -427,12 +461,147 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         return Data((header + text[bodyStart...]).utf8)
     }
 
+    // MARK: Outside changes
+
+    /// Takes the file at `path` as the note's file, as a scan found it: after an edit, rename or move outside
+    /// NoteIt, or for a new file. The entry moves there (the old path stays in `formerPaths`) and records the file
+    /// as it is now. With `assignID`, the note's id is written into the file's front matter first; nothing else in
+    /// the file changes. The next body write of the note leaves the file alone when only `created` or `updated` would change.
+    struct Adopted {
+        var body: StoredBody
+        /// Nil for a file that can't be read as Markdown.
+        var frontMatter: FrontMatter?
+        var modified: Date?
+        var created: Date?
+    }
+
+    @discardableResult
+    func adopt(_ id: UUID, at path: String, assignID: Bool) throws -> Adopted {
+        try lock.withLock {
+            try requireContentRoot()
+            let fileURL = url(of: path)
+            let before = MarkdownFileStat.of(fileURL)
+            var data = try Data(contentsOf: fileURL)
+            if assignID, let text = String(data: data, encoding: .utf8), var frontMatter = try? FrontMatter.read(text).0 {
+                frontMatter.id = id
+                let patched = Self.patchingFrontMatter(data, with: frontMatter)
+                guard MarkdownFileStat.of(fileURL) == before else { throw MarkdownStorageError.externallyChanged(id) }
+                ledger.record(path: path, sha256: AttachmentStore.sha256(patched))
+                try Self.writeAtomically(patched, to: fileURL, replacing: true)
+                data = patched
+            }
+            if let entry = index.entry(id), entry.path != path {
+                index.move(id, to: path)
+            }
+            let read = readFile(data, notePath: path)
+            let stat = MarkdownFileStat.of(fileURL)
+            var entry = index.entry(id) ?? MarkdownFileEntry(path: path)
+            entry.path = path
+            entry.sha256 = AttachmentStore.sha256(data)
+            entry.size = stat?.size ?? Int64(data.count)
+            entry.mtimeNs = stat?.mtimeNs ?? 0
+            entry.inode = stat?.inode ?? 0
+            entry.frontMatterExtra = read.parsed.flatMap { $0.frontMatter.extra.isEmpty ? nil : $0.frontMatter.extra }
+            entry.attachments = read.attachmentNames ?? entry.attachments
+            index.set(entry, for: id)
+            previous[id] = read.parsed
+            acceptedExternal.insert(id)
+            let values = try? fileURL.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
+            return Adopted(body: read.body, frontMatter: read.parsed?.frontMatter,
+                           modified: values?.contentModificationDate, created: values?.creationDate)
+        }
+    }
+
+    /// After `adopt`: the note's file is taken as written for `meta` (its folder and front matter are not
+    /// rewritten until something else changes), and its name as given for `meta.title`.
+    func markPlaced(_ meta: NoteMeta) {
+        lock.withLock {
+            index.update(meta.id) { entry in
+                entry.placement = placement(of: meta, folder: targetFolder(for: meta), extra: entry.frontMatterExtra)
+                entry.nameTitle = meta.title
+            }
+        }
+    }
+
+    /// The body as NoteIt last read or wrote it, for a file that is gone.
+    func lastKnownBody(_ id: UUID) -> StoredBody? {
+        lock.withLock {
+            guard let parsed = previous[id], let entry = index.entry(id),
+                  var result = try? BodyCodec.libraryBody(from: parsed, notePath: entry.path, contentRoot: contentRootURL)
+            else { return nil }
+            result.body.extras.frontMatter = parsed.frontMatter.extra.isEmpty ? nil : parsed.frontMatter.extra
+            return result.body
+        }
+    }
+
+    /// For a note whose file was deleted outside NoteIt: writes `text` as a new file in `.trash/` for `meta` (in
+    /// Recently Deleted), or forgets the file when there's no text to keep.
+    func writeDeletedCopy(_ text: NSAttributedString?, extras: ContainerExtras, for meta: NoteMeta) throws {
+        try lock.withLock {
+            try requireContentRoot()
+            guard let entry = index.entry(meta.id) else { return }
+            guard let text else {
+                index.remove(meta.id)
+                previous[meta.id] = nil
+                return
+            }
+            let path = index.uniquePath(stem: entry.stem, inFolder: Self.trashFolder, contentRoot: contentRootURL, keeping: nil)
+            let rendered = try BodyCodec.libraryMarkdown(of: text, extras: extras, frontMatter: BodyCodec.frontMatter(meta, extras: extras),
+                                                         notePath: path, attachments: attachments, links: links, previous: nil)
+            let data = Data(rendered.text.utf8)
+            ledger.record(path: path, sha256: AttachmentStore.sha256(data))
+            try Self.writeAtomically(data, to: url(of: path), replacing: false)
+            index.move(meta.id, to: path)
+            let read = readFile(data, notePath: path)
+            let stat = MarkdownFileStat.of(url(of: path))
+            index.update(meta.id) { stored in
+                stored.sha256 = AttachmentStore.sha256(data)
+                stored.size = stat?.size ?? Int64(data.count)
+                stored.mtimeNs = stat?.mtimeNs ?? 0
+                stored.inode = stat?.inode ?? 0
+                stored.attachments = read.attachmentNames ?? []
+                stored.placement = placement(of: meta, folder: Self.trashFolder, extra: stored.frontMatterExtra)
+            }
+            previous[meta.id] = read.parsed
+        }
+    }
+
+    /// Forgets a note whose file is gone, keeping nothing.
+    func forget(_ id: UUID) {
+        lock.withLock {
+            index.remove(id)
+            previous[id] = nil
+            acceptedExternal.remove(id)
+        }
+    }
+
+    /// Whether a body write would change only `created` or `updated` in the front matter of a file adopted from
+    /// outside; those are written on the next change of the note.
+    private func onlyDatesDiffer(_ data: Data, existing: Data) -> Bool {
+        guard let new = String(data: data, encoding: .utf8), let old = String(data: existing, encoding: .utf8),
+              let newRead = try? FrontMatter.read(new), let oldRead = try? FrontMatter.read(old) else { return false }
+        var newFM = newRead.0, oldFM = oldRead.0
+        let newStart = newRead.1, oldStart = oldRead.1
+        func body(_ text: String, _ start: String.Index) -> Substring {
+            var rest = text[start...]
+            if start != text.startIndex, rest.first == "\n" { rest = rest.dropFirst() }
+            return rest
+        }
+        guard body(new, newStart) == body(old, oldStart) else { return false }
+        newFM.created = nil
+        newFM.updated = nil
+        oldFM.created = nil
+        oldFM.updated = nil
+        return newFM.written() == oldFM.written()
+    }
+
     // MARK: Recently Deleted and removal
 
     /// The note leaves the library: its file goes to `.trash/` (with `deleted:`) if it isn't there yet and stays
     /// there, and the note is dropped from `markdown-files.json`.
     func moveToTrash(_ id: UUID) throws {
         try lock.withLock {
+            try requireContentRoot()
             guard let entry = index.entry(id) else { return }
             let file = url(of: entry.path)
             guard FileManager.default.fileExists(atPath: file.path) else {
@@ -478,6 +647,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     /// Moves the note's file to the macOS Trash (never deletes it).
     func removePermanently(_ id: UUID) throws {
         try lock.withLock {
+            try requireContentRoot()
             guard let entry = index.entry(id) else { return }
             let file = url(of: entry.path)
             if FileManager.default.fileExists(atPath: file.path) { try trash(file) }

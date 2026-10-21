@@ -101,6 +101,7 @@ Debug builds only:
 | `NOTEIT_EDITOR_SELFTEST_DARK=1` | With the above, forces dark mode |
 | `NOTEIT_EDITOR_SELFTEST_SHOW=<title prefix>` | With the above, only opens the matching note, for screenshots |
 | `NOTEIT_EDITOR_SELFTEST_NARROW=1` | With the above, shrinks the window to 900 pt wide |
+| `NOTEIT_MARKDOWN_ROOT=<folder>` | Debug builds only. Opens the library with its notes as Markdown files in `<folder>` (created when missing; `~` is expanded), keeping app data in the data folder. Refused, with a log line, when the data folder already has a library location file or RTFD notes. Use with `NOTEIT_DATA_DIR` |
 | `NOTEIT_STORE_SELFTEST=1` | Forces body write failures and checks that the library and search index stay consistent, then quits. `newnote` checks a new note whose first save fails, then simulates a crash; `quit` logs the files on disk after launch and quits. Logs `STORETEST` lines. Use with `NOTEIT_DATA_DIR` |
 | `NOTEIT_STORE_CRASHPOINT=<name>` | Exits immediately when the store reaches the named point, to simulate a crash |
 | `NOTEIT_SYNC_SELFTEST=1` | Runs the sync self-test against scratch stores inside `NOTEIT_DATA_DIR` (required), logs `SYNCTEST` lines and exits non-zero on failure. `NOTEIT_SYNC_SELFTEST_LIBRARY=<path>` also loads a copy of that `library.json` |
