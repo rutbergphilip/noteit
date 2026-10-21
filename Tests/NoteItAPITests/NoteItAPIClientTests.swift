@@ -19,7 +19,46 @@ private struct FakeResponder: LocalAPIResponder {
     }
 }
 
+/// Answers every request with `204` and remembers its Authorization header.
+private final class RecordingProtocol: URLProtocol {
+    nonisolated(unsafe) static var authorization: [String: String?] = [:]
+    private static let lock = NSLock()
+
+    static func header(for host: String) -> String?? { lock.withLock { authorization[host] } }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.lock.withLock {
+            Self.authorization[request.url?.host ?? ""] = .some(request.value(forHTTPHeaderField: "Authorization"))
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: "HTTP/1.1", headerFields: [:])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
+}
+
 final class NoteItAPIClientTests: XCTestCase {
+    func testTokenOnlyGoesToLoopback() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RecordingProtocol.self]
+        let recording = URLSession(configuration: configuration)
+        defer { recording.invalidateAndCancel() }
+        for base in ["http://example.com/v1", "http://127.0.0.1:47600/v1"] {
+            let client = NoteItAPIClient(baseURL: URL(string: base)!, token: "nit_secret", session: recording)
+            _ = try await client.sendRaw(.GET, "/tags", body: nil)
+        }
+        XCTAssertEqual(RecordingProtocol.header(for: "example.com"), .some(nil))
+        XCTAssertEqual(RecordingProtocol.header(for: "127.0.0.1"), .some("Bearer nit_secret"))
+        for (text, loopback) in [("http://localhost:1/v1", true), ("http://[::1]:1/v1", true), ("http://LOCALHOST/v1", true),
+                                 ("http://127.0.0.2/v1", false), ("http://localhost.example.com/v1", false)] {
+            XCTAssertEqual(NoteItAPIClient.isLoopback(URL(string: text)!), loopback, text)
+        }
+    }
+
     private var server: LocalHTTPServer?
     private var session: URLSession!
 

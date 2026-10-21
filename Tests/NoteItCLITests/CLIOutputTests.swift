@@ -156,6 +156,14 @@ final class CLIOutputTests: XCTestCase {
         XCTAssertEqual(terminal.openedURLs, [URL(string: "noteit://settings?tab=integrations")!])
     }
 
+    func testNonLoopbackAPIURLIsAUsageError() async {
+        let terminal = Terminal()
+        let cli = offlineCLI(terminal, environment: ["NOTEIT_API_URL": "http://example.com", "NOTEIT_TOKEN": "nit_secret"])
+        let exit = await cli.run(["list"])
+        XCTAssertEqual(exit, .usage)
+        XCTAssertEqual(terminal.err, "noteit: \(AppLocator.invalidAPIURLMessage)\n")
+    }
+
     func testNotSignedInExits4() async throws {
         let harness = try await harness { _ in .error(.notFound, "No.") }
         let exit = await harness.run(["list"])

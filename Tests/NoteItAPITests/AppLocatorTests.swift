@@ -45,6 +45,50 @@ final class AppLocatorTests: XCTestCase {
         XCTAssertEqual(probe.pings, 0)
     }
 
+    func testLocatorRefusesNonLoopbackOverride() async {
+        let probe = Probe()
+        probe.file = discovery(enabled: true)
+        for value in ["http://example.com", "http://127.0.0.1.example.com:47600", "http://10.0.0.2:47600/v1"] {
+            let result = await locator(probe, environment: ["NOTEIT_API_URL": value]).locate(launch: true)
+            XCTAssertEqual(result, .notRunning, value)
+            XCTAssertEqual(AppLocator.invalidAPIURL(in: ["NOTEIT_API_URL": value]), value)
+        }
+        let ipv6 = await locator(probe, environment: ["NOTEIT_API_URL": "http://[::1]:5000"]).locate(launch: true)
+        XCTAssertEqual(ipv6, .ready(URL(string: "http://[::1]:5000/v1")!))
+        XCTAssertNil(AppLocator.invalidAPIURL(in: ["NOTEIT_API_URL": "http://localhost:5000"]))
+        XCTAssertEqual(probe.launches, 0)
+        XCTAssertEqual(probe.pings, 0)
+    }
+
+    func testLocatorIgnoresForgedDiscoveryBaseURL() async {
+        let probe = Probe()
+        probe.file = DiscoveryFile(pid: 1, appVersion: "1.0", apiEnabled: true, port: 47600,
+                                   baseURL: URL(string: "http://example.com:47600/v1")!, startedAt: Date())
+        let pinged = Box<[URL]>([])
+        var located = locator(probe)
+        located.ping = { url in
+            pinged.value.append(url)
+            return true
+        }
+        let result = await located.locate(launch: false)
+        XCTAssertEqual(result, .ready(apiURL))
+        XCTAssertEqual(pinged.value, [apiURL])
+
+        probe.file?.port = nil
+        let noPort = await locator(probe).locate(launch: false)
+        XCTAssertEqual(noPort, .notRunning)
+    }
+
+    private final class Box<Value>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored: Value
+        init(_ value: Value) { stored = value }
+        var value: Value {
+            get { lock.withLock { stored } }
+            set { lock.withLock { stored = newValue } }
+        }
+    }
+
     func testLocatorReady() async {
         let probe = Probe()
         probe.file = discovery(enabled: true)

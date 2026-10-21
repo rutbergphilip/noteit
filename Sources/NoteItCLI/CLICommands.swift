@@ -230,6 +230,10 @@ private struct Command {
         } else {
             token = storedToken
         }
+        if AppLocator.invalidAPIURL(in: context.environment) != nil {
+            io.errorLine("noteit: " + AppLocator.invalidAPIURLMessage)
+            throw CLIQuietExit(exit: .usage)
+        }
         let launches = launch ?? !parsed.has("no-launch")
         switch await context.locator.locate(launch: launches) {
         case .ready(let url):

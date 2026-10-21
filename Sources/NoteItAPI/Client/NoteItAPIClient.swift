@@ -165,8 +165,17 @@ public struct NoteItAPIClient: Sendable {
         }
     }
 
+    /// The token only ever goes to this Mac.
     private func authorize(_ request: inout URLRequest) {
-        if let token { request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization") }
+        guard let token, let url = request.url, Self.isLoopback(url) else { return }
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+    }
+
+    /// `127.0.0.1`, `localhost` or `[::1]`.
+    public static func isLoopback(_ url: URL) -> Bool {
+        guard var host = url.host?.lowercased() else { return false }
+        if host.hasPrefix("["), host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
+        return ["127.0.0.1", "localhost", "::1"].contains(host)
     }
 
     func url(_ path: String, query: [String: String]) -> URL {

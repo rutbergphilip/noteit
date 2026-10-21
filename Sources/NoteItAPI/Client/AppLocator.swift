@@ -55,23 +55,34 @@ public struct AppLocator: Sendable {
         )
     }
 
-    /// `NOTEIT_API_URL` may be given with or without the trailing `/v1`.
+    public static let invalidAPIURLMessage =
+        "NOTEIT_API_URL must be an http address on this Mac (127.0.0.1, localhost or [::1]), such as http://127.0.0.1:47600."
+
+    /// `NOTEIT_API_URL` may be given with or without the trailing `/v1`. Only loopback hosts are accepted, because
+    /// the token is sent to it.
     public static func apiURL(from text: String) -> URL? {
         var trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         while trimmed.hasSuffix("/") { trimmed.removeLast() }
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https",
-              url.host != nil
+              NoteItAPIClient.isLoopback(url)
         else { return nil }
         return url.path.hasSuffix(APIRoutes.basePath) ? url : URL(string: trimmed + APIRoutes.basePath)
     }
 
+    /// The value of `NOTEIT_API_URL` when it is set but not usable.
+    public static func invalidAPIURL(in environment: [String: String]) -> String? {
+        guard let override = AppEnvironment.nonEmpty("API_URL", in: environment), apiURL(from: override) == nil else { return nil }
+        return override
+    }
+
+    /// An unusable `NOTEIT_API_URL` gives `.notRunning` rather than falling back to another copy of NoteIt.
     public func locate(launch: Bool, timeout: Duration = .seconds(10)) async -> LocatorResult {
-        if let override = AppEnvironment.nonEmpty("API_URL", in: environment), let url = Self.apiURL(from: override) {
-            return .ready(url)
+        if let override = AppEnvironment.nonEmpty("API_URL", in: environment) {
+            return Self.apiURL(from: override).map(LocatorResult.ready) ?? .notRunning
         }
         if let file = readDiscovery() {
             if !file.apiEnabled { return .apiDisabled }
-            if let baseURL = file.baseURL, await ping(baseURL) { return .ready(baseURL) }
+            if let baseURL = file.loopbackBaseURL, await ping(baseURL) { return .ready(baseURL) }
         }
         guard launch else { return .notRunning }
         do {
@@ -87,7 +98,7 @@ public struct AppLocator: Sendable {
             waited += Self.pollInterval
             guard let file = readDiscovery() else { continue }
             sawDisabled = !file.apiEnabled
-            if file.apiEnabled, let baseURL = file.baseURL, await ping(baseURL) { return .ready(baseURL) }
+            if file.apiEnabled, let baseURL = file.loopbackBaseURL, await ping(baseURL) { return .ready(baseURL) }
         }
         return sawDisabled ? .apiDisabled : .notRunning
     }
