@@ -82,6 +82,8 @@ final class LinkCompletionSource: InlineCompletionSource {
 
     func didCancel(in textView: NoteItTextView, queryRange: NSRange) {
         guard let location = insertedOpening else { return }
+        // Undo or Redo already took the inserted brackets out; any `[[` still there is the user's.
+        if let undo = textView.undoManager, undo.isUndoing || undo.isRedoing { return }
         let opening = NSRange(location: location, length: 2)
         guard NSMaxRange(opening) <= textView.storage.length, textView.nsString.substring(with: opening) == "[[" else { return }
         let caret = textView.selectedRange().location

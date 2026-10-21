@@ -68,6 +68,23 @@ final class InlineLinkCompletionTests: XCTestCase {
         XCTAssertEqual(textView.selectedRange(), NSRange(location: 5, length: 0))
     }
 
+    func testUndoOfOpeningKeepsTheUsersOwnBrackets() throws {
+        textView.textStorage?.setAttributedString(NSAttributedString(string: "abc[[x", attributes: EditorStyle.bodyAttributes))
+        textView.setSelectedRange(NSRange(location: 3, length: 0))
+        let undo = try XCTUnwrap(textView.undoManager)
+        undo.removeAllActions()
+        textView.linkToNote(nil)
+        XCTAssertEqual(textView.string, "abc[[[[x")
+        EditorHarness.settle(undo)
+        let token = NotificationCenter.default.addObserver(forName: NSText.didChangeNotification, object: textView, queue: nil) { [textView] _ in
+            MainActor.assumeIsolated { textView?.inlineCompletion.refresh() }
+        }
+        defer { NotificationCenter.default.removeObserver(token) }
+        undo.undo()
+        XCTAssertFalse(textView.inlineCompletion.isActive)
+        XCTAssertEqual(textView.string, "abc[[x")
+    }
+
     private func openList() {
         _ = host.store.createNote(in: nil, initial: EditorStyle.paragraph("Atlas", kind: .title))
         window.makeFirstResponder(textView)
