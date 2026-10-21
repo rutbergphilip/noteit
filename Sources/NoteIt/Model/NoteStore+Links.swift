@@ -209,10 +209,14 @@ extension NoteStore {
         }
     }
 
-    /// Where the first heading whose folded text equals `heading` starts; nil when the note has none.
+    /// Where the first heading whose folded text equals `heading` starts; nil when the note has none. A heading of
+    /// exactly `NoteLink.maxTextLength` characters was cut to fit a link, so it matches the start of a longer one.
     func headingLocation(_ heading: String, in id: UUID) -> Int? {
         let wanted = TextFold.fold(heading.trimmingCharacters(in: .whitespaces))
-        return headings(for: id).first { TextFold.fold($0.text) == wanted }?.range.location
+        let items = headings(for: id)
+        if let exact = items.first(where: { TextFold.fold($0.text) == wanted }) { return exact.range.location }
+        guard heading.count == NoteLink.maxTextLength, !wanted.isEmpty else { return nil }
+        return items.first { TextFold.fold($0.text).hasPrefix(wanted) }?.range.location
     }
 
     private static var headingCache: [UUID: (updatedAt: Date, items: [OutlineItem])] = [:]

@@ -121,7 +121,15 @@ final class LinkingAPIRoutesTests: XCTestCase {
         let response = call("linking.outline", store, params: ["id": id.uuidString])
         let items = try APIJSON.decoder().decode(LinkingAPIRoutes.Items<LinkingAPIRoutes.OutlineItemDTO>.self, from: response.body).items
         let url = try XCTUnwrap(URL(string: try XCTUnwrap(items.last?.url)))
-        XCTAssertEqual(NoteLink(url: url)?.heading?.count, NoteLink.maxTextLength)
+        let link = try XCTUnwrap(NoteLink(url: url))
+        XCTAssertEqual(link.heading?.count, NoteLink.maxTextLength)
+        let heading = try XCTUnwrap(link.heading)
+        XCTAssertEqual(URLSchemeHandler.headingLocation(heading, in: store.body(for: id)), 5)
+        RichTextEditor.pendingCaret[id] = nil
+        defer { RichTextEditor.pendingCaret[id] = nil }
+        store.navigate(to: id, heading: heading)
+        XCTAssertEqual(RichTextEditor.pendingCaret[id], 5)
+        XCTAssertNil(store.headingLocation(String(heading.dropLast(5)), in: id), "only a cut-off heading matches its start")
     }
 
     func testLockedNoteReturns423() {
