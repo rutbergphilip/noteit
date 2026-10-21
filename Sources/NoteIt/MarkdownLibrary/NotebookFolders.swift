@@ -64,6 +64,7 @@ enum NotebookFolders {
     static func folderName(for notebook: Notebook, taken: inout Set<String>) -> String {
         var name = ExportNaming.sanitized(notebook.name, fallback: "Notebook")
         while name.hasPrefix("_") { name.removeFirst() }
+        name = MarkdownPathIndex.fitting(name, maxBytes: MarkdownPathIndex.maxStemBytes)
         if name.isEmpty || name.lowercased() == "node_modules" { name = "Notebook" }
         return ExportNaming.unique(name, extension: "", taken: &taken)
     }
@@ -113,7 +114,8 @@ enum NotebookFolders {
 
     /// Whether a recorded folder name still belongs to the notebook (its name sanitized, or with a ` 2` suffix), case included.
     private static func matches(recorded: String, notebook: Notebook) -> Bool {
-        let base = ExportNaming.sanitized(notebook.name, fallback: "Notebook")
+        let base = MarkdownPathIndex.fitting(ExportNaming.sanitized(notebook.name, fallback: "Notebook"),
+                                             maxBytes: MarkdownPathIndex.maxStemBytes)
         let name = recorded
         if name == base { return true }
         guard name.hasPrefix(base + " ") else { return false }

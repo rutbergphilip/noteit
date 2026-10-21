@@ -74,6 +74,8 @@ struct MarkdownFileStat: Equatable, Sendable {
 final class MarkdownPathIndex: @unchecked Sendable {
     static let fileName = "markdown-files.json"
     static let maxStemLength = 100
+    /// A file name holds 255 bytes; this leaves room for a ` 99999` suffix, `.md` and the `.<name>.noteit-tmp` temp name.
+    static let maxStemBytes = 255 - ".".utf8.count - " 99999".utf8.count - ".md".utf8.count - ".noteit-tmp".utf8.count
     static let untitled = "Untitled"
 
     let url: URL
@@ -220,13 +222,23 @@ final class MarkdownPathIndex: @unchecked Sendable {
         }
     }
 
-    /// `title` as a file stem: `ExportNaming.sanitized`, cut to 100 characters on a grapheme boundary.
+    /// `title` as a file stem: `ExportNaming.sanitized`, cut to 100 characters and `maxStemBytes` on a grapheme boundary.
     static func stem(forTitle title: String) -> String {
         var stem = ExportNaming.sanitized(title, fallback: untitled)
         if stem.count > maxStemLength {
             stem = String(stem.prefix(maxStemLength)).trimmingCharacters(in: .whitespaces)
         }
+        stem = fitting(stem, maxBytes: maxStemBytes)
         return stem.isEmpty ? untitled : stem
+    }
+
+    /// `name` cut on a grapheme boundary so it takes at most `maxBytes` in UTF-8, composed or decomposed (some
+    /// file systems store names decomposed).
+    static func fitting(_ name: String, maxBytes: Int) -> String {
+        func size(_ s: Substring) -> Int { max(s.utf8.count, String(s).decomposedStringWithCanonicalMapping.utf8.count) }
+        var cut = Substring(name)
+        while size(cut) > maxBytes { cut = cut.dropLast() }
+        return cut.count == name.count ? name : String(cut).trimmingCharacters(in: .whitespaces)
     }
 
     /// A free `<stem>.md` (or `<stem> 2.md` …) in `folder`, case-insensitively, against the index and the disk.

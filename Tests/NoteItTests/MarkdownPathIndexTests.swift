@@ -31,10 +31,24 @@ final class MarkdownPathIndexTests: XCTestCase {
     }
 
     func testStemsAreCutTo100CharactersOnAGraphemeBoundary() {
-        let title = String(repeating: "e\u{301}", count: 120)
-        let stem = MarkdownPathIndex.stem(forTitle: title)
-        XCTAssertEqual(stem.count, 100)
-        XCTAssertEqual(stem.unicodeScalars.count, 200, "no accent cut off its letter")
+        XCTAssertEqual(MarkdownPathIndex.stem(forTitle: String(repeating: "e", count: 120)).count, 100)
+        let stem = MarkdownPathIndex.stem(forTitle: String(repeating: "e\u{301}", count: 120))
+        XCTAssertEqual(stem.unicodeScalars.count, stem.count * 2, "no accent cut off its letter")
+    }
+
+    func testStemsFitTheFileSystemsByteLimitWithRoomForSuffixAndTempName() throws {
+        for title in [String(repeating: "👩‍👩‍👧‍👦", count: 90), String(repeating: "\u{1F600}", count: 99), String(repeating: "é", count: 99)] {
+            let stem = MarkdownPathIndex.stem(forTitle: title)
+            XCTAssertLessThanOrEqual(stem.utf8.count, MarkdownPathIndex.maxStemBytes)
+            XCTAssertLessThanOrEqual(stem.decomposedStringWithCanonicalMapping.utf8.count, MarkdownPathIndex.maxStemBytes)
+            XCTAssertTrue(ExportNaming.sanitized(title).hasPrefix(stem), "cut on a grapheme boundary")
+            let path = MarkdownPathIndex(dataDir: root).uniquePath(stem: stem, inFolder: "", contentRoot: content)
+            let name = (path as NSString).lastPathComponent.replacingOccurrences(of: ".md", with: " 99999.md")
+            try MarkdownBodyStorage.writeAtomically(Data("x".utf8), to: content.appendingPathComponent(name), replacing: false)
+        }
+        var taken = Set<String>()
+        let folder = NotebookFolders.folderName(for: Notebook(name: String(repeating: "\u{1F600}", count: 99), symbol: "folder", colorHex: "#888888", sortIndex: 0), taken: &taken)
+        XCTAssertNoThrow(try FileManager.default.createDirectory(at: content.appendingPathComponent(folder), withIntermediateDirectories: true))
     }
 
     func testANameTakenOnDiskIsAvoided() throws {
