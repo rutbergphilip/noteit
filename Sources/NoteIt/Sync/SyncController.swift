@@ -483,6 +483,30 @@ final class SyncController: ObservableObject {
         requestSync(after: 0)
     }
 
+    // MARK: - Reminder claims
+
+    /// Nil when sync is off: the reminder is shown without asking other Macs.
+    func claimReminder(_ id: UUID, at date: Date) async -> ClaimOutcome? {
+        guard let session else { return nil }
+        let destination = Destination(backend: session.backend, folder: session.folder, scoped: session.scoped)
+        do {
+            return try await withAccess(destination) {
+                try await Self.offMain { await session.engine.claimReminder(id, at: date) }
+            }
+        } catch {
+            return .unavailable(error.localizedDescription)
+        }
+    }
+
+    /// Deletes this Mac's claims older than a week; errors wait for the next try.
+    func sweepReminderClaims(now: Date) async {
+        guard let session else { return }
+        let destination = Destination(backend: session.backend, folder: session.folder, scoped: session.scoped)
+        _ = try? await withAccess(destination) {
+            try await Self.offMain { try await session.engine.sweepReminderClaims(olderThan: 7 * 24 * 60 * 60, now: now) }
+        }
+    }
+
     private func requestSync(after delay: TimeInterval) {
         guard loop != nil else { return }
         let due = Date().addingTimeInterval(delay)

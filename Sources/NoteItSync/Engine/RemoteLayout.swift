@@ -35,6 +35,13 @@ public enum RemoteLayout {
     public static func device(_ deviceID: String) -> String {
         root + "devices/\(deviceID).json"
     }
+
+    /// Who showed a reminder (organise). No version's record sync reads this folder.
+    public static let reminderClaimsPrefix = root + "claims/reminders/"
+
+    public static func reminderClaim(_ id: UUID) -> String {
+        reminderClaimsPrefix + "\(id.uuidString).json"
+    }
 }
 
 /// How objects under a prefix are sealed (program §4 rule 6). foundations Task 3.5; sync-security and sharing
@@ -71,6 +78,7 @@ extension RemoteLayout {
         RemotePrefix(path: root + "tombstones/", depth: 1, sealing: .storeKey, owner: "core"),
         RemotePrefix(path: root + "devices/", depth: 1, sealing: .storeKey, owner: "core"),
         RemotePrefix(path: root + "smart-folders/", depth: 1, sealing: .storeKey, owner: "organise"),
+        RemotePrefix(path: root + "claims/reminders/", depth: 1, sealing: .storeKey, owner: "organise"),
     ]
 
     /// `manifest()`; never sealed and excluded from rekey.

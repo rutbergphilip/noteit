@@ -38,6 +38,12 @@
       "valid": true
     },
     {
+      "action": "reseal",
+      "key": "noteit/v1/claims/reminders/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.json",
+      "prefix": "noteit/v1/claims/reminders/",
+      "valid": true
+    },
+    {
       "action": "skip",
       "key": "noteit/v1/manifest.json",
       "prefix": null,
@@ -120,6 +126,12 @@
       "key": "noteit/v1/smart-folders/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F/x.json",
       "prefix": null,
       "valid": false
+    },
+    {
+      "action": "block",
+      "key": "noteit/v1/claims/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.json",
+      "prefix": null,
+      "valid": false
     }
   ],
   "listPrefixes": [
@@ -142,6 +154,14 @@
     {
       "allowed": true,
       "prefix": "noteit/v1/smart-folders/"
+    },
+    {
+      "allowed": true,
+      "prefix": "noteit/v1/claims/reminders/"
+    },
+    {
+      "allowed": true,
+      "prefix": "noteit/v1/claims/"
     },
     {
       "allowed": true,

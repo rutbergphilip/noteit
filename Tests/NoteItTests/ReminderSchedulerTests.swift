@@ -1,5 +1,6 @@
 import AppKit
 import NoteItCore
+import NoteItSync
 import XCTest
 @testable import NoteIt
 
@@ -156,6 +157,46 @@ final class ReminderSchedulerTests: XCTestCase {
         scheduler.check()
         for _ in 0..<20 where notifications.delivered.count < 2 { await Task.yield() }
         XCTAssertEqual(Set(notifications.delivered.map(\.title)), ["call bank", "pay rent"])
+    }
+
+    func testIdleMacWaitsAndAlreadyClaimedIsNotShown() async {
+        var slept: [TimeInterval] = []
+        var outcome: ClaimOutcome? = .claimed
+        let claims = ReminderClaims(claim: { _, _ in outcome }, sleep: { slept.append($0) })
+        let shownActive = await claims.shouldDeliver(UUID(), at: now, userActive: true)
+        XCTAssertTrue(shownActive)
+        XCTAssertEqual(slept, [])
+        outcome = .alreadyClaimed
+        let shownIdle = await claims.shouldDeliver(UUID(), at: now, userActive: false)
+        XCTAssertFalse(shownIdle)
+        XCTAssertEqual(slept, [ReminderClaims.idleDelay])
+        outcome = .unavailable("offline")
+        let shownOffline = await claims.shouldDeliver(UUID(), at: now, userActive: true)
+        XCTAssertTrue(shownOffline)
+        outcome = nil
+        let shownWithoutSync = await claims.shouldDeliver(UUID(), at: now, userActive: true)
+        XCTAssertTrue(shownWithoutSync)
+    }
+
+    func testTwoMacsShowTheReminderOnce() async {
+        _ = add("Plan\ncall bank @remind(2026-10-21 11:00)")
+        var claimed: Set<UUID> = []
+        let claim: (UUID, Date) async -> ClaimOutcome? = { id, _ in claimed.insert(id).inserted ? .claimed : .alreadyClaimed }
+        let other = FakeNotifications()
+        let otherDefaults = UserDefaults(suiteName: suite + "-b")!
+        defer { otherDefaults.removePersistentDomain(forName: suite + "-b") }
+        for target in [defaults!, otherDefaults] { target.set(at(10, 0), forKey: PrefKey.remindersLastCheck) }
+        let first = ReminderScheduler(store: store, notifications: notifications, claims: ReminderClaims(claim: claim, sleep: { _ in }),
+                                      defaults: defaults, clock: { [unowned self] in self.now }, calendar: { [unowned self] in self.calendar },
+                                      userActive: { true })
+        let second = ReminderScheduler(store: store, notifications: other, claims: ReminderClaims(claim: claim, sleep: { _ in }),
+                                       defaults: otherDefaults, clock: { [unowned self] in self.now }, calendar: { [unowned self] in self.calendar },
+                                       userActive: { false })
+        first.check()
+        second.check()
+        for _ in 0..<40 { await Task.yield() }
+        XCTAssertEqual(notifications.delivered.count + other.delivered.count, 1)
+        XCTAssertEqual(notifications.delivered.count, 1)
     }
 
     func testNotAvailableUnderSwiftTest() {

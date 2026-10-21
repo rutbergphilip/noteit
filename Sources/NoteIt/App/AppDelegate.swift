@@ -55,7 +55,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = LocalAPIController.shared
         PasteAndMatchStyleShortcut.install()
         ReminderNotifications.shared.configure()
-        let scheduler = ReminderScheduler(store: .shared, notifications: ReminderNotifications.shared, claims: nil,
+        let scheduler = ReminderScheduler(store: .shared, notifications: ReminderNotifications.shared,
+                                          claims: ReminderClaims.live(.shared),
                                           defaults: .standard, clock: Date.init)
         reminderScheduler = scheduler
         scheduler.start()

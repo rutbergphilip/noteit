@@ -96,15 +96,15 @@ public actor SyncEngine {
     /// The highest `formatVersion` this build opens (foundations step 3).
     public static let maxFormatVersion = 2
 
-    private let backend: StorageBackend
-    private let session: StoreSessionRef
+    let backend: StorageBackend
+    let session: StoreSessionRef
     private let local: SyncLocalStore
     private let stateURL: URL
-    private let deviceID: String
+    let deviceID: String
     private let deviceName: String
     private let appVersion: String?
     private let platform: DevicePlatform
-    private let now: @Sendable () -> Date
+    let now: @Sendable () -> Date
 
     private var state = SyncState()
     private var tail: Task<Void, Never>?
