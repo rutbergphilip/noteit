@@ -72,6 +72,20 @@ final class DailyNoteStoreTests: XCTestCase {
         XCTAssertEqual(dailyNotes(store).count, 2)
     }
 
+    func testNonGregorianSystemCalendarFindsTheSameNote() throws {
+        let store = makeStore()
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = .current
+        var japanese = Calendar(identifier: .japanese)
+        japanese.timeZone = .current
+        let first = try XCTUnwrap(store.dailyNote(for: day(21), createIfMissing: true, systemCalendar: buddhist))
+        XCTAssertEqual(first.title, "2026-10-21")
+        let again = try XCTUnwrap(store.dailyNote(for: day(21, hour: 18), createIfMissing: true, systemCalendar: buddhist))
+        XCTAssertEqual(again.id, first.id)
+        XCTAssertEqual(try store.dailyNote(for: day(21), createIfMissing: false, systemCalendar: japanese)?.id, first.id)
+        XCTAssertEqual(dailyNotes(store).count, 1)
+    }
+
     func testOldestMatchWins() throws {
         let store = makeStore()
         let first = try XCTUnwrap(store.dailyNote(for: day(19), createIfMissing: true))

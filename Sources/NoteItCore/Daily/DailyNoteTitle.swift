@@ -30,6 +30,13 @@ public struct DayKey: Hashable, Comparable, Codable, Sendable {
         self.init(year: parts.year ?? 0, month: parts.month ?? 0, day: parts.day ?? 0)
     }
 
+    /// The calendar daily notes count days in: always Gregorian (titles are Gregorian dates), in `timeZone`.
+    public static func dailyCalendar(timeZone: TimeZone = .current) -> Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        return calendar
+    }
+
     public func date(calendar: Calendar, hour: Int = 0) -> Date? {
         calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))
     }

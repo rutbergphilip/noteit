@@ -19,12 +19,12 @@ extension NoteStore {
     }
 
     /// The live note in the Daily Notes notebook whose title is `date`'s day in any `DailyTitleFormat` (the oldest
-    /// one when several match). With `createIfMissing`, a new note titled in the chosen format otherwise.
-    func dailyNote(for date: Date, createIfMissing: Bool) throws -> NoteMeta? {
+    /// one when several match). With `createIfMissing`, a new note titled in the chosen format otherwise. Days are
+    /// Gregorian whatever the system calendar is; only `systemCalendar`'s time zone is used.
+    func dailyNote(for date: Date, createIfMissing: Bool, systemCalendar: Calendar = .current) throws -> NoteMeta? {
         guard let notebookID = dailyNotesNotebookID(createIfMissing: createIfMissing) else { return nil }
-        let calendar = Calendar.current
         let locale = Locale.current
-        let day = DayKey(date, calendar: calendar)
+        let day = DayKey(date, calendar: DayKey.dailyCalendar(timeZone: systemCalendar.timeZone))
         let existing = notes
             .filter { $0.notebookID == notebookID && $0.deletedAt == nil
                 && DailyNoteTitle.parse($0.title, locale: locale) == day }
