@@ -22,6 +22,8 @@ struct TagEditResult {
     var cancelled = false
     /// Matching notes in Recently Deleted, which aren't changed.
     var untouchedInTrash = 0
+    /// Smart folders whose query the rename rewrote, put back by Undo.
+    var smartFolderQueries: [UUID: SmartFolderQueryChange] = [:]
 }
 
 extension NoteStore {
@@ -33,7 +35,7 @@ extension NoteStore {
         let target = to.hasPrefix("#") ? String(to.dropFirst()) : to
         var result = await applyTagEdit(.rename(from: from, to: target), tag: from, actionName: "Rename Tag", progress: progress)
         if !result.cancelled {
-            rewriteSmartFolderQueries { QueryRewriter.renamingTag(TokenGrammar.normalizedTag(from), to: target, in: $0) }
+            result.smartFolderQueries = rewriteSmartFolderQueries { QueryRewriter.renamingTag(TokenGrammar.normalizedTag(from), to: target, in: $0) }
         }
         result.untouchedInTrash = trashedNotes(tagged: from)
         return result
@@ -49,6 +51,7 @@ extension NoteStore {
     /// Puts back the bodies from before a tag edit, except in notes changed since. Returns how many were left alone.
     @discardableResult
     func undoTagEdit(_ result: TagEditResult) -> Int {
+        restoreSmartFolderQueries(result.smartFolderQueries)
         var leftAlone = 0
         for (id, after) in result.revisionsAfter {
             guard let before = result.bodiesBefore[id], note(with: id)?.revision == after else {

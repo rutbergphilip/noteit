@@ -27,6 +27,11 @@ enum SmartFolderError: Error, Equatable {
     case emptyName, nameTooLong, emptyQuery, queryTooLong, tooMany, notFound
 }
 
+struct SmartFolderQueryChange: Equatable {
+    var queryBefore: String
+    var revisionAfter: UUID
+}
+
 extension NoteStore {
     var smartFoldersURL: URL { rootURL.appendingPathComponent("smart-folders.json") }
 
@@ -108,17 +113,40 @@ extension NoteStore {
     }
 
     /// Runs `rewrite` over every smart folder's query and saves the ones that changed.
-    func rewriteSmartFolderQueries(_ rewrite: (String) -> String) {
+    /// Returns the folders it changed: ID → query before and revision after.
+    @discardableResult
+    func rewriteSmartFolderQueries(_ rewrite: (String) -> String) -> [UUID: SmartFolderQueryChange] {
         let now = Date()
         var updates: [Int: String] = [:]
         for (index, folder) in smartFolders.enumerated() {
             let query = rewrite(folder.query)
             if query != folder.query, query.count <= SmartFolder.maxQueryLength { updates[index] = query }
         }
-        guard !updates.isEmpty else { return }
+        guard !updates.isEmpty else { return [:] }
+        var changes: [UUID: SmartFolderQueryChange] = [:]
         changeSmartFolders(local: true) { folders in
             for (index, query) in updates {
+                let revision = UUID()
+                changes[folders[index].id] = SmartFolderQueryChange(queryBefore: folders[index].query, revisionAfter: revision)
                 folders[index].query = query
+                folders[index].revision = revision
+                folders[index].modifiedAt = now
+            }
+        }
+        return changes
+    }
+
+    /// Puts back queries changed by `rewriteSmartFolderQueries`, except in folders edited since.
+    func restoreSmartFolderQueries(_ changes: [UUID: SmartFolderQueryChange]) {
+        let now = Date()
+        let restorable = smartFolders.indices.filter { index in
+            changes[smartFolders[index].id].map { $0.revisionAfter == smartFolders[index].revision } ?? false
+        }
+        guard !restorable.isEmpty else { return }
+        changeSmartFolders(local: true) { folders in
+            for index in restorable {
+                guard let change = changes[folders[index].id] else { continue }
+                folders[index].query = change.queryBefore
                 folders[index].revision = UUID()
                 folders[index].modifiedAt = now
             }

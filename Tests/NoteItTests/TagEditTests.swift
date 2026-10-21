@@ -93,6 +93,19 @@ final class TagEditTests: XCTestCase {
         XCTAssertEqual(text(store, b), "B\n#job more")
     }
 
+    func testUndoPutsBackSmartFolderQueriesNotEditedSince() async throws {
+        let store = makeStore()
+        _ = add(store, "A\n#work")
+        _ = try store.createSmartFolder(name: "Work", query: "tag:work is:todo", symbol: SmartFolder.defaultSymbol)
+        _ = try store.createSmartFolder(name: "Mine", query: "tag:work", symbol: SmartFolder.defaultSymbol)
+        let result = await store.renameTag("work", to: "job")
+        XCTAssertEqual(store.smartFolders.map(\.query), ["tag:job is:todo", "tag:job"])
+        let mine = try XCTUnwrap(store.smartFolders.first { $0.name == "Mine" })
+        try store.updateSmartFolder(mine.id, name: "Mine", query: "tag:job -x", symbol: SmartFolder.defaultSymbol)
+        store.undoTagEdit(result)
+        XCTAssertEqual(store.smartFolders.map(\.query), ["tag:work is:todo", "tag:job -x"])
+    }
+
     func testCancelStopsBetweenBatches() async {
         let store = makeStore()
         for i in 0..<120 { _ = add(store, "N\(i)\n#bulk") }
