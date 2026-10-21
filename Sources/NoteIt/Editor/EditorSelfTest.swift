@@ -204,10 +204,14 @@ enum EditorSelfTest {
         let underline = lm.temporaryAttribute(.underlineStyle, atCharacterIndex: unresolvedAt, effectiveRange: nil) as? Int
         log("links: temporary color on note link \(ok(color == NSColor.controlAccentColor))")
         log("links: dotted underline on unresolved link \(ok(underline == NSUnderlineStyle.single.union(.patternDot).rawValue))")
-        tv.didChangeText()
+        let end = NSMaxRange(ns.paragraphRange(for: NSRange(location: resolvedAt, length: 0))) - 1
+        tv.setSelectedRange(NSRange(location: end, length: 0))
+        tv.insertText("!", replacementRange: tv.selectedRange())
+        let typing = lm.temporaryAttribute(.foregroundColor, atCharacterIndex: resolvedAt, effectiveRange: nil) as? NSColor
+        _ = tv.replace(NSRange(location: end, length: 1), with: NSAttributedString())
         await sleep(0.3)
         let after = lm.temporaryAttribute(.foregroundColor, atCharacterIndex: resolvedAt, effectiveRange: nil) as? NSColor
-        log("links: styling survives didChangeText \(ok(after == NSColor.controlAccentColor))")
+        log("links: styling survives typing in the paragraph \(ok(typing == NSColor.controlAccentColor && after == NSColor.controlAccentColor))")
 
         _ = tv.delegate?.textView?(tv, clickedOnLink: NoteLink.note(id: target.id, heading: nil).url, at: resolvedAt)
         await sleep(0.5)
