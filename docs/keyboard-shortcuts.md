@@ -19,6 +19,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⌥⇧⌘C | Copy as Markdown (the selection, or the whole note) |
 | ⌃⌘L | Copy Note Link (a `noteit://` link to the current note) |
 | ⌃⌘← / ⌃⌘→ | Go Back / Go Forward through the notes you opened in this window |
+| ⌃⌘T | Open Today's Note (creates it in Daily Notes the first time) |
 | ⌥⌘I | Show or hide Links and Outline (backlinks, the links in this note and its headings) |
 | ⌘0 | Show the main window (*NoteIt Notes* in the Window menu) |
 | ⌘, | Settings |
@@ -28,7 +29,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 
 ### Changing menu shortcuts
 
-The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back, Go Forward, Link to Note…, Show Links and Outline and New Note from Template… can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
+The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back, Go Forward, Link to Note…, Show Links and Outline, New Note from Template…, Open Today's Note and Daily Note for Date… (no shortcut until you set one) can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
 
 When recording one:
 
@@ -179,6 +180,7 @@ These work from any app. They're **unbound by default**, so NoteIt never takes o
 | Open Quickly | Opens the command palette to find notes, notebooks and commands |
 | Command Palette | Opens the command palette with `>` typed, to find commands only |
 | Capture Selection | Saves the text selected in the app you're in as a new note, with a link back to where it came from |
+| Open Today's Note | Brings NoteIt forward with today's daily note open, creating it if needed |
 
 Pressed while you're in another app, the palette opens over that app. Esc closes it and takes you back there.
 

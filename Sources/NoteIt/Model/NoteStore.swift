@@ -73,6 +73,8 @@ final class NoteStore: ObservableObject {
 
     /// Position hints for `note(with:)`; rebuilt only after `notes` changed and a lookup misses.
     private(set) var notesVersion = 0
+    /// Daily notes by day; rebuilt by `dailyNoteIndex` after `notes` change.
+    var dailyNoteIndexCache: DailyNoteIndex?
     private var noteIndexVersion = -1
     private var noteIndexByID: [UUID: Int] = [:]
     /// Editor snapshots taken during a view update and handed to `updateBody` on the next main-queue turn.

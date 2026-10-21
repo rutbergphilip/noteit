@@ -1,3 +1,4 @@
+import NoteItCore
 import AppKit
 
 struct PaletteCommand {
@@ -47,6 +48,19 @@ enum PaletteCommandRegistry {
                 if let notebookID = meta.notebookID { store.selection = .notebook(notebookID) }
                 store.selectedNoteID = meta.id
                 WindowRouter.focusEditor()
+            },
+            command("openToday", "Today's Note", symbol: "calendar", shortcut: shortcuts.current(.openToday)?.display,
+                    keywords: ["daily", "journal", "today"], available: DailyNotes.isAvailable) {
+                WindowRouter.showMainWindow()
+                store.openDailyNote(for: Date())
+                WindowRouter.focusEditor()
+            },
+            command("dailyNoteForDate", "Daily Note for Date…", symbol: "calendar", shortcut: shortcuts.current(.dailyNoteForDate)?.display,
+                    keywords: ["daily", "journal", "calendar", "date"], available: DailyNotes.isAvailable) {
+                WindowRouter.showMainWindow()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    NotificationCenter.default.post(name: .noteItShowDailyCalendar, object: nil)
+                }
             },
             command("newNotebook", "New Notebook…", symbol: "folder.badge.plus", shortcut: shortcuts.current(.newNotebook)?.display, keywords: ["create", "add", "folder"]) {
                 WindowRouter.showMainWindow()

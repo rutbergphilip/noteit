@@ -87,6 +87,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 PaletteController.shared.hotkeyToggle(mode: .commands)
             case .captureSelection:
                 CaptureController.shared.captureSelection()
+            case .openToday:
+                WindowRouter.showMainWindow()
+                NoteStore.shared.openDailyNote(for: Date())
+                WindowRouter.focusEditor()
             }
         }
         HotkeyManager.shared.start()

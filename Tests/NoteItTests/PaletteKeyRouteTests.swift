@@ -82,8 +82,8 @@ final class PaletteKeyRouteTests: XCTestCase {
     }
 
     func testRoutesFollowTheMenuTable() {
-        let open = MenuShortcutCommand.openQuickly.defaultShortcut
-        let palette = MenuShortcutCommand.commandPalette.defaultShortcut
+        let open = MenuShortcutCommand.openQuickly.defaultShortcut!
+        let palette = MenuShortcutCommand.commandPalette.defaultShortcut!
         XCTAssertEqual(MenuShortcuts.openQuickly, open)
         XCTAssertEqual(MenuShortcuts.commandPalette, palette)
         XCTAssertEqual(route(0, String(open.key.character), open.modifierFlags), .toggleEverything)

@@ -1,3 +1,4 @@
+import NoteItCore
 import SwiftUI
 
 @main
@@ -68,6 +69,21 @@ struct NoteItCommands: Commands {
 
             Button("Command Palette…") { PaletteController.shared.toggle(mode: .commands) }
                 .menuShortcut(.commandPalette)
+
+            if DailyNotes.isAvailable {
+                Divider()
+                Button("Open Today's Note") {
+                    WindowRouter.showMainWindow()
+                    NoteStore.shared.openDailyNote(for: Date())
+                    WindowRouter.focusEditor()
+                }
+                .menuShortcut(.openToday)
+                Button("Daily Note for Date…") {
+                    WindowRouter.showMainWindow()
+                    NotificationCenter.default.post(name: .noteItShowDailyCalendar, object: nil)
+                }
+                .menuShortcut(.dailyNoteForDate)
+            }
         }
 
         // ⌘F searches all notes; in-note find moves to ⌥⌘F.

@@ -49,7 +49,7 @@ final class MenuShortcutStore: ObservableObject {
 
     /// Leaves the command without a shortcut.
     func clear(_ command: MenuShortcutCommand) {
-        overrides[command] = .noShortcut
+        overrides[command] = command.defaultShortcut == nil ? nil : .noShortcut
         save()
     }
 
@@ -62,8 +62,8 @@ final class MenuShortcutStore: ObservableObject {
 
     /// The command now using `command`'s default shortcut, which stops it from being restored.
     func resetBlocker(for command: MenuShortcutCommand) -> MenuShortcutCommand? {
-        guard isCustomized(command) else { return nil }
-        return self.command(using: command.defaultShortcut, excluding: command)
+        guard isCustomized(command), let shortcut = command.defaultShortcut else { return nil }
+        return self.command(using: shortcut, excluding: command)
     }
 
     func resetAll() {

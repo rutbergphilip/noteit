@@ -159,7 +159,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
         store.selectedNoteID = id
 
         let expected: Set<String> = [
-            "newNote", "newNoteFromTemplate", "newTemplate", "newNotebook", "searchNotes", "find", "findReplace", "export",
+            "newNote", "newNoteFromTemplate", "newTemplate", "openToday", "dailyNoteForDate", "newNotebook", "searchNotes", "find", "findReplace", "export",
             "print", "copyMarkdown", "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn",
         ]
         XCTAssertEqual(availableIDs(store), expected)
@@ -183,6 +183,8 @@ final class PaletteCommandRegistryTests: XCTestCase {
             "copyNoteLink": MenuShortcutCommand.copyNoteLink.defaultShortcut,
             "newNoteFromTemplate": MenuShortcutCommand.newNoteFromTemplate.defaultShortcut,
             "newTemplate": nil,
+            "openToday": MenuShortcutCommand.openToday.defaultShortcut,
+            "dailyNoteForDate": nil,
             "versionHistory": MenuShortcutCommand.versionHistory.defaultShortcut,
             "deleteNote": MenuShortcutCommand.deleteNote.defaultShortcut,
             "settings": MenuShortcuts.settings,
@@ -197,10 +199,10 @@ final class PaletteCommandRegistryTests: XCTestCase {
     }
 
     func testShortcutDisplayUsesMenuGlyphOrder() {
-        XCTAssertEqual(MenuShortcutCommand.copyAsMarkdown.defaultShortcut.display, "⌥⇧⌘C")
-        XCTAssertEqual(MenuShortcutCommand.newNotebook.defaultShortcut.display, "⇧⌘N")
-        XCTAssertEqual(MenuShortcutCommand.versionHistory.defaultShortcut.display, "⌥⌘Y")
-        XCTAssertEqual(MenuShortcutCommand.deleteNote.defaultShortcut.display, "⌘⌫")
+        XCTAssertEqual(MenuShortcutCommand.copyAsMarkdown.defaultShortcut?.display, "⌥⇧⌘C")
+        XCTAssertEqual(MenuShortcutCommand.newNotebook.defaultShortcut?.display, "⇧⌘N")
+        XCTAssertEqual(MenuShortcutCommand.versionHistory.defaultShortcut?.display, "⌥⌘Y")
+        XCTAssertEqual(MenuShortcutCommand.deleteNote.defaultShortcut?.display, "⌘⌫")
         XCTAssertEqual(MenuShortcuts.settings.display, "⌘,")
         XCTAssertEqual(MenuShortcut("k", [.command, .control]).display, "⌃⌘K")
     }

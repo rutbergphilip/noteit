@@ -1,3 +1,4 @@
+import NoteItCore
 import SwiftUI
 
 struct EditorContainerView: View {
@@ -111,6 +112,7 @@ private struct NavigationButtons: View {
 struct EditorHeader: View {
     @EnvironmentObject private var store: NoteStore
     let note: NoteMeta
+    @State private var showsCalendar = false
 
     private var notebook: Notebook? { store.notebook(with: note.notebookID) }
 
@@ -146,6 +148,10 @@ struct EditorHeader: View {
                 ConflictBadge(source: source) { store.markConflictResolved(note.id) }
             }
 
+            if DailyNotes.isAvailable, note.deletedAt == nil, let day = store.dailyDay(of: note.id) {
+                dailyControls(day)
+            }
+
             Button {
                 store.togglePin(note.id)
             } label: {
@@ -160,6 +166,36 @@ struct EditorHeader: View {
         .padding(.horizontal, 16)
         .padding(.top, 8)
         .padding(.bottom, 2)
+    }
+
+    @ViewBuilder
+    private func dailyControls(_ day: DayKey) -> some View {
+        let previous = store.adjacentDailyNote(to: note.id, forward: false)
+        let next = store.adjacentDailyNote(to: note.id, forward: true)
+        HStack(spacing: 2) {
+            Button { open(previous) } label: { Image(systemName: "chevron.left").frame(width: 18, height: 22) }
+                .disabled(previous == nil)
+                .help(previous.map { "Previous Daily Note: \($0.displayTitle)" } ?? "No earlier daily note")
+                .accessibilityLabel("Previous Daily Note")
+            Button { showsCalendar = true } label: { Image(systemName: "calendar").frame(width: 22, height: 22) }
+                .help("Daily Note for Date…")
+                .accessibilityLabel("Daily Note for Date")
+                .popover(isPresented: $showsCalendar, arrowEdge: .bottom) {
+                    DailyCalendarView(selected: day) { showsCalendar = false }
+                        .environmentObject(store)
+                }
+            Button { open(next) } label: { Image(systemName: "chevron.right").frame(width: 18, height: 22) }
+                .disabled(next == nil)
+                .help(next.map { "Next Daily Note: \($0.displayTitle)" } ?? "No later daily note")
+                .accessibilityLabel("Next Daily Note")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+    }
+
+    private func open(_ meta: NoteMeta?) {
+        guard let meta else { return }
+        store.selectedNoteID = meta.id
     }
 }
 

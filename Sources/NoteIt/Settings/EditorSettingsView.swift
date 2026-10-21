@@ -1,3 +1,4 @@
+import NoteItCore
 import SwiftUI
 
 struct EditorSettingsView: View {
@@ -11,6 +12,10 @@ struct EditorSettingsView: View {
     @AppStorage(PrefKey.linkRenameUpdates) private var linkRenameUpdates = PrefDefault.linkRenameUpdates
     @AppStorage(PrefKey.linkNewNoteNotebook) private var linkNewNoteNotebook = PrefDefault.linkNewNoteNotebook
     @AppStorage(PrefKey.templatesNotebookID) private var templatesNotebookRaw = ""
+    @AppStorage(PrefKey.dailyNotesNotebookID) private var dailyNotebookRaw = ""
+    @AppStorage(PrefKey.dailyNoteTitleFormat) private var dailyTitleFormat = DailyTitleFormat.iso.rawValue
+    @AppStorage(PrefKey.dailyNoteTemplateID) private var dailyTemplateRaw = ""
+    @AppStorage(PrefKey.showTodayInSidebar) private var showTodayInSidebar = PrefDefault.showTodayInSidebar
 
     var body: some View {
         Form {
@@ -105,9 +110,58 @@ struct EditorSettingsView: View {
             } header: {
                 Text("Templates")
             }
+
+            if DailyNotes.isAvailable {
+                Section {
+                    Picker("Notebook", selection: dailyNotebookBinding) {
+                        Text("Daily Notes (created on first use)").tag("")
+                        Divider()
+                        ForEach(store.sortedNotebooks) { notebook in
+                            Label(notebook.name, systemImage: notebook.symbol).tag(notebook.id.uuidString)
+                        }
+                    }
+                    Picker("Title", selection: $dailyTitleFormat) {
+                        ForEach(DailyTitleFormat.allCases, id: \.self) { format in
+                            Text(DailyNoteTitle.title(for: today, format: format, locale: .current)).tag(format.rawValue)
+                        }
+                    }
+                    Picker("Template", selection: dailyTemplateBinding) {
+                        Text("None").tag("")
+                        if !store.templates.isEmpty { Divider() }
+                        ForEach(store.templates) { template in
+                            Text(NoteStore.templateName(template)).tag(template.id.uuidString)
+                        }
+                    }
+                    Toggle("Show Today in the sidebar", isOn: $showTodayInSidebar)
+                } header: {
+                    Text("Daily Notes")
+                }
+            }
         }
         .formStyle(.grouped)
         .frame(height: 560)
+    }
+
+    private var today: DayKey { DayKey(Date(), calendar: DayKey.dailyCalendar()) }
+
+    private var dailyNotebookBinding: Binding<String> {
+        Binding(
+            get: {
+                _ = dailyNotebookRaw
+                return store.dailyNotesNotebookID(createIfMissing: false)?.uuidString ?? ""
+            },
+            set: { dailyNotebookRaw = $0 }
+        )
+    }
+
+    private var dailyTemplateBinding: Binding<String> {
+        Binding(
+            get: {
+                _ = dailyTemplateRaw
+                return store.dailyNoteTemplateID?.uuidString ?? ""
+            },
+            set: { dailyTemplateRaw = $0 }
+        )
     }
 
     private var templatesNotebookBinding: Binding<String> {

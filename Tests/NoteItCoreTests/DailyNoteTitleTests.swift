@@ -52,7 +52,7 @@ final class DailyNoteTitleTests: XCTestCase {
         XCTAssertLessThan(DayKey(year: 2025, month: 12, day: 31), day)
     }
 
-    func testGateIsClosed() {
-        XCTAssertFalse(DailyNotes.isAvailable)
+    func testGateIsOpen() {
+        XCTAssertTrue(DailyNotes.isAvailable)
     }
 }

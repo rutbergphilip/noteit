@@ -6,6 +6,7 @@ struct MainView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var notebookDraft: NotebookDraft?
     @State private var templateRequest: TemplatePickerRequest?
+    @State private var showsDailyCalendar = false
     @StateObject private var navigation = NavigationModel()
 
     var body: some View {
@@ -27,6 +28,16 @@ struct MainView: View {
         .sheet(item: $templateRequest) { request in
             TemplatePickerSheet(request: request)
                 .environmentObject(store)
+        }
+        .sheet(isPresented: $showsDailyCalendar) {
+            DailyCalendarView(selected: store.selectedNoteID.flatMap { store.dailyDay(of: $0) }) {
+                showsDailyCalendar = false
+            }
+            .environmentObject(store)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .noteItShowDailyCalendar)) { _ in
+            guard controlActiveState == .key || NSApp.keyWindow == nil else { return }
+            showsDailyCalendar = true
         }
         .onReceive(NotificationCenter.default.publisher(for: .noteItShowTemplatePicker)) { note in
             guard controlActiveState == .key || NSApp.keyWindow == nil,
