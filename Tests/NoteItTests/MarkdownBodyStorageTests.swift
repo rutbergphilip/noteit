@@ -64,6 +64,18 @@ final class MarkdownBodyStorageTests: XCTestCase {
         BodyStorageContract.runAll { Self.make($0) }
     }
 
+    func testReadingAndWritingAgainIsStable() throws {
+        let storage = storage()
+        let note = meta("Plan")
+        try storage.write(body("Plan\nFirst line\n\nlast"), extras: .empty, for: note, notebook: nil)
+        let first = try storage.read(note.id).text
+        try storage.write(first, extras: .empty, for: note, notebook: nil)
+        let file = try file("Plan.md")
+        try storage.write(try storage.read(note.id).text, extras: .empty, for: note, notebook: nil)
+        XCTAssertEqual(try storage.read(note.id).text.string, first.string)
+        XCTAssertEqual(try self.file("Plan.md"), file)
+    }
+
     func testFilesAreUTF8WithLFAndAFinalNewlineWrittenThroughATempFile() throws {
         let storage = storage()
         let note = meta("Plan")

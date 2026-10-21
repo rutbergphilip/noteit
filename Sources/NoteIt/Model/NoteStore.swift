@@ -1526,7 +1526,9 @@ final class NoteStore: ObservableObject {
         }
         let temp = try storage.prepareTemp(body, extras: tempExtras, meta: meta)
         var replaces = false
-        if FileManager.default.fileExists(atPath: storage.fileURL(for: payload.id).path) {
+        if let markdown = storage as? MarkdownBodyStorage {
+            replaces = markdown.revisionInputURL(for: payload.id) != nil && !markdown.tempHasSameBody(temp, as: payload.id)
+        } else if FileManager.default.fileExists(atPath: storage.fileURL(for: payload.id).path) {
             replaces = (try? storage.read(payload.id)).map { !$0.text.isEqual(to: body) } ?? true
         }
         return PreparedRemoteNote(meta: meta, body: body, searchEntry: OrganiseIndexer.makeEntry(body, updatedAt: meta.updatedAt), tempBody: temp, extras: extras,
@@ -1662,6 +1664,8 @@ final class NoteStore: ObservableObject {
     /// Durable part of a remote apply: library.json (plus deferred trash moves). Pending user edits keep
     /// their own debounced save; the search index save is coalesced.
     private func persistRemoteApply() {
+        // Notes arrive at their path; only a notebook change moves folders and other notes' files.
+        if let storage = markdownStorage, libraryDirty, Set(storage.knownNotebooks) != Set(notebooks) { syncMarkdownLayout() }
         if libraryDirty || !FileManager.default.fileExists(atPath: libraryURL.path) { saveLibrary() }
         if !libraryDirty, hasPendingAuxDeletions { trashPendingBodies() }
         if searchIndexer.isDirty { scheduleIndexSave() }
@@ -1675,11 +1679,19 @@ final class NoteStore: ObservableObject {
         case file(URL)
     }
 
-    func exportBodySource(_ id: UUID) -> ExportBody {
+    /// A Markdown file is parsed here, because `completeExport` only reads RTFD. A known file that is missing or
+    /// can't be read throws rather than sending an empty body.
+    func exportBodySource(_ id: UUID) throws -> ExportBody {
         if let cached = bodyCache[id] {
             return .text(cached.copy() as? NSAttributedString ?? NSAttributedString(attributedString: cached))
         }
-        return .file(bodyStorage.fileURL(for: id))
+        guard bodyStorage.kind != .rtfd else { return .file(bodyStorage.fileURL(for: id)) }
+        guard bodyStorage.revisionInputURL(for: id) != nil else { return .text(NSAttributedString()) }
+        do {
+            return .text(try bodyStorage.read(id).text)
+        } catch {
+            throw NoteStoreSyncError.unreadableBody(id)
+        }
     }
 
     /// Adjusts metadata of a note just created by sync (e.g. a conflict copy); counts as a local change.

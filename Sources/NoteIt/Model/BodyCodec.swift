@@ -236,6 +236,12 @@ extension BodyCodec {
             return try? Data(contentsOf: url)
         }
         var stored = try attributedString(from: imported.body)
+        // Every imported paragraph ends in a newline; the editor's last paragraph doesn't.
+        if stored.text.string.hasSuffix("\n") {
+            let text = NSMutableAttributedString(attributedString: stored.text)
+            text.deleteCharacters(in: NSRange(location: text.length - 1, length: 1))
+            stored.text = text
+        }
         var known = imported.frontMatter
         known.extra = ""
         stored.frontMatter = known

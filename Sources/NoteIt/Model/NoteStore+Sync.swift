@@ -70,7 +70,7 @@ extension NoteStore {
             let merged = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .notes))
                 .merged(with: try Self.encoder.encode(meta), ownedKeys: NoteMeta.ownedCodingKeys)
             return (RecordPayload(id: id, kind: .note, revision: revision, modifiedAt: meta.updatedAt,
-                                  deviceID: deviceID, meta: merged), exportBodySource(id))
+                                  deviceID: deviceID, meta: merged), try exportBodySource(id))
         }
     }
 

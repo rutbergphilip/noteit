@@ -577,17 +577,28 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
 
     /// Whether a body write would change only `created` or `updated` in the front matter of a file adopted from
     /// outside; those are written on the next change of the note.
-    private func onlyDatesDiffer(_ data: Data, existing: Data) -> Bool {
+    /// True when the prepared temp file and the note's file have the same text after the front matter.
+    func tempHasSameBody(_ temp: URL, as id: UUID) -> Bool {
+        guard let entry = index.entry(id), let new = try? Data(contentsOf: temp),
+              let old = try? Data(contentsOf: url(of: entry.path)) else { return false }
+        return Self.bodies(new, old).map { $0.0 == $0.1 } ?? false
+    }
+
+    private static func bodies(_ data: Data, _ existing: Data) -> ((FrontMatter, Substring), (FrontMatter, Substring))? {
         guard let new = String(data: data, encoding: .utf8), let old = String(data: existing, encoding: .utf8),
-              let newRead = try? FrontMatter.read(new), let oldRead = try? FrontMatter.read(old) else { return false }
-        var newFM = newRead.0, oldFM = oldRead.0
-        let newStart = newRead.1, oldStart = oldRead.1
+              let newRead = try? FrontMatter.read(new), let oldRead = try? FrontMatter.read(old) else { return nil }
         func body(_ text: String, _ start: String.Index) -> Substring {
             var rest = text[start...]
             if start != text.startIndex, rest.first == "\n" { rest = rest.dropFirst() }
             return rest
         }
-        guard body(new, newStart) == body(old, oldStart) else { return false }
+        return ((newRead.0, body(new, newRead.1)), (oldRead.0, body(old, oldRead.1)))
+    }
+
+    private func onlyDatesDiffer(_ data: Data, existing: Data) -> Bool {
+        guard let ((newFrontMatter, newBody), (oldFrontMatter, oldBody)) = Self.bodies(data, existing) else { return false }
+        var newFM = newFrontMatter, oldFM = oldFrontMatter
+        guard newBody == oldBody else { return false }
         newFM.created = nil
         newFM.updated = nil
         oldFM.created = nil

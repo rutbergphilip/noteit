@@ -164,6 +164,57 @@ final class MarkdownNoteStoreTests: XCTestCase {
         XCTAssertEqual(store.note(with: id)?.preview, "new words")
     }
 
+    func testSyncExportsAMarkdownFileAsRTFD() throws {
+        try put("Plan.md", "---\nmood: calm\n---\n# Plan\n\n- [ ] ship\n")
+        let store = open()
+        let id = try note(store, titled: "Plan").id
+        store.dropCachedBody(id)
+        let payload = try store.exportPayload(id: id, kind: .note, deviceID: "md")
+        let text = try NoteStore.deserializeBody(XCTUnwrap(payload.body))
+        XCTAssertEqual(text.string, store.body(for: id).string)
+        XCTAssertTrue(text.string.hasPrefix("Plan\n"))
+
+        try fm.removeItem(at: content.appendingPathComponent("Plan.md"))
+        store.dropCachedBody(id)
+        XCTAssertThrowsError(try store.exportPayload(id: id, kind: .note, deviceID: "md"), "a missing file never syncs as empty")
+    }
+
+    func testRemoteNotesAndNotebooksLandInTheirFolders() throws {
+        let rtfd = NoteStore(rootURL: root.appendingPathComponent("rtfd", isDirectory: true))
+        let work = rtfd.createNotebook(name: "Work", symbol: "tray", colorHex: "#0A84FF")
+        let id = rtfd.createNote(in: work.id, initial: body("Remote\nfrom the other Mac")).id
+        rtfd.flush()
+        try put("Local.md", "# Local\n")
+
+        let store = open()
+        try store.applyRemote(rtfd.exportPayload(id: work.id, kind: .notebook, deviceID: "a"))
+        let payload = try rtfd.exportPayload(id: id, kind: .note, deviceID: "a")
+        try store.applyRemote(payload)
+        XCTAssertEqual(store.note(with: id)?.revision, payload.revision)
+        XCTAssertTrue(try read("Work/Remote.md").contains("id: \(id.uuidString)"))
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: content.appendingPathComponent(".noteit/staging").path), [])
+        XCTAssertTrue(store.versions(of: id).isEmpty)
+
+        let text = try read("Work/Remote.md").replacingOccurrences(of: "Z\n---\n", with: "Z\nmood: calm\n---\n")
+        try Data(text.utf8).write(to: content.appendingPathComponent("Work/Remote.md"))
+        store.rescanMarkdownFolder()
+        rtfd.updateBody(id, body("Remote\nedited"))
+        try store.applyRemote(rtfd.exportPayload(id: id, kind: .note, deviceID: "a"))
+        XCTAssertTrue(try read("Work/Remote.md").contains("mood: calm"), "unknown keys survive a remote edit")
+        XCTAssertTrue(try read("Work/Remote.md").hasSuffix("edited\n"))
+
+        var renamed = try XCTUnwrap(rtfd.notebook(with: work.id))
+        renamed.name = "Office"
+        rtfd.updateNotebook(renamed)
+        try store.applyRemote(rtfd.exportPayload(id: work.id, kind: .notebook, deviceID: "a"))
+        XCTAssertTrue(exists("Office/Remote.md"))
+        XCTAssertFalse(exists("Work"))
+
+        store.applyRemoteDeletion(work.id, kind: .notebook)
+        XCTAssertTrue(exists("Remote.md"), "a note of a notebook deleted elsewhere moves to the top")
+        XCTAssertFalse(exists("Office"))
+    }
+
     func testAdoptedFolderKeepsFileNames() throws {
         try put("my-file.md", "# Some title\n\ntext\n")
         let store = open(renames: false)
