@@ -412,7 +412,8 @@ struct CompletionCandidates {
         let locator = context.locator
         let session = context.session
         let lines = await Self.firstResult(within: timeout) { () async -> [String] in
-            guard let token = environmentToken ?? keychain.nonInteractive().token(profile: profile) else { return [] }
+            guard let token = environmentToken ?? keychain.nonInteractive().token(profile: profile),
+                  !Task.isCancelled else { return [] }
             return await Self.candidates(kind, prefix: prefix, locator: locator, token: token, session: session)
         }
         lines?.forEach(context.io.line)
