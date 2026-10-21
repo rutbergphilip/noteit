@@ -790,6 +790,7 @@ Steps:
 - [ ] Manual: bundled build; in Shortcuts, Create Note → Append to Note → Get Note Text, run it; check the note.
 - [ ] Verify: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter AutomationServiceTests` → `Executed <n> tests, with 0 failures`; `NOTEIT_VERSION=x-test NOTEIT_BUILD=99999999999999 NOTEIT_INSTALL_DIR="$PWD/.selftest/app" ./scripts/build_app.sh` succeeds (exit 0) and `test -d .selftest/app/NoteIt.app/Contents/Resources/Metadata.appintents` exits 0.
 - [ ] Commit `feat(automation): add Shortcuts actions`.
+- Note (T20 as built): entity lookups live in an `AutomationService` extension in `NoteEntity.swift` (`noteEntity(_:)`, `noteEntities(for:)`, `noteEntities(matching:)`, `suggestedNoteEntities()`, `notebookEntities()`), so the tests run them on a scratch service; the queries call them on `AutomationService.shared`. An empty search string gives the suggestions. Find Notes uses `list(…query:)` so an empty search text lists notes instead of failing. `IntentError` (a `LocalizedError`) carries `AutomationError.message`. `NotebookEntityQuery` is also an `EntityStringQuery` (name contains). The position and format parameters are `AppEnum`s, `NotePositionOption` and `NoteTextFormatOption`. `TrivialIntent` is gone.
 
 ### M7 — Daily notes
 

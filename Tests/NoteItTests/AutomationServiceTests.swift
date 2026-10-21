@@ -416,6 +416,51 @@ final class AutomationServiceTests: XCTestCase {
         XCTAssertEqual(service.tags().map(\.count), [1, 2])
     }
 
+    // MARK: Shortcuts entities
+
+    func testNoteEntityFromMeta() throws {
+        let (service, store) = makeService()
+        let work = store.createNotebook(name: "Work", symbol: "folder", colorHex: "#0A84FF")
+        let meta = try service.create(title: "Plan", body: "steps", format: .text, notebook: .id(work.id), tags: ["q3"],
+                                      pinned: false)
+        let entity = service.noteEntity(meta)
+        XCTAssertEqual(entity.id, meta.id)
+        XCTAssertEqual(entity.title, "Plan")
+        XCTAssertEqual(entity.notebookName, "Work")
+        XCTAssertEqual(entity.tags, ["q3"])
+        XCTAssertEqual(entity.createdAt, meta.createdAt)
+        XCTAssertEqual(entity.modifiedAt, meta.updatedAt)
+
+        let untitled = store.createNote(in: nil, initial: NSAttributedString(string: ""))
+        let bare = service.noteEntity(untitled)
+        XCTAssertEqual(bare.title, "New Note")
+        XCTAssertNil(bare.notebookName)
+    }
+
+    func testEntityQueryExcludesRecentlyDeleted() throws {
+        let (service, _) = makeService()
+        let kept = try service.create(title: "Keep apples", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
+        let gone = try service.create(title: "Gone apples", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
+        try service.moveToRecentlyDeleted(gone)
+        XCTAssertEqual(service.noteEntities(for: [gone, kept, UUID()]).map(\.id), [kept])
+        XCTAssertEqual(try service.noteEntities(matching: "apples").map(\.id), [kept])
+        XCTAssertEqual(service.suggestedNoteEntities().map(\.id), [kept])
+    }
+
+    func testSuggestedEntitiesAreTenMostRecent() throws {
+        let (service, store) = makeService()
+        var ids: [UUID] = []
+        for index in 0..<15 {
+            let id = store.createNote(in: nil, initial: NSAttributedString(string: "Note \(index)")).id
+            store.notes[store.noteIndex(id)!].updatedAt = clock.addingTimeInterval(Double(index))
+            ids.append(id)
+        }
+        store.togglePin(ids[0])
+        store.notes[store.noteIndex(ids[0])!].updatedAt = clock.addingTimeInterval(-100)
+        XCTAssertEqual(service.suggestedNoteEntities().map(\.id), Array(ids.suffix(10).reversed()))
+        XCTAssertEqual(try service.noteEntities(matching: "  ").map(\.id), Array(ids.suffix(10).reversed()))
+    }
+
     // MARK: Daily, limits, Markdown and attachments
 
     func testDailyBeforeLinkingThrowsUnavailable() {
