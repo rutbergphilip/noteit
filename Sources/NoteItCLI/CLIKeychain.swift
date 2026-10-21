@@ -1,4 +1,5 @@
 import Foundation
+import LocalAuthentication
 import NoteItSync
 import Security
 
@@ -10,6 +11,13 @@ struct CLIKeychain {
     init(store: SecretStore = CLISecItemStore(), service: String = AppIdentity.cliKeychainService) {
         self.store = store
         self.service = service
+    }
+
+    /// The same Keychain, but reads fail instead of asking the user to allow access.
+    func nonInteractive() -> CLIKeychain {
+        guard var live = store as? CLISecItemStore else { return self }
+        live.allowsInteraction = false
+        return CLIKeychain(store: live, service: service)
     }
 
     func token(profile: String) -> String? {
@@ -37,10 +45,17 @@ struct CLIKeychainError: Error, LocalizedError {
 struct CLISecItemStore: SecretStore {
     static let label = "noteit command line tool"
 
+    var allowsInteraction = true
+
     func read(service: String, account: String) -> String? {
         var query = Self.baseQuery(service: service, account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
+        if !allowsInteraction {
+            let context = LAContext()
+            context.interactionNotAllowed = true
+            query[kSecUseAuthenticationContext as String] = context
+        }
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)

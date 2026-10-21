@@ -82,16 +82,19 @@ final class CLIHarness {
     var keychain: CLIKeychain { CLIKeychain(store: secrets, service: "test.noteit.cli") }
 
     func run(_ arguments: [String]) async -> CLIExit {
+        await CLI(context: context()).run(arguments)
+    }
+
+    func context() -> CLIContext {
         let environment = environment
         let terminal = terminal
-        let context = CLIContext(
+        return CLIContext(
             io: terminal.io, environment: environment,
             locator: AppLocator(environment: environment, readDiscovery: { nil }, launchApp: {},
                                 ping: { _ in true }, sleep: { _ in }),
             keychain: keychain, session: session, hostName: { "Studio" },
             openURL: { terminal.openedURLs.append($0) }, executableURL: nil,
             timeZone: TimeZone(identifier: "Europe/Stockholm")!, runEditor: editor)
-        return await CLI(context: context).run(arguments)
     }
 
     func stop() {
