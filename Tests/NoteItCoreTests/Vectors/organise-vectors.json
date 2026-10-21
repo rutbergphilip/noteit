@@ -43,5 +43,39 @@
       { "input": "2026-10-21 14:00", "due": "2026-10-21 14:00", "remind": "2026-10-21 14:00" },
       { "input": "nothing here", "due": null, "remind": null }
     ]
-  }
+  },
+  "queries": [
+    { "input": "", "tree": "all" },
+    { "input": "apple pie", "tree": "and(word(apple),word(pie))", "highlight": ["apple", "pie"], "text": true },
+    { "input": "\"Apple Pie\"", "tree": "phrase(apple pie)", "highlight": ["apple pie"], "text": true },
+    { "input": "-draft", "tree": "not(word(draft))", "highlight": [], "text": false },
+    { "input": "a b OR c", "tree": "and(word(a),or(word(b),word(c)))" },
+    { "input": "-(a OR b)", "tree": "not(or(word(a),word(b)))", "highlight": [], "text": false },
+    { "input": "(a OR b) c", "tree": "and(or(word(a),word(b)),word(c))" },
+    { "input": "tag:Work/Acme", "tree": "tag(work/acme)", "text": false },
+    { "input": "tag:#work", "tree": "tag(work)" },
+    { "input": "-tag:x", "tree": "not(tag(x))" },
+    { "input": "notebook:\"Client Work\"", "tree": "notebook(Client Work)" },
+    { "input": "in:Work/Clients", "tree": "notebook(Work/Clients)" },
+    { "input": "title:Budget", "tree": "title(budget)", "highlight": ["budget"], "text": false },
+    { "input": "is:todo has:due", "tree": "and(is(todo),has(due))" },
+    { "input": "edited:<7d", "tree": "date(edited,within(604800))" },
+    { "input": "created:>2w", "tree": "date(created,olderThan(1209600))" },
+    { "input": "edited:2026-10-01", "tree": "date(edited,on(2026-10-01))" },
+    { "input": "edited:>2026-10-01", "tree": "date(edited,after(2026-10-01))" },
+    { "input": "edited:<2026-10-01", "tree": "date(edited,before(2026-10-01))" },
+    { "input": "due:overdue", "tree": "date(due,overdue)" },
+    { "input": "edited:this-week", "tree": "date(edited,thisWeek)" },
+    { "input": "10:30", "tree": "word(10:30)", "issues": 0 },
+    { "input": "foo:bar", "tree": "word(foo:bar)" },
+    { "input": "edited:<7x", "tree": "word(edited:<7x)", "issues": 1, "message": "“edited:<7x” isn't a date. Try edited:<7d." },
+    { "input": "edited:overdue", "tree": "word(edited:overdue)", "issues": 1 },
+    { "input": "is:maybe", "tree": "word(is:maybe)", "issues": 1 },
+    { "input": "(a OR b", "tree": "or(word(a),word(b))", "issues": 1 },
+    { "input": ") a b", "tree": "and(word(a),word(b))", "issues": 1 },
+    { "input": "f(x) y", "tree": "and(word(f(x)),word(y))", "issues": 0 },
+    { "input": "a OR", "tree": "word(a)" },
+    { "input": "\"open phrase", "tree": "phrase(open phrase)" },
+    { "input": "Été", "tree": "word(ete)" }
+  ]
 }
