@@ -162,6 +162,12 @@ struct SyncConfiguration: Codable, Equatable, Sendable {
         return prefix.isEmpty ? s3.bucket : "\(s3.bucket)/\(prefix)"
     }
 
+    /// The sync folder's name for messages, from the saved path, so it never touches the volume.
+    var folderName: String? {
+        guard provider == .folder, let folderPath, !folderPath.isEmpty else { return nil }
+        return URL(fileURLWithPath: folderPath).lastPathComponent
+    }
+
     /// Identifies the remote store (not the credentials), e.g. to key the local sync state file.
     var storeKey: String {
         let parts: [String]
