@@ -262,6 +262,28 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertEqual(try snapshot(), before, "no library created in its place")
     }
 
+    func testUnresponsiveContentFolderIsReportedWithoutHangingLaunch() throws {
+        let content = base.appendingPathComponent("NAS Notes", isDirectory: true)
+        try fm.createDirectory(at: content, withIntermediateDirectories: true)
+        try writeLocationFile(markdownFile(at: content))
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let access = BoundedFileAccess()
+        var launcher = launcher(override: dataDir.path)
+        launcher.checkContentRoot = { file in
+            access.runBlocking(key: "root", timeout: 0.2) {
+                release.wait()
+                return LibraryLauncher.inspectContentRoot(file)
+            }
+        }
+
+        let started = Date()
+        let store: NoteStore? = launcher.launch(open: { NoteStore(location: $0) }, quit: {})
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        XCTAssertNil(store)
+        XCTAssertEqual(missingAlerts, [content])
+    }
+
     func testCorruptLocationFileOpensRTFDWithoutSeedingAndIsSetAside() throws {
         try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
         let url = dataDir.appendingPathComponent(LibraryLocationFile.fileName)

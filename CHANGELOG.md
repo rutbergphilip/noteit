@@ -24,6 +24,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - HTML export in Dark Mode no longer gives captured text, or notes made in Open Quickly, a fixed colour that could come out near-white.
+- NoteIt no longer freezes when a sync folder on a NAS or network drive becomes unreachable. Sync shows “Can't reach” the folder and picks up again when it's back, and notes on this Mac are never removed because the folder couldn't be read.
 
 ## [0.5.0] - 2026-10-20
 

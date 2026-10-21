@@ -41,7 +41,7 @@ enum SyncSetupError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .folderUnavailable(let path): "The folder “\(path)” isn't available. Is the drive or NAS connected?"
+        case .folderUnavailable(let name): "Can't reach “\(name)”. Check that the drive or NAS is connected."
         case .missingField(let name): "Enter \(name)."
         case .invalidEndpoint: "The endpoint must be a full URL, such as https://s3.eu-north-1.amazonaws.com."
         case .insecureEndpoint(let provider): "\(provider.displayName) requires an https:// endpoint."
@@ -76,6 +76,10 @@ final class SyncController: ObservableObject {
     static let maxBackoff: TimeInterval = 600
 
     private let store: NoteStore
+    /// Runs the checks of a sync folder that may be on a network volume; see `checkFolder`.
+    var folderAccess = BoundedFileAccess.shared
+    var folderCheckTimeout: TimeInterval = 10
+    var folderIsDirectory: @Sendable (URL) -> Bool = SyncController.isDirectory
     private var session: Session?
     private var loop: Task<Void, Never>?
     private var sleeper: Task<Void, Never>?
@@ -130,8 +134,10 @@ final class SyncController: ObservableObject {
         var scoped: Bool
     }
 
-    init(store: NoteStore) {
+    /// keepsSecretsInMemory: the configuration and secrets are never saved to UserDefaults or the keychain.
+    init(store: NoteStore, keepsSecretsInMemory: Bool = false) {
         self.store = store
+        if keepsSecretsInMemory { ephemeralSecrets = Secrets() }
     }
 
     /// One state file per remote store, so a pass still finishing for an old store can't feed a new one.
@@ -171,7 +177,7 @@ final class SyncController: ObservableObject {
     /// Validates the destination, creates or joins the remote library, stores secrets and starts syncing.
     func connect(_ config: SyncConfiguration, accessKey: String?, secret: String?, passphrase: String?) async throws {
         var config = config
-        let destination = try makeDestination(config, accessKey: accessKey, secret: secret)
+        let destination = try await makeDestination(config, accessKey: accessKey, secret: secret, creatingStore: true)
         let encryptNew = config.encrypted
         let deviceName = config.deviceName
         let migrationRecord = migrationRecord(for: config)
@@ -231,7 +237,7 @@ final class SyncController: ObservableObject {
     /// Re-enters the passphrase after the keychain lost it or it changed on another Mac.
     func unlock(passphrase: String) async throws {
         guard let config = configuration else { return }
-        let destination = try makeDestination(config, accessKey: secrets.accessKey, secret: secrets.secret)
+        let destination = try await makeDestination(config, accessKey: secrets.accessKey, secret: secrets.secret)
         let migrationRecord = migrationRecord(for: config)
         let storeSession = try await withAccess(destination) {
             try await Self.offMain {
@@ -288,7 +294,7 @@ final class SyncController: ObservableObject {
     /// Checks that the key pair can read the connected library, without saving anything.
     func testCredentials(accessKey: String, secret: String) async throws {
         guard let config = configuration, config.provider.isS3 else { return }
-        let destination = try makeDestination(config, accessKey: accessKey, secret: secret)
+        let destination = try await makeDestination(config, accessKey: accessKey, secret: secret)
         let inspection = try await withAccess(destination) {
             try await Self.offMain { () async throws -> RemoteInspection in
                 try await destination.backend.probe()
@@ -340,7 +346,7 @@ final class SyncController: ObservableObject {
 
     func testConnection(_ config: SyncConfiguration, accessKey: String?, secret: String?) async -> Result<RemoteInspection, Error> {
         do {
-            let destination = try makeDestination(config, accessKey: accessKey, secret: secret)
+            let destination = try await makeDestination(config, accessKey: accessKey, secret: secret, creatingStore: true)
             let inspection = try await withAccess(destination) {
                 try await Self.offMain { () async throws -> RemoteInspection in
                     try await destination.backend.probe()
@@ -455,6 +461,15 @@ final class SyncController: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor [weak self] in self?.requestSync(after: 5) }
         })
+        if configuration?.provider == .folder {
+            for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification] {
+                workspaceObservers.append(NSWorkspace.shared.notificationCenter.addObserver(
+                    forName: name, object: nil, queue: nil
+                ) { [weak self] _ in
+                    Task { @MainActor [weak self] in self?.volumesChanged() }
+                })
+            }
+        }
         notesSubscription = store.$notes
             .map { notes in notes.reduce(0) { $0 + ($1.conflictSource == nil || $1.deletedAt != nil ? 0 : 1) } }
             .removeDuplicates()
@@ -477,6 +492,13 @@ final class SyncController: ObservableObject {
         firstPendingLocalChange = first
         localChangeDue = min(now.addingTimeInterval(Self.localChangeDebounce), first.addingTimeInterval(Self.localChangeMaxDelay))
         sleeper?.cancel()
+    }
+
+    /// A volume came or went: the sync folder may be reachable again (skip the backoff) or just went away.
+    private func volumesChanged() {
+        guard !paused else { return }
+        failures = 0
+        requestSync(after: 2)
     }
 
     private func appBecameActive() {
@@ -542,6 +564,11 @@ final class SyncController: ObservableObject {
         do {
             let session = try await ensureSession(config)
             guard gen == generation else { return nil }
+            // A pass on a mount that went away would block in the kernel; a bounded check fails fast instead.
+            if session.folder != nil {
+                _ = try await Self.checkFolder(config, access: folderAccess, timeout: folderCheckTimeout, isDirectory: folderIsDirectory)
+            }
+            guard gen == generation else { return nil }
             let destination = Destination(backend: session.backend, folder: session.folder, scoped: session.scoped)
             let report = try await withAccess(destination) {
                 try await self.runTrackedPass(session)
@@ -587,11 +614,13 @@ final class SyncController: ObservableObject {
             credentialsRejected = configuration?.provider.isS3 == true
             pause()
             return nil
-        case StorageError.notFound(let key) where key == RemoteLayout.manifest():
+        case StorageError.notFound(RemoteLayout.manifest()), StorageError.storeMissing:
             status = .error(SyncSetupError.storageReset.errorDescription ?? "")
             pause()
             return nil
-        case SyncSetupError.folderUnavailable, StorageError.network:
+        case SyncSetupError.folderUnavailable, StorageError.unavailable:
+            status = .offline(Self.unreachable(configuration?.folderName))
+        case StorageError.network:
             status = .offline(Self.describe(error))
         default:
             status = .error(Self.describe(error))
@@ -626,7 +655,7 @@ final class SyncController: ObservableObject {
         let dataKey = secrets.dataKey.flatMap { Data(base64Encoded: $0) }.map { SymmetricKey(data: $0) }
         let passphrase = secrets.passphrase.flatMap { $0.isEmpty ? nil : $0 }
         if config.encrypted, dataKey == nil, passphrase == nil { throw SyncError.passphraseRequired }
-        let destination = try makeDestination(config, accessKey: secrets.accessKey, secret: secrets.secret)
+        let destination = try await makeDestination(config, accessKey: secrets.accessKey, secret: secrets.secret)
         let deviceName = config.deviceName
         let migrationRecord = migrationRecord(for: config)
         let storeSession = try await withAccess(destination) {
@@ -694,21 +723,19 @@ final class SyncController: ObservableObject {
 
     // MARK: - Backends
 
-    private func makeDestination(_ config: SyncConfiguration, accessKey: String?, secret: String?) throws -> Destination {
+    /// creatingStore: connecting, so a folder without a store is empty rather than a share that went away.
+    private func makeDestination(_ config: SyncConfiguration, accessKey: String?, secret: String?,
+                                 creatingStore: Bool = false) async throws -> Destination {
         if config.provider == .folder {
-            guard let resolved = config.resolveFolder() else { throw SyncSetupError.missingField("a folder") }
+            let resolved = try await Self.checkFolder(config, access: folderAccess, timeout: folderCheckTimeout,
+                                                      isDirectory: folderIsDirectory)
             if let refreshed = resolved.refreshedBookmark, var current = configuration, current == config {
                 current.folderBookmark = refreshed
                 configuration = current
                 if ephemeralSecrets == nil { current.save() }
             }
-            var isDir: ObjCBool = false
-            let accessing = resolved.scoped && resolved.url.startAccessingSecurityScopedResource()
-            defer { if accessing { resolved.url.stopAccessingSecurityScopedResource() } }
-            guard FileManager.default.fileExists(atPath: resolved.url.path, isDirectory: &isDir), isDir.boolValue else {
-                throw SyncSetupError.folderUnavailable((resolved.url.path as NSString).abbreviatingWithTildeInPath)
-            }
-            return Destination(backend: FolderBackend(root: resolved.url), folder: resolved.url, scoped: resolved.scoped)
+            let backend = FolderBackend(root: resolved.url, store: creatingStore ? .creatable : .existing)
+            return Destination(backend: backend, folder: resolved.url, scoped: resolved.scoped)
         }
         guard let s3 = config.s3 else { throw SyncSetupError.missingField("the bucket details") }
         guard let scheme = s3.endpoint.scheme?.lowercased(), ["http", "https"].contains(scheme), s3.endpoint.host != nil else {
@@ -721,6 +748,34 @@ final class SyncController: ObservableObject {
         let backend = S3Backend(config: s3, credentials: S3Credentials(accessKeyID: accessKey, secretAccessKey: secret),
                                 session: Self.urlSession)
         return Destination(backend: backend, folder: nil, scoped: false)
+    }
+
+    typealias ResolvedFolder = (url: URL, scoped: Bool, refreshedBookmark: Data?)
+
+    /// Resolves the folder's bookmark and checks that the folder is there, off the main thread and for at most
+    /// `timeout`: both can block for minutes on a NAS that went away. Throws `folderUnavailable` when the folder
+    /// is missing or doesn't answer in time.
+    nonisolated static func checkFolder(_ config: SyncConfiguration, access: BoundedFileAccess, timeout: TimeInterval,
+                                        isDirectory: @escaping @Sendable (URL) -> Bool = SyncController.isDirectory)
+        async throws -> ResolvedFolder {
+        enum Outcome { case found(ResolvedFolder), missing, noFolder }
+        let name = config.folderName ?? "the sync folder"
+        let outcome = await access.run(key: "sync-folder:\(config.storeKey)", timeout: timeout) { () -> Outcome in
+            guard let resolved = config.resolveFolder() else { return .noFolder }
+            let accessing = resolved.scoped && resolved.url.startAccessingSecurityScopedResource()
+            defer { if accessing { resolved.url.stopAccessingSecurityScopedResource() } }
+            return isDirectory(resolved.url) ? .found(resolved) : .missing
+        }
+        switch outcome {
+        case .found(let resolved): return resolved
+        case .noFolder: throw SyncSetupError.missingField("a folder")
+        case .missing, nil: throw SyncSetupError.folderUnavailable(name)
+        }
+    }
+
+    nonisolated static func isDirectory(_ url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
     }
 
     /// No response cache: stale listings or bodies would make sync decisions on old data.
@@ -803,12 +858,14 @@ final class SyncController: ObservableObject {
             return "macOS blocked the unencrypted http:// connection. Use an https:// endpoint, or a local address such as nas.local or the NAS's IP address."
         case StorageError.network(let message):
             return "Can't reach the storage: \(message)"
-        case StorageError.notFound(let key) where key == RemoteLayout.manifest():
+        case StorageError.notFound(RemoteLayout.manifest()), StorageError.storeMissing:
             return SyncSetupError.storageReset.errorDescription ?? ""
         case StorageError.notFound:
             return "The bucket or folder wasn't found. Check its name and region."
         case StorageError.io(let message):
             return "Couldn't read or write the folder: \(message)"
+        case StorageError.unavailable:
+            return unreachable(nil)
         case StorageError.invalidResponse(let message):
             return "The storage returned an unexpected response: \(message)"
         case StorageError.preconditionFailed:
@@ -816,6 +873,11 @@ final class SyncController: ObservableObject {
         default:
             return error.localizedDescription
         }
+    }
+
+    /// Status while the sync folder's volume is away; syncing resumes on its own.
+    static func unreachable(_ folderName: String?) -> String {
+        "Can't reach \(folderName.map { "“\($0)”" } ?? "the sync folder"). NoteIt will try again when it's available."
     }
 
     /// "Access was denied (Code)." plus a hint for common S3 error codes.

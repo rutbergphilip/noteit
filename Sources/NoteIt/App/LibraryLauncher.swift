@@ -36,6 +36,23 @@ struct LibraryLauncher {
     var log: (String) -> Void = { NSLog("%@", $0) }
     var showContentRootMissing: (URL) -> Void = { LibraryLauncher.presentContentRootMissing($0) }
     var showLibraryLocationUnreadable: (String) -> Void = { LibraryLauncher.presentLibraryLocationUnreadable($0) }
+    /// Inspects the Markdown content folder, which may be on a NAS that went away: nil when it didn't answer in time.
+    var checkContentRoot: (LibraryLocationFile) -> ContentRootCheck? = { file in
+        BoundedFileAccess.shared.runBlocking(key: "content-root:\(file.path)", timeout: LibraryLauncher.contentRootTimeout) {
+            LibraryLauncher.inspectContentRoot(file)
+        }
+    }
+
+    nonisolated static let contentRootTimeout: TimeInterval = 10
+
+    struct ContentRootCheck: Equatable {
+        /// The bookmark's target when the folder moved, otherwise the recorded path.
+        var root: URL
+        var moved: Bool
+        /// A recreated bookmark when the saved one was stale.
+        var freshBookmark: Data?
+        var isFolder: Bool
+    }
 
     var legacyDirectory: URL {
         baseDirectory().appendingPathComponent(AppIdentity.Legacy.dataFolderName, isDirectory: true)
@@ -72,37 +89,50 @@ struct LibraryLauncher {
             file = loaded
         }
         guard file.format == .markdown else { return .open(location) }
-        let root = contentRoot(of: &file, dataDir: location.url)
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return .contentRootMissing(root)
+        guard let check = checkContentRoot(file) else {
+            log("NoteIt: the library folder \(file.path) didn't respond")
+            return .contentRootMissing(file.contentRootURL)
         }
-        return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false, format: .markdown, contentRootURL: root))
+        record(check, in: &file, dataDir: location.url)
+        guard check.isFolder else { return .contentRootMissing(check.root) }
+        return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false, format: .markdown, contentRootURL: check.root))
     }
 
-    /// Follows the bookmark when the folder was renamed or moved, and records the new path.
-    private func contentRoot(of file: inout LibraryLocationFile, dataDir: URL) -> URL {
-        let recorded = file.contentRootURL
-        guard let bookmark = file.bookmark else { return recorded }
-        var isStale = false
-        guard let resolved = try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting],
-                                      relativeTo: nil, bookmarkDataIsStale: &isStale),
-              !resolved.pathComponents.contains(".Trash") else { return recorded }
-        let folder = URL(fileURLWithPath: resolved.path, isDirectory: true)
-        let moved = folder.resolvingSymlinksInPath().standardizedFileURL.path
-            != recorded.resolvingSymlinksInPath().standardizedFileURL.path
-        guard moved || isStale else { return recorded }
-        if moved {
-            log("NoteIt: library folder moved to \(folder.path)")
-            file.path = LibraryLocationFile.displayPath(folder)
+    /// Records a moved folder's new path and a recreated bookmark.
+    private func record(_ check: ContentRootCheck, in file: inout LibraryLocationFile, dataDir: URL) {
+        guard check.moved || check.freshBookmark != nil else { return }
+        if check.moved {
+            log("NoteIt: library folder moved to \(check.root.path)")
+            file.path = LibraryLocationFile.displayPath(check.root)
         }
-        if isStale, let fresh = try? folder.bookmarkData() { file.bookmark = fresh }
+        if let fresh = check.freshBookmark { file.bookmark = fresh }
         do {
             try file.write(dataDir: dataDir)
         } catch {
             log("NoteIt: couldn't update \(LibraryLocationFile.fileName): \(error)")
         }
-        return moved ? folder : recorded
+    }
+
+    /// Follows the bookmark when the folder was renamed or moved, and checks the folder is there. Every step can
+    /// block on a network volume that went away, so this runs off the main thread (`checkContentRoot`).
+    nonisolated static func inspectContentRoot(_ file: LibraryLocationFile) -> ContentRootCheck {
+        func isFolder(_ url: URL) -> Bool {
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+        }
+        let recorded = file.contentRootURL
+        let unchanged = { ContentRootCheck(root: recorded, moved: false, freshBookmark: nil, isFolder: isFolder(recorded)) }
+        guard let bookmark = file.bookmark else { return unchanged() }
+        var isStale = false
+        guard let resolved = try? URL(resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting],
+                                      relativeTo: nil, bookmarkDataIsStale: &isStale),
+              !resolved.pathComponents.contains(".Trash") else { return unchanged() }
+        let folder = URL(fileURLWithPath: resolved.path, isDirectory: true)
+        let moved = folder.resolvingSymlinksInPath().standardizedFileURL.path
+            != recorded.resolvingSymlinksInPath().standardizedFileURL.path
+        let fresh = isStale ? try? folder.bookmarkData() : nil
+        let root = moved ? folder : recorded
+        return ContentRootCheck(root: root, moved: moved, freshBookmark: fresh, isFolder: isFolder(root))
     }
 
     /// Runs `decide()` and hands the result to `open` (normally: build the NoteStore) or `quit`.
@@ -135,7 +165,7 @@ struct LibraryLauncher {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "NoteIt can't find your library folder"
-        alert.informativeText = "Your notes are kept in \(LibraryLocationFile.displayPath(url)), which isn't there. If it's on a disk that isn't connected, connect it and open NoteIt again."
+        alert.informativeText = "Your notes are kept in \(LibraryLocationFile.displayPath(url)), which NoteIt can't reach. If it's on a disk or NAS that isn't connected, connect it and open NoteIt again."
         alert.addButton(withTitle: "Quit")
         alert.runModal()
     }
