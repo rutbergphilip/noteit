@@ -282,6 +282,56 @@ final class MarkdownBodyStorageTests: XCTestCase {
         XCTAssertTrue(try fm.contentsOfDirectory(atPath: content.path).contains("job"), "a change of case renames the folder")
     }
 
+    func testSwappedNotebookNamesAndNamesTakenOnDiskStillPlaceEveryFolder() throws {
+        let storage = storage()
+        var a = notebook("A"), b = notebook("B"), inner = notebook("Inner", parent: a.id)
+        storage.setNotebooks([a, b, inner])
+        let inA = meta("In A", notebook: a), inB = meta("In B", notebook: b), deep = meta("Deep", notebook: inner)
+        try storage.write(body("In A\nx"), extras: .empty, for: inA, notebook: a)
+        try storage.write(body("In B\nx"), extras: .empty, for: inB, notebook: b)
+        try storage.write(body("Deep\nx"), extras: .empty, for: deep, notebook: inner)
+
+        a.name = "B"
+        b.name = "A"
+        storage.setNotebooks([a, b, inner])
+        try storage.reconcileNotebooks()
+        XCTAssertEqual(storage.index.entry(inA.id)?.path, "B/In A.md")
+        XCTAssertEqual(storage.index.entry(inB.id)?.path, "A/In B.md")
+        XCTAssertEqual(storage.index.entry(deep.id)?.path, "B/Inner/Deep.md")
+        XCTAssertEqual(try NotebookFolders.read(content.appendingPathComponent("B")).notebook.id, a.id)
+        XCTAssertEqual(try NotebookFolders.read(content.appendingPathComponent("A")).notebook.id, b.id)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: content.path).filter { !$0.hasPrefix(".") }.sorted(), ["A", "B"])
+        XCTAssertEqual(storage.index.entry(inA.id)?.formerPaths, ["A/In A.md"])
+
+        try fm.createDirectory(at: content.appendingPathComponent("Archive"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: content.appendingPathComponent("Linked"), withDestinationURL: content.appendingPathComponent("Archive"))
+        a.name = "Archive"
+        b.name = "linked"
+        storage.setNotebooks([a, b, inner])
+        try storage.reconcileNotebooks()
+        XCTAssertEqual(storage.index.notebookFolder(a.id), "Archive 2")
+        XCTAssertEqual(storage.index.notebookFolder(b.id), "linked 2")
+        try storage.write(body("In A\ny"), extras: .empty, for: inA, notebook: a)
+        XCTAssertEqual(try storage.read(inA.id).text.string.withoutFinalNewline, "In A\ny")
+    }
+
+    func testAFolderThatCantMoveNeverStopsWritesIntoIt() throws {
+        let storage = storage()
+        var a = notebook("A")
+        storage.setNotebooks([a])
+        let note = meta("Note", notebook: a)
+        try storage.write(body("Note\nx"), extras: .empty, for: note, notebook: a)
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: content.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: content.path) }
+
+        a.name = "Renamed"
+        storage.setNotebooks([a])
+        XCTAssertThrowsError(try storage.reconcileNotebooks())
+        try storage.write(body("Note\ny"), extras: .empty, for: note, notebook: a)
+        XCTAssertEqual(storage.index.entry(note.id)?.path, "A/Note.md")
+        XCTAssertEqual(try storage.read(note.id).text.string.withoutFinalNewline, "Note\ny")
+    }
+
     func testRemovingANotebookTrashesOnlyAnEmptyFolder() throws {
         let storage = storage()
         let empty = notebook("Empty"), full = notebook("Full")

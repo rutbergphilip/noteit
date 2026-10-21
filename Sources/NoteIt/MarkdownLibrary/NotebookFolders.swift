@@ -72,7 +72,10 @@ enum NotebookFolders {
     /// Content-relative folder paths for every notebook, parents first, siblings in sort order. Notebooks deeper
     /// than `maxDepth` (which NoteIt doesn't create) get their deepest allowed ancestor's folder. `existing` keeps
     /// a notebook's recorded folder name while its notebook name still matches it.
-    static func layout(_ notebooks: [Notebook], existing: [UUID: String]) -> [UUID: String] {
+    /// `occupied` gives the lowercased names in a folder that no notebook may take (files and folders on disk
+    /// that aren't a notebook's recorded folder).
+    static func layout(_ notebooks: [Notebook], existing: [UUID: String],
+                       occupied: (String) -> Set<String> = { _ in [] }) -> [UUID: String] {
         let byID = Dictionary(notebooks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         var children: [UUID?: [Notebook]] = [:]
         for notebook in notebooks {
@@ -82,7 +85,7 @@ enum NotebookFolders {
         var result: [UUID: String] = [:]
         func place(_ parent: UUID?, path: String, depth: Int) {
             let siblings = (children[parent] ?? []).sorted { ($0.sortIndex, $0.id.uuidString) < ($1.sortIndex, $1.id.uuidString) }
-            var taken = Set<String>()
+            var taken = occupied(path)
             var named: [(Notebook, String)] = []
             // Keep recorded names first so an unrelated sibling never takes over a folder.
             for notebook in siblings {

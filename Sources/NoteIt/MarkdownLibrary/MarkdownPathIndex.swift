@@ -175,12 +175,17 @@ final class MarkdownPathIndex: @unchecked Sendable {
     }
 
     /// Rewrites every note and notebook path under `old` to sit under `new` (a folder renamed or moved).
-    func moveFolder(_ old: String, to new: String) {
+    /// `formerFolder` is recorded in the notes' `formerPaths` instead of `old` (a folder moved through a temporary
+    /// name records where it came from); `recordingFormerPaths: false` records nothing.
+    func moveFolder(_ old: String, to new: String, formerFolder: String? = nil, recordingFormerPaths: Bool = true) {
         lock.withLock {
             let prefix = old.lowercased() + "/"
             for (id, entry) in entries where entry.path.lowercased().hasPrefix(prefix) {
                 var moved = entry
-                moved.formerPaths.append(entry.path)
+                if recordingFormerPaths {
+                    let former = formerFolder.map { $0 + "/" + entry.path.dropFirst(prefix.count) } ?? entry.path
+                    if !moved.formerPaths.contains(former) { moved.formerPaths.append(former) }
+                }
                 if moved.formerPaths.count > 20 { moved.formerPaths.removeFirst(moved.formerPaths.count - 20) }
                 moved.path = new + "/" + entry.path.dropFirst(prefix.count)
                 entries[id] = moved

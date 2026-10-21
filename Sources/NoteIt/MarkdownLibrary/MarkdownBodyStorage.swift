@@ -107,32 +107,82 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     func reconcileNotebooks() throws {
         try lock.withLock {
             try requireContentRoot()
-            let tree = Array(notebooks.values)
-            var firstError: Error?
-            for notebook in tree.sorted(by: { depth(of: $0.id) < depth(of: $1.id) }) {
-                do { try placeNotebook(notebook.id, in: tree) } catch { firstError = firstError ?? error }
-            }
-            if let firstError { throw firstError }
+            try placeNotebooks(Array(notebooks.values))
         }
     }
 
-    private func placeNotebook(_ id: UUID, in tree: [Notebook]) throws {
-        guard let notebook = notebooks[id] else { return }
-        if keepsMissingFolders, let recorded = index.notebookFolder(id), !FileManager.default.fileExists(atPath: url(of: recorded).path) {
-            return
-        }
-        let layout = NotebookFolders.layout(tree, existing: index.allNotebookFolders)
-        guard let target = layout[id] else { return }
-        let owns = depth(of: id) <= NotebookFolders.maxDepth
-        if owns, let old = index.notebookFolder(id), old != target {
-            let from = url(of: old), to = url(of: target)
-            if FileManager.default.fileExists(atPath: from.path) {
-                try Self.move(from, to: to)
+    /// Names in each folder that no notebook folder may take: whatever is on disk there that isn't the recorded
+    /// folder of a notebook in `tree`.
+    private func occupiedNames(_ tree: [Notebook]) -> (String) -> Set<String> {
+        let recorded = index.allNotebookFolders.filter { id, _ in tree.contains { $0.id == id } }.values
+        return { [contentRootURL] path in
+            let dir = path.isEmpty ? contentRootURL : contentRootURL.appendingPathComponent(path, isDirectory: true)
+            var names = Set(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).map { $0.lowercased() })
+            for folder in recorded where MarkdownPathIndex.folder(of: folder).lowercased() == path.lowercased() {
+                names.remove((folder as NSString).lastPathComponent.lowercased())
             }
-            index.moveFolder(old, to: target)
+            return names
         }
-        index.setNotebookFolder(target, for: id)
-        guard owns else { return }
+    }
+
+    private func layout(_ tree: [Notebook]) -> [UUID: String] {
+        NotebookFolders.layout(tree, existing: index.allNotebookFolders, occupied: occupiedNames(tree))
+    }
+
+    private func keepsMissing(_ id: UUID) -> Bool {
+        guard keepsMissingFolders, let recorded = index.notebookFolder(id) else { return false }
+        return !FileManager.default.fileExists(atPath: url(of: recorded).path)
+    }
+
+    /// Moves every notebook folder whose place changed in two steps, first aside under a temporary name beside it
+    /// and then to its new place, so swapped names and cycles work. A folder that can't reach its new place goes
+    /// back (or stays recorded where it is), so the notes in it can still be written.
+    private func placeNotebooks(_ tree: [Notebook]) throws {
+        let fm = FileManager.default
+        let target = layout(tree)
+        let ordered = tree.sorted { depth(of: $0.id) < depth(of: $1.id) }
+        var firstError: Error?
+        var original: [UUID: String] = [:]
+        for notebook in ordered where depth(of: notebook.id) <= NotebookFolders.maxDepth && !keepsMissing(notebook.id) {
+            guard let wanted = target[notebook.id], let old = index.notebookFolder(notebook.id), old != wanted,
+                  fm.fileExists(atPath: url(of: old).path) else { continue }
+            let aside = MarkdownPathIndex.folder(of: old).isEmpty ? "" : MarkdownPathIndex.folder(of: old) + "/"
+            let temp = aside + (old as NSString).lastPathComponent + " " + UUID().uuidString.prefix(8)
+            do {
+                try Self.move(url(of: old), to: url(of: temp))
+                index.moveFolder(old, to: temp, recordingFormerPaths: false)
+                original[notebook.id] = old
+            } catch {
+                firstError = firstError ?? error
+            }
+        }
+        for notebook in ordered {
+            do {
+                try placeNotebook(notebook, target: target[notebook.id], formerFolder: original[notebook.id])
+            } catch {
+                firstError = firstError ?? error
+                let parentExists = { (path: String) in fm.fileExists(atPath: self.url(of: MarkdownPathIndex.folder(of: path)).path) }
+                if let old = original[notebook.id], let temp = index.notebookFolder(notebook.id), temp != old, parentExists(old),
+                   (try? Self.move(url(of: temp), to: url(of: old))) != nil {
+                    index.moveFolder(temp, to: old, recordingFormerPaths: false)
+                }
+            }
+        }
+        if let firstError { throw firstError }
+    }
+
+    private func placeNotebook(_ notebook: Notebook, target: String?, formerFolder: String?) throws {
+        guard !keepsMissing(notebook.id), let target else { return }
+        let owns = depth(of: notebook.id) <= NotebookFolders.maxDepth
+        guard owns else { return index.setNotebookFolder(target, for: notebook.id) }
+        if let old = index.notebookFolder(notebook.id), old != target {
+            let from = url(of: old)
+            if FileManager.default.fileExists(atPath: from.path) {
+                try Self.move(from, to: url(of: target))
+            }
+            index.moveFolder(old, to: target, formerFolder: formerFolder)
+        }
+        index.setNotebookFolder(target, for: notebook.id)
         let folder = url(of: target)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let raw = (try? NotebookFolders.read(folder))?.raw ?? [:]
@@ -157,22 +207,8 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     func renameNotebook(_ notebook: Notebook, from oldName: String) throws {
         try lock.withLock {
             notebooks[notebook.id] = notebook
-            let tree = Array(notebooks.values)
-            try placeNotebook(notebook.id, in: tree)
-            for child in tree where child.id != notebook.id && isDescendant(child.id, of: notebook.id) {
-                try placeNotebook(child.id, in: tree)
-            }
+            try placeNotebooks(Array(notebooks.values))
         }
-    }
-
-    private func isDescendant(_ id: UUID, of ancestor: UUID) -> Bool {
-        var seen: Set<UUID> = [id]
-        var current = notebooks[id]?.parent
-        while let parent = current, seen.insert(parent).inserted {
-            if parent == ancestor { return true }
-            current = notebooks[parent]?.parent
-        }
-        return false
     }
 
     /// Forgets the notebook. Its folder goes to the macOS Trash only when nothing but NoteIt's own file is left in
@@ -380,14 +416,14 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     private func plannedPathCreatingFolders(for meta: NoteMeta) throws -> String {
         if meta.deletedAt == nil, let id = meta.notebookID, notebooks[id] != nil {
             let tree = Array(notebooks.values)
-            var chain: [UUID] = []
-            var current: UUID? = id
-            var seen = Set<UUID>()
-            while let next = current, notebooks[next] != nil, seen.insert(next).inserted {
-                chain.insert(next, at: 0)
-                current = notebooks[next]?.parent
+            let target = layout(tree)
+            let placed = index.notebookFolder(id).map { recorded in
+                recorded == target[id] && FileManager.default.fileExists(atPath: url(of: recorded).path)
+            } ?? false
+            if !placed {
+                // The note is written into its notebook's recorded folder even when the folders can't follow now.
+                do { try placeNotebooks(tree) } catch { NSLog("NoteIt: couldn't place the notebook folders: \(error)") }
             }
-            for notebook in chain { try placeNotebook(notebook, in: tree) }
         }
         let path = plannedPath(for: meta)
         try FileManager.default.createDirectory(at: url(of: path).deletingLastPathComponent(), withIntermediateDirectories: true)
