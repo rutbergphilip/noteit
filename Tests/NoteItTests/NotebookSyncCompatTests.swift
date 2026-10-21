@@ -124,4 +124,139 @@ final class NotebookSyncCompatTests: XCTestCase {
         XCTAssertEqual(b.notebook(with: child.id)?.revision, a.notebook(with: child.id)?.revision)
         XCTAssertEqual(b.notebookTree.children(of: parent.id), [child.id])
     }
+
+    // MARK: Through the sync engine
+
+    private struct Peer {
+        let engine: SyncEngine
+        func sync() async throws -> SyncReport { try await engine.sync() }
+    }
+
+    private func peer(_ name: String, _ local: SyncLocalStore, backend: InMemoryBackend) -> Peer {
+        Peer(engine: SyncEngine(backend: backend, cipher: PassthroughCipher(), local: local,
+                                stateURL: root.appendingPathComponent("\(name)-sync.json"), deviceID: name, deviceName: name))
+    }
+
+    private func adapter(_ store: NoteStore, _ name: String) -> NoteStoreSyncAdapter {
+        NoteStoreSyncAdapter(store: store, deviceID: name)
+    }
+
+    private func isQuiet(_ report: SyncReport) -> Bool {
+        report.pushed == 0 && report.pulled == 0 && report.deleted == 0 && report.conflicts == 0 && report.errors.isEmpty
+    }
+
+    func testOlderClientRenameKeepsParentAfterRepair() async throws {
+        let backend = InMemoryBackend()
+        _ = try await SyncEngine.connect(backend: backend, passphrase: nil, encryptNew: false)
+        let a = makeStore("a"), b = makeStore("b")
+        let legacyStore = LegacyNotebookStore()
+        let devA = peer("A", adapter(a, "A"), backend: backend)
+        let devB = peer("B", adapter(b, "B"), backend: backend)
+        let devL = peer("L", legacyStore, backend: backend)
+        let (parent, child) = nested(a)
+
+        _ = try await devA.sync()
+        _ = try await devL.sync()
+        let strippedOnL = await legacyStore.hasParentKey(child.id)
+        XCTAssertEqual(strippedOnL, false)
+        try await Task.sleep(nanoseconds: 5_000_000)
+        await legacyStore.rename(child.id, to: "Customers")
+        _ = try await devL.sync()
+
+        _ = try await devA.sync()
+        XCTAssertEqual(a.notebook(with: child.id)?.name, "Customers")
+        XCTAssertEqual(a.notebook(with: child.id)?.parent, parent.id)
+
+        for _ in 0..<2 { for dev in [devA, devL, devB] { _ = try await dev.sync() } }
+        for _ in 0..<3 {
+            for (name, dev) in [("A", devA), ("L", devL), ("B", devB)] {
+                let report = try await dev.sync()
+                XCTAssertTrue(isQuiet(report), "\(name) still syncing: \(report)")
+            }
+        }
+        XCTAssertEqual(a.notebook(with: child.id)?.parent, parent.id)
+        XCTAssertEqual(b.notebook(with: child.id)?.parent, parent.id)
+        XCTAssertEqual(b.notebook(with: child.id)?.name, "Customers")
+        XCTAssertEqual(a.notebooks.count, 2)
+        XCTAssertEqual(b.notebooks.count, 2)
+        let legacyCount = await legacyStore.notebookCount()
+        XCTAssertEqual(legacyCount, 2)
+    }
+
+    func testConcurrentMovesLastWriterWinsWithoutCopies() async throws {
+        let backend = InMemoryBackend()
+        _ = try await SyncEngine.connect(backend: backend, passphrase: nil, encryptNew: false)
+        let a = makeStore("a"), b = makeStore("b")
+        let devA = peer("A", adapter(a, "A"), backend: backend)
+        let devB = peer("B", adapter(b, "B"), backend: backend)
+        let first = a.createNotebook(name: "First", symbol: "folder", colorHex: "#0A84FF")
+        let second = a.createNotebook(name: "Second", symbol: "folder", colorHex: "#0A84FF")
+        let moving = a.createNotebook(name: "Moving", symbol: "folder", colorHex: "#0A84FF")
+        _ = try await devA.sync()
+        _ = try await devB.sync()
+
+        XCTAssertTrue(a.moveNotebook(moving.id, under: first.id))
+        try await Task.sleep(nanoseconds: 5_000_000)
+        XCTAssertTrue(b.moveNotebook(moving.id, under: second.id))
+        _ = try await devA.sync()
+        _ = try await devB.sync()
+        _ = try await devA.sync()
+
+        XCTAssertEqual(a.notebook(with: moving.id)?.parent, second.id)
+        XCTAssertEqual(b.notebook(with: moving.id)?.parent, second.id)
+        XCTAssertEqual(a.notebooks.count, 3)
+        XCTAssertEqual(b.notebooks.count, 3)
+        XCTAssertTrue(a.notes.isEmpty && b.notes.isEmpty, "no conflict copies")
+    }
+}
+
+/// A `SyncLocalStore` that keeps notebooks the way NoteIt 0.2 did: decoding drops keys it doesn't know,
+/// so `parent` is gone from everything it pushes.
+private actor LegacyNotebookStore: SyncLocalStore {
+    private struct Entry {
+        var record: LocalRecord
+        var meta: [String: Any]
+        var body: Data?
+    }
+
+    private var entries: [UUID: Entry] = [:]
+    private static let known: Set<String> = ["id", "name", "symbol", "colorHex", "sortIndex", "revision", "modifiedAt"]
+
+    func hasParentKey(_ id: UUID) -> Bool? { entries[id].map { $0.meta.keys.contains("parent") } }
+
+    func notebookCount() -> Int { entries.values.filter { $0.record.kind == .notebook }.count }
+
+    func rename(_ id: UUID, to name: String) {
+        guard var entry = entries[id] else { return }
+        let revision = UUID(), now = Date()
+        entry.meta["name"] = name
+        entry.meta["revision"] = revision.uuidString
+        entry.meta["modifiedAt"] = ISO8601DateFormatter().string(from: now)
+        entry.record.revision = revision
+        entry.record.modifiedAt = now
+        entries[id] = entry
+    }
+
+    func records() -> [LocalRecord] { entries.values.map(\.record) }
+
+    func deletions() -> [UUID: LocalDeletion] { [:] }
+
+    func export(_ id: UUID, kind: RecordKind) throws -> RecordPayload {
+        guard let entry = entries[id] else { throw CocoaError(.fileNoSuchFile) }
+        return RecordPayload(id: id, kind: kind, revision: entry.record.revision, modifiedAt: entry.record.modifiedAt,
+                             deviceID: "legacy", meta: try JSONSerialization.data(withJSONObject: entry.meta), body: entry.body)
+    }
+
+    func apply(_ payload: RecordPayload) throws {
+        var meta = (try JSONSerialization.jsonObject(with: payload.meta) as? [String: Any]) ?? [:]
+        if payload.kind == .notebook { meta = meta.filter { Self.known.contains($0.key) } }
+        entries[payload.id] = Entry(record: LocalRecord(id: payload.id, kind: payload.kind, revision: payload.revision,
+                                                        modifiedAt: payload.modifiedAt), meta: meta, body: payload.body)
+    }
+
+    func applyDeletion(_ id: UUID, kind: RecordKind) { entries[id] = nil }
+
+    func importConflictCopy(_ payload: RecordPayload, fromDevice name: String) throws {}
+
+    func clearDeletion(_ id: UUID) {}
 }
