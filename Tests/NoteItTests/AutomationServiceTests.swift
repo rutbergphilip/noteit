@@ -25,8 +25,9 @@ final class AutomationServiceTests: XCTestCase {
         try? fm.removeItem(at: root)
     }
 
-    private func makeService(loading: Bool = false, dailyAvailable: Bool = false) -> (AutomationService, NoteStore) {
+    private func makeService(loading: Bool = false, dailyAvailable: Bool = DailyNotes.isAvailable) -> (AutomationService, NoteStore) {
         let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
+        store.preferences = defaults
         store.history.now = { [unowned self] in self.clock }
         let staged = StagedUploads(directory: root.appendingPathComponent("staged"), now: { [unowned self] in self.clock })
         let service = AutomationService(store: store, defaults: defaults, staged: staged, now: { [unowned self] in self.clock },
@@ -477,7 +478,7 @@ final class AutomationServiceTests: XCTestCase {
     }
 
     func testDailyCreateAndAppend() throws {
-        let (service, store) = makeService(dailyAvailable: true)
+        let (service, store) = makeService()
         XCTAssertNil(try service.daily(date: clock, create: false))
         let created = try XCTUnwrap(try service.daily(date: clock, create: true))
         XCTAssertEqual(store.notebook(with: try XCTUnwrap(created.notebookID))?.name, NoteStore.dailyNotesNotebookName)
@@ -495,7 +496,7 @@ final class AutomationServiceTests: XCTestCase {
 
     func testDailyAppendGoesThroughDailyLogAppender() throws {
         clock = afternoon()
-        let (service, store) = makeService(dailyAvailable: true)
+        let (service, store) = makeService()
         let meta = try service.appendToDaily(text: "Shipped\nthe build", format: .plain, timestamp: true, date: clock)
         let body = store.body(for: meta.id).string
         let expected = try XCTUnwrap(DailyLogLine.format(text: "Shipped\nthe build", at: clock, timeZone: .current))
@@ -505,7 +506,7 @@ final class AutomationServiceTests: XCTestCase {
     }
 
     func testDailyAppendMarkdownFormat() throws {
-        let (service, store) = makeService(dailyAvailable: true)
+        let (service, store) = makeService()
         let meta = try service.appendToDaily(text: "Read **this** today", format: .markdown, timestamp: false, date: clock)
         let body = store.body(for: meta.id)
         XCTAssertTrue(body.string.hasSuffix("\n- Read this today"), body.string)
@@ -517,15 +518,33 @@ final class AutomationServiceTests: XCTestCase {
 
     func testDailyAppendWithoutTimestamp() throws {
         clock = afternoon()
-        let (service, store) = makeService(dailyAvailable: true)
+        let (service, store) = makeService()
         let meta = try service.appendToDaily(text: "No time", format: .plain, timestamp: false, date: clock)
         _ = try service.appendToDaily(text: "With time", format: .plain, timestamp: true, date: clock)
         let lines = store.body(for: meta.id).string.components(separatedBy: "\n")
         XCTAssertEqual(Array(lines.suffix(2)), ["- No time", "- 15:05 With time"])
     }
 
+    func testDailyFromAutomationUsesTemplateWithoutClipboardOrCaret() throws {
+        let (service, store) = makeService()
+        let saved = NoteStore.clipboardString
+        NoteStore.clipboardString = { "secret" }
+        defer { NoteStore.clipboardString = saved }
+        let template = store.createTemplate()
+        store.updateBody(template.id, NSAttributedString(string: "{{title}}\nPlan\n{{clipboard}}{{cursor}}\n", attributes: EditorStyle.bodyAttributes))
+        defaults.set(template.id.uuidString, forKey: PrefKey.dailyNoteTemplateID)
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: clock)!
+        let created = try XCTUnwrap(try service.daily(date: clock, create: true))
+        let appended = try service.appendToDaily(text: "Ran", format: .plain, timestamp: false, date: tomorrow)
+        for id in [created.id, appended.id] {
+            XCTAssertTrue(store.body(for: id).string.contains("Plan"))
+            XCTAssertFalse(store.body(for: id).string.contains("secret"))
+            XCTAssertNil(RichTextEditor.pendingCaret[id])
+        }
+    }
+
     func testDailyAppendToLockedNoteFails() throws {
-        let (service, store) = makeService(dailyAvailable: true)
+        let (service, store) = makeService()
         let meta = try XCTUnwrap(try service.daily(date: clock, create: true))
         lock(store, meta.id)
         assertThrows(.noteLocked) { try service.appendToDaily(text: "x", format: .plain, timestamp: true, date: clock) }

@@ -17,7 +17,7 @@ final class URLSchemeHandlerTests: XCTestCase {
     private var saved: [String?] = []
     private var searches: [String] = []
     private var answer = true
-    private var dailyAvailable = false
+    private var dailyAvailable = DailyNotes.isAvailable
 
     override func setUpWithError() throws {
         root = fm.temporaryDirectory.appendingPathComponent("noteit-urlscheme-\(UUID().uuidString)", isDirectory: true)
@@ -126,6 +126,7 @@ final class URLSchemeHandlerTests: XCTestCase {
     }
 
     func testDailyUnavailableWhileGateOff() async {
+        dailyAvailable = false
         let (handler, _) = makeHandler()
         await open(handler, "noteit://daily")
         await open(handler, "noteit://x-callback-url/append?daily=today&text=x&x-error=app://err")
@@ -136,7 +137,6 @@ final class URLSchemeHandlerTests: XCTestCase {
     }
 
     func testDailyHostsOpenAndAppendWhenAvailable() async throws {
-        dailyAvailable = true
         let (handler, store) = makeHandler()
         answer = false
         await open(handler, "noteit://x-callback-url/append?daily=today&text=x&x-cancel=app://cancel")
@@ -160,7 +160,6 @@ final class URLSchemeHandlerTests: XCTestCase {
 
     /// The day the user approved is the day written to, even when midnight passes while the question is open.
     func testDailyAppendUsesConfirmedDayAcrossMidnight() async throws {
-        dailyAvailable = true
         let calendar = Calendar.current
         let evening = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 23, minute: 59)))
         var clock = evening

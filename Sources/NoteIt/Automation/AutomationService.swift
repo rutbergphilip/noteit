@@ -21,7 +21,7 @@ final class AutomationService {
     let defaults: UserDefaults
     let staged: StagedUploads
     let now: () -> Date
-    /// The `DailyNotes.isAvailable` gate, injected so tests can run the daily paths before linking flips it.
+    /// The `DailyNotes.isAvailable` gate, injected so tests can run the daily paths with it on or off.
     let dailyNotesAvailable: @Sendable () -> Bool
     private let isLoading: () -> Bool
     /// In-process issue, list and revoke, through the Local API server's client registry.
