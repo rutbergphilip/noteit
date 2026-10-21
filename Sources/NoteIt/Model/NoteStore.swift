@@ -79,6 +79,8 @@ final class NoteStore: ObservableObject {
     private var noteIndexByID: [UUID: Int] = [:]
     /// Editor snapshots taken during a view update and handed to `updateBody` on the next main-queue turn.
     private var stagedEditorBodies: [UUID: NSAttributedString] = [:]
+    /// Titles changed by typing in an editor; not by sync, Restore Version, link rewrites or the API.
+    let editorTitleCommits = PassthroughSubject<(id: UUID, title: String), Never>()
 
     /// Read failures for note bodies, keyed by note ID (message suitable for UI).
     private var loadErrors: [UUID: String] = [:]
@@ -337,8 +339,15 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func commitStagedEditorBody(_ id: UUID) -> Bool {
         guard let snapshot = stagedEditorBodies.removeValue(forKey: id) else { return false }
-        updateBody(id, snapshot)
+        commitEditorBody(id, snapshot)
         return true
+    }
+
+    /// `updateBody` for the editor's own commits; reports a changed title on `editorTitleCommits`.
+    func commitEditorBody(_ id: UUID, _ snapshot: NSAttributedString) {
+        let before = note(with: id)?.title
+        updateBody(id, snapshot)
+        if let after = note(with: id)?.title, after != before { editorTitleCommits.send((id, after)) }
     }
 
     func hasStagedEditorBody(_ id: UUID) -> Bool {

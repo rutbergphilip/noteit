@@ -247,6 +247,36 @@ final class NoteStoreLinksTests: XCTestCase {
         XCTAssertEqual(store.backlinks(to: target).map(\.source), [source])
     }
 
+    func testRenamePromptOnlyForEditorCommits() async throws {
+        let store = makeStore()
+        let target = store.createNote(in: nil, initial: body("Atlas")).id
+        let source = store.createNote(in: nil, initial: body("Source", linking: [("Atlas", .note(id: target, heading: nil))])).id
+        await waitUntil { store.linkIndex.hasEntry(for: source) }
+        let saved = RenameTracker.idleDelay
+        RenameTracker.idleDelay = .milliseconds(20)
+        defer { RenameTracker.idleDelay = saved }
+        let suite = "noteit-rename-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tracker = RenameTracker()
+        tracker.defaults = defaults
+        tracker.store = store
+        tracker.open(target, title: "Atlas")
+
+        store.updateBody(target, body("Globe"))
+        tracker.titleObserved("Globe", of: target)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertNil(tracker.prompt, "a rename from sync or Restore Version")
+
+        store.updateBody(target, body("Atlas"))
+        tracker.titleObserved("Atlas", of: target)
+        store.commitEditorBody(target, body("Atlas 2"))
+        tracker.titleObserved("Atlas 2", of: target)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(tracker.prompt?.oldTitle, "Atlas")
+        XCTAssertEqual(tracker.prompt?.newTitle, "Atlas 2")
+    }
+
     func testRewriteOnlyMatchingText() async {
         let store = makeStore()
         let (target, source) = renameFixture(store)

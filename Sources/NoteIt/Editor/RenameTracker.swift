@@ -1,7 +1,9 @@
+import Combine
 import Foundation
 import SwiftUI
 
-/// Watches the open note's title and offers to update the text of links to it after a rename (spec §8).
+/// Watches the open note's title and offers to update the text of links to it after the user renames it in the
+/// editor (spec §8). Titles changed any other way (sync, Restore Version, the Local API) only move the baseline.
 @MainActor
 final class RenameTracker: ObservableObject {
     struct Prompt: Equatable {
@@ -22,7 +24,15 @@ final class RenameTracker: ObservableObject {
     @Published private(set) var outcome: Outcome?
     @Published private(set) var isUpdating = false
 
-    weak var store: NoteStore?
+    weak var store: NoteStore? {
+        didSet {
+            guard store !== oldValue else { return }
+            commits = store?.editorTitleCommits.sink { [weak self] commit in
+                self?.titleChanged(commit.title, of: commit.id)
+            }
+        }
+    }
+    private var commits: AnyCancellable?
     var defaults: UserDefaults = .standard
     private var noteID: UUID?
     private var baseline = ""
@@ -38,6 +48,15 @@ final class RenameTracker: ObservableObject {
         latest = title
         prompt = nil
         outcome = nil
+    }
+
+    /// The open note's stored title, from any source. A title the editor didn't commit becomes the new baseline.
+    func titleObserved(_ title: String, of noteID: UUID) {
+        guard noteID == self.noteID, title != latest else { return }
+        waitTask?.cancel()
+        prompt = nil
+        baseline = title
+        latest = title
     }
 
     func titleChanged(_ title: String, of noteID: UUID) {

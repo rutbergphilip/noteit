@@ -202,7 +202,7 @@ struct RichTextEditor: NSViewRepresentable {
             if deferred {
                 store.stageEditorCommit(id, snapshot)
             } else {
-                store.updateBody(id, snapshot)
+                store.commitEditorBody(id, snapshot)
             }
         }
 

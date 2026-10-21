@@ -63,7 +63,7 @@ struct EditorContainerView: View {
                 renames.store = store
                 renames.open(id, title: note.title)
             }
-            .onChange(of: note.title) { _, title in renames.titleChanged(title, of: id) }
+            .onChange(of: note.title) { _, title in renames.titleObserved(title, of: id) }
             .background(Tokens.Color.surfaceEditor)
             .toolbar {
                 ToolbarItemGroup(placement: .navigation) {
