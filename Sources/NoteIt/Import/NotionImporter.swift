@@ -291,7 +291,70 @@ enum NotionImporter {
         options: [.caseInsensitive])
 
     /// `![alt](https://…)` → `[alt](https://…)`, named by the address when it has no alt text.
+    /// Code blocks (``` and ~~~ fences) and code spans are left as written.
     nonisolated static func remoteImagesAsLinks(_ text: String) -> String {
+        var out: [String] = []
+        var fence: (char: Character, count: Int)?
+        for line in text.components(separatedBy: "\n") {
+            let trimmed = line.drop { $0 == " " || $0 == "\t" }
+            let run = trimmed.prefix { $0 == "`" || $0 == "~" }
+            let marker = run.first.map { c in (char: c, count: run.prefix { $0 == c }.count) }
+            if let open = fence {
+                if let marker, marker.char == open.char, marker.count >= open.count,
+                   trimmed.dropFirst(marker.count).allSatisfy(\.isWhitespace) {
+                    fence = nil
+                }
+                out.append(line)
+            } else if let marker, marker.count >= 3, !(marker.char == "`" && trimmed.dropFirst(marker.count).contains("`")) {
+                fence = marker
+                out.append(line)
+            } else {
+                out.append(imagesOutsideCodeSpans(line))
+            }
+        }
+        return out.joined(separator: "\n")
+    }
+
+    /// Rewrites the parts of `line` outside backtick code spans.
+    nonisolated private static func imagesOutsideCodeSpans(_ line: String) -> String {
+        guard line.contains("`") else { return imagesAsLinks(line) }
+        let chars = Array(line)
+        var out = ""
+        var plain = ""
+        var i = 0
+        while i < chars.count {
+            guard chars[i] == "`" else {
+                plain.append(chars[i])
+                i += 1
+                continue
+            }
+            var n = 0
+            while i + n < chars.count, chars[i + n] == "`" { n += 1 }
+            var j = i + n
+            var close: Int?
+            while j < chars.count {
+                if chars[j] == "`" {
+                    var m = 0
+                    while j + m < chars.count, chars[j + m] == "`" { m += 1 }
+                    if m == n { close = j; break }
+                    j += m
+                } else {
+                    j += 1
+                }
+            }
+            guard let close else {
+                plain += String(chars[i..<(i + n)])
+                i += n
+                continue
+            }
+            out += imagesAsLinks(plain) + String(chars[i..<(close + n)])
+            plain = ""
+            i = close + n
+        }
+        return out + imagesAsLinks(plain)
+    }
+
+    nonisolated private static func imagesAsLinks(_ text: String) -> String {
         let ns = text as NSString
         var out = ""
         var last = 0

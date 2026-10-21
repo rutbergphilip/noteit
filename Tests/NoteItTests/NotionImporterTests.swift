@@ -351,6 +351,29 @@ final class NotionImporterTests: XCTestCase {
         XCTAssertEqual(found["https://example.com/a%20b.png"], "https://example.com/a b.png")
     }
 
+    func testImagesInCodeAreLeftAlone() {
+        let text = """
+            ![Out](https://example.com/a.png) and `![Span](https://example.com/b.png)` and ``![Two](https://x.io/c.png)``
+            ```
+            ![Fenced](https://example.com/d.png)
+            ```
+            ~~~swift
+            let s = "![Tilde](https://example.com/e.png)"
+            ~~~
+              ```
+              ![Indented fence](https://example.com/f.png)
+              ```
+            ![After](https://example.com/g.png)
+            """
+        let out = NotionImporter.remoteImagesAsLinks(text)
+        XCTAssertTrue(out.hasPrefix("[Out](https://example.com/a.png) and `![Span]"), out)
+        XCTAssertTrue(out.contains("``![Two](https://x.io/c.png)``"), out)
+        XCTAssertTrue(out.contains("\n![Fenced](https://example.com/d.png)\n"), out)
+        XCTAssertTrue(out.contains("\"![Tilde](https://example.com/e.png)\""), out)
+        XCTAssertTrue(out.contains("  ![Indented fence](https://example.com/f.png)"), out)
+        XCTAssertTrue(out.hasSuffix("\n[After](https://example.com/g.png)"), out)
+    }
+
     func testNames() {
         XCTAssertEqual(NotionNames.stripID("Plan \(projectsID)").title, "Plan")
         XCTAssertEqual(NotionNames.stripID("Plan \(projectsID.uppercased())").id, projectsID)
