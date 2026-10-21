@@ -19,6 +19,10 @@ extension NoteStore {
             return id
         }
         guard named.count > 1 else { return named.first }
+        if let cached = dailyNotebookChoiceCache, cached.notesVersion == notesVersion, cached.named == named {
+            return cached.choice
+        }
+        dailyNotebookChoiceScans += 1
         var count: [UUID: Int] = [:]
         var oldest: [UUID: Date] = [:]
         for note in notes where note.deletedAt == nil {
@@ -26,12 +30,14 @@ extension NoteStore {
             count[notebookID, default: 0] += 1
             oldest[notebookID] = min(oldest[notebookID] ?? .distantFuture, note.createdAt)
         }
-        return named.min {
+        let choice = named.min {
             let a = (count[$0] ?? 0, oldest[$0] ?? .distantFuture), b = (count[$1] ?? 0, oldest[$1] ?? .distantFuture)
             if a.0 != b.0 { return a.0 > b.0 }
             if a.1 != b.1 { return a.1 < b.1 }
             return $0.uuidString < $1.uuidString
         }
+        dailyNotebookChoiceCache = (notesVersion, named, choice)
+        return choice
     }
 
     func dailyNotesNotebookID(createIfMissing: Bool) -> UUID? {

@@ -75,6 +75,10 @@ final class NoteStore: ObservableObject {
     private(set) var notesVersion = 0
     /// Daily notes by day; rebuilt by `dailyNoteIndex` after `notes` change.
     var dailyNoteIndexCache: DailyNoteIndex?
+    /// The pick among several "Daily Notes" notebooks, for `notesVersion` and those notebooks.
+    var dailyNotebookChoiceCache: (notesVersion: Int, named: [UUID], choice: UUID?)?
+    /// How often that pick scanned the notes (tests).
+    var dailyNotebookChoiceScans = 0
     private var noteIndexVersion = -1
     private var noteIndexByID: [UUID: Int] = [:]
     /// Editor snapshots taken during a view update and handed to `updateBody` on the next main-queue turn.

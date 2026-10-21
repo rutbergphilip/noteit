@@ -105,6 +105,24 @@ final class DailyNoteStoreTests: XCTestCase {
         XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), custom.id, "a notebook the user picked stays")
     }
 
+    func testNotebookChoiceIsWorkedOutOncePerChange() {
+        let store = makeStore()
+        let first = store.createNotebook(name: "Daily Notes", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
+        let second = store.createNotebook(name: "Daily Notes", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
+        _ = store.createNote(in: second.id, initial: NSAttributedString(string: "2026-10-13"))
+        for _ in 0..<5 { XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), second.id) }
+        XCTAssertEqual(store.dailyNotebookChoiceScans, 1)
+        _ = store.createNote(in: first.id, initial: NSAttributedString(string: "A"))
+        _ = store.createNote(in: first.id, initial: NSAttributedString(string: "B"))
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id)
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id)
+        XCTAssertEqual(store.dailyNotebookChoiceScans, 2)
+        var renamed = second
+        renamed.name = "Archive"
+        store.updateNotebook(renamed)
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id)
+    }
+
     func testSameDayReturnsSameNote() throws {
         let store = makeStore()
         XCTAssertNil(try store.dailyNote(for: day(19), createIfMissing: false))
