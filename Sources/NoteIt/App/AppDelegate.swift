@@ -96,6 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 WindowRouter.showMainWindow()
                 NoteStore.shared.openDailyNote(for: Date())
                 WindowRouter.focusEditor()
+            case .showTasks:
+                WindowRouter.showMainWindow()
+                NoteStore.shared.showTasks()
             }
         }
         HotkeyManager.shared.start()

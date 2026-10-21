@@ -124,6 +124,8 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
     case dailyNoteForDate
     case newSmartFolder
     case saveSearchAsSmartFolder
+    case showTasks
+    case setDueDate
 
     var id: String { rawValue }
 
@@ -152,6 +154,8 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
         case .dailyNoteForDate: "Daily Note for Date…"
         case .newSmartFolder: "New Smart Folder…"
         case .saveSearchAsSmartFolder: "Save Search as Smart Folder…"
+        case .showTasks: "Tasks"
+        case .setDueDate: "Set Due Date…"
         }
     }
 
@@ -177,6 +181,8 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
         case .newNoteFromTemplate: MenuShortcut("n", [.option, .command])
         case .toggleInspector: MenuShortcut("i", [.option, .command])
         case .openToday: MenuShortcut("t", [.control, .command])
+        case .showTasks: MenuShortcut("t", [.shift, .command])
+        case .setDueDate: MenuShortcut("d", [.shift, .command])
         case .dailyNoteForDate, .newSmartFolder, .saveSearchAsSmartFolder: nil
         }
     }
@@ -206,6 +212,8 @@ enum MenuShortcuts {
     static var dailyNoteForDate: MenuShortcut? { current(.dailyNoteForDate) }
     static var newSmartFolder: MenuShortcut? { current(.newSmartFolder) }
     static var saveSearchAsSmartFolder: MenuShortcut? { current(.saveSearchAsSmartFolder) }
+    static var showTasks: MenuShortcut? { current(.showTasks) }
+    static var setDueDate: MenuShortcut? { current(.setDueDate) }
     /// SwiftUI's own Settings… item; listed so the palette can show it. It can't be changed.
     static let settings = MenuShortcut(",", .command)
 

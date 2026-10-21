@@ -562,6 +562,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             if let text {
                 beginLinkCompletionIfNeeded(afterTyping: text)
                 beginTagCompletionIfNeeded(afterTyping: text)
+                if text == ")" { scheduleDateTokenFormat() }
             }
             return
         }
@@ -574,6 +575,17 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             guard let self, self.selectedRange() == caret, self.storage.length == length, caret.location > 0,
                   self.nsString.substring(with: NSRange(location: caret.location - 1, length: 1)) == text,
                   self.handleMarkdownTriggerAfterTyping(text, at: caret.location - 1) else { return }
+        }
+    }
+
+    /// Like the Markdown shortcuts, the rewrite runs on the next turn so ⌘Z restores what was typed.
+    private func scheduleDateTokenFormat() {
+        let caret = selectedRange()
+        let length = storage.length
+        guard caret.length == 0 else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.selectedRange() == caret, self.storage.length == length else { return }
+            self.formatDateTokenAfterTyping(at: caret.location)
         }
     }
 
@@ -804,6 +816,17 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
                     format.addItem(item)
                 }
             }
+        }
+        if isEditable, taskLineRange(at: selectedRange().location) != nil {
+            let task = NSMenu(title: "Task")
+            let due = NSMenuItem(title: "Set Due Date…", action: #selector(setDueDate(_:)), keyEquivalent: "")
+            due.target = self
+            due.image = NSImage(systemSymbolName: "calendar.badge.clock", accessibilityDescription: nil)
+            task.addItem(due)
+            let taskItem = NSMenuItem(title: "Task", action: nil, keyEquivalent: "")
+            taskItem.submenu = task
+            format.addItem(.separator())
+            format.addItem(taskItem)
         }
         let formatItem = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
         formatItem.submenu = format

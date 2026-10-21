@@ -159,7 +159,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
         store.selectedNoteID = id
 
         let expected: Set<String> = [
-            "newNote", "newNoteFromTemplate", "newTemplate", "openToday", "dailyNoteForDate", "newNotebook", "newSmartFolder", "searchNotes", "find", "findReplace", "export",
+            "newNote", "newNoteFromTemplate", "newTemplate", "openToday", "dailyNoteForDate", "newNotebook", "newSmartFolder", "showTasks", "showCompletedTasks", "searchNotes", "find", "findReplace", "export",
             "print", "copyMarkdown", "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn",
         ]
         XCTAssertEqual(availableIDs(store), expected)
@@ -193,6 +193,9 @@ final class PaletteCommandRegistryTests: XCTestCase {
             "import": nil,
             "newSmartFolder": nil,
             "saveSearchAsSmartFolder": nil,
+            "showTasks": MenuShortcutCommand.showTasks.defaultShortcut,
+            "setDueDate": MenuShortcutCommand.setDueDate.defaultShortcut,
+            "showCompletedTasks": nil,
         ]
         for (id, shortcut) in expected {
             let display: String? = shortcut?.display
@@ -234,7 +237,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
             .newNote: "newNote", .newNotebook: "newNotebook", .searchNotes: "searchNotes", .find: "find",
             .findAndReplace: "findReplace", .exportNote: "export", .print: "print", .copyAsMarkdown: "copyMarkdown",
             .copyNoteLink: "copyNoteLink", .versionHistory: "versionHistory", .deleteNote: "deleteNote",
-            .newNoteFromTemplate: "newNoteFromTemplate",
+            .newNoteFromTemplate: "newNoteFromTemplate", .setDueDate: "setDueDate",
         ]
         for (command, id) in paletteIDs {
             XCTAssertEqual(titles[id], command.title, id)
@@ -277,5 +280,12 @@ final class PaletteCommandRegistryTests: XCTestCase {
         XCTAssertFalse(availableIDs(store).contains("saveSearchAsSmartFolder"))
         store.searchText = "tag:work"
         XCTAssertTrue(availableIDs(store).contains("saveSearchAsSmartFolder"))
+    }
+
+    func testShowCompletedTasksTitleFollowsThePreference() throws {
+        let store = makeStore()
+        XCTAssertEqual(try XCTUnwrap(command("showCompletedTasks", in: store)).info.title, "Show Completed Tasks")
+        prefs.set(true, forKey: PrefKey.tasksShowCompleted)
+        XCTAssertEqual(try XCTUnwrap(command("showCompletedTasks", in: store)).info.title, "Hide Completed Tasks")
     }
 }

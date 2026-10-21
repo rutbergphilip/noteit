@@ -251,6 +251,12 @@ final class NoteStore: ObservableObject {
     /// Ensures `selectedNoteID` refers to a note in the visible list (current sidebar selection + search).
     /// Keeps the note the user is actively typing in, even if their edit hid it (e.g. removed its tag).
     func reconcileSelection() {
+        if selection == .tasks {
+            // The Tasks view lists lines, not notes: keep the note opened from it while it exists.
+            if let id = selectedNoteID, note(with: id)?.deletedAt == nil, note(with: id) != nil { return }
+            if selectedNoteID != nil { selectedNoteID = nil }
+            return
+        }
         let visible = notes(for: selection, search: searchText)
         if let id = selectedNoteID {
             if visible.contains(where: { $0.id == id }) { return }

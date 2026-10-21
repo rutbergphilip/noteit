@@ -28,6 +28,13 @@ struct SidebarView: View {
                         if showToday && DailyNotes.isAvailable {
                             todayRow
                         }
+                        Label {
+                            Text("Tasks")
+                        } icon: {
+                            Image(systemName: "checklist").foregroundStyle(Tokens.Color.tasks)
+                        }
+                        .badge(store.openDueTodayOrOverdueCount)
+                        .tag(SidebarSelection.tasks)
                         libraryRow("Pinned", symbol: "pin.fill", tint: Tokens.Color.pinned, selection: .pinned)
                         libraryRow("Recent", symbol: "clock", tint: Tokens.Color.recent, selection: .recent)
                         if store.count(for: .conflicts) > 0 || store.selection == .conflicts {

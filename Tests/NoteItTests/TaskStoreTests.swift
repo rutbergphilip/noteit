@@ -134,6 +134,18 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(store.body(for: id).string, "List\n☐\tbuy milk @due(2026-10-23)\n☐\tpay rent #home")
     }
 
+    func testTasksSelectionKeepsTheNoteOpenedFromIt() {
+        let store = makeStore()
+        let id = add(store, "Errands\n☐\tbuy milk")
+        store.showTasks()
+        store.selectedNoteID = id
+        store.reconcileSelection()
+        XCTAssertEqual(store.selectedNoteID, id)
+        store.moveToRecentlyDeleted([id])
+        store.reconcileSelection()
+        XCTAssertNil(store.selectedNoteID)
+    }
+
     func testFiveThousandNotesTasksUnderBudget() {
         let store = makeStore()
         for index in 0..<5000 {

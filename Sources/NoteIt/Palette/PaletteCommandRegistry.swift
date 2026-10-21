@@ -77,6 +77,25 @@ enum PaletteCommandRegistry {
                     available: !store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
                 SmartFolderActions.newSmartFolder(query: store.searchText)
             },
+            command("showTasks", "Show Tasks", symbol: "checklist", shortcut: shortcuts.current(.showTasks)?.display,
+                    keywords: ["todo", "checkbox", "due"]) {
+                WindowRouter.showMainWindow()
+                store.showTasks()
+            },
+            command("showCompletedTasks", defaults.bool(forKey: PrefKey.tasksShowCompleted) ? "Hide Completed Tasks" : "Show Completed Tasks",
+                    symbol: "checkmark.circle", shortcut: nil, keywords: ["todo", "done", "tasks"]) {
+                defaults.set(!defaults.bool(forKey: PrefKey.tasksShowCompleted), forKey: PrefKey.tasksShowCompleted)
+                WindowRouter.showMainWindow()
+                store.showTasks()
+            },
+            command("setDueDate", "Set Due Date…", symbol: "calendar.badge.clock", shortcut: shortcuts.current(.setDueDate)?.display,
+                    keywords: ["task", "todo", "deadline"], available: hasLiveNote && liveNote?.isLocked != true) {
+                WindowRouter.showMainWindow()
+                WindowRouter.focusEditor()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NSApp.sendAction(#selector(NoteItTextView.setDueDate(_:)), to: nil, from: nil)
+                }
+            },
             command("searchNotes", "Search Notes", symbol: "magnifyingglass", shortcut: shortcuts.current(.searchNotes)?.display, keywords: ["find", "filter"]) {
                 NotificationCenter.default.post(name: .noteItFocusSearch, object: nil)
             },

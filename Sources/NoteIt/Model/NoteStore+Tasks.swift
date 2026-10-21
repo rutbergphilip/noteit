@@ -208,3 +208,11 @@ extension NoteStore {
         body.insert(NSAttributedString(string: (needsSpace ? " " : "") + value, attributes: attributes), at: end)
     }
 }
+
+extension NoteStore {
+    /// View › Tasks and the Show Tasks hotkey.
+    func showTasks() {
+        searchText = ""
+        selection = .tasks
+    }
+}

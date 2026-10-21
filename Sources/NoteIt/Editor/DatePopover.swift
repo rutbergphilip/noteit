@@ -1,0 +1,82 @@
+import AppKit
+import NoteItCore
+import SwiftUI
+
+/// The date picker for a task's due date or a reminder: from the editor's token chips, Set Due Date… and the
+/// Tasks view.
+struct DatePopover: View {
+    let title: String
+    let onSet: (LocalDateTime) -> Void
+    var onRemove: (() -> Void)?
+    let onClose: () -> Void
+
+    @State private var date: Date
+    @State private var includesTime: Bool
+    private let calendar: Calendar
+
+    init(title: String, initial: LocalDateTime?, defaultMinutes: Int = 540, calendar: Calendar = .current,
+         onSet: @escaping (LocalDateTime) -> Void, onRemove: (() -> Void)? = nil, onClose: @escaping () -> Void) {
+        self.title = title
+        self.onSet = onSet
+        self.onRemove = onRemove
+        self.onClose = onClose
+        self.calendar = calendar
+        let start = initial ?? LocalDateTime(Date(), calendar: calendar, includeTime: false)
+        let withTime = start.hasTime ? start : start.withTime(hour: defaultMinutes / 60 % 24, minute: defaultMinutes % 60)
+        _date = State(initialValue: withTime.date(in: calendar) ?? Date())
+        _includesTime = State(initialValue: initial?.hasTime ?? false)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title).font(.headline)
+            DatePicker("", selection: $date, displayedComponents: [.date])
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+            HStack {
+                Toggle("Time", isOn: $includesTime)
+                if includesTime {
+                    DatePicker("", selection: $date, displayedComponents: [.hourAndMinute])
+                        .labelsHidden()
+                }
+            }
+            HStack {
+                if let onRemove {
+                    Button("Remove", role: .destructive) {
+                        onRemove()
+                        onClose()
+                    }
+                }
+                Spacer()
+                Button("Cancel", role: .cancel) { onClose() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Set") {
+                    onSet(LocalDateTime(date, calendar: calendar, includeTime: includesTime))
+                    onClose()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(14)
+        .frame(width: 280)
+    }
+}
+
+/// Shows a `DatePopover` next to a range of an AppKit view.
+@MainActor
+enum DatePopoverPresenter {
+    private static var current: NSPopover?
+
+    static func show(title: String, initial: LocalDateTime?, relativeTo rect: NSRect, of view: NSView,
+                     onSet: @escaping (LocalDateTime) -> Void, onRemove: (() -> Void)?) {
+        current?.close()
+        let popover = NSPopover()
+        popover.behavior = .transient
+        let close: () -> Void = { [weak popover] in popover?.close() }
+        let minutes = UserDefaults.standard.object(forKey: PrefKey.reminderDefaultTime) as? Int ?? PrefDefault.reminderDefaultTime
+        popover.contentViewController = NSHostingController(rootView: DatePopover(
+            title: title, initial: initial, defaultMinutes: minutes, onSet: onSet, onRemove: onRemove, onClose: close))
+        popover.show(relativeTo: rect, of: view, preferredEdge: .maxY)
+        current = popover
+    }
+}

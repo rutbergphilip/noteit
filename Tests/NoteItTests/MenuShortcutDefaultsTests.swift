@@ -27,6 +27,8 @@ final class MenuShortcutDefaultsTests: XCTestCase {
             (.dailyNoteForDate, nil),
             (.newSmartFolder, nil),
             (.saveSearchAsSmartFolder, nil),
+            (.showTasks, MenuShortcut("t", [.shift, .command])),
+            (.setDueDate, MenuShortcut("d", [.shift, .command])),
         ]
         XCTAssertEqual(MenuShortcutCommand.allCases, expected.map(\.0))
         for (command, shortcut) in expected {
@@ -61,6 +63,6 @@ final class MenuShortcutDefaultsTests: XCTestCase {
     func testPlannedCommandsUnique() {
         let commands = PlannedMenuShortcuts.rows.map(\.command)
         XCTAssertEqual(Set(commands).count, commands.count)
-        XCTAssertEqual(commands.count, 12)
+        XCTAssertEqual(commands.count, 10)
     }
 }

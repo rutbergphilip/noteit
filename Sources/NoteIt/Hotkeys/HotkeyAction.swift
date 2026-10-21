@@ -10,6 +10,7 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
     case commandPalette
     case captureSelection
     case openToday
+    case showTasks
 
     var id: String { rawValue }
 
@@ -22,6 +23,7 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         case .commandPalette: "Command Palette"
         case .captureSelection: "Capture Selection"
         case .openToday: "Open Today's Note"
+        case .showTasks: "Show Tasks"
         }
     }
 
@@ -34,6 +36,7 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         case .commandPalette: "Run a NoteIt command from any app."
         case .captureSelection: "Save the text selected in any app as a new note, with a link back to where it came from."
         case .openToday: "Open today's daily note from any app, creating it if needed."
+        case .showTasks: "Show the tasks from all your notes, with the ones due soon first."
         }
     }
 
@@ -46,6 +49,7 @@ enum HotkeyAction: String, CaseIterable, Identifiable, Codable {
         case .commandPalette: "command"
         case .captureSelection: "text.quote"
         case .openToday: "calendar"
+        case .showTasks: "checklist"
         }
     }
 

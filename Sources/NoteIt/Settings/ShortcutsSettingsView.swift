@@ -120,6 +120,7 @@ private struct HotkeyRow: View {
         case .commandPalette: Tokens.Color.tileCommandPalette
         case .captureSelection: Tokens.Color.tileCaptureSelection
         case .openToday: Tokens.Color.tileOpenToday
+        case .showTasks: Tokens.Color.tileShowTasks
         }
     }
 }

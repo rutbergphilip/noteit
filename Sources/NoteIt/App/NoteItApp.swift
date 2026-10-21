@@ -123,11 +123,23 @@ struct NoteItCommands: Commands {
             Button("Insert Template…") {
                 NSApp.sendAction(#selector(NoteItTextView.showInsertTemplatePicker(_:)), to: nil, from: nil)
             }
+
+            Menu("Task") {
+                Button("Set Due Date…") {
+                    NSApp.sendAction(#selector(NoteItTextView.setDueDate(_:)), to: nil, from: nil)
+                }
+                .menuShortcut(.setDueDate)
+            }
         }
 
         CommandGroup(after: .toolbar) {
             Divider()
             InspectorMenuButton()
+            Button("Tasks") {
+                WindowRouter.showMainWindow()
+                NoteStore.shared.showTasks()
+            }
+            .menuShortcut(.showTasks)
             Button("Go Back") { NotificationCenter.default.post(name: .noteItGoBack, object: nil) }
                 .menuShortcut(.goBack)
             Button("Go Forward") { NotificationCenter.default.post(name: .noteItGoForward, object: nil) }
@@ -151,7 +163,6 @@ struct InspectorMenuButton: View {
     }
 }
 
-/// "Check for Updates…" for the app menu; nothing when updates are off.
 /// Enabled while the main window's search field has text.
 private struct SaveSearchMenuButton: View {
     @ObservedObject private var store = NoteStore.shared
@@ -163,6 +174,7 @@ private struct SaveSearchMenuButton: View {
     }
 }
 
+/// "Check for Updates…" for the app menu; nothing when updates are off.
 struct CheckForUpdatesButton: View {
     @ObservedObject private var updater = AppUpdater.shared
 

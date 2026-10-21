@@ -15,7 +15,13 @@ struct MainView: View {
             SidebarView(notebookDraft: $notebookDraft)
                 .navigationSplitViewColumnWidth(min: Tokens.Size.sidebarMin, ideal: Tokens.Size.sidebarWidth, max: Tokens.Size.sidebarMax)
         } content: {
-            NoteListView()
+            Group {
+                if store.selection == .tasks {
+                    TaskListView()
+                } else {
+                    NoteListView()
+                }
+            }
                 .navigationSplitViewColumnWidth(min: Tokens.Size.noteListMin, ideal: Tokens.Size.noteListWidth, max: Tokens.Size.noteListMax)
         } detail: {
             EditorContainerView()

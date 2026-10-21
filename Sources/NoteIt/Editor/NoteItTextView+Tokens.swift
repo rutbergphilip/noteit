@@ -25,9 +25,9 @@ extension NoteItTextView {
             host.store.selection = .tag(tag)
             return true
         }
-        if flags.isEmpty, let onDateToken, let (value, _) = token(at: point, key: .tokenDate),
+        if flags.isEmpty, isEditable, let (value, _) = token(at: point, key: .tokenDate),
            let range = (value as? NSValue)?.rangeValue {
-            onDateToken(range)
+            if let onDateToken { onDateToken(range) } else { editDateToken(range) }
             return true
         }
         return false
