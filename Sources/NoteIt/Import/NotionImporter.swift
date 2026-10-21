@@ -55,9 +55,9 @@ enum NotionImporter {
         var isTable: Bool
     }
 
-    static func importExport(_ url: URL, into store: NoteStore,
+    static func importExport(_ url: URL, into store: NoteStore, limits: ZipLimits = .standard,
                              progress: (ImportProgress) -> Void = { _ in }) async throws -> ImportReport {
-        let (roots, temporary, failed) = try await Task.detached { try Self.contentRoots(for: url) }.value
+        let (roots, temporary, failed) = try await Task.detached { try Self.contentRoots(for: url, limits: limits) }.value
         defer { for folder in temporary { try? FileManager.default.removeItem(at: folder) } }
         let pages: [Page]
         do {
@@ -76,14 +76,19 @@ enum NotionImporter {
     /// unzipped (one level only).
     /// `temporary` lists the unzipped folders, for the caller to remove; `failed` names the part ZIPs that
     /// couldn't be opened.
-    nonisolated static func contentRoots(for url: URL) throws -> (roots: [URL], temporary: [URL], failed: [String]) {
+    /// Archives that together unpack past `limits` throw `ImportError.archiveTooLarge`.
+    nonisolated static func contentRoots(for url: URL, limits: ZipLimits = .standard) throws
+        -> (roots: [URL], temporary: [URL], failed: [String]) {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { throw ImportError.unreadableArchive(url.lastPathComponent) }
         var root = url.standardizedFileURL
         var temporary: [URL] = []
+        var budget = limits
+        var finished = false
+        defer { if !finished { for folder in temporary { try? fm.removeItem(at: folder) } } }
         if !isDir.boolValue {
-            guard url.pathExtension.lowercased() == "zip", let unpacked = MarkdownImporter.unzip(url) else {
+            guard url.pathExtension.lowercased() == "zip", let unpacked = try MarkdownImporter.unzip(url, within: &budget) else {
                 throw ImportError.unreadableArchive(url.lastPathComponent)
             }
             temporary.append(unpacked)
@@ -94,13 +99,14 @@ enum NotionImporter {
         let top = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         for zip in top.filter({ $0.pathExtension.lowercased() == "zip" })
             .sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
-            guard let unpacked = MarkdownImporter.unzip(zip) else {
+            guard let unpacked = try MarkdownImporter.unzip(zip, within: &budget) else {
                 failed.append(zip.lastPathComponent)
                 continue
             }
             temporary.append(unpacked)
             roots.append(unpacked)
         }
+        finished = true
         return (roots, temporary, failed)
     }
 

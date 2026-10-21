@@ -1,6 +1,14 @@
 import AppKit
 import NoteItCore
 
+/// How many entries and unpacked bytes the archives of one import may hold, so a ZIP bomb is refused.
+struct ZipLimits: Sendable {
+    var maxEntries: Int
+    var maxBytes: Int64
+
+    static let standard = ZipLimits(maxEntries: 200_000, maxBytes: 8 << 30)
+}
+
 /// Imports Markdown and plain-text files, Obsidian vaults and Bear exports (`.textbundle` folders,
 /// `.textpack` zips or plain Markdown).
 @MainActor
@@ -209,8 +217,21 @@ final class MarkdownImporter {
     /// Unpacks a zip archive (a `.textpack`, a Notion export) into a temporary folder, refusing archives with
     /// entries that would land outside it.
     nonisolated static func unzip(_ url: URL) -> URL? {
+        var limits = ZipLimits.standard
+        return try? unzip(url, within: &limits)
+    }
+
+    /// `unzip(_:)` that also takes the archive's entries and unpacked size off `limits`, throwing
+    /// `ImportError.archiveTooLarge` when they don't fit. Nil when the archive can't be opened.
+    nonisolated static func unzip(_ url: URL, within limits: inout ZipLimits) throws -> URL? {
         let fileManager = FileManager.default
+        guard let totals = zipTotals(url) else { return nil }
+        guard totals.entries <= limits.maxEntries, totals.bytes <= limits.maxBytes else {
+            throw ImportError.archiveTooLarge(url.lastPathComponent)
+        }
         guard let entries = zipEntries(url), entries.allSatisfy(isSafeZipEntry) else { return nil }
+        limits.maxEntries -= totals.entries
+        limits.maxBytes -= totals.bytes
         let destination = fileManager.temporaryDirectory.appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -247,6 +268,29 @@ final class MarkdownImporter {
         process.waitUntilExit()
         guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else { return nil }
         return text.split(whereSeparator: \.isNewline).map(String.init)
+    }
+
+    /// The number of entries in a zip archive and their unpacked size, as its directory states them.
+    nonisolated static func zipTotals(_ url: URL) -> (entries: Int, bytes: Int64)? {
+        let process = Process()
+        let pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
+        process.arguments = ["-t", url.path]
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        // "5 files, 335 bytes uncompressed, 185 bytes compressed:  44.8%"
+        guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else { return nil }
+        let words = text.split(whereSeparator: { $0 == " " || $0 == "," || $0.isNewline })
+        guard words.count >= 3, let entries = Int(words[0]), words[1].hasPrefix("file"),
+              let bytes = Int64(words[2]), words.count > 3, words[3] == "bytes" else { return nil }
+        return (entries, bytes)
     }
 
     nonisolated static func isSafeZipEntry(_ name: String) -> Bool {

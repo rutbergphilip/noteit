@@ -83,6 +83,7 @@ enum ImportError: LocalizedError, Equatable {
     case nothingToImport
     case notionHTMLExport
     case unreadableArchive(String)
+    case archiveTooLarge(String)
 
     var errorDescription: String? {
         switch self {
@@ -96,6 +97,8 @@ enum ImportError: LocalizedError, Equatable {
             "This is an HTML export. In Notion, choose Export › Markdown & CSV and try again."
         case .unreadableArchive(let name):
             "“\(name)” couldn't be opened. Unzip it in Finder and choose the folder instead."
+        case .archiveTooLarge(let name):
+            "“\(name)” unpacks to more files or data than NoteIt can import at once. Unzip it in Finder and import its folders a few at a time."
         }
     }
 }

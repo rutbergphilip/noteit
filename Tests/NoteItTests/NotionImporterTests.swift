@@ -176,6 +176,38 @@ final class NotionImporterTests: XCTestCase {
         }
     }
 
+    func testArchivesOverTheSizeOrEntryLimitAreRefused() async throws {
+        let export = try makeExport()
+        let staging = base.appendingPathComponent("Outer", isDirectory: true)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        let part = staging.appendingPathComponent("Export-1234-Part-1.zip")
+        try zip(export, to: part)
+        let outer = base.appendingPathComponent("Notion.zip")
+        try zip(staging, to: outer, keepParent: false)
+        let outerTotals = try XCTUnwrap(MarkdownImporter.zipTotals(outer))
+        let partTotals = try XCTUnwrap(MarkdownImporter.zipTotals(part))
+        XCTAssertGreaterThan(partTotals.entries, 5)
+
+        func refused(_ limits: ZipLimits, _ name: String, line: UInt = #line) async {
+            do {
+                _ = try await NotionImporter.importExport(outer, into: makeStore(), limits: limits)
+                XCTFail("No error thrown", line: line)
+            } catch {
+                XCTAssertEqual(error as? ImportError, .archiveTooLarge(name), line: line)
+            }
+        }
+        await refused(ZipLimits(maxEntries: outerTotals.entries - 1, maxBytes: .max), "Notion.zip")
+        await refused(ZipLimits(maxEntries: .max, maxBytes: outerTotals.bytes - 1), "Notion.zip")
+        await refused(ZipLimits(maxEntries: outerTotals.entries + partTotals.entries - 1, maxBytes: .max),
+                      "Export-1234-Part-1.zip")
+        XCTAssertTrue(ImportError.archiveTooLarge("Notion.zip").errorDescription?.contains("Notion.zip") == true)
+
+        let fits = ZipLimits(maxEntries: outerTotals.entries + partTotals.entries,
+                             maxBytes: outerTotals.bytes + partTotals.bytes)
+        let report = try await NotionImporter.importExport(outer, into: makeStore(), limits: fits)
+        XCTAssertEqual(report.notesImported, 4)
+    }
+
     func testHTMLExportAndEmptyFoldersAreRefused() async throws {
         let html = base.appendingPathComponent("HTML", isDirectory: true)
         try write("<html></html>", to: "Page \(projectsID).html", in: html)
