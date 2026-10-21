@@ -24,10 +24,28 @@ final class CLIInstallerTests: XCTestCase {
         try? FileManager.default.removeItem(at: root)
     }
 
-    private func installer(tool: URL? = nil, needsMoving: Bool = false) -> CLIInstaller {
+    private func installer(tool: URL? = nil, needsMoving: Bool = false, completions: [CLIInstaller.Completion] = []) -> CLIInstaller {
         let commands = commands
         return CLIInstaller(linkURL: bin.appendingPathComponent("noteit"), toolURL: tool ?? self.tool,
-                            runPrivileged: { commands.append($0) }, appNeedsMoving: { needsMoving })
+                            runPrivileged: { commands.append($0) }, appNeedsMoving: { needsMoving }, completions: completions)
+    }
+
+    /// The three completion files in the test app, linked from folders under `root`.
+    private func completions(shipped: Bool = true) throws -> [CLIInstaller.Completion] {
+        let app = root.appendingPathComponent("Apps/NoteIt.app")
+        let links = ["share/zsh/site-functions/_noteit", "etc/bash_completion.d/noteit", "share/fish/vendor_completions.d/noteit.fish"]
+        return try zip(CLIInstaller.completions(in: app), links).map { completion, link in
+            if shipped {
+                try FileManager.default.createDirectory(at: completion.fileURL.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                FileManager.default.createFile(atPath: completion.fileURL.path, contents: Data("# script".utf8))
+            }
+            return CLIInstaller.Completion(fileURL: completion.fileURL, linkURL: root.appendingPathComponent(link))
+        }
+    }
+
+    private func destination(_ completion: CLIInstaller.Completion) -> String? {
+        try? FileManager.default.destinationOfSymbolicLink(atPath: completion.linkURL.path)
     }
 
     private func makeApp(_ name: String, bundleID: String) throws -> URL {
@@ -147,6 +165,96 @@ final class CLIInstallerTests: XCTestCase {
         XCTAssertTrue(CLIInstaller.needsMoving(
             URL(fileURLWithPath: "/private/var/folders/xy/T/AppTranslocation/ABC/d/NoteIt.app")))
         XCTAssertFalse(CLIInstaller.needsMoving(root))
+    }
+
+    func testInstallLinksCompletions() throws {
+        let completions = try completions()
+        XCTAssertEqual(completions.map(\.fileURL.lastPathComponent), ["_noteit", "noteit.bash", "noteit.fish"])
+        XCTAssertEqual(CLIInstaller.completionLinks.map(\.1), ["/usr/local/share/zsh/site-functions/_noteit",
+                                                              "/usr/local/etc/bash_completion.d/noteit",
+                                                              "/usr/local/share/fish/vendor_completions.d/noteit.fish"])
+        try installer(completions: completions).install()
+        for completion in completions {
+            XCTAssertEqual(destination(completion), completion.fileURL.path)
+        }
+        XCTAssertEqual(installer(completions: completions).state(), .installed)
+        XCTAssertEqual(commands.all, [])
+
+        try installer(completions: completions).uninstall()
+        XCTAssertEqual(installer(completions: completions).state(), .notInstalled)
+        XCTAssertTrue(completions.allSatisfy { destination($0) == nil })
+    }
+
+    func testInstallWithoutCompletionsNeedsFix() throws {
+        let completions = try completions()
+        try link(to: tool)
+        XCTAssertEqual(installer(completions: completions).state(), .completionsMissing)
+        XCTAssertEqual(installer().state(), .installed)
+
+        let other = root.appendingPathComponent("Old/NoteIt.app/Contents/Resources/completions/_noteit")
+        try FileManager.default.createDirectory(at: completions[0].linkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: completions[0].linkURL, withDestinationURL: other)
+        try installer(completions: Array(completions.prefix(1))).install()
+        XCTAssertEqual(destination(completions[0]), completions[0].fileURL.path)
+        XCTAssertEqual(installer(completions: completions).state(), .completionsMissing)
+
+        try installer(completions: completions).install()
+        XCTAssertEqual(installer(completions: completions).state(), .installed)
+    }
+
+    func testCompletionsNotShippedAreSkipped() throws {
+        let completions = try completions(shipped: false)
+        try installer(completions: completions).install()
+        XCTAssertEqual(installer(completions: completions).state(), .installed)
+        XCTAssertTrue(completions.allSatisfy { destination($0) == nil })
+    }
+
+    func testForeignCompletionFilesAreLeftAlone() throws {
+        let completions = try completions()
+        let fileManager = FileManager.default
+        for completion in completions {
+            try fileManager.createDirectory(at: completion.linkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        }
+        fileManager.createFile(atPath: completions[0].linkURL.path, contents: Data("# mine".utf8))
+        let foreign = root.appendingPathComponent("opt/othertool/share/noteit.bash")
+        try fileManager.createSymbolicLink(at: completions[1].linkURL, withDestinationURL: foreign)
+        let otherApp = try makeApp("Other.app", bundleID: "com.example.other")
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/completions/noteit.fish")
+        try fileManager.createSymbolicLink(at: completions[2].linkURL, withDestinationURL: otherApp)
+
+        try installer(completions: completions).install()
+        XCTAssertEqual(installer(completions: completions).state(), .installed)
+        XCTAssertEqual(try String(contentsOf: completions[0].linkURL, encoding: .utf8), "# mine")
+        XCTAssertEqual(destination(completions[1]), foreign.path)
+        XCTAssertEqual(destination(completions[2]), otherApp.path)
+
+        try installer(completions: completions).uninstall()
+        XCTAssertTrue(fileManager.fileExists(atPath: completions[0].linkURL.path))
+        XCTAssertEqual(destination(completions[1]), foreign.path)
+        XCTAssertEqual(destination(completions[2]), otherApp.path)
+        XCTAssertEqual(commands.all, [])
+    }
+
+    func testPrivilegedInstallAndUninstallUseOneCommand() throws {
+        let completions = try completions()
+        let share = root.appendingPathComponent("share")
+        try FileManager.default.createDirectory(at: share, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: share.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: share.path) }
+
+        try installer(completions: completions).install()
+        let link = bin.appendingPathComponent("noteit").path
+        XCTAssertEqual(try FileManager.default.destinationOfSymbolicLink(atPath: link), tool.path)
+        XCTAssertEqual(commands.all, [completions.map { completion in
+            "mkdir -p '\(completion.linkURL.deletingLastPathComponent().path)' && ln -sfh '\(completion.fileURL.path)' '\(completion.linkURL.path)'"
+        }.joined(separator: " && ")])
+        XCTAssertEqual(installer(completions: completions).state(), .completionsMissing)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: share.path)
+        try installer(completions: completions).install()
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: bin.path)
+        try installer(completions: completions).uninstall()
+        XCTAssertEqual(commands.all.last, "rm -f " + ([link] + completions.map(\.linkURL.path)).map { "'\($0)'" }.joined(separator: " "))
     }
 
     func testQuotingInPrivilegedCommand() {

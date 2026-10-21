@@ -114,7 +114,7 @@ enum PaletteCommandRegistry {
         let installer = CLIInstaller.live()
         guard installer.toolURL != nil else { return false }
         switch installer.state() {
-        case .notInstalled, .otherCopy: return true
+        case .notInstalled, .otherCopy, .completionsMissing: return true
         case .installed, .pointsElsewhere: return false
         }
     }
