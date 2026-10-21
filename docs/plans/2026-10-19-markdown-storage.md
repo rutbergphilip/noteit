@@ -660,6 +660,22 @@ Plan-vs-code check, done before Milestone 3 against `feature/wave-1` (after auto
 - **Task 5.2** is opened from Task 6.1's Your Data tab, which isn't built (`SettingsView.Tab.data` has `isBuilt == false`).
 - **Task 3.6** moved to Milestone 10 (wave 3), as the plan already says; no lock handling here.
 
+Deviations and limits found while building:
+
+- **Sync body.** A Markdown note still syncs as flattened RTFD, as the program contract requires; the plan's noteit-doc encoding test for sync doesn't apply. The sync self-test runs a second time with one Markdown device (`NOTEIT_SYNC_SELFTEST_MARKDOWN=1`).
+- **Watcher (4.2).** One 0.5 s debounce for the whole folder followed by a full rescan, instead of a per-path debounce; the scan is cheap (4.1 benchmark) and it handles editors that save by rename or atomic replace, case-only renames and bursts the same way. Folders on network volumes are also rescanned every 15 s, since FSEvents misses changes made by other machines. A new file without front matter gets its id once it has been unchanged for about 2 s.
+- **Changes while NoteIt was closed** are applied at launch without `editBody`, so history can't keep the previous body for them (it was never seen).
+- **Locate… (4.2).** A missing content folder shows **Locate…** and **Quit**; the chosen folder must not overlap the data folder and must hold at least one of the library's known note files (by their paths in `markdown-files.json`); it is then written to `library-location.json` with a fresh bookmark and NoteIt relaunches. Nothing else is written, so a wrong choice changes nothing.
+- **Mass-deletion guard (4.3).** While a batch is held, every further deletion joins it. A note created during a hold may bring its notebook's folder back, and a sync apply to a held note writes its file back (which clears it from the batch). The "`SyncPlanner` has no delete actions" check is tested as "no tombstone and no revision change".
+- **`exportBodySource`** throws for a note whose Markdown file is missing, rather than exporting an empty body.
+- **Conversion (5.1).** Staging goes to `<content>/.noteit/staging/convert-<time>/` and `<data>/backups/staging-convert-<time>/`, so moves stay on one volume. Every step is recorded in `library-conversion.json` before it happens; the location file is the commit, and the journal is marked committed right after it. At launch `finishInterrupted` finishes a committed conversion, rolls back one whose location file still shows the old library, and leaves everything as it is when the location file can't be read. Rollback removes only files whose bytes still match what the conversion wrote and folders it created that are empty again.
+- **Conversion checks.** The library is compared before the move and again before the commit, after a flush and a rescan of the Markdown folder, so an edit in NoteIt, in another app or by sync stops the conversion with `.libraryChangedDuringConversion`. Sync is suspended for the whole conversion, including a pass that was still connecting, and a store closed for the switch refuses sync applies. The space check runs after sync is paused.
+- **What stays behind.** RTFD → Markdown keeps `notes/` and `body-extras/` in `Previous Library <date>/` (with `previous-library.json`); Markdown → RTFD leaves the Markdown folder as it was, minus `.noteit/`. A destination folder that holds a different file at a path the conversion needs (including a different `.noteit-notebook.json`) stops with `.fileInTheWay`; a file with the same bytes is reused. Converting again into a folder that still holds NoteIt files from an earlier conversion with the same ids can create duplicates.
+- **Adopted folders.** Foreign files get front matter from the relaunched store's launch scan, not from the converter.
+- **Held deletions** make a conversion to RTFD report the held notes as not round-tripping; the batch has to be answered first.
+- **Previous library.** The 30-day question runs at launch; the Your Data row (and its **Remove**) waits for Task 6.1. The backup options of the sheet wait for Task 6.2 (backup ZIP).
+- **Task 5.2 is skipped:** the sheet is opened from Task 6.1's Your Data tab, which isn't built. Until then the converter has no caller in the app; it is exercised by `LibraryConverterTests`.
+
 ## Milestone 6: Your Data and backups
 
 ### Task 6.1: Your Data tab, menus, palette
