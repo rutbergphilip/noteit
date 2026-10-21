@@ -124,9 +124,11 @@ final class PaletteModel: ObservableObject {
     func recompute() {
         let parsed = PaletteRanker.parse(query)
         let text = parsed.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        var bodyMatches = Set<UUID>()
+        var bodyMatches: [UUID: Double] = [:]
         if parsed.mode == .everything, !text.isEmpty {
-            bodyMatches = Set(store.notes(for: .allNotes, search: text).map(\.id))
+            for result in store.searchResults(for: .allNotes, search: text, order: .bestMatch, decorated: false) {
+                bodyMatches[result.id] = result.score ?? 0
+            }
         }
         items = PaletteRanker.items(query: query, notes: store.activeNotes, notebooks: store.sortedNotebooks,
                                     commands: commands.map(\.info), bodyMatches: bodyMatches)

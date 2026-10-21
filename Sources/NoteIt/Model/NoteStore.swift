@@ -8,7 +8,9 @@ import NoteItSync
 final class NoteStore: ObservableObject {
     static let shared = NoteStore(location: defaultLocation())
 
-    @Published var notebooks: [Notebook] = []
+    @Published var notebooks: [Notebook] = [] {
+        didSet { notebooksVersion &+= 1 }
+    }
     @Published var notes: [NoteMeta] = [] {
         didSet { notesVersion &+= 1 }
     }
@@ -67,6 +69,11 @@ final class NoteStore: ObservableObject {
 
     /// The search index (`search-index.json`), registered as the first derived index.
     let searchIndexer: OrganiseIndexer
+    private(set) var notebooksVersion = 0
+    /// Search state kept by NoteStore+Search.
+    var imageTextProvider: ImageTextProviding?
+    var searchDocumentCache: SearchDocumentCache?
+    var searchResultCache: [SearchResultKey: [SearchResult]] = [:]
     private var indexSaveWorkItem: DispatchWorkItem?
 
     /// Position hints for `note(with:)`; rebuilt only after `notes` changed and a lookup misses.
@@ -217,7 +224,7 @@ final class NoteStore: ObservableObject {
 
     /// Pinned first, then most recently updated.
     func notes(for selection: SidebarSelection?, search: String) -> [NoteMeta] {
-        LibraryQuery.notes(notes, for: selection, search: search, now: Date(), indexedText: { searchIndexer.text(for: $0) })
+        searchResults(for: selection, search: search, order: .dateEdited, decorated: false).map(\.note)
     }
 
     func count(for selection: SidebarSelection) -> Int {

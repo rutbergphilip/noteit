@@ -46,7 +46,7 @@ enum PaletteRanker {
         notes: [NoteMeta],
         notebooks: [Notebook],
         commands: [PaletteCommandInfo],
-        bodyMatches: Set<UUID>,
+        bodyMatches: [UUID: Double],
         limit: Int = 50
     ) -> [PaletteItem] {
         let (mode, text) = parse(raw)
@@ -81,9 +81,10 @@ enum PaletteRanker {
                     }
                     let item = noteItem(note, names: names, indices: match.matchedIndices)
                     ranked.append(Ranked(item: item, score: match.score, kindRank: 0, updatedAt: note.updatedAt))
-                } else if bodyMatches.contains(note.id) {
+                } else if let bodyScore = bodyMatches[note.id] {
                     let item = noteItem(note, names: names, indices: [])
-                    ranked.append(Ranked(item: item, score: bodyMatchScore, kindRank: 0, updatedAt: note.updatedAt))
+                    ranked.append(Ranked(item: item, score: bodyMatchScore, kindRank: 0, updatedAt: note.updatedAt,
+                                         bodyScore: bodyScore))
                 }
             }
 
@@ -130,12 +131,15 @@ enum PaletteRanker {
         let score: Int
         let kindRank: Int        // notes, notebooks, commands
         let updatedAt: Date?
+        /// Search score of a body-only note match.
+        var bodyScore: Double = 0
     }
 
     /// Score desc, then notes before notebooks before commands, then most recent, then title.
     private static func precedes(_ a: Ranked, _ b: Ranked) -> Bool {
         if a.score != b.score { return a.score > b.score }
         if a.kindRank != b.kindRank { return a.kindRank < b.kindRank }
+        if a.bodyScore != b.bodyScore { return a.bodyScore > b.bodyScore }
         let aDate = a.updatedAt ?? .distantPast
         let bDate = b.updatedAt ?? .distantPast
         if aDate != bDate { return aDate > bDate }

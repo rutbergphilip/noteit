@@ -29,7 +29,7 @@ final class PaletteRankerTests: XCTestCase {
         notes: [NoteMeta] = [],
         notebooks: [Notebook] = [],
         commands: [PaletteCommandInfo] = [],
-        bodyMatches: Set<UUID> = [],
+        bodyMatches: [UUID: Double] = [:],
         limit: Int = 50
     ) -> [PaletteItem] {
         PaletteRanker.items(query: query, notes: notes, notebooks: notebooks, commands: commands,
@@ -146,7 +146,7 @@ final class PaletteRankerTests: XCTestCase {
         let weakTitle = note("Some very long title that barely matches recipes later on", minutesAgo: 5)
         let strongTitle = note("Recipes 2026", minutesAgo: 10)
         let ignored = note("Unrelated", minutesAgo: 0)
-        let items = ranked("recipes", notes: [bodyOnly, weakTitle, strongTitle, ignored], bodyMatches: [bodyOnly.id])
+        let items = ranked("recipes", notes: [bodyOnly, weakTitle, strongTitle, ignored], bodyMatches: [bodyOnly.id: 1])
         let ids = items.map(\.id)
         XCTAssertEqual(ids, ["note:\(strongTitle.id.uuidString)", "note:\(weakTitle.id.uuidString)",
                              "note:\(bodyOnly.id.uuidString)", "create"])
