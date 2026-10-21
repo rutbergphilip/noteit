@@ -79,7 +79,7 @@ enum CLIEditor {
             guard spawned == 0 else { throw POSIXError(POSIXErrorCode(rawValue: spawned) ?? .EIO) }
             return pid
         }
-        let termination = try wait(for: pid)
+        let termination = try stopGuard.waitForChild(pid)
         if let number = stopGuard.caught { _exit(abandon(file, child: 0, signal: number)) }
         return termination
     }
@@ -99,6 +99,7 @@ enum CLIEditor {
 
         private let lock = NSLock()
         private var pid: pid_t = 0
+        private var finished = false
         private var caughtSignal: Int32?
         private var sources: [DispatchSourceSignal] = []
         private var previous: [(Int32, sig_t?)] = []
@@ -116,22 +117,50 @@ enum CLIEditor {
         /// Set before the editor is signalled, so the waiting thread, woken by its exit, leaves the same way.
         var caught: Int32? { lock.withLock { caughtSignal } }
 
+        private let file: URL
+        private let stop: @Sendable (Int32) -> Void
+
         init(file: URL, stop: @escaping @Sendable (Int32) -> Void = { _exit($0) }) {
+            self.file = file
+            self.stop = stop
             for number in Self.signals {
                 let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
-                source.setEventHandler { [unowned self] in
-                    let child = self.lock.withLock {
-                        self.caughtSignal = number
-                        return self.pid
-                    }
-                    stop(CLIEditor.abandon(file, child: child, signal: number))
-                }
+                source.setEventHandler { self.handle(number) }
                 source.resume()
                 sources.append(source)
                 previous.append((number, signal(number, SIG_IGN)))
             }
         }
 
+        /// Signals the editor under the lock, so it can't have been reaped and its pid reused meanwhile.
+        /// Once the editor has finished, the signal is ignored and its saved file kept.
+        func handle(_ number: Int32) {
+            let stopping = lock.withLock {
+                guard !finished else { return false }
+                caughtSignal = number
+                if pid > 0 { kill(pid, number) }
+                return true
+            }
+            if stopping { stop(CLIEditor.abandon(file, child: 0, signal: number)) }
+        }
+
+        /// Waits for the editor to exit while leaving it a zombie, so its pid stays reserved until the handlers
+        /// can no longer signal it, then reaps it.
+        func waitForChild(_ child: pid_t, afterFinish: () -> Void = {}) throws -> Termination {
+            var info = siginfo_t()
+            while waitid(P_PID, id_t(child), &info, WEXITED | WNOWAIT) == -1 {
+                guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ECHILD) }
+            }
+            markFinished()
+            afterFinish()
+            return try CLIEditor.wait(for: child)
+        }
+
+        func markFinished() {
+            lock.withLock { finished = true }
+        }
+
+        /// The handlers hold the guard until cancellation releases them.
         func cancel() {
             for (number, handler) in previous { signal(number, handler) }
             sources.forEach { $0.cancel() }

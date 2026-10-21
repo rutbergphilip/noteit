@@ -119,6 +119,49 @@ extension CLIEditorTests {
         XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
     }
 
+    /// A stop signal handled once the editor has exited, before it is reaped, leaves the saved file alone.
+    func testStopSignalAfterEditorFinishesKeepsTheFile() throws {
+        let file = try temporaryDirectory().appendingPathComponent("note.md")
+        try Data("saved".utf8).write(to: file)
+        let stopGuard = CLIEditor.StopSignalGuard(file: file) { _ in XCTFail("noteit was stopped.") }
+        defer { stopGuard.cancel() }
+        var argv: [UnsafeMutablePointer<CChar>?] = [strdup("/usr/bin/true"), nil]
+        defer { argv.forEach { free($0) } }
+        let pid = try stopGuard.recordChild {
+            var pid: pid_t = 0
+            let spawned = posix_spawn(&pid, "/usr/bin/true", nil, nil, &argv, environ)
+            guard spawned == 0 else { throw POSIXError(POSIXErrorCode(rawValue: spawned) ?? .EIO) }
+            return pid
+        }
+        let termination = try stopGuard.waitForChild(pid) {
+            stopGuard.handle(SIGTERM)
+            stopGuard.handle(SIGHUP)
+        }
+        XCTAssertEqual(termination, .exited(0))
+        XCTAssertNil(stopGuard.caught)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "saved")
+    }
+
+    func testStopSignalAfterFinishDoesNotSignalTheRecordedPid() throws {
+        let file = try temporaryDirectory().appendingPathComponent("note.md")
+        try Data("saved".utf8).write(to: file)
+        let stopGuard = CLIEditor.StopSignalGuard(file: file) { _ in XCTFail("noteit was stopped.") }
+        defer { stopGuard.cancel() }
+        let other = Process()
+        other.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        other.arguments = ["30"]
+        defer { if other.isRunning { other.terminate() } }
+        stopGuard.recordChild {
+            try? other.run()
+            return other.processIdentifier
+        }
+        stopGuard.markFinished()
+        stopGuard.handle(SIGTERM)
+        XCTAssertEqual(kill(other.processIdentifier, 0), 0)
+        XCTAssertTrue(other.isRunning)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path))
+    }
+
     /// Stops the built `noteit edit` with SIGTERM and SIGHUP while its editor is running.
     func testStopSignalRemovesTemporaryFile() async throws {
         let binary = Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("NoteItCLI")
