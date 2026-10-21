@@ -7,6 +7,8 @@ import NoteItCore
 protocol ReminderNotifying: AnyObject {
     var isAvailable: Bool { get }
     func requestAuthorization() async -> Bool
+    /// True when a notification shown now would reach the user; asks for permission the first time.
+    func canDeliver() async -> Bool
     func deliver(_ reminder: LiveReminder, title: String, subtitle: String)
     func withdraw(_ ids: [UUID])
 }
@@ -120,8 +122,11 @@ final class ReminderScheduler {
         for reminder in due where !delivered.contains(reminder.id) {
             if let claims {
                 let active = userActive()
+                let notifications = notifications
                 Task { @MainActor [weak self] in
-                    guard await claims.shouldDeliver(reminder.id, at: reminder.fireDate, userActive: active) else { return }
+                    // A Mac that can't show it must not claim it, or no Mac rings.
+                    guard await notifications.canDeliver(),
+                          await claims.shouldDeliver(reminder.id, at: reminder.fireDate, userActive: active) else { return }
                     self?.deliverIfLive(reminder.id)
                 }
             } else {

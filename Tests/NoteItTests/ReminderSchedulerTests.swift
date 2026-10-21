@@ -7,9 +7,11 @@ import XCTest
 @MainActor
 private final class FakeNotifications: ReminderNotifying {
     var isAvailable = true
+    var allowed = true
     var delivered: [(id: UUID, title: String, subtitle: String)] = []
     var withdrawn: [UUID] = []
     func requestAuthorization() async -> Bool { true }
+    func canDeliver() async -> Bool { isAvailable && allowed }
     func deliver(_ reminder: LiveReminder, title: String, subtitle: String) { delivered.append((reminder.id, title, subtitle)) }
     func withdraw(_ ids: [UUID]) { withdrawn += ids }
 }
@@ -175,6 +177,21 @@ final class ReminderSchedulerTests: XCTestCase {
         scheduler.check()
         for _ in 0..<20 where notifications.delivered.count < 2 { await Task.yield() }
         XCTAssertEqual(Set(notifications.delivered.map(\.title)), ["call bank", "pay rent"])
+    }
+
+    func testMacThatCannotShowNotificationsDoesNotClaim() async {
+        _ = add("Plan\ncall bank @remind(2026-10-21 11:00)")
+        defaults.set(at(10, 0), forKey: PrefKey.remindersLastCheck)
+        let claims = FakeClaims()
+        for blocked in [{ (n: FakeNotifications) in n.allowed = false }, { (n: FakeNotifications) in n.isAvailable = false }] {
+            notifications = FakeNotifications()
+            blocked(notifications)
+            defaults.set(at(10, 0), forKey: PrefKey.remindersLastCheck)
+            makeScheduler(claims: claims).check()
+            for _ in 0..<40 { await Task.yield() }
+            XCTAssertTrue(claims.asked.isEmpty)
+            XCTAssertTrue(notifications.delivered.isEmpty)
+        }
     }
 
     func testIdleMacWaitsAndAlreadyClaimedIsNotShown() async {

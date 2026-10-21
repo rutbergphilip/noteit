@@ -79,6 +79,20 @@ final class ReminderNotifications: NSObject, ObservableObject, ReminderNotifying
         isAuthorized = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
     }
 
+    func canDeliver() async -> Bool {
+        guard let center else { return false }
+        switch await center.notificationSettings().authorizationStatus {
+        case .authorized, .provisional:
+            isAuthorized = true
+            return true
+        case .notDetermined:
+            return await requestAuthorization()
+        default:
+            isAuthorized = false
+            return false
+        }
+    }
+
     func deliver(_ reminder: LiveReminder, title: String, subtitle: String) {
         guard let center else {
             #if DEBUG
