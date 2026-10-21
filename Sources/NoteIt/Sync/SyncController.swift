@@ -79,6 +79,7 @@ final class SyncController: ObservableObject {
     /// Runs the checks of a sync folder that may be on a network volume; see `checkFolder`.
     var folderAccess = BoundedFileAccess.shared
     var folderCheckTimeout: TimeInterval = 10
+    var folderIsDirectory: @Sendable (URL) -> Bool = SyncController.isDirectory
     private var session: Session?
     private var loop: Task<Void, Never>?
     private var sleeper: Task<Void, Never>?
@@ -133,8 +134,10 @@ final class SyncController: ObservableObject {
         var scoped: Bool
     }
 
-    init(store: NoteStore) {
+    /// keepsSecretsInMemory: the configuration and secrets are never saved to UserDefaults or the keychain.
+    init(store: NoteStore, keepsSecretsInMemory: Bool = false) {
         self.store = store
+        if keepsSecretsInMemory { ephemeralSecrets = Secrets() }
     }
 
     /// One state file per remote store, so a pass still finishing for an old store can't feed a new one.
@@ -562,7 +565,9 @@ final class SyncController: ObservableObject {
             let session = try await ensureSession(config)
             guard gen == generation else { return nil }
             // A pass on a mount that went away would block in the kernel; a bounded check fails fast instead.
-            if session.folder != nil { _ = try await Self.checkFolder(config, access: folderAccess, timeout: folderCheckTimeout) }
+            if session.folder != nil {
+                _ = try await Self.checkFolder(config, access: folderAccess, timeout: folderCheckTimeout, isDirectory: folderIsDirectory)
+            }
             guard gen == generation else { return nil }
             let destination = Destination(backend: session.backend, folder: session.folder, scoped: session.scoped)
             let report = try await withAccess(destination) {
@@ -722,7 +727,8 @@ final class SyncController: ObservableObject {
     private func makeDestination(_ config: SyncConfiguration, accessKey: String?, secret: String?,
                                  creatingStore: Bool = false) async throws -> Destination {
         if config.provider == .folder {
-            let resolved = try await Self.checkFolder(config, access: folderAccess, timeout: folderCheckTimeout)
+            let resolved = try await Self.checkFolder(config, access: folderAccess, timeout: folderCheckTimeout,
+                                                      isDirectory: folderIsDirectory)
             if let refreshed = resolved.refreshedBookmark, var current = configuration, current == config {
                 current.folderBookmark = refreshed
                 configuration = current

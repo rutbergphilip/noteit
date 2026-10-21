@@ -165,20 +165,31 @@ struct SyncConfiguration: Codable, Equatable, Sendable {
     /// The sync folder's name for messages, from the saved path, so it never touches the volume.
     var folderName: String? {
         guard provider == .folder, let folderPath, !folderPath.isEmpty else { return nil }
-        return URL(fileURLWithPath: folderPath).lastPathComponent
+        return URL(fileURLWithPath: folderPath, isDirectory: true).lastPathComponent
     }
 
     /// Identifies the remote store (not the credentials), e.g. to key the local sync state file.
     var storeKey: String {
         let parts: [String]
         if provider == .folder {
-            parts = ["folder", folderPath.map { URL(fileURLWithPath: $0).standardizedFileURL.path } ?? ""]
+            parts = ["folder", folderPath.map(Self.standardizedPath) ?? ""]
         } else {
             parts = [provider.rawValue, s3?.endpoint.absoluteString.lowercased() ?? "", s3?.bucket ?? "",
                      s3?.prefix.trimmingCharacters(in: CharacterSet(charactersIn: "/")) ?? ""]
         }
         let digest = SHA256.hash(data: Data(parts.joined(separator: "\n").utf8))
         return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// `URL(fileURLWithPath:).standardizedFileURL.path`, which keys existing state files, worked out from the string
+    /// alone: Foundation stats the path, which blocks on a NAS that went away. Paths it would resolve on disk (a ".."
+    /// after a symlink, a "/private" it drops when the path exists) still go through it; a chosen folder has neither.
+    static func standardizedPath(_ path: String) -> String {
+        let components = path.split(separator: "/").filter { $0 != "." }
+        guard path.hasPrefix("/"), !components.contains(".."), components.first != "private" else {
+            return URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL.path
+        }
+        return "/" + components.joined(separator: "/")
     }
 
     /// Resolves the folder, preferring the security-scoped bookmark and falling back to the stored path.
