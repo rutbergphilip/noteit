@@ -239,6 +239,14 @@ final class NoteStoreLinksTests: XCTestCase {
         return (target, source)
     }
 
+    func testNotesCreatedBeforeFirstRebuildKeepTheirEntries() async throws {
+        let store = makeStore()
+        let target = store.createNote(in: nil, initial: body("Atlas")).id
+        let source = store.createNote(in: nil, initial: body("Source", linking: [("Atlas", .note(id: target, heading: nil))])).id
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertEqual(store.backlinks(to: target).map(\.source), [source])
+    }
+
     func testRewriteOnlyMatchingText() async {
         let store = makeStore()
         let (target, source) = renameFixture(store)

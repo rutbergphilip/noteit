@@ -165,7 +165,11 @@ final class LinkIndex: ObservableObject, DerivedIndex {
     func rebuild(notes: [NoteMeta], body: @escaping (UUID) -> NSAttributedString?) async {
         await loadTask?.value
         let current = Set(notes.lazy.filter { !$0.isLocked }.map(\.id))
-        for id in Array(outgoingBySource.keys) where !current.contains(id) { remove(id) }
+        // Notes created or unlocked since `notes` was taken keep their entries.
+        for id in Array(outgoingBySource.keys) where !current.contains(id) {
+            if let meta = store?.note(with: id), !meta.isLocked { continue }
+            remove(id)
+        }
         let missing = notes.filter { !$0.isLocked && !hasEntry(for: $0.id) }.map(\.id)
         guard !missing.isEmpty else { return }
         isRebuilding = true
