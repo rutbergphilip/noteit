@@ -57,7 +57,9 @@ struct CLISecItemStore: SecretStore {
             query[kSecUseAuthenticationContext as String] = context
         }
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data else { return nil }
+        let status = allowsInteraction ? SecItemCopyMatching(query as CFDictionary, &item)
+            : (LegacyKeychain.self as KeychainInteraction.Type).withoutInteraction { SecItemCopyMatching(query as CFDictionary, &item) }
+        guard status == errSecSuccess, let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -88,5 +90,23 @@ struct CLISecItemStore: SecretStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
+    }
+}
+
+private protocol KeychainInteraction {
+    static func withoutInteraction(_ body: () -> OSStatus) -> OSStatus
+}
+
+/// The login keychain is a file-based keychain, where only the deprecated SecKeychain switch keeps a read from showing
+/// an "allow access" dialog; the LAContext setting covers the data protection keychain. Called through
+/// `KeychainInteraction` so the deprecation warning stays here.
+private enum LegacyKeychain: KeychainInteraction {
+    @available(macOS, deprecated: 10.10)
+    static func withoutInteraction(_ body: () -> OSStatus) -> OSStatus {
+        var allowed: DarwinBoolean = true
+        let known = SecKeychainGetUserInteractionAllowed(&allowed) == errSecSuccess
+        SecKeychainSetUserInteractionAllowed(false)
+        defer { SecKeychainSetUserInteractionAllowed(known ? allowed.boolValue : true) }
+        return body()
     }
 }

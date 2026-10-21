@@ -1,5 +1,6 @@
 import Foundation
 import NoteItAPI
+import NoteItSync
 @testable import NoteItCLI
 import XCTest
 
@@ -229,4 +230,27 @@ final class CLICompletionTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(start), 0.8)
         XCTAssertEqual(harness.terminal.out, "")
     }
+
+    func testCompleteGivesUpWhenTheKeychainBlocks() async throws {
+        let harness = try await harness { _ in .json([TagDTO(name: "home", noteCount: 1)]) }
+        var context = harness.context()
+        context.keychain = CLIKeychain(store: BlockingSecretStore(), service: "test.noteit.cli")
+        var candidates = CompletionCandidates(context: context)
+        candidates.timeout = .milliseconds(50)
+        let start = Date()
+        await candidates.run(["tags"])
+        XCTAssertLessThan(Date().timeIntervalSince(start), 0.8)
+        XCTAssertEqual(harness.terminal.out, "")
+    }
+}
+
+/// A Keychain read that hangs, like one waiting for the user to answer an "allow access" dialog.
+private struct BlockingSecretStore: SecretStore {
+    func read(service: String, account: String) -> String? {
+        Thread.sleep(forTimeInterval: 2)
+        return "nit_x"
+    }
+
+    func write(_ value: String, service: String, account: String) throws {}
+    func remove(service: String, account: String) throws {}
 }

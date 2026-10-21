@@ -404,27 +404,35 @@ struct CompletionCandidates {
     func run(_ arguments: [String]) async {
         guard let kind = arguments.first.flatMap(Kind.init(rawValue:)), arguments.count <= 2,
               let profile = try? CLIProfile.resolve(flag: nil, environment: context.environment),
-              AppLocator.invalidAPIURL(in: context.environment) == nil,
-              let token = AppEnvironment.nonEmpty("TOKEN", in: context.environment)
-                ?? context.keychain.nonInteractive().token(profile: profile)
+              AppLocator.invalidAPIURL(in: context.environment) == nil
         else { return }
         let prefix = arguments.count == 2 ? arguments[1] : ""
+        let environmentToken = AppEnvironment.nonEmpty("TOKEN", in: context.environment)
+        let keychain = context.keychain
         let locator = context.locator
         let session = context.session
-        let timeout = timeout
-        let lines = await withTaskGroup(of: [String]?.self) { group in
-            group.addTask { await Self.candidates(kind, prefix: prefix, locator: locator, token: token, session: session) }
-            group.addTask {
-                try? await Task.sleep(for: timeout)
-                return nil
-            }
-            let first = await group.next() ?? nil
-            group.cancelAll()
-            return first ?? nil
+        let lines = await Self.firstResult(within: timeout) { () async -> [String] in
+            guard let token = environmentToken ?? keychain.nonInteractive().token(profile: profile) else { return [] }
+            return await Self.candidates(kind, prefix: prefix, locator: locator, token: token, session: session)
         }
         lines?.forEach(context.io.line)
     }
 
+    /// `work`'s result, or nil once `timeout` has passed. Doesn't wait for `work` to finish, since a Keychain read
+    /// can block in a way that can't be cancelled; the process exits right after anyway.
+    static func firstResult<Value: Sendable>(within timeout: Duration,
+                                             _ work: @escaping @Sendable () async -> Value) async -> Value? {
+        let once = ResumeOnce<Value?>()
+        return await withCheckedContinuation { continuation in
+            once.continuation = continuation
+            let worker = Task.detached { once.resume(await work()) }
+            Task.detached {
+                try? await Task.sleep(for: timeout)
+                worker.cancel()
+                once.resume(nil)
+            }
+        }
+    }
     private static func candidates(_ kind: Kind, prefix: String, locator: AppLocator, token: String,
                                    session: URLSession) async -> [String] {
         guard case .ready(let url) = await locator.locate(launch: false) else { return [] }
@@ -468,5 +476,23 @@ struct CompletionCandidates {
             let line = description.map { $0.isNewline || $0 == "\t" ? " " : $0 }
             return value + "\t" + String(line)
         }
+    }
+}
+
+private final class ResumeOnce<Value: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: CheckedContinuation<Value, Never>?
+
+    var continuation: CheckedContinuation<Value, Never>? {
+        get { lock.withLock { stored } }
+        set { lock.withLock { stored = newValue } }
+    }
+
+    func resume(_ value: Value) {
+        lock.withLock {
+            let continuation = stored
+            stored = nil
+            return continuation
+        }?.resume(returning: value)
     }
 }
