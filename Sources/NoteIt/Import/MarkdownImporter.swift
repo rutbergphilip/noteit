@@ -225,13 +225,14 @@ final class MarkdownImporter {
     /// `ImportError.archiveTooLarge` when they don't fit. Nil when the archive can't be opened.
     nonisolated static func unzip(_ url: URL, within limits: inout ZipLimits) throws -> URL? {
         let fileManager = FileManager.default
-        guard let totals = zipTotals(url) else { return nil }
-        guard totals.entries <= limits.maxEntries, totals.bytes <= limits.maxBytes else {
+        guard let directory = ZipDirectory.read(url) else { return nil }
+        let bytes = Int64(clamping: directory.totalUncompressedSize)
+        guard directory.entries.count <= limits.maxEntries, bytes <= limits.maxBytes else {
             throw ImportError.archiveTooLarge(url.lastPathComponent)
         }
-        guard let entries = zipEntries(url), entries.allSatisfy(isSafeZipEntry) else { return nil }
-        limits.maxEntries -= totals.entries
-        limits.maxBytes -= totals.bytes
+        guard directory.entries.allSatisfy({ isSafeZipEntry($0.name) }) else { return nil }
+        limits.maxEntries -= directory.entries.count
+        limits.maxBytes -= bytes
         let destination = fileManager.temporaryDirectory.appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -251,70 +252,26 @@ final class MarkdownImporter {
         return destination
     }
 
-    /// The entry names in a zip archive, or nil when it can't be listed.
+    /// The entry names in a zip archive, or nil when it can't be read.
     nonisolated static func zipEntries(_ url: URL) -> [String]? {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
-        process.arguments = ["-1", url.path]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            return nil
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else { return nil }
-        return text.split(whereSeparator: \.isNewline).map(String.init)
+        ZipDirectory.read(url)?.entries.map(\.name)
     }
 
     /// The number of entries in a zip archive and their unpacked size, as its directory states them.
     nonisolated static func zipTotals(_ url: URL) -> (entries: Int, bytes: Int64)? {
-        zipListing(url).map { ($0.entries, $0.bytes) }
+        ZipDirectory.read(url).map { ($0.entries.count, Int64(clamping: $0.totalUncompressedSize)) }
     }
 
-    /// The unpacked size the archive's directory states for each `.zip` file at its top level, by name.
+    /// The unpacked size the archive's directory states for each `.zip` file at its top level, by name in
+    /// precomposed (NFC) form, so it matches whichever form the file system gives back.
     nonisolated static func topLevelZipSizes(_ url: URL) -> [String: Int64]? {
-        zipListing(url)?.topLevelZips
-    }
-
-    nonisolated private static func zipListing(_ url: URL) -> (entries: Int, bytes: Int64, topLevelZips: [String: Int64])? {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
-        process.arguments = ["-s", url.path]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            return nil
+        guard let directory = ZipDirectory.read(url) else { return nil }
+        var sizes: [String: Int64] = [:]
+        for entry in directory.entries where !entry.name.contains("/") && entry.name.lowercased().hasSuffix(".zip") {
+            sizes[entry.name.precomposedStringWithCanonicalMapping] = Int64(clamping: entry.uncompressedSize)
         }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else { return nil }
-        let lines = text.split(whereSeparator: \.isNewline)
-        // Last line: "5 files, 335 bytes uncompressed, 185 bytes compressed:  44.8%"
-        guard let summary = lines.last else { return nil }
-        let words = summary.split(whereSeparator: { $0 == " " || $0 == "," })
-        guard words.count > 3, let entries = Int(words[0]), words[1].hasPrefix("file"),
-              let bytes = Int64(words[2]), words[3] == "bytes" else { return nil }
-        var zips: [String: Int64] = [:]
-        for line in lines.dropLast() {
-            let ns = String(line) as NSString
-            guard let match = zipEntryLine.firstMatch(in: String(line), range: NSRange(location: 0, length: ns.length)),
-                  let size = Int64(ns.substring(with: match.range(at: 1))) else { continue }
-            let name = ns.substring(with: match.range(at: 2))
-            if !name.contains("/"), name.lowercased().hasSuffix(".zip") { zips[name] = size }
-        }
-        return (entries, bytes, zips)
+        return sizes
     }
-
-    /// An entry in `zipinfo -s` output: "-rw-r--r--  2.1 unx      513 bX defN 26-Oct-21 15:11 Part 1.zip".
-    nonisolated private static let zipEntryLine = try! NSRegularExpression(
-        pattern: #"^\S{10}\s+\S+\s+\S+\s+(\d+)\s+\S+\s+\S+\s+\S+\s+\S+ (.+)$"#)
 
     nonisolated static func isSafeZipEntry(_ name: String) -> Bool {
         let parts = name.split(separator: "/", omittingEmptySubsequences: false)

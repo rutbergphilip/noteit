@@ -107,7 +107,7 @@ enum NotionImporter {
             // unpacked size, that first charge is given back. Parts that aren't opened stay charged.
             let onDisk = ((try? zip.resourceValues(forKeys: [.fileSizeKey]))?.fileSize).map(Int64.init) ?? 0
             var opened = budget
-            opened.maxBytes += min(listedParts[zip.lastPathComponent] ?? 0, onDisk)
+            opened.maxBytes += min(listedParts[zip.lastPathComponent.precomposedStringWithCanonicalMapping] ?? 0, onDisk)
             guard let unpacked = try MarkdownImporter.unzip(zip, within: &opened) else {
                 failed.append(zip.lastPathComponent)
                 continue
