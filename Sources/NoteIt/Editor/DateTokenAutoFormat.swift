@@ -21,7 +21,8 @@ enum DateTokenAutoFormat {
             inner = String(inner.dropLast(5)).trimmingCharacters(in: .whitespaces)
         }
         guard !inner.isEmpty, LocalDateTime(token: inner) == nil,
-              let parsed = NaturalDateParser.parse(inner, now: now, calendar: calendar, defaultHour: nil) else { return nil }
+              let parsed = NaturalDateParser.parse(inner, now: now, calendar: calendar, defaultHour: nil,
+                                                   midnightEndsDay: kind == .remind) else { return nil }
         let rest = inner.replacingCharacters(in: parsed.range, with: "")
         guard rest.trimmingCharacters(in: .whitespaces.union(.punctuationCharacters)).isEmpty else { return nil }
         var value = parsed.value

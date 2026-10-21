@@ -35,8 +35,10 @@ public enum NaturalDateParser {
         options: [.caseInsensitive])
 
     /// The first date found in `text`. A date without a time gets `defaultHour`:00 when `defaultHour` is set and
-    /// stays date-only otherwise. Weekday names never mean today.
-    public static func parse(_ text: String, now: Date, calendar: Calendar, defaultHour: Int?) -> NaturalDateResult? {
+    /// stays date-only otherwise. Weekday names never mean today. The word "midnight" ends the named day (00:00 the
+    /// next day) when `midnightEndsDay` is set, as a reminder needs; otherwise it keeps the named day, date-only.
+    public static func parse(_ text: String, now: Date, calendar: Calendar, defaultHour: Int?,
+                             midnightEndsDay: Bool = true) -> NaturalDateResult? {
         let ns = text as NSString
         let full = NSRange(location: 0, length: ns.length)
         let today = LocalDateTime(now, calendar: calendar, includeTime: false)
@@ -66,15 +68,16 @@ public enum NaturalDateParser {
                     ?? clock(lead, in: ns, hourGroup: 4, minuteGroup: 5, meridiemGroup: nil)
                     ?? named(lead, in: ns, group: 6),
                   let value = shortForm(day, in: ns, now: now, today: today, calendar: calendar, leadingTime: leadTime,
-                                        leadingMidnight: isMidnight(lead, in: ns, group: 6))
+                                        leadingMidnight: isMidnight(lead, in: ns, group: 6), midnightEndsDay: midnightEndsDay)
             else { continue }
             return result(value, NSUnionRange(lead.range, day.range))
         }
-        if let match = shortMatch, let value = shortForm(match, in: ns, now: now, today: today, calendar: calendar) {
+        if let match = shortMatch, let value = shortForm(match, in: ns, now: now, today: today, calendar: calendar,
+                                                         midnightEndsDay: midnightEndsDay) {
             return result(value, match.range)
         }
 
-        let detectedDate = detected(text, calendar: calendar)
+        let detectedDate = detected(text, calendar: calendar, midnightEndsDay: midnightEndsDay)
         if let match = clockRegex.firstMatch(in: text, range: full),
            let (hour, minute) = clock(match, in: ns, hourGroup: 1, minuteGroup: 2, meridiemGroup: 3)
             ?? clock(match, in: ns, hourGroup: 4, minuteGroup: 5, meridiemGroup: nil) {
@@ -92,14 +95,15 @@ public enum NaturalDateParser {
 
     private static func shortForm(_ match: NSTextCheckingResult, in ns: NSString, now: Date, today: LocalDateTime,
                                   calendar: Calendar, leadingTime: (Int, Int)? = nil,
-                                  leadingMidnight: Bool = false) -> LocalDateTime? {
+                                  leadingMidnight: Bool = false, midnightEndsDay: Bool) -> LocalDateTime? {
         let word = ns.substring(with: match.range(at: 1)).lowercased()
         let trailingTime = clock(match, in: ns, hourGroup: 6, minuteGroup: 7, meridiemGroup: 8)
             ?? clock(match, in: ns, hourGroup: 9, minuteGroup: 10, meridiemGroup: nil)
             ?? named(match, in: ns, group: 11)
-        let clockTime = trailingTime ?? leadingTime
+        var clockTime = trailingTime ?? leadingTime
         // The word "midnight" ends the named day, as NSDataDetector reads it; "00:00" and "12am" start it.
         let saysMidnight = trailingTime == nil ? leadingMidnight : isMidnight(match, in: ns, group: 11)
+        if saysMidnight, !midnightEndsDay { clockTime = nil }
         func at(_ day: LocalDateTime) -> LocalDateTime {
             guard let clockTime else { return day }
             if saysMidnight { return adding(days: 1, to: day, calendar: calendar).withTime(hour: 0, minute: 0) }
@@ -112,6 +116,7 @@ public enum NaturalDateParser {
         switch word {
         case "today": return at(today)
         case "tonight":
+            if saysMidnight, !midnightEndsDay { return today }
             return today.withTime(hour: clockTime?.0 ?? 20, minute: clockTime?.1 ?? 0)
         case "tomorrow", "tmrw": return at(adding(days: 1, to: today, calendar: calendar))
         default: break
@@ -186,7 +191,7 @@ public enum NaturalDateParser {
         pattern: "\\d[:.h]\\d|\\d\\s*(am|pm|uhr|h\\b)|noon|midnight|o'clock", options: [.caseInsensitive])
 
     /// NSDataDetector reads text in the Mac's own time zone and fills date-only matches in at 12:00.
-    private static func detected(_ text: String, calendar: Calendar) -> (LocalDateTime, NSRange)? {
+    private static func detected(_ text: String, calendar: Calendar, midnightEndsDay: Bool) -> (LocalDateTime, NSRange)? {
         guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else { return nil }
         let ns = text as NSString
         guard let match = detector.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
@@ -197,6 +202,10 @@ public enum NaturalDateParser {
         let hasTime = timeHint.firstMatch(in: matched, range: NSRange(location: 0, length: (matched as NSString).length)) != nil
         let parts = local.dateComponents([.hour, .minute], from: date)
         let looksDateOnly = !hasTime && parts.hour == 12 && parts.minute == 0
+        if !midnightEndsDay, parts.hour == 0, parts.minute == 0, matched.lowercased().contains("midnight"),
+           let dayBefore = local.date(byAdding: .day, value: -1, to: date) {
+            return (LocalDateTime(dayBefore, calendar: local, includeTime: false), match.range)
+        }
         return (LocalDateTime(date, calendar: local, includeTime: !looksDateOnly), match.range)
     }
 }

@@ -30,6 +30,17 @@ final class TaskViewTests: XCTestCase {
         XCTAssertEqual(rewrite("x @due(next tuesday 14:30)"), "x @due(2026-10-27 14:30)")
     }
 
+    func testMidnightKeepsTheDueDayButEndsItForReminders() {
+        XCTAssertEqual(rewrite("x @due(fri at midnight)"), "x @due(2026-10-23)")
+        XCTAssertEqual(rewrite("x @due(tomorrow midnight)"), "x @due(2026-10-22)")
+        XCTAssertEqual(rewrite("x @due(in 3 days at midnight)"), "x @due(2026-10-24)")
+        XCTAssertEqual(rewrite("x @due(midnight tonight)"), "x @due(2026-10-21)")
+        XCTAssertEqual(rewrite("x @due(October 23 at midnight)"), "x @due(2026-10-23)")
+        XCTAssertEqual(rewrite("x @due(fri 00:00)"), "x @due(2026-10-23 00:00)")
+        XCTAssertEqual(rewrite("x @remind(fri at midnight)"), "x @remind(2026-10-24 00:00)")
+        XCTAssertEqual(rewrite("x @remind(midnight tonight)"), "x @remind(2026-10-22 00:00)")
+    }
+
     func testReminderWithoutTimeGetsTheDefaultTime() {
         XCTAssertEqual(rewrite("call @remind(tomorrow)", minutes: 570), "call @remind(2026-10-22 09:30)")
         XCTAssertEqual(rewrite("call @remind(tomorrow 9am)"), "call @remind(2026-10-22 09:00)")
