@@ -79,22 +79,25 @@ final class DailyNoteStoreTests: XCTestCase {
         let store = makeStore()
         let first = store.createNotebook(name: "Daily Notes", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
         let second = store.createNotebook(name: "Daily Notes", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
-        _ = store.createNote(in: first.id, initial: NSAttributedString(string: "2026-10-12"))
-        _ = store.createNote(in: first.id, initial: NSAttributedString(string: "Shopping"))
-        let busy = [store.createNote(in: second.id, initial: NSAttributedString(string: "2026-10-13")),
-                    store.createNote(in: second.id, initial: NSAttributedString(string: "2026-10-14"))]
+        let oldest = store.createNote(in: first.id, initial: NSAttributedString(string: "2026-10-12"))
+        let others = [store.createNote(in: first.id, initial: NSAttributedString(string: "Shopping")),
+                      store.createNote(in: first.id, initial: NSAttributedString(string: "Ideas"))]
+        _ = store.createNote(in: second.id, initial: NSAttributedString(string: "2026-10-13"))
+        _ = store.createNote(in: second.id, initial: NSAttributedString(string: "2026-10-14"))
 
         for pinned in [nil, first.id.uuidString, second.id.uuidString] {
             defaults.set(pinned, forKey: PrefKey.dailyNotesNotebookID)
-            XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), second.id, String(describing: pinned))
+            XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id, "most notes, whatever their titles")
         }
-        defaults.set(first.id.uuidString, forKey: PrefKey.dailyNotesNotebookID)
-        let note = try XCTUnwrap(store.dailyNote(for: day(14), createIfMissing: true))
-        XCTAssertEqual(note.id, busy[1].id)
-        XCTAssertEqual(defaults.string(forKey: PrefKey.dailyNotesNotebookID), second.id.uuidString, "re-pinned")
+        defaults.set(second.id.uuidString, forKey: PrefKey.dailyNotesNotebookID)
+        let note = try XCTUnwrap(store.dailyNote(for: day(12), createIfMissing: true))
+        XCTAssertEqual(note.id, oldest.id)
+        XCTAssertEqual(defaults.string(forKey: PrefKey.dailyNotesNotebookID), first.id.uuidString, "re-pinned")
         XCTAssertEqual(store.notebooks.count, 2)
 
-        _ = store.createNote(in: first.id, initial: NSAttributedString(string: "2026-10-15"))
+        _ = store.moveToRecentlyDeleted(others.map(\.id))
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), second.id, "notes in Recently Deleted don't count")
+        _ = store.createNote(in: first.id, initial: NSAttributedString(string: "Later"))
         XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id, "a tie goes to the notebook with the oldest note")
 
         let custom = store.createNotebook(name: "Journal", symbol: "book", colorHex: Tokens.Hex.notebookBlue)

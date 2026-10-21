@@ -9,7 +9,7 @@ extension NoteStore {
     /// The notebook from the preference, else the one named "Daily Notes" (synced from another Mac, imported, or
     /// left after the preference was reset). Never creates one or writes the preference. When several are named
     /// "Daily Notes" and the preference is unset or one of them (two Macs each made one before syncing), every Mac
-    /// picks the same: the most daily-titled notes, then the oldest note, then the id.
+    /// picks the same, whatever its language: the most live notes, then the oldest live note, then the id.
     var dailyNotesNotebookIDIfSet: UUID? {
         let named = notebooks.filter {
             $0.name.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(Self.dailyNotesNotebookName) == .orderedSame
@@ -19,16 +19,15 @@ extension NoteStore {
             return id
         }
         guard named.count > 1 else { return named.first }
-        let locale = Locale.current
-        var dailyCount: [UUID: Int] = [:]
+        var count: [UUID: Int] = [:]
         var oldest: [UUID: Date] = [:]
         for note in notes where note.deletedAt == nil {
             guard let notebookID = note.notebookID, named.contains(notebookID) else { continue }
-            if DailyNoteTitle.parse(note.title, locale: locale) != nil { dailyCount[notebookID, default: 0] += 1 }
+            count[notebookID, default: 0] += 1
             oldest[notebookID] = min(oldest[notebookID] ?? .distantFuture, note.createdAt)
         }
         return named.min {
-            let a = (dailyCount[$0] ?? 0, oldest[$0] ?? .distantFuture), b = (dailyCount[$1] ?? 0, oldest[$1] ?? .distantFuture)
+            let a = (count[$0] ?? 0, oldest[$0] ?? .distantFuture), b = (count[$1] ?? 0, oldest[$1] ?? .distantFuture)
             if a.0 != b.0 { return a.0 > b.0 }
             if a.1 != b.1 { return a.1 < b.1 }
             return $0.uuidString < $1.uuidString
