@@ -123,6 +123,47 @@ final class MarkdownNoteStoreTests: XCTestCase {
         XCTAssertNotNil(store.note(with: id)?.deletedAt)
     }
 
+    func testDeletingANestedNotebookRemovesEveryFolderAndNothingComesBack() throws {
+        for _ in 0..<5 {
+            try? fm.removeItem(at: root)
+            try fm.createDirectory(at: content, withIntermediateDirectories: true)
+            let store = open()
+            var parent: UUID?
+            var top: UUID?
+            for name in ["A", "B", "C", "D"] {
+                let notebook = store.createNotebook(name: name, symbol: "tray", colorHex: "#0A84FF", parentID: parent)
+                _ = store.createNote(in: notebook.id, initial: body("\(name) note\nx"))
+                parent = notebook.id
+                top = top ?? notebook.id
+            }
+            store.flush()
+            XCTAssertTrue(exists("A/B/C/D/D note.md"))
+
+            store.deleteNotebook(try XCTUnwrap(top))
+            store.flush()
+            XCTAssertFalse(exists("A"))
+            XCTAssertEqual(open().notebooks.count, 0, "no notebook comes back from a folder left behind")
+        }
+    }
+
+    func testANotebookFolderThatCantBeTrashedIsTriedAgain() throws {
+        let store = open()
+        let storage = try XCTUnwrap(store.markdownStorage)
+        let work = store.createNotebook(name: "Work", symbol: "tray", colorHex: "#0A84FF")
+        store.flush()
+        let trash = storage.trash
+        storage.trash = { _ in throw CocoaError(.fileWriteNoPermission) }
+        store.deleteNotebook(work.id)
+        store.flush()
+        XCTAssertTrue(exists("Work"))
+        XCTAssertEqual(storage.index.notebookFolder(work.id), "Work")
+
+        storage.trash = trash
+        store.flush()
+        XCTAssertFalse(exists("Work"))
+        XCTAssertNil(storage.index.notebookFolder(work.id))
+    }
+
     func testFilesAreRenamedAfterTheTitleOnlyWhenIdleOrDeselected() throws {
         let store = open()
         var now = Date()

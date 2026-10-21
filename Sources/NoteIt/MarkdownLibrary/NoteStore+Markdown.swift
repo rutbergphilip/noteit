@@ -30,9 +30,13 @@ extension NoteStore {
                     handleMarkdownWriteError(error, for: meta.id)
                 }
             }
-            for id in storage.index.allNotebookFolders.keys where notebook(with: id) == nil {
-                do { try storage.removeNotebook(id: id) } catch { NSLog("NoteIt: couldn't remove a notebook folder: \(error)") }
-            }
+        }
+        // Deepest first, so a parent's folder is empty by the time it goes; a folder that couldn't go keeps its
+        // record and is tried again on the next flush.
+        let gone = storage.index.allNotebookFolders.filter { notebook(with: $0.key) == nil }
+            .sorted { MarkdownBodyStorage.depth(of: $0.value) > MarkdownBodyStorage.depth(of: $1.value) }
+        for (id, _) in gone {
+            do { try storage.removeNotebook(id: id) } catch { NSLog("NoteIt: couldn't remove a notebook folder: \(error)") }
         }
         renameIdleMarkdownFiles()
         try? storage.index.save()
