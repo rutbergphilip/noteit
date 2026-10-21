@@ -127,10 +127,14 @@ final class NoteStore: ObservableObject {
     /// Called once when the content folder goes away while the library is open; the app asks the user to locate it.
     var onMarkdownFolderMissing: ((URL) -> Void)?
     var markdownFolderReportedMissing = false
+    /// Called when the mass-deletion guard holds a batch, with the number of held notes.
+    var onManyNotesDisappeared: ((Int) -> Void)?
     /// New files wait until they have been unchanged this long before they become notes (spec §3.5).
     var newFileSettleDelay: TimeInterval = 2
     /// Notes whose files disappeared in a batch the mass-deletion guard holds.
-    var heldMarkdownDeletions: Set<UUID> = []
+    var heldMarkdownDeletions: Set<UUID> = [] {
+        didSet { markdownStorage?.setKeepsMissingFolders(!heldMarkdownDeletions.isEmpty) }
+    }
     /// Why a readable body is read-only (`StoredBody.readOnlyReason`); shown like a load error.
     private var bodyReadOnlyReasons: [UUID: String] = [:]
     /// The extras of each loaded body, keyed by note ID (Task 4.1). Set from every body read (on an RTFD store from
@@ -310,6 +314,9 @@ final class NoteStore: ObservableObject {
             } catch {
                 handleUnreadableBody(id, at: url, error: error)
             }
+        } else if let held = heldMarkdownBody(id) {
+            loaded = held.text
+            setBodyExtras(held.extras, for: id)
         }
         bodyCache[id] = loaded
         touchBody(id)

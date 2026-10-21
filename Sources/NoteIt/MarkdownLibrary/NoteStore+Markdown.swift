@@ -121,6 +121,7 @@ extension NoteStore {
     /// files don't say (spec §3.3).
     func loadMarkdownFolder() {
         guard let storage = markdownStorage else { return }
+        heldMarkdownDeletions = MassDeletionGuard.load(dataDir: rootURL)
         storage.setNotebooks(notebooks)
         guard storage.contentRootExists else { return }
         let result = FolderScanner.scan(contentRoot: storage.contentRootURL, index: storage.index)
@@ -135,7 +136,7 @@ extension NoteStore {
 
     /// Applies one scan: notebook folders first, so new files land in their notebooks, then files, then
     /// notebook folders that are gone. At launch nothing is versioned or flushed; the load saves the result.
-    func applyExternalChanges(_ result: FolderScanResult, atLaunch: Bool) {
+    func applyExternalChanges(_ result: FolderScanResult, atLaunch: Bool, confirmsMassDeletion: Bool = false) {
         guard let storage = markdownStorage, storage.contentRootExists else { return }
         storage.setSkippedFiles(result.skipped.map(storage.url(of:)))
         var metadataChanged = applyNotebookFolders(result.notebookFolders)
@@ -150,12 +151,15 @@ extension NoteStore {
         var newFiles: [NewFile] = result.added.sorted().map { NewFile(id: nil, path: $0, assign: true) }
         newFiles += result.duplicateIDs.sorted().map { NewFile(id: nil, path: $0, assign: true) }
         importFiles(atLaunch ? newFiles : settledFiles(newFiles), atLaunch: atLaunch)
+        releaseReturnedDeletions()
 
         let removed = result.removed.filter { id in
             guard let entry = storage.index.entry(id) else { return false }
             return !FileManager.default.fileExists(atPath: storage.url(of: entry.path).path)
         }
-        if !removed.isEmpty { metadataChanged = applyRemovals(removed, atLaunch: atLaunch) || metadataChanged }
+        if !removed.isEmpty, !holdRemovals(removed, atLaunch: atLaunch, confirmed: confirmsMassDeletion) {
+            metadataChanged = applyRemovals(removed, atLaunch: atLaunch) || metadataChanged
+        }
         metadataChanged = removeNotebooksWithoutFolders(result.notebookFolders) || metadataChanged
         try? storage.index.save()
         if metadataChanged { commitOutsideMetadataChange() }
@@ -478,6 +482,68 @@ extension NoteStore {
     }
 
     // MARK: Deletions
+
+    /// Holds `removed` instead of deleting when the batch is large, or joins a batch already held. Held notes stay
+    /// in the library, read-only, with no tombstone, until the user confirms or their files come back.
+    private func holdRemovals(_ removed: Set<UUID>, atLaunch: Bool, confirmed: Bool) -> Bool {
+        guard let storage = markdownStorage, !confirmed else { return false }
+        guard !heldMarkdownDeletions.isEmpty
+                || MassDeletionGuard.mustHold(removed: removed.count, totalFiles: storage.index.ids.count) else { return false }
+        let added = removed.subtracting(heldMarkdownDeletions)
+        heldMarkdownDeletions.formUnion(removed)
+        for id in removed {
+            if !atLaunch { handOverPendingEdits(id) }
+            blockMarkdownBodyWrites(id, reason: Self.missingFileReason)
+        }
+        MassDeletionGuard.save(heldMarkdownDeletions, dataDir: rootURL)
+        if !added.isEmpty {
+            NSLog("NoteIt: \(removed.count) note files disappeared from the folder; waiting for the user before deleting them")
+            if !atLaunch { onManyNotesDisappeared?(heldMarkdownDeletions.count) }
+        }
+        return true
+    }
+
+    /// Held notes whose files are back (or which are gone from the library) leave the batch.
+    private func releaseReturnedDeletions() {
+        guard let storage = markdownStorage, !heldMarkdownDeletions.isEmpty else { return }
+        let returned = heldMarkdownDeletions.filter { id in
+            guard note(with: id) != nil, let entry = storage.index.entry(id) else { return true }
+            return FileManager.default.fileExists(atPath: storage.url(of: entry.path).path)
+        }
+        guard !returned.isEmpty else { return }
+        heldMarkdownDeletions.subtract(returned)
+        for id in returned {
+            unblockMarkdownBodyWrites(id, reason: Self.missingFileReason)
+            dropCachedBody(id)
+        }
+        MassDeletionGuard.save(heldMarkdownDeletions, dataDir: rootURL)
+    }
+
+    /// Asks about a batch still held from an earlier session; the app calls this after launch.
+    func askAboutHeldDeletions() {
+        guard !heldMarkdownDeletions.isEmpty else { return }
+        onManyNotesDisappeared?(heldMarkdownDeletions.count)
+    }
+
+    /// **Move to Recently Deleted**: the held notes whose files are still missing are deleted as usual.
+    func confirmHeldDeletions() {
+        guard let storage = markdownStorage, storage.contentRootExists, !heldMarkdownDeletions.isEmpty else { return }
+        let held = heldMarkdownDeletions
+        heldMarkdownDeletions = []
+        MassDeletionGuard.save([], dataDir: rootURL)
+        for id in held { unblockMarkdownBodyWrites(id, reason: Self.missingFileReason) }
+        let result = FolderScanner.scan(contentRoot: storage.contentRootURL, index: storage.index)
+        guard storage.contentRootExists else { return markdownFolderWentMissing() }
+        applyExternalChanges(result, atLaunch: false, confirmsMassDeletion: true)
+    }
+
+    /// What a held note shows: its last known text, since its file is missing.
+    func heldMarkdownBody(_ id: UUID) -> StoredBody? {
+        guard heldMarkdownDeletions.contains(id), let storage = markdownStorage else { return nil }
+        if let known = storage.lastKnownBody(id) { return known }
+        guard let version = history.versions(of: id).first, let loaded = try? history.load(version) else { return nil }
+        return StoredBody(text: loaded.text, extras: loaded.extras ?? .empty)
+    }
 
     /// Files deleted outside NoteIt: their notes go to Recently Deleted, with their last known text written to
     /// `.trash/` so Recover works. A batch the mass-deletion guard holds is kept for the user instead.

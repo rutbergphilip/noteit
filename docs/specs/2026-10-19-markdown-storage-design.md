@@ -92,6 +92,7 @@ A library has one **format**. Two folders are involved:
 | `library-location.json` | New. `{"version":1,"format":"markdown","path":"~/Documents/NoteIt","bookmark":"<base64>","libraryID":"<uuid>","renameFilesOnTitleChange":true}`. Missing file = `rtfd` in `<data>`, which is today's behaviour. |
 | `library.json` | Unchanged schema (`LibraryFile` version 1). For Markdown it is a cache of notebooks and `NoteMeta` (titles, previews, tags, revisions), rebuilt from the folder if missing. Revisions are only ever stored here. |
 | `markdown-files.json` | New, Markdown only. Per note: `{"path":"Work/Plan.md","sha256":"…","size":1234,"mtimeNs":…,"inode":…,"frontMatterExtra":"…","formerPaths":["Work/Old plan.md"]}`. It is also the path → id map used to resolve wiki links (3.4). |
+| `markdown-held-deletions.json` | New, Markdown only, present only while the mass-deletion guard (3.5) holds a batch. `{"ids":["<uuid>",…]}`: the notes whose files disappeared, so the question is asked again at the next launch. |
 | `tombstones.json`, `sync-deletions.json`, `sync-state-*.json`, `recovery/`, `history/` | Unchanged role. |
 | `backups/` | New. Temporary staging for backup ZIPs and safety backups made before a conversion. |
 

@@ -40,6 +40,12 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
 
     private let lock = NSRecursiveLock()
     private var notebooks: [UUID: Notebook] = [:]
+    private var keepsMissingFolders = false
+
+    /// While the mass-deletion guard holds a batch, notebook folders that went missing aren't recreated.
+    func setKeepsMissingFolders(_ keeps: Bool) {
+        lock.withLock { keepsMissingFolders = keeps }
+    }
     private var previous: [UUID: ParsedMarkdown] = [:]
     private var pendingTemps: [String: String] = [:]
     private var skipped: [URL] = []
@@ -112,6 +118,9 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
 
     private func placeNotebook(_ id: UUID, in tree: [Notebook]) throws {
         guard let notebook = notebooks[id] else { return }
+        if keepsMissingFolders, let recorded = index.notebookFolder(id), !FileManager.default.fileExists(atPath: url(of: recorded).path) {
+            return
+        }
         let layout = NotebookFolders.layout(tree, existing: index.allNotebookFolders)
         guard let target = layout[id] else { return }
         let owns = depth(of: id) <= NotebookFolders.maxDepth

@@ -52,7 +52,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NoteStore.shared.onMarkdownFolderMissing = { url in
             DispatchQueue.main.async { LibraryLauncher.contentRootLost(url, dataDir: NoteStore.shared.rootURL) }
         }
+        NoteStore.shared.onManyNotesDisappeared = { _ in
+            DispatchQueue.main.async { MassDeletionGuard.askIfNeeded(NoteStore.shared) }
+        }
         NoteStore.shared.startWatchingMarkdownFolder()
+        NoteStore.shared.askAboutHeldDeletions()
         AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
         LinkingAPIRoutes.register(in: .shared, store: NoteStore.shared)
