@@ -80,6 +80,7 @@ enum EvernoteImporter {
                             progress: (ImportProgress) -> Void = { _ in }) async -> ImportReport {
         var report = ImportReport()
         var tagNames = ImportTags()
+        var notebooks = ImportNotebooks()
         let total = await Task.detached { items.reduce(0) { $0 + ENEXReader.countNotes(in: $1.url) } }.value
         progress(ImportProgress(completed: 0, total: total))
         var created: [UUID] = []
@@ -106,7 +107,7 @@ enum EvernoteImporter {
                 let title = note.title.isEmpty ? "Untitled" : note.title
                 progress(ImportProgress(completed: done - 1, total: max(total, done), currentName: title))
                 if Task.isCancelled { report.cancelled = true; break files }
-                let notebook = store.notebookForImport(path: item.notebook)
+                let notebook = notebooks.notebook(for: item.notebook, in: store)
                 let meta = autoreleasepool {
                     store.createImportedNote(body: Self.body(for: note, title: title, tagNames: &tagNames, report: &report), title: title,
                                              notebookID: notebook.id, createdAt: note.created, updatedAt: note.updated)

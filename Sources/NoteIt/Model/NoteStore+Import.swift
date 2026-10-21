@@ -173,6 +173,22 @@ extension NoteStore {
         return createNotebook(name: trimmed.isEmpty ? "Imported" : trimmed, symbol: "folder", colorHex: color, parentID: parentID)
     }
 
+    /// A new notebook named `name`, or "name 2", "name 3"… when a notebook beside it already has that name.
+    func newNotebookForImport(named name: String, parentID: UUID?) -> Notebook {
+        let tree = notebookTree
+        let taken = Set(notebooks.filter { tree.effectiveParent(of: $0.id) == parentID }
+            .map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() })
+        var candidate = name
+        var n = 2
+        while taken.contains(candidate.lowercased()) {
+            candidate = "\(name) \(n)"
+            n += 1
+        }
+        let palette = NotebookPalette.colors
+        let color = palette.isEmpty ? Tokens.Hex.notebookBlue : palette[notebooks.count % palette.count]
+        return createNotebook(name: candidate, symbol: "folder", colorHex: color, parentID: parentID)
+    }
+
     /// Nested notebooks for a folder path, up to the deepest level allowed; deeper folders are named
     /// `Folder / Subfolder` inside the deepest notebook.
     func notebookForImport(path: [String]) -> Notebook {
@@ -182,6 +198,36 @@ extension NoteStore {
         var notebook = notebookForImport(named: nested[0])
         for name in nested.dropFirst() { notebook = notebookForImport(named: name, parentID: notebook.id) }
         return notebook
+    }
+}
+
+/// The notebooks one import run makes. A run never adds notes to a notebook that was in the library before it:
+/// a name already taken among its siblings becomes "Work 2", "Work 3"…, and the same path within the run goes to
+/// the same new notebook.
+struct ImportNotebooks {
+    /// Folded path → notebook made by this run.
+    private var made: [String: UUID] = [:]
+
+    @MainActor
+    mutating func notebook(for path: [String], in store: NoteStore) -> Notebook {
+        let names = (path.isEmpty ? ["Imported"] : path).map {
+            let name = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+            return name.isEmpty ? "Imported" : name
+        }
+        let nested = Array(names.prefix(NotebookTree.maxDepth - 1))
+            + [names.dropFirst(NotebookTree.maxDepth - 1).joined(separator: " / ")].filter { !$0.isEmpty }
+        var parent: Notebook?
+        for depth in nested.indices {
+            let key = nested[...depth].map { $0.lowercased() }.joined(separator: "/")
+            if let id = made[key], let existing = store.notebooks.first(where: { $0.id == id }) {
+                parent = existing
+                continue
+            }
+            let notebook = store.newNotebookForImport(named: nested[depth], parentID: parent?.id)
+            made[key] = notebook.id
+            parent = notebook
+        }
+        return parent ?? store.newNotebookForImport(named: "Imported", parentID: nil)
     }
 }
 

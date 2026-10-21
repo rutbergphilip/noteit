@@ -9,7 +9,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
-- Import from Evernote. Choose one or more `.enex` files, or a folder of them, in File › Import…. Each file becomes a notebook and folders become notebooks around them. Notes keep their dates, tags, checklists, images and attachments, reminders and links to each other.
+- Import from Evernote. Choose one or more `.enex` files, or a folder of them, in File › Import…. Each file becomes a new notebook and folders become notebooks around them; a name already in use gets a number, such as “Work 2”. Notes keep their dates, tags, checklists, images and attachments, reminders and links to each other.
 - Import from Notion. Choose the `.zip` from Notion's Export › Markdown & CSV in File › Import…. Pages keep their images and links to each other, subpages go into a notebook named after their top page, and databases become tables.
 - `noteit://` links. Open a note, search, or create and add to notes from Shortcuts, Raycast, Alfred, scripts and web pages. Links that create or add to a note ask first; you can turn that off in Settings › Integrations.
 - Copy Note Link (⌃⌘L) in the Edit menu copies a link to the current note.

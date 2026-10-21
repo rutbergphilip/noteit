@@ -268,6 +268,32 @@ final class EvernoteImporterTests: XCTestCase {
         XCTAssertEqual(try meta("B", in: store).notebookID.map { store.notebookPathTitle($0) }, "Inbox")
     }
 
+    func testExistingNotebookIsNotMergedInto() async throws {
+        let store = makeStore()
+        let existing = store.createNotebook(name: "Work", symbol: "folder", colorHex: Tokens.Hex.notebookRed)
+        let file = try enex([note("A", content: "x"), note("B", content: "y")], to: "Work.enex")
+        _ = await EvernoteImporter.importFiles([file], into: store)
+        let a = try XCTUnwrap(try meta("A", in: store).notebookID)
+        XCTAssertNotEqual(a, existing.id)
+        XCTAssertEqual(store.notebookPathTitle(a), "Work 2")
+        XCTAssertEqual(try meta("B", in: store).notebookID, a)
+
+        _ = await EvernoteImporter.importFiles([file], into: store)
+        XCTAssertEqual(Set(store.notebooks.map(\.name)), ["Work", "Work 2", "Work 3"])
+        XCTAssertTrue(store.notes.allSatisfy { $0.notebookID != existing.id })
+    }
+
+    func testStackSharedWithinOneImportButNotWithTheLibrary() async throws {
+        let store = makeStore()
+        _ = store.createNotebook(name: "Work", symbol: "folder", colorHex: Tokens.Hex.notebookRed)
+        try enex([note("A", content: "x")], to: "Export/Work/Alpha.enex")
+        try enex([note("B", content: "x")], to: "Export/Work/Beta.enex")
+        _ = await EvernoteImporter.importFiles([base.appendingPathComponent("Export")], into: store)
+        XCTAssertEqual(try meta("A", in: store).notebookID.map { store.notebookPathTitle($0) }, "Work 2 › Alpha")
+        XCTAssertEqual(try meta("B", in: store).notebookID.map { store.notebookPathTitle($0) }, "Work 2 › Beta")
+        XCTAssertEqual(store.notebooks.filter { $0.name == "Work 2" }.count, 1)
+    }
+
     func testReminderBecomesToken() throws {
         let parsed = try XCTUnwrap(ENEXNoteParser.parse(Data(note("Call", content: "<div>Dentist</div>", extra: """
             <note-attributes><reminder-time>20240105T090000Z</reminder-time><reminder-done-time>20240105T100000Z</reminder-done-time></note-attributes>
