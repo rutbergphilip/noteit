@@ -720,6 +720,7 @@ Can run any time after T7.
 - [ ] `AppLocator.locate`: `NOTEIT_API_URL` → `.ready`; discovery with `apiEnabled` and a successful ping → `.ready`; `apiEnabled == false` → `.apiDisabled`; otherwise, if `launch`, call `launchApp` once and poll every 200 ms until timeout.
 - [ ] Tests: `testClientMapsErrors` (against a `LocalHTTPServer` on port 0 with a fake responder), `testEventsStreamParsing`, `testLocatorEnvOverride`, `testLocatorReady`, `testLocatorApiDisabled`, `testLocatorLaunchesOnceAndWaits`, `testLocatorTimesOut` (fake sleep, no real waiting).
 - [ ] Verify: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter "NoteItAPIClientTests|AppLocatorTests"` → `Executed <n> tests, with 0 failures`.
+- Note (T15 as built): `baseURL` includes `/v1` (as in the discovery file) and paths such as `/notes` are appended; `NOTEIT_API_URL` is accepted with or without `/v1`. `send(…, as: APINoContent.self)` is how callers read `204` routes. Query values are percent-encoded including `+`, which the server reads as a space. While polling after a launch, `apiEnabled: false` doesn't end the wait, because a starting app writes it before its server binds; the locator returns `.apiDisabled` at the timeout if the last file still said so. `AppLocator` has a public memberwise `init` for fakes. Extra test: `testEventsReconnectOnceWithLastEventID`.
 - [ ] Commit `feat(cli): add api client and app locator`.
 
 #### Task 16: `noteit` commands
