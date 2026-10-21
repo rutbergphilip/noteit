@@ -34,16 +34,11 @@ struct SidebarView: View {
                 .onMove { store.moveNotebooks(from: $0, to: $1) }
             }
 
-            if !store.allTags.isEmpty {
+            let tags = store.tagTree
+            if !tags.isEmpty {
                 Section("Tags") {
-                    ForEach(store.allTags, id: \.self) { tag in
-                        Label {
-                            Text(tag)
-                        } icon: {
-                            Image(systemName: "number").foregroundStyle(.secondary)
-                        }
-                        .badge(store.count(for: .tag(tag)))
-                        .tag(SidebarSelection.tag(tag))
+                    ForEach(tags) { node in
+                        TagTreeRow(node: node)
                     }
                 }
             }
@@ -190,5 +185,33 @@ struct SidebarView: View {
             store.updateNotebook(current)
         }
         renamingID = nil
+    }
+}
+
+/// A tag and, under a disclosure triangle, the tags nested in it.
+struct TagTreeRow: View {
+    let node: TagNode
+
+    var body: some View {
+        if node.children.isEmpty {
+            label
+        } else {
+            DisclosureGroup {
+                ForEach(node.children) { TagTreeRow(node: $0) }
+            } label: {
+                label
+            }
+        }
+    }
+
+    private var label: some View {
+        Label {
+            Text(node.name)
+        } icon: {
+            Image(systemName: "number").foregroundStyle(.secondary)
+        }
+        .badge(node.totalCount)
+        .tag(SidebarSelection.tag(node.path))
+        .help("#\(node.path)")
     }
 }

@@ -74,6 +74,7 @@ final class NoteStore: ObservableObject {
     var imageTextProvider: ImageTextProviding?
     var searchDocumentCache: SearchDocumentCache?
     var searchResultCache: [SearchResultKey: [SearchResult]] = [:]
+    var tagTreeCache: (notesVersion: Int, tree: [TagNode])?
     private var indexSaveWorkItem: DispatchWorkItem?
 
     /// Position hints for `note(with:)`; rebuilt only after `notes` changed and a lookup misses.

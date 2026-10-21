@@ -59,7 +59,7 @@ public enum LibraryQuery {
         case .notebook(let id):
             return active.filter { $0.notebookID == id }
         case .tag(let tag):
-            return active.filter { $0.tags.contains(tag) }
+            return active.filter { $0.tags.contains { TagTree.matches($0, selected: tag) } }
         case .today, .tasks, .smartFolder:
             return []
         }
