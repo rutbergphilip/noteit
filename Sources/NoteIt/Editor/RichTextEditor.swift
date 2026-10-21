@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import NoteItCore
 import SwiftUI
 
 /// Bridges the toolbar (SwiftUI) and the active text view.
@@ -97,6 +98,7 @@ struct RichTextEditor: NSViewRepresentable {
         private let undo = UndoManager()
         private var isLoading = false
         private var remoteUpdates: AnyCancellable?
+        private var notesChanges: AnyCancellable?
         /// Edits not yet written to the store.
         private(set) var hasPendingChanges = false
 
@@ -122,6 +124,7 @@ struct RichTextEditor: NSViewRepresentable {
             NoteItTextView.refreshTableColors(in: textView.storage)
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
+            styleLinks()
             let caret = RichTextEditor.pendingCaret.removeValue(forKey: noteID).map { min(max($0, 0), textView.storage.length) }
             textView.setSelectedRange(NSRange(location: caret ?? 0, length: 0))
             if let caret, caret > 0 {
@@ -170,6 +173,7 @@ struct RichTextEditor: NSViewRepresentable {
             NoteItTextView.refreshTableColors(in: textView.storage)
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
+            styleLinks()
             let length = textView.storage.length
             let location = min(selection.location, length)
             textView.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
@@ -232,6 +236,36 @@ struct RichTextEditor: NSViewRepresentable {
                         self.remoteUpdateArrived()
                     }
                 }
+            // A link's target was renamed, deleted or created.
+            notesChanges = store.$notes
+                .dropFirst()
+                .debounce(for: .seconds(0.3), scheduler: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated { self?.styleLinks(onlyNoteLinks: true) }
+                }
+        }
+
+        func styleLinks(onlyNoteLinks: Bool = false) {
+            guard let textView else { return }
+            let styler = textView.linkStyler
+            if styler.resolve == nil {
+                styler.resolve = { [weak self] link in
+                    guard let self else { return .note(UUID(), heading: nil) }
+                    return self.store.resolve(link, from: self.noteID)
+                }
+            }
+            if onlyNoteLinks {
+                var hasNoteLink = false
+                let storage = textView.storage
+                storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, _, stop in
+                    if let url = value.flatMap(NoteStore.url(from:)), NoteLink(url: url) != nil {
+                        hasNoteLink = true
+                        stop.pointee = true
+                    }
+                }
+                guard hasNoteLink else { return }
+            }
+            styler.restyleAll()
         }
 
         /// Sync is about to replace or delete a note: hand it our pending edits first so it can see them.
@@ -249,6 +283,7 @@ struct RichTextEditor: NSViewRepresentable {
         func stopObserving() {
             NotificationCenter.default.removeObserver(self)
             remoteUpdates = nil
+            notesChanges = nil
             cancelScheduledCommit()
         }
 
@@ -301,10 +336,22 @@ struct RichTextEditor: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
-            guard let url else { return false }
+            guard let url = NoteStore.url(from: link) else { return false }
+            if let noteLink = NoteLink(url: url) {
+                commit()
+                store.followLink(noteLink, from: noteID)
+                return true
+            }
             NSWorkspace.shared.open(url)
             return true
+        }
+
+        /// The target's title and notebook for note links instead of the raw URL.
+        func textView(_ textView: NSTextView, willDisplayToolTip tooltip: String, forCharacterAt characterIndex: Int) -> String? {
+            guard let storage = textView.textStorage, characterIndex < storage.length,
+                  let url = storage.attribute(.link, at: characterIndex, effectiveRange: nil).flatMap(NoteStore.url(from:)),
+                  let link = NoteLink(url: url) else { return tooltip }
+            return store.linkToolTip(for: link, from: noteID)
         }
     }
 }

@@ -17,6 +17,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⌘P | Print the note |
 | ⌥⇧⌘C | Copy as Markdown (the selection, or the whole note) |
 | ⌃⌘L | Copy Note Link (a `noteit://` link to the current note) |
+| ⌃⌘← / ⌃⌘→ | Go Back / Go Forward through the notes you opened in this window |
 | ⌘0 | Show the main window (*NoteIt Notes* in the Window menu) |
 | ⌘, | Settings |
 | ⌘⌫, or ⌫ in the note list | Move the selected note to Recently Deleted (in Recently Deleted: delete it now, after confirming) |
@@ -25,7 +26,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 
 ### Changing menu shortcuts
 
-The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History… and Delete Note (⌘⌫) can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
+The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back and Go Forward can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
 
 When recording one:
 

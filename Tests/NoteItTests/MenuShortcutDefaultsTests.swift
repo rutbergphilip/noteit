@@ -18,6 +18,8 @@ final class MenuShortcutDefaultsTests: XCTestCase {
             (.copyNoteLink, MenuShortcut("l", [.control, .command])),
             (.versionHistory, MenuShortcut("y", [.option, .command])),
             (.deleteNote, MenuShortcut(.delete, .command)),
+            (.goBack, MenuShortcut(.leftArrow, [.control, .command])),
+            (.goForward, MenuShortcut(.rightArrow, [.control, .command])),
         ]
         XCTAssertEqual(MenuShortcutCommand.allCases, expected.map(\.0))
         for (command, shortcut) in expected {
@@ -52,6 +54,6 @@ final class MenuShortcutDefaultsTests: XCTestCase {
     func testPlannedCommandsUnique() {
         let commands = PlannedMenuShortcuts.rows.map(\.command)
         XCTAssertEqual(Set(commands).count, commands.count)
-        XCTAssertEqual(commands.count, 21)
+        XCTAssertEqual(commands.count, 19)
     }
 }

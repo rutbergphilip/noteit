@@ -87,6 +87,14 @@ struct NoteItCommands: Commands {
             }
         }
 
+        CommandGroup(after: .toolbar) {
+            Divider()
+            Button("Go Back") { NotificationCenter.default.post(name: .noteItGoBack, object: nil) }
+                .menuShortcut(.goBack)
+            Button("Go Forward") { NotificationCenter.default.post(name: .noteItGoForward, object: nil) }
+                .menuShortcut(.goForward)
+        }
+
         CommandGroup(after: .windowArrangement) {
             Button("NoteIt Notes") { WindowRouter.showMainWindow() }
                 .keyboardShortcut("0", modifiers: .command)
@@ -111,6 +119,8 @@ extension Notification.Name {
     static let noteItFocusSearch = Notification.Name("noteItFocusSearch")
     static let noteItShowMainWindow = Notification.Name("noteItShowMainWindow")
     static let noteItNewNotebook = Notification.Name("noteItNewNotebook")
+    static let noteItGoBack = Notification.Name("noteItGoBack")
+    static let noteItGoForward = Notification.Name("noteItGoForward")
     /// Posted after a user change to the library has been saved (sync uses it to schedule a pass).
     static let noteItLocalChange = Notification.Name("noteItLocalChange")
 }

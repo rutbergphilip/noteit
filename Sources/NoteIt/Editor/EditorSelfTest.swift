@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 import NoteItSync
 
 #if DEBUG
@@ -171,7 +172,71 @@ enum EditorSelfTest {
         }
         checkHeadingSentinels()
         await checkDebounce(store: store)
+        await checkLinks(store: store)
         log("done")
+    }
+
+    // MARK: Note links
+
+    private static func checkLinks(store: NoteStore) async {
+        func ok(_ pass: Bool) -> String { pass ? "ok" : "FAIL" }
+        let target = store.createNote(in: nil, initial: NoteStore.linkedNoteBody(title: "Link Target"))
+        let source = NSMutableAttributedString(string: "Link Source\n", attributes: EditorStyle.attributes(for: .title))
+        source.append(NSAttributedString(string: "See ", attributes: EditorStyle.bodyAttributes))
+        var resolvedAttrs = EditorStyle.bodyAttributes
+        resolvedAttrs[.link] = NoteLink.note(id: target.id, heading: nil).url
+        source.append(NSAttributedString(string: "Link Target", attributes: resolvedAttrs))
+        source.append(NSAttributedString(string: " and ", attributes: EditorStyle.bodyAttributes))
+        var unresolvedAttrs = EditorStyle.bodyAttributes
+        unresolvedAttrs[.link] = NoteLink.unresolved(title: "Brand New Target", heading: nil).url
+        source.append(NSAttributedString(string: "Brand New Target", attributes: unresolvedAttrs))
+        let sourceMeta = store.createNote(in: nil, initial: source)
+        store.reveal(sourceMeta.id)
+        await sleep(1)
+        guard let tv = textView, let lm = tv.layoutManager else { log("links: no text view"); return }
+        let ns = tv.string as NSString
+        let resolvedAt = ns.range(of: "Link Target", options: .backwards).location
+        let unresolvedAt = ns.range(of: "Brand New Target").location
+
+        // Spike: temporary attributes over a .link run show with linkTextAttributes reduced to the cursor.
+        let color = lm.temporaryAttribute(.foregroundColor, atCharacterIndex: resolvedAt, effectiveRange: nil) as? NSColor
+        let underline = lm.temporaryAttribute(.underlineStyle, atCharacterIndex: unresolvedAt, effectiveRange: nil) as? Int
+        log("links: temporary color on note link \(ok(color == NSColor.controlAccentColor))")
+        log("links: dotted underline on unresolved link \(ok(underline == NSUnderlineStyle.single.union(.patternDot).rawValue))")
+        tv.didChangeText()
+        await sleep(0.3)
+        let after = lm.temporaryAttribute(.foregroundColor, atCharacterIndex: resolvedAt, effectiveRange: nil) as? NSColor
+        log("links: styling survives didChangeText \(ok(after == NSColor.controlAccentColor))")
+
+        _ = tv.delegate?.textView?(tv, clickedOnLink: NoteLink.note(id: target.id, heading: nil).url, at: resolvedAt)
+        await sleep(0.5)
+        log("links: clicking a resolved link selects the target \(ok(store.selectedNoteID == target.id))")
+
+        NotificationCenter.default.post(name: .noteItGoBack, object: nil)
+        await sleep(0.5)
+        log("links: Go Back returns \(ok(store.selectedNoteID == sourceMeta.id))")
+        NotificationCenter.default.post(name: .noteItGoForward, object: nil)
+        await sleep(0.5)
+        log("links: Go Forward returns \(ok(store.selectedNoteID == target.id))")
+        store.reveal(sourceMeta.id)
+        await sleep(0.5)
+
+        guard let tv2 = textView else { log("links: no text view"); return }
+        let before = store.notes.count
+        _ = tv2.delegate?.textView?(tv2, clickedOnLink: NoteLink.unresolved(title: "Brand New Target", heading: nil).url, at: unresolvedAt)
+        await sleep(0.5)
+        let created = store.notes.first { $0.title == "Brand New Target" }
+        log("links: clicking an unresolved link creates and opens a note \(ok(store.notes.count == before + 1 && created != nil && store.selectedNoteID == created?.id))")
+        let rewritten = store.outgoingLinks(from: sourceMeta.id).contains { $0.link == .note(id: created?.id ?? UUID(), heading: nil) }
+            || {
+                var found = false
+                let body = store.body(for: sourceMeta.id)
+                body.enumerateAttribute(.link, in: NSRange(location: 0, length: body.length)) { value, _, _ in
+                    if let url = value.flatMap(NoteStore.url(from:)), NoteLink(url: url) == .note(id: created?.id ?? UUID(), heading: nil) { found = true }
+                }
+                return found
+            }()
+        log("links: the clicked link now points at the new note \(ok(rewritten))")
     }
 
     // MARK: Heading sentinels

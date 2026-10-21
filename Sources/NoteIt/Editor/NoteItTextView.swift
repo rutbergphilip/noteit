@@ -13,6 +13,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     private var isNormalizing = false
     private var lineBreakEditLocation: Int?
     private(set) lazy var codeStyler = CodeStyler(textView: self)
+    private(set) lazy var linkStyler = LinkStyler(textView: self)
     private var hoverTrackingArea: NSTrackingArea?
 
     // MARK: Setup
@@ -65,11 +66,8 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         smartInsertDeleteEnabled = true
         displaysLinkToolTips = true
         usesFontPanel = true
-        linkTextAttributes = [
-            .foregroundColor: NSColor.linkColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .cursor: NSCursor.pointingHand,
-        ]
+        // Colors come from LinkStyler's temporary attributes.
+        linkTextAttributes = [.cursor: NSCursor.pointingHand]
         (layoutManager as? NoteItLayoutManager)?.codeSettings = codeStyler.settings
     }
 
@@ -248,6 +246,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             guard !isNormalizing, !codeStyler.isApplying else { return }
             let r = NSRange(location: editedRange.location, length: max(editedRange.length, 0))
             codeStyler.noteEdit(r)
+            if editedMask.contains(.editedAttributes) || editedMask.contains(.editedCharacters) { linkStyler.noteEdit(r) }
             pendingNormalizeRange = pendingNormalizeRange.map { NSUnionRange($0, r) } ?? r
             if let p = pendingNormalizeRange, NSMaxRange(p) > textStorage.length {
                 pendingNormalizeRange = NSRange(location: min(p.location, textStorage.length), length: textStorage.length - min(p.location, textStorage.length))

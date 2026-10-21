@@ -160,4 +160,30 @@ final class NoteStoreLinksTests: XCTestCase {
         XCTAssertEqual(store.noteID(forTitle: "plan", preferring: nil), newer)
         XCTAssertEqual(store.resolve(.unresolved(title: "Plan", heading: nil), from: source), .note(inBook, heading: nil))
     }
+
+    func testFollowUnresolvedCreatesNoteInSourceNotebookAndRewritesLink() throws {
+        let store = makeStore()
+        let notebook = store.createNotebook(name: "Work", symbol: "folder", colorHex: "#3478F6").id
+        let source = store.createNote(in: notebook, initial: body("Source", linking: [("Plan", .unresolved(title: "Plan", heading: nil))])).id
+        store.followLink(.unresolved(title: "Plan", heading: nil), from: source)
+        let created = try XCTUnwrap(store.notes.first { $0.title == "Plan" })
+        XCTAssertEqual(created.notebookID, notebook)
+        XCTAssertEqual(store.selectedNoteID, created.id)
+        XCTAssertEqual(store.outgoingLinks(from: source).map(\.link), [.note(id: created.id, heading: nil)])
+    }
+
+    func testFollowMissingRemovesLinkWhenConfirmed() {
+        let store = makeStore()
+        let gone = UUID()
+        let source = store.createNote(in: nil, initial: body("Source", linking: [("Gone", .note(id: gone, heading: nil))])).id
+        let state = LinkNavigationState.shared
+        let original = state.confirm
+        defer { state.confirm = original }
+        var asked: [LinkAlert] = []
+        state.confirm = { asked.append($0); return true }
+        store.followLink(.note(id: gone, heading: nil), from: source)
+        XCTAssertEqual(asked, [.missing])
+        XCTAssertEqual(store.outgoingLinks(from: source), [])
+        XCTAssertTrue(store.body(for: source).string.contains("Gone"))
+    }
 }

@@ -23,7 +23,10 @@ final class URLSchemeHandler: NSObject {
                 confirm: URLSchemeHandler.askToAllow,
                 notify: URLSchemeHandler.showNotice,
                 openCallback: { NSWorkspace.shared.open($0) },
-                showNote: URLSchemeHandler.reveal,
+                showNote: { id, heading in
+                    WindowRouter.showMainWindow()
+                    NoteStore.shared.followLink(.note(id: id, heading: heading), from: nil)
+                },
                 showSaved: { meta, notebookName in
                     let outcome = CaptureOutcome.saved(noteID: meta.id, notebookName: notebookName, title: meta.title)
                     CaptureToastController.shared.show(CaptureToastContent(outcome)) { event in

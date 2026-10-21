@@ -105,3 +105,178 @@ extension NoteStore {
     /// The templates notebook when one is known; templates stay out of suggestions and backlinks.
     var templatesNotebookIDIfSet: UUID? { nil }
 }
+
+/// What `followLink` asks the user; replaced by tests.
+enum LinkAlert: Equatable {
+    case deleted(title: String)
+    case missing
+}
+
+/// Transient link-navigation state the editor header shows.
+@MainActor
+final class LinkNavigationState: ObservableObject {
+    static let shared = LinkNavigationState()
+    /// Set for 3 seconds after a link's heading wasn't found in its note.
+    @Published var missingHeading: (note: UUID, heading: String)?
+    private var clearTask: Task<Void, Never>?
+
+    func showMissingHeading(_ heading: String, in note: UUID) {
+        missingHeading = (note, heading)
+        clearTask?.cancel()
+        clearTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled else { return }
+            self?.missingHeading = nil
+        }
+    }
+
+    /// Returns true for the confirming button (Show / Remove Link).
+    var confirm: @MainActor (LinkAlert) -> Bool = LinkNavigationState.runAlert
+
+    private static func runAlert(_ kind: LinkAlert) -> Bool {
+        let alert = NSAlert()
+        switch kind {
+        case .deleted(let title):
+            alert.messageText = title.isEmpty ? "This note is in Recently Deleted." : "“\(title)” is in Recently Deleted."
+            alert.addButton(withTitle: "Show")
+        case .missing:
+            alert.messageText = "This note no longer exists"
+            alert.addButton(withTitle: "Remove Link")
+        }
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+}
+
+extension NoteStore {
+    // MARK: Following links
+
+    /// Opens what `link` points at (spec §3). `source` is the note the link is in; nil when it came from outside.
+    func followLink(_ link: NoteLink, from source: UUID?) {
+        switch resolve(link, from: source) {
+        case .note(let id, let heading):
+            if case .unresolved = link, let source { rewriteLinks(in: source, matching: link, to: id) }
+            navigate(to: id, heading: heading)
+        case .unresolved(let title):
+            let meta = createNoteForLink(title: title, from: source)
+            if let source { rewriteLinks(in: source, matching: link, to: meta.id) }
+            navigate(to: meta.id, heading: nil)
+        case .deleted(let id):
+            guard LinkNavigationState.shared.confirm(.deleted(title: note(with: id)?.title ?? "")) else { return }
+            if source == nil { WindowRouter.showMainWindow() }
+            searchText = ""
+            selection = .recentlyDeleted
+            selectedNoteID = id
+        case .missing:
+            guard let source, LinkNavigationState.shared.confirm(.missing) else { return }
+            try? editBody(source, actionName: "Remove Link", versioning: .none) { text in
+                for range in Self.linkRanges(in: text, matching: link).reversed() {
+                    text.removeAttribute(.link, range: range)
+                }
+            }
+        }
+    }
+
+    /// Selects `id`, with the caret at `heading` when the note has it. Leaves the sidebar alone when the note is
+    /// already in the visible list.
+    func navigate(to id: UUID, heading: String?) {
+        if let heading {
+            let wanted = TextFold.fold(heading.trimmingCharacters(in: .whitespaces))
+            let match = OutlineExtractor.items(in: body(for: id)).first { TextFold.fold($0.text) == wanted }
+            if let match {
+                if selectedNoteID == id, let textView = OpenEditorRegistry.shared.textView(for: id) {
+                    textView.setSelectedRange(NSRange(location: match.range.location, length: 0))
+                    textView.scrollRangeToVisible(NSRange(location: match.range.location, length: 0))
+                } else {
+                    RichTextEditor.pendingCaret[id] = match.range.location
+                }
+            } else {
+                RichTextEditor.pendingCaret[id] = 0
+                LinkNavigationState.shared.showMissingHeading(heading, in: id)
+            }
+        }
+        if notes(for: selection, search: searchText).contains(where: { $0.id == id }) {
+            selectedNoteID = id
+        } else {
+            reveal(id)
+        }
+    }
+
+    /// Creates the note an unresolved link names, in the notebook the Links setting picks. Not selected.
+    @discardableResult
+    func createNoteForLink(title: String, from source: UUID?) -> NoteMeta {
+        let title = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(NoteLink.maxTextLength))
+        let notebookID: UUID?
+        if preferences.string(forKey: PrefKey.linkNewNoteNotebook) == "default" {
+            notebookID = defaultNotebookIDForNewNotes
+        } else if let source {
+            notebookID = note(with: source)?.notebookID
+        } else {
+            notebookID = defaultNotebookIDForNewNotes
+        }
+        return createNote(in: notebookID, initial: Self.linkedNoteBody(title: title))
+    }
+
+    /// A title paragraph and an empty body paragraph.
+    static func linkedNoteBody(title: String) -> NSAttributedString {
+        let text = NSMutableAttributedString(string: title + "\n", attributes: EditorStyle.attributes(for: .title))
+        text.append(NSAttributedString(string: "", attributes: EditorStyle.bodyAttributes))
+        return text
+    }
+
+    /// Points the links in `source` that are `link` (same target, folded) at `id`, keeping their headings.
+    func rewriteLinks(in source: UUID, matching link: NoteLink, to id: UUID) {
+        let current = body(for: source)
+        guard !Self.linkRanges(in: current, matching: link).isEmpty else { return }
+        try? editBody(source, actionName: "Link", versioning: .none) { text in
+            for range in Self.linkRanges(in: text, matching: link) {
+                guard let url = text.attribute(.link, at: range.location, effectiveRange: nil).flatMap(Self.url(from:)),
+                      let existing = NoteLink(url: url) else { continue }
+                text.addAttribute(.link, value: NoteLink.note(id: id, heading: existing.heading).url, range: range)
+            }
+        }
+    }
+
+    /// `.link` runs whose note link has the same target as `link` (headings ignored, titles folded).
+    static func linkRanges(in text: NSAttributedString, matching link: NoteLink) -> [NSRange] {
+        var ranges: [NSRange] = []
+        text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            guard let url = value.flatMap(url(from:)), let found = NoteLink(url: url) else { return }
+            if sameTarget(found, link) { ranges.append(range) }
+        }
+        return ranges
+    }
+
+    private static func sameTarget(_ a: NoteLink, _ b: NoteLink) -> Bool {
+        switch (a, b) {
+        case let (.note(x, _), .note(y, _)): return x == y
+        case let (.unresolved(x, _), .unresolved(y, _)):
+            return TextFold.fold(x.trimmingCharacters(in: .whitespacesAndNewlines))
+                == TextFold.fold(y.trimmingCharacters(in: .whitespacesAndNewlines))
+        default: return false
+        }
+    }
+
+    static func url(from value: Any) -> URL? {
+        (value as? URL) ?? (value as? String).flatMap(URL.init(string:))
+    }
+}
+
+extension NoteStore {
+    func linkToolTip(for link: NoteLink, from source: UUID?) -> String {
+        switch resolve(link, from: source) {
+        case .note(let id, let heading):
+            guard let meta = note(with: id) else { return "" }
+            var text = meta.displayTitle
+            if let heading, !heading.isEmpty { text += " › \(heading)" }
+            if let name = meta.notebookID.flatMap({ notebook(with: $0)?.name }) { text += " — \(name)" }
+            return text
+        case .unresolved(let title):
+            return "Create “\(title)”"
+        case .deleted(let id):
+            return "\(note(with: id)?.displayTitle ?? "") — Recently Deleted"
+        case .missing:
+            return "This note no longer exists"
+        }
+    }
+}

@@ -4,6 +4,8 @@ struct EditorContainerView: View {
     @EnvironmentObject private var store: NoteStore
     @StateObject private var editor = EditorController()
     @StateObject private var find = FindReplaceModel()
+    @EnvironmentObject private var navigation: NavigationModel
+    @ObservedObject private var linkState = LinkNavigationState.shared
 
     var body: some View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
@@ -11,6 +13,14 @@ struct EditorContainerView: View {
             let readOnly = writeBlocked || note.deletedAt != nil
             VStack(spacing: 0) {
                 EditorHeader(note: note)
+                if let missing = linkState.missingHeading, missing.note == id {
+                    Text("Heading “\(missing.heading)” not found")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .transition(.opacity)
+                }
                 if let deletedAt = note.deletedAt {
                     DeletedNoteBanner(note: note, deletedAt: deletedAt)
                 }
@@ -38,6 +48,9 @@ struct EditorContainerView: View {
             .onChange(of: id) { find.close(refocusText: false) }
             .background(Tokens.Color.surfaceEditor)
             .toolbar {
+                ToolbarItemGroup(placement: .navigation) {
+                    NavigationButtons(navigation: navigation)
+                }
                 ToolbarItem(placement: .primaryAction) {
                     ShareToolbarButton(note: note)
                 }
@@ -50,6 +63,24 @@ struct EditorContainerView: View {
                 actionTitle: "New Note"
             ) { store.createNoteInCurrentContext() }
             .background(Tokens.Color.surfaceEditor)
+        }
+    }
+}
+
+private struct NavigationButtons: View {
+    @EnvironmentObject private var store: NoteStore
+    @ObservedObject var navigation: NavigationModel
+
+    var body: some View {
+        ControlGroup {
+            Button { navigation.goBack(in: store) } label: { Image(systemName: "chevron.backward") }
+                .help("Go Back")
+                .accessibilityLabel("Go Back")
+                .disabled(!navigation.history.canGoBack)
+            Button { navigation.goForward(in: store) } label: { Image(systemName: "chevron.forward") }
+                .help("Go Forward")
+                .accessibilityLabel("Go Forward")
+                .disabled(!navigation.history.canGoForward)
         }
     }
 }
