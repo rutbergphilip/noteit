@@ -54,6 +54,9 @@ enum PrefKey {
     static let reminderDefaultTime = "reminderDefaultTime"
     /// When reminders were last checked; reminders due between then and launch are delivered once.
     static let remindersLastCheck = "remindersLastCheck"
+    /// Reminder IDs (UUID string → fire date) shown after `remindersLastCheck`, which stays behind while the index is
+    /// built at launch; a relaunch doesn't show them again. Pruned as `remindersLastCheck` moves past them.
+    static let remindersShownAhead = "remindersShownAhead"
     /// Set once the reminder popover has offered Open at Login, so it's only offered the first time.
     static let reminderLoginOffered = "reminderLoginOffered"
     /// A `SearchSortOrder` raw value.

@@ -65,7 +65,22 @@ final class ReminderScheduler {
     /// End of the last checked window; missing means nothing was checked yet on this Mac.
     var lastCheck: Date? {
         get { defaults.object(forKey: PrefKey.remindersLastCheck) as? Date }
-        set { defaults.set(newValue, forKey: PrefKey.remindersLastCheck) }
+        set {
+            defaults.set(newValue, forKey: PrefKey.remindersLastCheck)
+            if let newValue { shownAhead = shownAhead.filter { $0.value > newValue } }
+        }
+    }
+
+    /// Reminders shown with a fire date after `lastCheck`, persisted so a relaunch doesn't show them twice.
+    private var shownAhead: [String: Date] {
+        get { defaults.dictionary(forKey: PrefKey.remindersShownAhead) as? [String: Date] ?? [:] }
+        set {
+            if newValue.isEmpty {
+                if defaults.object(forKey: PrefKey.remindersShownAhead) != nil { defaults.removeObject(forKey: PrefKey.remindersShownAhead) }
+            } else {
+                defaults.set(newValue, forKey: PrefKey.remindersShownAhead)
+            }
+        }
     }
 
     func start() {
@@ -115,7 +130,10 @@ final class ReminderScheduler {
     func check() {
         let now = clock()
         let since = max(lastCheck ?? now, now.addingTimeInterval(-Self.catchUpWindow))
-        let due = isEnabled ? store.liveReminders(calendar: calendar()).filter { $0.fireDate > since && $0.fireDate <= now } : []
+        let shown = shownAhead
+        let due = isEnabled ? store.liveReminders(calendar: calendar()).filter {
+            $0.fireDate > since && $0.fireDate <= now && shown[$0.id.uuidString] == nil
+        } : []
         awaitingIndex = isEnabled && !store.searchIndexer.hasRebuilt && !store.remindersAreIndexed
         if !awaitingIndex { lastCheck = now }
         checkedUntil = now
@@ -165,6 +183,7 @@ final class ReminderScheduler {
 
     private func deliver(_ reminder: LiveReminder) {
         delivered.insert(reminder.id)
+        if reminder.fireDate > lastCheck ?? .distantPast { shownAhead[reminder.id.uuidString] = reminder.fireDate }
         let title = reminder.line.text.isEmpty ? "Reminder" : reminder.line.text
         notifications.deliver(reminder, title: title, subtitle: store.note(with: reminder.noteID)?.displayTitle ?? "")
     }

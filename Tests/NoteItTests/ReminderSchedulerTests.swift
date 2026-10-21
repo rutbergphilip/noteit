@@ -119,6 +119,27 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(defaults.object(forKey: PrefKey.remindersLastCheck) as? Date, now)
     }
 
+    func testRelaunchBeforeTheIndexIsBuiltDoesNotRingAgain() throws {
+        _ = add("Plan\ncall bank @remind(2026-10-21 11:00)")
+        let late = add("Later\npay rent @remind(2026-10-21 11:30)")
+        let meta = try XCTUnwrap(store.note(with: late))
+        let body = store.body(for: late)
+        store.searchIndexer.noteRemoved(late)
+        defaults.set(at(10, 0), forKey: PrefKey.remindersLastCheck)
+        makeScheduler().check()
+        XCTAssertEqual(notifications.delivered.map(\.title), ["call bank"])
+
+        now = at(12, 5)
+        let relaunched = makeScheduler()
+        relaunched.check()
+        XCTAssertEqual(notifications.delivered.map(\.title), ["call bank"], "already shown before the relaunch")
+
+        store.searchIndexer.noteChanged(meta, body: body)
+        relaunched.indexChanged()
+        XCTAssertEqual(notifications.delivered.map(\.title), ["call bank", "pay rent"])
+        XCTAssertNil(defaults.object(forKey: PrefKey.remindersShownAhead), "pruned once the check moved past them")
+    }
+
     func testDoneTaskIsNotLive() {
         _ = add("Plan\n☑\tpay rent @remind(2026-10-21 11:00)")
         defaults.set(at(10, 0), forKey: PrefKey.remindersLastCheck)
