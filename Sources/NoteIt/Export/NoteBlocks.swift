@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 import UniformTypeIdentifiers
 
 /// A run of text with the character formatting that export formats care about.
@@ -10,6 +11,7 @@ struct InlineRun {
     var strikethrough = false
     var code = false
     var link: URL?
+    var noteLink: NoteLink?
     var color: NSColor?
     var highlight: NSColor?
     var attachment: NSTextAttachment?
@@ -18,7 +20,7 @@ struct InlineRun {
     func hasSameStyle(as other: InlineRun) -> Bool {
         attachment == nil && other.attachment == nil
             && bold == other.bold && italic == other.italic && underline == other.underline
-            && strikethrough == other.strikethrough && code == other.code && link == other.link
+            && strikethrough == other.strikethrough && code == other.code && link == other.link && noteLink == other.noteLink
             && color == other.color && highlight == other.highlight
     }
 }
@@ -144,6 +146,10 @@ enum NoteBlocks {
                 run.link = url
             } else if let s = attrs[.link] as? String {
                 run.link = URL(string: s)
+            }
+            if let url = run.link, let noteLink = NoteLink(url: url) {
+                run.noteLink = noteLink
+                run.link = nil
             }
             run.color = attrs[.foregroundColor] as? NSColor
             if let bg = attrs[.backgroundColor] as? NSColor, !(run.code && EditorStyle.isLegacyInlineCodeBackground(bg)) {

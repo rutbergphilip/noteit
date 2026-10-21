@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 
 /// The result of writing a note as Markdown.
 struct MarkdownExport: Equatable {
@@ -18,18 +19,19 @@ enum MarkdownWriter {
     }
 
     /// `title` names the assets folder that image links point into; pass the exported file's base name.
-    static func write(_ text: NSAttributedString, title: String) -> MarkdownExport {
-        write(text, assetsFolder: assetsFolderName(for: title))
+    static func write(_ text: NSAttributedString, title: String, links: ExportLinkContext = .titlesOnly) -> MarkdownExport {
+        write(text, assetsFolder: assetsFolderName(for: title), links: links)
     }
 
     /// Like `write(_:title:)`, with image links pointing into the folder named `assetsFolder`.
-    static func write(_ text: NSAttributedString, assetsFolder: String) -> MarkdownExport {
-        var writer = Writer(assetsFolder: assetsFolder)
+    static func write(_ text: NSAttributedString, assetsFolder: String, links: ExportLinkContext = .titlesOnly) -> MarkdownExport {
+        var writer = Writer(assetsFolder: assetsFolder, links: links)
         return writer.write(NoteBlocks.parse(text))
     }
 
     private struct Writer {
         let assetsFolder: String
+        let links: ExportLinkContext
         var assets: [ExportAsset] = []
         var takenAssetNames = Set<String>()
         var imageCount = 0
@@ -126,9 +128,23 @@ enum MarkdownWriter {
             var out = ""
             var index = 0
             while index < runs.count {
+                if let noteLink = runs[index].noteLink, runs[index].attachment == nil {
+                    var end = index + 1
+                    while end < runs.count, runs[end].noteLink == noteLink, runs[end].attachment == nil { end += 1 }
+                    let group = Array(runs[index..<end])
+                    let text = group.map(\.text).joined().replacingOccurrences(of: "\u{2028}", with: " ")
+                    if let wiki = links.wikiLink(for: noteLink, text: text) {
+                        out += inTable ? wiki.replacingOccurrences(of: "|", with: "\\|") : wiki
+                    } else {
+                        out += styledText(group.map { var r = $0; r.noteLink = nil; return r }, continuation: continuation, inTable: inTable)
+                    }
+                    index = end
+                    continue
+                }
                 let link = runs[index].attachment == nil ? runs[index].link : nil
                 var end = index + 1
-                while end < runs.count, runs[end].link == link || (link == nil && runs[end].attachment != nil) {
+                while end < runs.count, runs[end].noteLink == nil || runs[end].attachment != nil,
+                      runs[end].link == link || (link == nil && runs[end].attachment != nil) {
                     if link != nil && runs[end].attachment != nil { break }
                     end += 1
                 }

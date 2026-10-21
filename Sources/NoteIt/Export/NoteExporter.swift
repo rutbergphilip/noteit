@@ -91,7 +91,8 @@ enum NoteExporter {
     /// Writes `body` to `url` (which includes the extension). Markdown images and files go in a
     /// `<file name> assets` folder next to it, or `<file name> assets 2`… if that name is taken, so
     /// nothing already on disk is replaced.
-    static func write(_ body: NSAttributedString, title: String, format: ExportFormat, to url: URL) throws {
+    static func write(_ body: NSAttributedString, title: String, format: ExportFormat, to url: URL,
+                      links: ExportLinkContext = .titlesOnly) throws {
         switch format {
         case .markdown:
             let parent = url.deletingLastPathComponent()
@@ -100,7 +101,7 @@ enum NoteExporter {
             if FileManager.default.fileExists(atPath: parent.appendingPathComponent(assetsName).path) {
                 assetsName = ExportNaming.uniqueOnDisk(assetsName, extension: "", in: parent)
             }
-            let export = MarkdownWriter.write(body, assetsFolder: assetsName)
+            let export = MarkdownWriter.write(body, assetsFolder: assetsName, links: links)
             if !export.assets.isEmpty {
                 let folder = parent.appendingPathComponent(assetsName, isDirectory: true)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -110,7 +111,7 @@ enum NoteExporter {
             }
             try Data(export.markdown.utf8).write(to: url, options: .atomic)
         case .html:
-            try Data(BodyCodec.html(of: body, title: title).utf8).write(to: url, options: .atomic)
+            try Data(BodyCodec.html(of: body, title: title, links: links).utf8).write(to: url, options: .atomic)
         case .pdf:
             try pdfData(body, title: title).write(to: url, options: .atomic)
         case .rtfd:
@@ -157,7 +158,7 @@ enum NoteExporter {
         let folder = destination.appendingPathComponent(name, isDirectory: true)
         let notebookNotes = exportableNotes(in: notes).filter { $0.notebookID == notebook.id }
         let files = try prepareFolder(folder, notes: notebookNotes, format: format)
-        return NotesExport(folder: folder, format: format, files: files, body: body)
+        return NotesExport(folder: folder, format: format, files: files, body: body, links: linkContext(files, notes: notes))
     }
 
     /// Creates the `NoteIt Export` folder and a folder per notebook, and returns the export, ready to
@@ -166,6 +167,7 @@ enum NoteExporter {
                            body: @escaping (UUID) -> NSAttributedString) throws -> NotesExport {
         let root = destination.appendingPathComponent(
             ExportNaming.uniqueOnDisk(allNotesFolderName, extension: "", in: destination), isDirectory: true)
+        let allNotes = notes
         let notes = exportableNotes(in: notes)
         let notebookIDs = Set(notebooks.map(\.id))
         var groups: [(name: String, notes: [NoteMeta])] = notebooks.map { nb in
@@ -181,7 +183,12 @@ enum NoteExporter {
             let folder = root.appendingPathComponent(ExportNaming.unique(group.name, extension: "", taken: &taken), isDirectory: true)
             files += try prepareFolder(folder, notes: group.notes, format: format)
         }
-        return NotesExport(folder: root, format: format, files: files, body: body)
+        return NotesExport(folder: root, format: format, files: files, body: body, links: linkContext(files, notes: allNotes))
+    }
+
+    /// Links to notes in the same export use their planned file names; other links use titles.
+    private static func linkContext(_ files: [NotesExport.File], notes: [NoteMeta]) -> ExportLinkContext {
+        .files(files, titles: Dictionary(notes.map { ($0.id, $0.displayTitle) }, uniquingKeysWith: { a, _ in a }))
     }
 
     /// Creates `folder` and names one file per note, oldest first, so the first of several same-named
@@ -291,13 +298,16 @@ final class NotesExport {
     let format: ExportFormat
     private let files: [File]
     private let body: (UUID) -> NSAttributedString
+    private let links: ExportLinkContext
     private(set) var written = 0
 
-    init(folder: URL, format: ExportFormat, files: [File], body: @escaping (UUID) -> NSAttributedString) {
+    init(folder: URL, format: ExportFormat, files: [File], body: @escaping (UUID) -> NSAttributedString,
+         links: ExportLinkContext = .titlesOnly) {
         self.folder = folder
         self.format = format
         self.files = files
         self.body = body
+        self.links = links
     }
 
     var total: Int { files.count }
@@ -307,7 +317,8 @@ final class NotesExport {
     func writeNext() throws {
         guard !isFinished else { return }
         let file = files[written]
-        try NoteExporter.write(body(file.note.id), title: file.note.displayTitle, format: format, to: file.url)
+        try NoteExporter.write(body(file.note.id), title: file.note.displayTitle, format: format, to: file.url,
+                               links: links.from(file.note.id))
         written += 1
     }
 

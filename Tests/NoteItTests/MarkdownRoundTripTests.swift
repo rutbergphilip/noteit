@@ -428,4 +428,9 @@ final class MarkdownRoundTripTests: XCTestCase {
         XCTAssertTrue(first.contains("A paragraph written\\\nover two lines.\n\nAnother paragraph after extra blank lines."), first)
         XCTAssertTrue(first.contains("> Quote line one\\\n> quote line two\n>\n> Second quote paragraph"), first)
     }
+
+    func testWikiLinksRoundTripThroughImporter() throws {
+        throw XCTSkip("Needs wiki-link import")
+    }
 }
+
