@@ -110,7 +110,8 @@ final class InlineCompletionController {
     func accept(_ row: InlineCompletionRow) {
         guard let source else { return }
         let caret = textView.selectedRange().location
-        let range = NSRange(location: start, length: max(caret - start, 0))
+        let location = min(start, textView.storage.length)
+        let range = NSRange(location: location, length: max(min(caret, textView.storage.length) - location, 0))
         end()
         source.accept(row, replacing: range, in: textView)
     }
@@ -127,7 +128,8 @@ final class InlineCompletionController {
     private func cancel() {
         guard let source else { return }
         let caret = textView.selectedRange().location
-        let range = NSRange(location: start, length: max(caret - start, 0))
+        let location = min(start, textView.storage.length)
+        let range = NSRange(location: location, length: max(min(caret, textView.storage.length) - location, 0))
         end()
         source.didCancel(in: textView, queryRange: range)
     }

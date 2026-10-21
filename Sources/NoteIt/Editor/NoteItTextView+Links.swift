@@ -34,7 +34,6 @@ extension NoteItTextView {
         let selected = nsString.substring(with: selection)
         guard !selected.contains(where: \.isNewline) else { return }
         let source = LinkCompletionSource(store: host.store, noteID: host.noteID)
-        source.removesOpeningOnCancel = true
         if selection.length > 0 { source.presetText = selected }
         var attrs = typingAttributes
         attrs[.link] = nil
@@ -42,6 +41,7 @@ extension NoteItTextView {
         breakUndoCoalescing()
         guard replace(NSRange(location: selection.location, length: 0), with: opening,
                       select: NSRange(location: NSMaxRange(selection) + 2, length: 0), actionName: "Link to Note") else { return }
+        source.insertedOpening = selection.location
         inlineCompletion.begin(at: selection.location + 2, source: source)
     }
 

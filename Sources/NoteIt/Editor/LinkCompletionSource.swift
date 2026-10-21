@@ -8,8 +8,8 @@ final class LinkCompletionSource: InlineCompletionSource {
     let noteID: UUID
     /// Shown text from a selection (Link to Note…), used unless the query has an alias.
     var presetText: String?
-    /// Link to Note… inserted the `[[`; it's removed again when the list closes without a choice.
-    var removesOpeningOnCancel = false
+    /// Where Link to Note… inserted the `[[`; it's removed again when the list closes without a choice.
+    var insertedOpening: Int?
     private var suggestions: [String: LinkSuggestion] = [:]
     private var lastQuery = LinkQuery("")
 
@@ -81,10 +81,11 @@ final class LinkCompletionSource: InlineCompletionSource {
     }
 
     func didCancel(in textView: NoteItTextView, queryRange: NSRange) {
-        guard removesOpeningOnCancel else { return }
-        let opening = NSRange(location: queryRange.location - 2, length: 2)
-        guard opening.location >= 0, textView.nsString.substring(with: opening) == "[[" else { return }
-        textView.replace(opening, with: NSAttributedString(), select: NSRange(location: NSMaxRange(queryRange) - 2, length: 0),
-                         actionName: "Link to Note")
+        guard let location = insertedOpening else { return }
+        let opening = NSRange(location: location, length: 2)
+        guard NSMaxRange(opening) <= textView.storage.length, textView.nsString.substring(with: opening) == "[[" else { return }
+        let caret = textView.selectedRange().location
+        let after = caret >= NSMaxRange(opening) ? caret - 2 : min(caret, location)
+        textView.replace(opening, with: NSAttributedString(), select: NSRange(location: after, length: 0), actionName: "Link to Note")
     }
 }
