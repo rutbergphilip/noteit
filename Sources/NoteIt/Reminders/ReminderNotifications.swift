@@ -76,7 +76,16 @@ final class ReminderNotifications: NSObject, ObservableObject, ReminderNotifying
     func refreshAuthorization() async {
         guard let center else { return }
         let settings = await center.notificationSettings()
-        isAuthorized = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+        isAuthorized = Self.authorization(for: settings.authorizationStatus)
+    }
+
+    /// Nil while NoteIt hasn't asked yet, so "Notifications are off" only shows after the user said no.
+    nonisolated static func authorization(for status: UNAuthorizationStatus) -> Bool? {
+        switch status {
+        case .notDetermined: nil
+        case .denied: false
+        default: true
+        }
     }
 
     func canDeliver() async -> Bool {

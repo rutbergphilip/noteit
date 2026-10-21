@@ -17,6 +17,8 @@ struct TaskListView: View {
     @EnvironmentObject private var store: NoteStore
     @Environment(\.undoManager) private var undoManager
     @AppStorage(PrefKey.tasksShowCompleted) private var showCompleted = false
+    @AppStorage(PrefKey.remindersEnabled) private var remindersEnabled = PrefDefault.remindersEnabled
+    @ObservedObject private var notifications = ReminderNotifications.shared
     @State private var selection: TaskRef?
     @State private var settling: [TaskKey: Settling] = [:]
     @State private var settleGeneration = 0
@@ -67,19 +69,34 @@ struct TaskListView: View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if let message {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    Text(message).font(.callout)
-                    Spacer()
-                    Button("OK") { self.message = nil }
-                        .buttonStyle(.borderless)
+            VStack(spacing: 0) {
+                if remindersEnabled, notifications.isAvailable, notifications.isAuthorized == false {
+                    HStack(spacing: 8) {
+                        Image(systemName: "bell.slash").foregroundStyle(.secondary)
+                        Text("Notifications are off for NoteIt.").font(.callout)
+                        Spacer()
+                        Button("Open System Settings…") { ReminderNotifications.openSystemSettings() }
+                            .buttonStyle(.borderless)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(.bar)
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 6)
-                .background(.bar)
+                if let message {
+                    HStack(spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text(message).font(.callout)
+                        Spacer()
+                        Button("OK") { self.message = nil }
+                            .buttonStyle(.borderless)
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(.bar)
+                }
             }
         }
+        .task { await notifications.refreshAuthorization() }
         .navigationTitle("Tasks")
         .navigationSubtitle(openCount == 1 ? "1 open task" : "\(openCount) open tasks")
         .searchable(text: $store.searchText, placement: .toolbar, prompt: "Search Tasks")

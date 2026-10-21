@@ -8,6 +8,7 @@ struct DatePopover: View {
     let title: String
     let onSet: (LocalDateTime) -> Void
     var onRemove: (() -> Void)?
+    var onDone: (() -> Void)?
     let onClose: () -> Void
 
     @State private var date: Date
@@ -15,10 +16,12 @@ struct DatePopover: View {
     private let calendar: Calendar
 
     init(title: String, initial: LocalDateTime?, defaultMinutes: Int = 540, calendar: Calendar = .current,
-         onSet: @escaping (LocalDateTime) -> Void, onRemove: (() -> Void)? = nil, onClose: @escaping () -> Void) {
+         onSet: @escaping (LocalDateTime) -> Void, onRemove: (() -> Void)? = nil, onDone: (() -> Void)? = nil,
+         onClose: @escaping () -> Void) {
         self.title = title
         self.onSet = onSet
         self.onRemove = onRemove
+        self.onDone = onDone
         self.onClose = onClose
         self.calendar = calendar
         let start = initial ?? LocalDateTime(Date(), calendar: calendar, includeTime: false)
@@ -47,6 +50,12 @@ struct DatePopover: View {
                         onClose()
                     }
                 }
+                if let onDone {
+                    Button("Done") {
+                        onDone()
+                        onClose()
+                    }
+                }
                 Spacer()
                 Button("Cancel", role: .cancel) { onClose() }
                     .keyboardShortcut(.cancelAction)
@@ -68,35 +77,60 @@ enum DatePopoverPresenter {
     private static var current: NSPopover?
 
     static func show(title: String, initial: LocalDateTime?, relativeTo rect: NSRect, of view: NSView,
-                     onSet: @escaping (LocalDateTime) -> Void, onRemove: (() -> Void)?) {
+                     onSet: @escaping (LocalDateTime) -> Void, onRemove: (() -> Void)?, onDone: (() -> Void)? = nil) {
         current?.close()
         let popover = NSPopover()
         popover.behavior = .transient
         let close: () -> Void = { [weak popover] in popover?.close() }
         let minutes = UserDefaults.standard.object(forKey: PrefKey.reminderDefaultTime) as? Int ?? PrefDefault.reminderDefaultTime
         popover.contentViewController = NSHostingController(rootView: DatePopover(
-            title: title, initial: initial, defaultMinutes: minutes, onSet: onSet, onRemove: onRemove, onClose: close))
+            title: title, initial: initial, defaultMinutes: minutes, onSet: onSet, onRemove: onRemove, onDone: onDone,
+            onClose: close))
         popover.show(relativeTo: rect, of: view, preferredEdge: .maxY)
         current = popover
     }
 }
 
-/// "Reminder set for tomorrow at 09:00" with Change…, after Add Reminder found a date in the line.
+/// "Reminder set for tomorrow at 09:00" with Change…, after a reminder was added. The first time, it also offers
+/// Open at Login.
 struct ReminderSetPopover: View {
     let message: String
-    let onChange: () -> Void
+    var offersLogin = false
+    let onChange: (() -> Void)?
+    var onClose: () -> Void = {}
 
     var body: some View {
-        HStack(spacing: 10) {
-            Image(systemName: "bell.fill").foregroundStyle(.purple)
-            Text(message)
-            Button("Change…", action: onChange)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "bell.fill").foregroundStyle(.purple)
+                Text(message)
+                if let onChange { Button("Change…", action: onChange) }
+            }
+            if offersLogin {
+                Text("Reminders ring only while NoteIt is running.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button("Not Now", action: onClose)
+                    Button("Open at Login") {
+                        ReminderLoginOffer.accept()
+                        onClose()
+                    }
+                    .keyboardShortcut(.defaultAction)
+                }
+            }
         }
         .padding(12)
         .fixedSize()
     }
 
     static func message(for value: LocalDateTime, now: Date, calendar: Calendar) -> String {
+        "Reminder set for " + dayAndTime(value, now: now, calendar: calendar)
+    }
+
+    /// "today at 09:00", "tomorrow at 09:00" or "Wed 21 Oct at 09:00".
+    static func dayAndTime(_ value: LocalDateTime, now: Date, calendar: Calendar) -> String {
         let time = String(format: "%02d:%02d", value.hour ?? 0, value.minute ?? 0)
         let today = LocalDateTime(now, calendar: calendar, includeTime: false)
         let day = value.dateOnly
@@ -116,18 +150,21 @@ struct ReminderSetPopover: View {
         } else {
             dayText = day.token
         }
-        return "Reminder set for \(dayText) at \(time)"
+        return "\(dayText) at \(time)"
     }
 }
 
 extension DatePopoverPresenter {
-    static func showReminderSet(_ message: String, relativeTo rect: NSRect, of view: NSView, onChange: @escaping () -> Void) {
+    static func showReminderSet(_ message: String, offersLogin: Bool = false, relativeTo rect: NSRect, of view: NSView,
+                                onChange: (() -> Void)?) {
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentViewController = NSHostingController(rootView: ReminderSetPopover(message: message, onChange: { [weak popover] in
+        let change: (() -> Void)? = onChange.map { onChange in { [weak popover] in
             popover?.close()
             onChange()
-        }))
+        } }
+        popover.contentViewController = NSHostingController(rootView: ReminderSetPopover(
+            message: message, offersLogin: offersLogin, onChange: change, onClose: { [weak popover] in popover?.close() }))
         popover.show(relativeTo: rect, of: view, preferredEdge: .maxY)
     }
 }

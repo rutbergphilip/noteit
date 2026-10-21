@@ -5,6 +5,13 @@ enum ReminderAction: Hashable {
     case done, snooze(TimeInterval), tomorrow, remove, set(LocalDateTime)
 }
 
+/// What Done does to a line with a reminder.
+enum ReminderDoneEdit: Equatable {
+    case check
+    /// The new `@remind(… done)` token.
+    case markDone(String)
+}
+
 struct LiveReminder: Identifiable, Hashable {
     var id: UUID
     var noteID: UUID
@@ -86,6 +93,14 @@ extension NoteStore {
                 Self.setToken(.remind, value: "@remind(\(at.token))", paragraph: range, in: body)
             }
         }
+    }
+
+    /// Done for the reminder on a line: checks an unchecked task, otherwise marks the token done. Nil when the line
+    /// has no reminder left to finish.
+    nonisolated static func reminderDoneEdit(forMaskedLine line: String) -> ReminderDoneEdit? {
+        guard let reminder = TaskParser.parse(masked: line).reminders.first, !reminder.done,
+              !(reminder.isTask && reminder.checked) else { return nil }
+        return reminder.isTask ? .check : .markDone("@remind(\(reminder.at.token) done)")
     }
 
     /// The date written in a line, for Add Reminder: dates without a time get the default time; past dates don't count.

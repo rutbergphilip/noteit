@@ -90,7 +90,8 @@ extension NoteItTextView {
         writeLineToken(.remind, value: "@remind(\(found.token))", line: line, actionName: "Set Reminder")
         let updated = lineRange(at: min(line.location, storage.length))
         let message = ReminderSetPopover.message(for: found, now: Date(), calendar: .current)
-        DatePopoverPresenter.showReminderSet(message, relativeTo: rect(for: updated), of: self) { [weak self] in
+        DatePopoverPresenter.showReminderSet(message, offersLogin: ReminderLoginOffer.take(), relativeTo: rect(for: updated),
+                                             of: self) { [weak self] in
             guard let self else { return }
             let current = self.lineRange(at: min(updated.location, self.storage.length))
             self.showDatePopover(.remind, title: "Reminder", initial: found, line: current, anchor: current, canRemove: true)
@@ -127,10 +128,32 @@ extension NoteItTextView {
             }
             self.writeLineToken(kind, value: "@\(name)(\(stored.token))", line: target,
                                 actionName: kind == .due ? "Set Due Date" : "Set Reminder")
+            if kind == .remind, ReminderLoginOffer.take() {
+                let updated = self.lineRange(at: min(target.location, self.storage.length))
+                let message = ReminderSetPopover.message(for: stored, now: Date(), calendar: .current)
+                // After the date popover has gone, so the two don't fight over the anchor.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    DatePopoverPresenter.showReminderSet(message, offersLogin: true, relativeTo: self.rect(for: updated), of: self,
+                                                         onChange: nil)
+                }
+            }
         }, onRemove: canRemove ? { [weak self] in
             guard let self, let target = locate(self) else { return }
             self.writeLineToken(kind, value: nil, line: target, actionName: kind == .due ? "Remove Due Date" : "Remove Reminder")
+        } : nil, onDone: kind == .remind && NoteStore.reminderDoneEdit(forMaskedLine: maskedLine(line)) != nil ? { [weak self] in
+            guard let self, let target = locate(self) else { return }
+            self.markReminderDone(line: target)
         } : nil)
+    }
+
+    private func markReminderDone(line: NSRange) {
+        guard isEditable, NSMaxRange(line) <= storage.length,
+              let edit = NoteStore.reminderDoneEdit(forMaskedLine: maskedLine(line)) else { return }
+        switch edit {
+        case .check: toggleCheckbox(atParagraphStart: line.location)
+        case .markDone(let token): writeLineToken(.remind, value: token, line: line, actionName: "Mark Reminder Done")
+        }
     }
 
     /// After `)` closes `@due(…)` or `@remind(…)` written in words: rewrites it as a full date. True when it did.

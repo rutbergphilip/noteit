@@ -30,6 +30,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Search filters. Narrow a search with `tag:`, `notebook:`, `is:todo`, `is:done`, `is:pinned`, `has:attachment`, `due:today`, dates and more, combine them with `OR`, leave words out with `-` and search exact phrases with quotes.
 - Tasks (⇧⌘T). See the checklist items from all your notes in one place, grouped into Overdue, Today, Upcoming, Later and No Date. Check them off there or jump to the note. Give an item a due date with Set Due Date… (⇧⌘D) or by writing `@due(2026-10-24)`.
 - Reminders. Add Reminder… (⌃⌘R) or `@remind(2026-10-24 09:00)` in a note gives you a notification at that time. When you sync several Macs, only one of them shows it.
+- Quick Capture offers to remind you when the first line has a date, such as "Call the bank tomorrow".
+- Clicking a reminder in a note lets you mark it done. The first reminder you add offers to open NoteIt at login, since reminders only ring while NoteIt is running.
+- The Tasks view tells you when notifications are off for NoteIt, with a button to open System Settings.
 - The Local API can rename, merge and delete tags, move notebooks, list and change smart folders, and list, check off and set due dates for tasks.
 
 ### Changed

@@ -1,5 +1,7 @@
 import AppKit
 import NoteItCore
+import ServiceManagement
+import UserNotifications
 import XCTest
 @testable import NoteIt
 
@@ -108,6 +110,55 @@ final class ReminderStoreTests: XCTestCase {
         XCTAssertEqual(ReminderSetPopover.message(for: at("2026-10-22 09:00"), now: now, calendar: calendar), "Reminder set for tomorrow at 09:00")
         XCTAssertEqual(ReminderSetPopover.message(for: at("2026-10-21 18:30"), now: now, calendar: calendar), "Reminder set for today at 18:30")
         XCTAssertEqual(ReminderSetPopover.message(for: at("2026-10-30 08:00"), now: now, calendar: calendar), "Reminder set for Fri 30 Oct at 08:00")
+    }
+
+    func testDoneChecksATaskOrMarksThePlainReminder() {
+        XCTAssertEqual(NoteStore.reminderDoneEdit(forMaskedLine: "☐\tpay rent @remind(2026-10-21 14:00)"), .check)
+        XCTAssertEqual(NoteStore.reminderDoneEdit(forMaskedLine: "call bank @remind(2026-10-21 15:00)"),
+                       .markDone("@remind(2026-10-21 15:00 done)"))
+        XCTAssertNil(NoteStore.reminderDoneEdit(forMaskedLine: "☑\tbook train @remind(2026-10-21 13:00)"))
+        XCTAssertNil(NoteStore.reminderDoneEdit(forMaskedLine: "call bank @remind(2026-10-21 15:00 done)"))
+        XCTAssertNil(NoteStore.reminderDoneEdit(forMaskedLine: "☐\tpay rent @due(2026-10-21)"))
+    }
+
+    func testQuickCaptureOffersTheDateInTheFirstLine() {
+        let offer = { (title: String, body: String) in
+            NoteStore.captureReminder(title: title, body: body, now: self.now, calendar: self.calendar, defaultMinutes: 540)?.token
+        }
+        XCTAssertEqual(offer("Call the bank tomorrow", "about the loan friday"), "2026-10-22 09:00")
+        XCTAssertEqual(offer("", "  send invoice friday 3pm\nthen file it"), "2026-10-23 15:00")
+        XCTAssertNil(offer("Call the bank", "about the loan friday"), "only the first line counts")
+        XCTAssertNil(offer("Call the bank tomorrow @remind(2026-10-22 08:00)", ""))
+        XCTAssertNil(offer("Call at 8am today", ""), "past times aren't offered")
+
+        let at = LocalDateTime(token: "2026-10-22 09:00")!
+        XCTAssertEqual(NoteStore.addingCaptureReminder(at, title: " Call the bank tomorrow ", body: "x").title,
+                       "Call the bank tomorrow @remind(2026-10-22 09:00)")
+        let bodyOnly = NoteStore.addingCaptureReminder(at, title: "", body: "\nsend invoice tomorrow\nthen file it\n")
+        XCTAssertEqual(bodyOnly.title, "")
+        XCTAssertEqual(bodyOnly.body, "send invoice tomorrow @remind(2026-10-22 09:00)\nthen file it")
+    }
+
+    func testOpenAtLoginIsOfferedOnceAndOnlyWhenOff() {
+        XCTAssertTrue(ReminderLoginOffer.shouldOffer(alreadyOffered: false, isBundled: true, status: .notRegistered))
+        XCTAssertTrue(ReminderLoginOffer.shouldOffer(alreadyOffered: false, isBundled: true, status: .notFound))
+        XCTAssertFalse(ReminderLoginOffer.shouldOffer(alreadyOffered: true, isBundled: true, status: .notRegistered))
+        XCTAssertFalse(ReminderLoginOffer.shouldOffer(alreadyOffered: false, isBundled: true, status: .enabled))
+        XCTAssertFalse(ReminderLoginOffer.shouldOffer(alreadyOffered: false, isBundled: true, status: .requiresApproval))
+        XCTAssertFalse(ReminderLoginOffer.shouldOffer(alreadyOffered: false, isBundled: false, status: .notRegistered))
+
+        let suite = "noteit-login-offer-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        XCTAssertFalse(ReminderLoginOffer.take(defaults), "not offered outside an app bundle")
+        XCTAssertFalse(defaults.bool(forKey: PrefKey.reminderLoginOffered))
+    }
+
+    func testNotificationsOffOnlyAfterTheUserSaidNo() {
+        XCTAssertNil(ReminderNotifications.authorization(for: .notDetermined))
+        XCTAssertEqual(ReminderNotifications.authorization(for: .denied), false)
+        XCTAssertEqual(ReminderNotifications.authorization(for: .authorized), true)
+        XCTAssertEqual(ReminderNotifications.authorization(for: .provisional), true)
     }
 
     func testNotificationsNeedABundledApp() {
