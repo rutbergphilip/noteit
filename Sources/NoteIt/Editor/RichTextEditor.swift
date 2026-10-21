@@ -130,6 +130,7 @@ struct RichTextEditor: NSViewRepresentable {
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
             styleLinks()
+            textView.tokenStyler.restyleAll()
             let caret = RichTextEditor.pendingCaret.removeValue(forKey: noteID).map { min(max($0, 0), textView.storage.length) }
             textView.setSelectedRange(NSRange(location: caret ?? 0, length: 0))
             if let caret, caret > 0 {
@@ -180,6 +181,7 @@ struct RichTextEditor: NSViewRepresentable {
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
             styleLinks()
+            textView.tokenStyler.restyleAll()
             let length = textView.storage.length
             let location = min(selection.location, length)
             textView.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))

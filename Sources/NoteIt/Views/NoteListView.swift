@@ -250,6 +250,10 @@ struct NoteRow: View {
                 Text(note.deletedAt ?? note.updatedAt, format: .relative(presentation: .named))
                     .font(Tokens.Font.cardMeta)
                     .foregroundStyle(Tokens.Color.inkSecondary)
+                    .layoutPriority(1)
+                if !note.tags.isEmpty {
+                    TagChipRow(tags: note.tags)
+                }
                 if let notebook {
                     Spacer(minLength: 4)
                     HStack(spacing: 4) {
