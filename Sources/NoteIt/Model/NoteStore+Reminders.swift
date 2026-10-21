@@ -36,6 +36,14 @@ extension NoteStore {
         return result.sorted { $0.fireDate != $1.fireDate ? $0.fireDate < $1.fireDate : $0.id.uuidString < $1.id.uuidString }
     }
 
+    /// True when every note that can hold a live reminder has its reminders read into the index.
+    var remindersAreIndexed: Bool {
+        let entries = searchIndexer.entries
+        return notes.allSatisfy { meta in
+            meta.deletedAt != nil || meta.isLocked || entries[meta.id]?.reminders != nil || hasUnreadableBody(meta.id)
+        }
+    }
+
     /// Adds or replaces the `@remind(…)` token on paragraph `paragraph` of the note.
     func addReminder(noteID: UUID, paragraph: Int, at: LocalDateTime) throws {
         let value = at.hasTime ? at : Self.withDefaultTime(at)

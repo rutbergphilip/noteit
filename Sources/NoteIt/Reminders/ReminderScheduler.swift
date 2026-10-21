@@ -40,6 +40,9 @@ final class ReminderScheduler {
     private var storeSubscription: AnyCancellable?
     private var lastIndexVersion = -1
     private var isStarted = false
+    /// End of the last check in this session; `lastCheck` stays behind it while the index is still being built.
+    private var checkedUntil: Date?
+    private var awaitingIndex = false
 
     init(store: NoteStore, notifications: ReminderNotifying, claims: ReminderClaiming?, defaults: UserDefaults,
          clock: @escaping () -> Date, calendar: @escaping () -> Calendar = { .current },
@@ -81,8 +84,9 @@ final class ReminderScheduler {
         storeSubscription = store.objectWillChange
             .debounce(for: .milliseconds(300), scheduler: RunLoop.main)
             .sink { [weak self] _ in
-                guard let self, self.store.searchIndexer.version != self.lastIndexVersion else { return }
-                self.rearm()
+                guard let self, self.store.searchIndexer.version != self.lastIndexVersion
+                        || (self.awaitingIndex && self.store.searchIndexer.hasRebuilt) else { return }
+                self.indexChanged()
             }
         check()
     }
@@ -99,12 +103,20 @@ final class ReminderScheduler {
         observers = []
     }
 
-    /// Delivers live reminders due in (lastCheck, now] and less than a day old, then moves `lastCheck` to now.
+    /// The index read more notes: reminders that came due while they were missing get their check now.
+    func indexChanged() {
+        if awaitingIndex { check() } else { rearm() }
+    }
+
+    /// Delivers live reminders due in (lastCheck, now] and less than a day old, then moves `lastCheck` to now. While
+    /// some notes wait for the launch rebuild of the index `lastCheck` stays put, so their reminders are caught up once they are.
     func check() {
         let now = clock()
         let since = max(lastCheck ?? now, now.addingTimeInterval(-Self.catchUpWindow))
         let due = isEnabled ? store.liveReminders(calendar: calendar()).filter { $0.fireDate > since && $0.fireDate <= now } : []
-        lastCheck = now
+        awaitingIndex = isEnabled && !store.searchIndexer.hasRebuilt && !store.remindersAreIndexed
+        if !awaitingIndex { lastCheck = now }
+        checkedUntil = now
         for reminder in due where !delivered.contains(reminder.id) {
             if let claims {
                 let active = userActive()
@@ -131,7 +143,7 @@ final class ReminderScheduler {
         timer?.invalidate()
         timer = nil
         let now = clock()
-        let since = lastCheck ?? now
+        let since = max(checkedUntil ?? lastCheck ?? now, lastCheck ?? now)
         nextFireDate = live.first { $0.fireDate > since }?.fireDate
         guard isStarted, let next = nextFireDate else { return }
         let interval = min(max(next.timeIntervalSince(now), 0), Self.maxTimerInterval)

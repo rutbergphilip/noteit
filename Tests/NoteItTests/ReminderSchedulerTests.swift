@@ -99,6 +99,24 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertTrue(notifications.delivered.isEmpty)
     }
 
+    func testReminderIndexedAfterLaunchCheckStillRings() throws {
+        let id = add("Plan\ncall bank @remind(2026-10-21 11:00)")
+        let meta = try XCTUnwrap(store.note(with: id))
+        let body = store.body(for: id)
+        store.searchIndexer.noteRemoved(id)
+        defaults.set(at(10, 0), forKey: PrefKey.remindersLastCheck)
+        let scheduler = makeScheduler()
+        scheduler.check()
+        XCTAssertTrue(notifications.delivered.isEmpty)
+        XCTAssertEqual(defaults.object(forKey: PrefKey.remindersLastCheck) as? Date, at(10, 0), "kept until the index caught up")
+
+        now = at(12, 5)
+        store.searchIndexer.noteChanged(meta, body: body)
+        scheduler.indexChanged()
+        XCTAssertEqual(notifications.delivered.map(\.title), ["call bank"])
+        XCTAssertEqual(defaults.object(forKey: PrefKey.remindersLastCheck) as? Date, now)
+    }
+
     func testDoneTaskIsNotLive() {
         _ = add("Plan\n☑\tpay rent @remind(2026-10-21 11:00)")
         defaults.set(at(10, 0), forKey: PrefKey.remindersLastCheck)

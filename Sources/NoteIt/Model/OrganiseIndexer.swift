@@ -18,6 +18,8 @@ final class OrganiseIndexer: DerivedIndex {
     let fileURL: URL
     private(set) var isDirty = false
     private var isRebuilding = false
+    /// Set once a rebuild has gone over every note after launch.
+    private(set) var hasRebuilt = false
     private var changedDuringRebuild: Set<UUID> = []
     /// Entries built off the main actor for a body about to be applied (see `prime`).
     private var primed: [UUID: (body: ObjectIdentifier, entry: SearchIndexEntry)] = [:]
@@ -101,10 +103,14 @@ final class OrganiseIndexer: DerivedIndex {
             version &+= 1
         }
         let missing = notes.filter { !$0.isLocked && entries[$0.id]?.isComplete != true && store?.hasUnreadableBody($0.id) != true }
-        guard !missing.isEmpty else { return }
+        guard !missing.isEmpty else {
+            hasRebuilt = true
+            return
+        }
         isRebuilding = true
         changedDuringRebuild = []
         defer {
+            hasRebuilt = true
             isRebuilding = false
             changedDuringRebuild = []
         }
