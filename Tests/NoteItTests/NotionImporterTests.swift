@@ -216,7 +216,7 @@ final class NotionImporterTests: XCTestCase {
         try zip(export, to: part)
         let outer = base.appendingPathComponent("Notion.zip")
         try zip(staging, to: outer, keepParent: false)
-        let outerTotals = try XCTUnwrap(MarkdownImporter.zipTotals(outer))
+        let outerTotals = try XCTUnwrap(MarkdownImporter.zipTotals(outer, excludingTopLevelZips: true))
         let partTotals = try XCTUnwrap(MarkdownImporter.zipTotals(part))
         XCTAssertGreaterThan(partTotals.entries, 5)
 
@@ -238,6 +238,29 @@ final class NotionImporterTests: XCTestCase {
                              maxBytes: outerTotals.bytes + partTotals.bytes)
         let report = try await NotionImporter.importExport(outer, into: makeStore(), limits: fits)
         XCTAssertEqual(report.notesImported, 4)
+    }
+
+    func testPartArchivesAreChargedOnlyOnceAgainstTheLimit() async throws {
+        let export = try makeExport()
+        try Data(repeating: 65, count: 2_000_000).write(to: export.appendingPathComponent("Filler.bin"))
+        let staging = base.appendingPathComponent("Outer", isDirectory: true)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        let part = staging.appendingPathComponent("Export-1234-Part-1.zip")
+        try zip(export, to: part)
+        let outer = base.appendingPathComponent("Notion.zip")
+        try zip(staging, to: outer, keepParent: false)
+        let outerTotals = try XCTUnwrap(MarkdownImporter.zipTotals(outer))
+        let partTotals = try XCTUnwrap(MarkdownImporter.zipTotals(part))
+        let partSize = try XCTUnwrap(fm.attributesOfItem(atPath: part.path)[.size] as? Int64)
+
+        let limits = ZipLimits(maxEntries: .max, maxBytes: outerTotals.bytes - partSize + partTotals.bytes)
+        XCTAssertGreaterThan(limits.maxBytes, outerTotals.bytes)
+        do {
+            let report = try await NotionImporter.importExport(outer, into: makeStore(), limits: limits)
+            XCTAssertEqual(report.notesImported, 4)
+        } catch {
+            XCTFail("\(error)")
+        }
     }
 
     func testHTMLExportAndEmptyFoldersAreRefused() async throws {

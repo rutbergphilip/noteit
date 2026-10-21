@@ -90,7 +90,7 @@ enum NotionImporter {
         var finished = false
         defer { if !finished { for folder in temporary { try? fm.removeItem(at: folder) } } }
         if !isDir.boolValue {
-            guard url.pathExtension.lowercased() == "zip", let unpacked = try MarkdownImporter.unzip(url, within: &budget) else {
+            guard url.pathExtension.lowercased() == "zip", let unpacked = try MarkdownImporter.unzip(url, within: &budget, excludingTopLevelZips: true) else {
                 throw ImportError.unreadableArchive(url.lastPathComponent)
             }
             temporary.append(unpacked)
