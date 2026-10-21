@@ -76,3 +76,62 @@ final class CLIEditorTests: XCTestCase {
         XCTAssertEqual(body.body, "# Plan\n\nOld\ntyped in the terminal\n")
     }
 }
+
+extension CLIEditorTests {
+    func testAbandonRemovesTheFileAndStopsTheEditor() throws {
+        let file = try temporaryDirectory().appendingPathComponent("note.md")
+        try Data("draft".utf8).write(to: file)
+        let editor = Process()
+        editor.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        editor.arguments = ["30"]
+        try editor.run()
+        XCTAssertEqual(CLIEditor.abandon(file, child: editor.processIdentifier, signal: SIGTERM), 143)
+        editor.waitUntilExit()
+        XCTAssertEqual(editor.terminationReason, .uncaughtSignal)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+        XCTAssertEqual(CLIEditor.abandon(file, child: 0, signal: SIGHUP), 129)
+    }
+
+    /// Stops the built `noteit edit` with SIGTERM and SIGHUP while its editor is running.
+    func testStopSignalRemovesTemporaryFile() async throws {
+        let binary = Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("NoteItCLI")
+        guard FileManager.default.isExecutableFile(atPath: binary.path) else { throw XCTSkip("NoteItCLI isn't built.") }
+        let id = UUID()
+        let harness = CLIHarness { _ in
+            .json(NoteDTO(summary: summary(id, title: "Plan"), format: .markdown, body: "# Plan\n"))
+        }
+        try await harness.start()
+        defer { harness.stop() }
+        try harness.signIn()
+
+        for number in [SIGTERM, SIGHUP] {
+            let directory = try temporaryDirectory()
+            let started = directory.appendingPathComponent("started")
+            let editor = directory.appendingPathComponent("editor.sh")
+            try Data("#!/bin/sh\necho \"$1\" > '\(started.path).tmp'\nmv '\(started.path).tmp' '\(started.path)'\nexec sleep 30\n".utf8)
+                .write(to: editor)
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: editor.path)
+
+            let process = Process()
+            process.executableURL = binary
+            process.arguments = ["edit", id.uuidString]
+            process.environment = harness.environment.merging(["EDITOR": editor.path, "PATH": "/usr/bin:/bin"]) { $1 }
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            let exited = expectation(description: "noteit edit exits")
+            process.terminationHandler = { _ in exited.fulfill() }
+            try process.run()
+            let deadline = Date().addingTimeInterval(20)
+            while !FileManager.default.fileExists(atPath: started.path), Date() < deadline {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            let temporary = try String(contentsOf: started, encoding: .utf8).trimmingCharacters(in: .newlines)
+            XCTAssertTrue(FileManager.default.fileExists(atPath: temporary))
+            kill(process.processIdentifier, number)
+            await fulfillment(of: [exited], timeout: 20)
+            XCTAssertEqual(process.terminationReason, .exit)
+            XCTAssertEqual(process.terminationStatus, 128 + number)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: temporary))
+        }
+    }
+}

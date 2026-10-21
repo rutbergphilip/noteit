@@ -61,6 +61,8 @@ enum CLIEditor {
         posix_spawnattr_setsigmask(&attributes, &unmasked)
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
 
+        let stopGuard = StopSignalGuard(file: file)
+        defer { stopGuard.cancel() }
         let previousInterrupt = signal(SIGINT, SIG_IGN)
         let previousQuit = signal(SIGQUIT, SIG_IGN)
         defer {
@@ -74,7 +76,59 @@ enum CLIEditor {
         var pid: pid_t = 0
         let spawned = posix_spawn(&pid, "/bin/sh", nil, &attributes, &argv, environ)
         guard spawned == 0 else { throw POSIXError(POSIXErrorCode(rawValue: spawned) ?? .EIO) }
-        return try wait(for: pid)
+        stopGuard.child = pid
+        let termination = try wait(for: pid)
+        if let number = stopGuard.caught { _exit(abandon(file, child: 0, signal: number)) }
+        return termination
+    }
+
+    /// For SIGTERM and SIGHUP while the editor runs: passes the signal on to the editor, removes the temporary
+    /// file and returns noteit's exit status, 128 + signal.
+    static func abandon(_ file: URL, child: pid_t, signal: Int32) -> Int32 {
+        if child > 0 { kill(child, signal) }
+        try? FileManager.default.removeItem(at: file)
+        return 128 + signal
+    }
+
+    /// Catches SIGTERM and SIGHUP from before the editor starts until it has finished. SIGINT and SIGQUIT need
+    /// no handler: noteit ignores them, and an editor they kill is handled in `runEditor`.
+    final class StopSignalGuard: @unchecked Sendable {
+        static let signals = [SIGTERM, SIGHUP]
+
+        private let lock = NSLock()
+        private var pid: pid_t = 0
+        private var caughtSignal: Int32?
+        private var sources: [DispatchSourceSignal] = []
+        private var previous: [(Int32, sig_t?)] = []
+
+        var child: pid_t {
+            get { lock.withLock { pid } }
+            set { lock.withLock { pid = newValue } }
+        }
+
+        /// Set before the editor is signalled, so the waiting thread, woken by its exit, leaves the same way.
+        var caught: Int32? { lock.withLock { caughtSignal } }
+
+        init(file: URL) {
+            for number in Self.signals {
+                let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
+                source.setEventHandler { [unowned self] in
+                    let child = self.lock.withLock {
+                        self.caughtSignal = number
+                        return self.pid
+                    }
+                    _exit(CLIEditor.abandon(file, child: child, signal: number))
+                }
+                source.resume()
+                sources.append(source)
+                previous.append((number, signal(number, SIG_IGN)))
+            }
+        }
+
+        func cancel() {
+            for (number, handler) in previous { signal(number, handler) }
+            sources.forEach { $0.cancel() }
+        }
     }
 
     static func wait(for pid: pid_t) throws -> Termination {
