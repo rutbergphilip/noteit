@@ -241,7 +241,8 @@ enum NotionImporter {
         return body
     }
 
-    /// `<aside>` callouts become quotes, and links to a database's `.csv` point at its note.
+    /// `<aside>` callouts become quotes, links to a database's `.csv` point at its note, and images on the web
+    /// become links to them.
     nonisolated static func prepared(_ markdown: String) -> String {
         var out: [String] = []
         var inAside = false
@@ -270,7 +271,32 @@ enum NotionImporter {
         }
         let text = out.joined(separator: "\n")
         let ns = text as NSString
-        return csvLink.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "]($1.md)")
+        let linked = csvLink.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "]($1.md)")
+        return remoteImagesAsLinks(linked)
+    }
+
+    nonisolated private static let remoteImage = try! NSRegularExpression(
+        pattern: #"!\[((?:[^\[\]\\]|\\.)*)\]\(\s*(?:<(https?://[^<>\n]+)>|(https?://[^\s()]+))(?:\s+"[^"\n]*")?\s*\)"#,
+        options: [.caseInsensitive])
+
+    /// `![alt](https://…)` → `[alt](https://…)`, named by the address when it has no alt text.
+    nonisolated static func remoteImagesAsLinks(_ text: String) -> String {
+        let ns = text as NSString
+        var out = ""
+        var last = 0
+        for match in remoteImage.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+            let angled = match.range(at: 2).location != NSNotFound
+            let url = ns.substring(with: match.range(at: angled ? 2 : 3))
+            var label = ns.substring(with: match.range(at: 1)).trimmingCharacters(in: .whitespaces)
+            if label.isEmpty {
+                label = url.replacingOccurrences(of: "\\", with: "\\\\")
+                    .replacingOccurrences(of: "[", with: "\\[").replacingOccurrences(of: "]", with: "\\]")
+            }
+            out += ns.substring(with: NSRange(location: last, length: match.range.location - last))
+            out += "[\(label)](\(url.replacingOccurrences(of: " ", with: "%20")))"
+            last = NSMaxRange(match.range)
+        }
+        return out + ns.substring(from: last)
     }
 
     nonisolated private static let csvLink = try! NSRegularExpression(pattern: "\\]\\(([^()\\s]*?)(?:_all)?\\.csv\\)", options: [.caseInsensitive])

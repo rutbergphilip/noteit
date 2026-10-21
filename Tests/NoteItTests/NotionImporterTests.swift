@@ -243,6 +243,27 @@ final class NotionImporterTests: XCTestCase {
         XCTAssertEqual(report.filesSkipped, 1)
     }
 
+    func testRemoteImagesStayAsLinks() async throws {
+        let export = base.appendingPathComponent("Remote", isDirectory: true)
+        try write("""
+            # Web
+            ![Chart](https://example.com/chart.png)
+
+            ![](<https://example.com/a b.png> "Caption")
+            """, to: "Web \(projectsID).md", in: export)
+        let store = makeStore()
+        let report = try await NotionImporter.importExport(export, into: store)
+        XCTAssertEqual(report.attachmentsSkipped, 0)
+        let body = store.body(for: try meta("Web", in: store).id)
+        var found: [String: String] = [:]
+        body.enumerateAttribute(.link, in: NSRange(location: 0, length: body.length)) { value, range, _ in
+            let url = (value as? URL)?.absoluteString ?? value as? String
+            if let url { found[url] = (body.string as NSString).substring(with: range) }
+        }
+        XCTAssertEqual(found["https://example.com/chart.png"], "Chart")
+        XCTAssertEqual(found["https://example.com/a%20b.png"], "https://example.com/a b.png")
+    }
+
     func testNames() {
         XCTAssertEqual(NotionNames.stripID("Plan \(projectsID)").title, "Plan")
         XCTAssertEqual(NotionNames.stripID("Plan \(projectsID.uppercased())").id, projectsID)
