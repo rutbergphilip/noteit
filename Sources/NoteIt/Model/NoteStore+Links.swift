@@ -116,9 +116,6 @@ extension NoteStore {
         }
         return result.sorted { $0.1 > $1.1 }.map(\.0)
     }
-
-    /// The templates notebook when one is known; templates stay out of suggestions and backlinks.
-    var templatesNotebookIDIfSet: UUID? { nil }
 }
 
 /// What `followLink` asks the user; replaced by tests.
@@ -241,6 +238,9 @@ extension NoteStore {
             notebookID = note(with: source)?.notebookID
         } else {
             notebookID = defaultNotebookIDForNewNotes
+        }
+        if let template = defaultTemplateID(for: notebookID) {
+            return createNote(fromTemplate: template, title: title, in: notebookID)
         }
         return createNote(in: notebookID, initial: Self.linkedNoteBody(title: title))
     }

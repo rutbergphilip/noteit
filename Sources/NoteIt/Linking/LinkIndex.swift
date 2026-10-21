@@ -39,6 +39,7 @@ final class LinkIndex: ObservableObject, DerivedIndex {
 
     private var titleIndexVersion = -1
     private var titleIndexCache: [String: [UUID]] = [:]
+    private var titleIndexTemplates: UUID?
 
     init() {}
 
@@ -130,15 +131,17 @@ final class LinkIndex: ObservableObject, DerivedIndex {
     // MARK: Title index
 
     func titleIndex(for store: NoteStore) -> [String: [UUID]] {
-        if titleIndexVersion == store.notesVersion { return titleIndexCache }
+        let templates = store.templatesNotebookIDIfSet
+        if titleIndexVersion == store.notesVersion, titleIndexTemplates == templates { return titleIndexCache }
         var map: [String: [UUID]] = [:]
-        for meta in store.notes where meta.deletedAt == nil {
+        for meta in store.notes where meta.deletedAt == nil && (templates == nil || meta.notebookID != templates) {
             let key = TextFold.fold(meta.title)
             guard !key.isEmpty else { continue }
             map[key, default: []].append(meta.id)
         }
         titleIndexCache = map
         titleIndexVersion = store.notesVersion
+        titleIndexTemplates = templates
         return map
     }
 

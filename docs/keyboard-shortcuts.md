@@ -7,6 +7,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | Shortcut | Action |
 |---|---|
 | ⌘N | New note in the selected notebook, with the cursor in the editor |
+| ⌥⌘N | New Note from Template… (type to find a template; text that matches none becomes the new note's title) |
 | ⇧⌘N | New notebook… |
 | ⌘O | Open Quickly… (see [Command palette](#command-palette)) |
 | ⇧⌘P | Command Palette… |
@@ -27,7 +28,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 
 ### Changing menu shortcuts
 
-The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back, Go Forward, Link to Note… and Show Links and Outline can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
+The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back, Go Forward, Link to Note…, Show Links and Outline and New Note from Template… can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
 
 When recording one:
 

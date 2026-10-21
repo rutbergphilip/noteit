@@ -10,6 +10,7 @@ struct EditorSettingsView: View {
     @AppStorage(PrefKey.syntaxHighlighting) private var syntaxHighlighting = true
     @AppStorage(PrefKey.linkRenameUpdates) private var linkRenameUpdates = PrefDefault.linkRenameUpdates
     @AppStorage(PrefKey.linkNewNoteNotebook) private var linkNewNoteNotebook = PrefDefault.linkNewNoteNotebook
+    @AppStorage(PrefKey.templatesNotebookID) private var templatesNotebookRaw = ""
 
     var body: some View {
         Form {
@@ -91,9 +92,32 @@ struct EditorSettingsView: View {
             } header: {
                 Text("Links")
             }
+
+            Section {
+                Picker("Templates notebook", selection: templatesNotebookBinding) {
+                    Text("Templates (created on first use)").tag("")
+                    Divider()
+                    ForEach(store.sortedNotebooks) { notebook in
+                        Label(notebook.name, systemImage: notebook.symbol).tag(notebook.id.uuidString)
+                    }
+                }
+                SettingsFootnote(text: "Notes in this notebook are templates. Use New Template in the command palette to add one.")
+            } header: {
+                Text("Templates")
+            }
         }
         .formStyle(.grouped)
         .frame(height: 560)
+    }
+
+    private var templatesNotebookBinding: Binding<String> {
+        Binding(
+            get: {
+                _ = templatesNotebookRaw
+                return store.templatesNotebookIDIfSet?.uuidString ?? ""
+            },
+            set: { templatesNotebookRaw = $0 }
+        )
     }
 
     private var notebookBinding: Binding<String> {

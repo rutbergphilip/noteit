@@ -17,6 +17,12 @@ extension NoteStore {
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty || !body.isEmpty else { return nil }
+        if defaultTemplateID(for: notebookID) != nil {
+            let content = NSAttributedString(string: body, attributes: [.font: NSFont.systemFont(ofSize: Self.capturedTextSize)])
+            if let initial = templatedBody(for: notebookID, title: title, content: content) {
+                return createNote(in: notebookID, initial: initial)
+            }
+        }
         return createNote(in: notebookID, initial: Self.capturedText(title: title, body: body))
     }
 

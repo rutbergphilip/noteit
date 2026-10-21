@@ -5,6 +5,7 @@ struct MainView: View {
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var notebookDraft: NotebookDraft?
+    @State private var templateRequest: TemplatePickerRequest?
     @StateObject private var navigation = NavigationModel()
 
     var body: some View {
@@ -22,6 +23,15 @@ struct MainView: View {
         .sheet(item: $notebookDraft) { draft in
             NotebookEditSheet(draft: draft)
                 .environmentObject(store)
+        }
+        .sheet(item: $templateRequest) { request in
+            TemplatePickerSheet(request: request)
+                .environmentObject(store)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .noteItShowTemplatePicker)) { note in
+            guard controlActiveState == .key || NSApp.keyWindow == nil,
+                  let request = note.object as? TemplatePickerRequest else { return }
+            templateRequest = request
         }
         .onReceive(NotificationCenter.default.publisher(for: .noteItNewNotebook)) { _ in
             guard controlActiveState == .key || NSApp.keyWindow == nil else { return }

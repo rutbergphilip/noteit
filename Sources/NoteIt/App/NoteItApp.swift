@@ -50,6 +50,12 @@ struct NoteItCommands: Commands {
             }
             .menuShortcut(.newNote)
 
+            Button("New Note from Template…") {
+                WindowRouter.showMainWindow()
+                NotificationCenter.default.post(name: .noteItShowTemplatePicker, object: TemplatePickerRequest(mode: .newNote))
+            }
+            .menuShortcut(.newNoteFromTemplate)
+
             Button("New Notebook…") {
                 NotificationCenter.default.post(name: .noteItNewNotebook, object: nil)
             }
@@ -92,6 +98,10 @@ struct NoteItCommands: Commands {
                 NSApp.sendAction(#selector(NoteItTextView.linkToNote(_:)), to: nil, from: nil)
             }
             .menuShortcut(.linkToNote)
+
+            Button("Insert Template…") {
+                NSApp.sendAction(#selector(NoteItTextView.showInsertTemplatePicker(_:)), to: nil, from: nil)
+            }
         }
 
         CommandGroup(after: .toolbar) {

@@ -534,6 +534,16 @@ final class NoteStore: ObservableObject {
     /// Creates a note in the notebook implied by the current sidebar selection and selects it.
     @discardableResult
     func createNoteInCurrentContext(initial: NSAttributedString? = nil) -> NoteMeta {
+        let notebookID = prepareCurrentContextForNewNote()
+        let template = initial == nil ? defaultTemplateID(for: notebookID) : nil
+        let meta = template.map { createNote(fromTemplate: $0, title: "", in: notebookID) }
+            ?? createNote(in: notebookID, initial: initial)
+        selectedNoteID = meta.id
+        return meta
+    }
+
+    /// The selected notebook, if any; leaves a selection the new note would be hidden in, and clears the search.
+    func prepareCurrentContextForNewNote() -> UUID? {
         var notebookID: UUID?
         switch selection {
         case .notebook(let id):
@@ -544,9 +554,7 @@ final class NoteStore: ObservableObject {
             break
         }
         searchText = ""
-        let meta = createNote(in: notebookID, initial: initial)
-        selectedNoteID = meta.id
-        return meta
+        return notebookID
     }
 
     /// Persists the metadata removal first, then moves the body into `.trash` (never deleted outright).
@@ -1339,8 +1347,10 @@ final class NoteStore: ObservableObject {
         return fields
     }
 
-    nonisolated private static func revisionFields(_ nb: Notebook) -> [String] {
-        ["notebook", nb.name, nb.symbol, nb.colorHex, String(nb.sortIndex)]
+    nonisolated static func revisionFields(_ nb: Notebook) -> [String] {
+        let fields = ["notebook", nb.name, nb.symbol, nb.colorHex, String(nb.sortIndex)]
+        guard let template = nb.defaultTemplateID else { return fields }
+        return fields + ["template \(template.uuidString)"]
     }
 
     /// SHA-256 over the id, the stable fields and the body package's files (sorted by path), as a v8 UUID.

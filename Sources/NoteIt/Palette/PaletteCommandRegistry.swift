@@ -25,6 +25,29 @@ enum PaletteCommandRegistry {
             command("newNote", "New Note", symbol: "square.and.pencil", shortcut: shortcuts.current(.newNote)?.display, keywords: ["create", "add"]) {
                 NotificationCenter.default.post(name: .noteItNewNote, object: nil)
             },
+            command("newNoteFromTemplate", "New Note from Template…", symbol: "doc.on.doc", shortcut: shortcuts.current(.newNoteFromTemplate)?.display,
+                    keywords: ["create", "add", "template"]) {
+                WindowRouter.showMainWindow()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    NotificationCenter.default.post(name: .noteItShowTemplatePicker, object: TemplatePickerRequest(mode: .newNote))
+                }
+            },
+            command("insertTemplate", "Insert Template…", symbol: "doc.on.doc", shortcut: nil, keywords: ["template", "snippet"],
+                    available: hasLiveNote && liveNote?.isLocked != true) {
+                WindowRouter.showMainWindow()
+                WindowRouter.focusEditor()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NSApp.sendAction(#selector(NoteItTextView.showInsertTemplatePicker(_:)), to: nil, from: nil)
+                }
+            },
+            command("newTemplate", "New Template", symbol: "doc.on.doc", shortcut: nil, keywords: ["create", "add", "template"]) {
+                let meta = store.createTemplate()
+                WindowRouter.showMainWindow()
+                store.searchText = ""
+                if let notebookID = meta.notebookID { store.selection = .notebook(notebookID) }
+                store.selectedNoteID = meta.id
+                WindowRouter.focusEditor()
+            },
             command("newNotebook", "New Notebook…", symbol: "folder.badge.plus", shortcut: shortcuts.current(.newNotebook)?.display, keywords: ["create", "add", "folder"]) {
                 WindowRouter.showMainWindow()
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {

@@ -101,6 +101,40 @@ extension NoteItTextView {
 }
 
 extension NoteItTextView {
+    /// Format › Insert Template…: picks a template, then `insertTemplate(_:)`.
+    @objc func showInsertTemplatePicker(_ sender: Any?) {
+        guard isEditable, linkHost != nil else { return }
+        NotificationCenter.default.post(name: .noteItShowTemplatePicker,
+                                        object: TemplatePickerRequest(mode: .insert(.init(self))))
+    }
+
+    /// Inserts the expanded template at the caret as one undo step; `{{title}}` is this note's title.
+    func insertTemplate(_ templateID: UUID) {
+        guard isEditable, let host = linkHost,
+              let expansion = host.store.expandedTemplate(templateID, title: host.store.note(with: host.noteID)?.title ?? "", date: Date())
+        else { return }
+        let selection = selectedRange()
+        let firstPara = paragraphRanges(for: NSRange(location: 0, length: 0)).first
+        let onEmptyFirstLine = selection.location == 0 && (firstPara.map { nsString.substring(with: $0).trimmingCharacters(in: .newlines).isEmpty } ?? true)
+        let (text, caret) = Self.templateInsertion(expansion, keepsTitle: onEmptyFirstLine)
+        guard text.length > 0 else { return }
+        breakUndoCoalescing()
+        let end = selection.location + (caret ?? text.length)
+        replace(selection, with: text, select: NSRange(location: end, length: 0), actionName: "Insert Template")
+        breakUndoCoalescing()
+    }
+
+    /// The expansion without its title paragraph unless `keepsTitle` (or it is the only paragraph), and the caret in it.
+    static func templateInsertion(_ expansion: TemplateExpansion, keepsTitle: Bool) -> (NSAttributedString, Int?) {
+        let ns = expansion.text.string as NSString
+        let newline = ns.range(of: "\n")
+        guard !keepsTitle, newline.location != NSNotFound, newline.location > 0 else { return (expansion.text, expansion.caret) }
+        let dropped = NSMaxRange(newline)
+        let rest = expansion.text.attributedSubstring(from: NSRange(location: dropped, length: ns.length - dropped))
+        let caret = expansion.caret.flatMap { $0 >= dropped ? $0 - dropped : nil }
+        return (rest, caret)
+    }
+
     /// The line rect of the character at `location`, in view coordinates.
     func lineRect(at location: Int) -> NSRect? {
         guard let layoutManager, let textContainer, location <= storage.length else { return nil }

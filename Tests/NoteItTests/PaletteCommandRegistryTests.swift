@@ -159,8 +159,8 @@ final class PaletteCommandRegistryTests: XCTestCase {
         store.selectedNoteID = id
 
         let expected: Set<String> = [
-            "newNote", "newNotebook", "searchNotes", "find", "findReplace", "export", "print", "copyMarkdown",
-            "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn",
+            "newNote", "newNoteFromTemplate", "newTemplate", "newNotebook", "searchNotes", "find", "findReplace", "export",
+            "print", "copyMarkdown", "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn",
         ]
         XCTAssertEqual(availableIDs(store), expected)
         XCTAssertEqual(try XCTUnwrap(command("deleteNote", in: store)).info.title, "Delete Now…")
@@ -181,6 +181,8 @@ final class PaletteCommandRegistryTests: XCTestCase {
             "print": MenuShortcutCommand.print.defaultShortcut,
             "copyMarkdown": MenuShortcutCommand.copyAsMarkdown.defaultShortcut,
             "copyNoteLink": MenuShortcutCommand.copyNoteLink.defaultShortcut,
+            "newNoteFromTemplate": MenuShortcutCommand.newNoteFromTemplate.defaultShortcut,
+            "newTemplate": nil,
             "versionHistory": MenuShortcutCommand.versionHistory.defaultShortcut,
             "deleteNote": MenuShortcutCommand.deleteNote.defaultShortcut,
             "settings": MenuShortcuts.settings,
@@ -228,6 +230,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
             .newNote: "newNote", .newNotebook: "newNotebook", .searchNotes: "searchNotes", .find: "find",
             .findAndReplace: "findReplace", .exportNote: "export", .print: "print", .copyAsMarkdown: "copyMarkdown",
             .copyNoteLink: "copyNoteLink", .versionHistory: "versionHistory", .deleteNote: "deleteNote",
+            .newNoteFromTemplate: "newNoteFromTemplate",
         ]
         for (command, id) in paletteIDs {
             XCTAssertEqual(titles[id], command.title, id)
