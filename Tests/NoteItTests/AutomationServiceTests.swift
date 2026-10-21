@@ -416,14 +416,119 @@ final class AutomationServiceTests: XCTestCase {
         XCTAssertEqual(service.tags().map(\.count), [1, 2])
     }
 
+    // MARK: Shortcuts entities
+
+    func testNoteEntityFromMeta() throws {
+        let (service, store) = makeService()
+        let work = store.createNotebook(name: "Work", symbol: "folder", colorHex: "#0A84FF")
+        let meta = try service.create(title: "Plan", body: "steps", format: .text, notebook: .id(work.id), tags: ["q3"],
+                                      pinned: false)
+        let entity = service.noteEntity(meta)
+        XCTAssertEqual(entity.id, meta.id)
+        XCTAssertEqual(entity.title, "Plan")
+        XCTAssertEqual(entity.notebookName, "Work")
+        XCTAssertEqual(entity.tags, ["q3"])
+        XCTAssertEqual(entity.createdAt, meta.createdAt)
+        XCTAssertEqual(entity.modifiedAt, meta.updatedAt)
+
+        let untitled = store.createNote(in: nil, initial: NSAttributedString(string: ""))
+        let bare = service.noteEntity(untitled)
+        XCTAssertEqual(bare.title, "New Note")
+        XCTAssertNil(bare.notebookName)
+    }
+
+    func testEntityQueryExcludesRecentlyDeleted() throws {
+        let (service, _) = makeService()
+        let kept = try service.create(title: "Keep apples", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
+        let gone = try service.create(title: "Gone apples", body: "", format: .text, notebook: nil, tags: [], pinned: false).id
+        try service.moveToRecentlyDeleted(gone)
+        XCTAssertEqual(service.noteEntities(for: [gone, kept, UUID()]).map(\.id), [kept])
+        XCTAssertEqual(try service.noteEntities(matching: "apples").map(\.id), [kept])
+        XCTAssertEqual(service.suggestedNoteEntities().map(\.id), [kept])
+    }
+
+    func testSuggestedEntitiesAreTenMostRecent() throws {
+        let (service, store) = makeService()
+        var ids: [UUID] = []
+        for index in 0..<15 {
+            let id = store.createNote(in: nil, initial: NSAttributedString(string: "Note \(index)")).id
+            store.notes[store.noteIndex(id)!].updatedAt = clock.addingTimeInterval(Double(index))
+            ids.append(id)
+        }
+        store.togglePin(ids[0])
+        store.notes[store.noteIndex(ids[0])!].updatedAt = clock.addingTimeInterval(-100)
+        XCTAssertEqual(service.suggestedNoteEntities().map(\.id), Array(ids.suffix(10).reversed()))
+        XCTAssertEqual(try service.noteEntities(matching: "  ").map(\.id), Array(ids.suffix(10).reversed()))
+    }
+
     // MARK: Daily, limits, Markdown and attachments
 
-    func testDailyBeforeLinkingThrowsUnavailable() {
-        for available in [false, true] {
-            let (service, _) = makeService(dailyAvailable: available)
-            assertThrows(.dailyNotesUnavailable) { try service.daily(date: Date(), create: true) }
-            assertThrows(.dailyNotesUnavailable) { try service.appendToDaily(text: "x", format: .plain, timestamp: true, date: Date()) }
+    func testDailyUnavailableWhileGateOff() {
+        let (service, store) = makeService(dailyAvailable: false)
+        assertThrows(.dailyNotesUnavailable) { try service.daily(date: Date(), create: true) }
+        assertThrows(.dailyNotesUnavailable) { try service.appendToDaily(text: "x", format: .plain, timestamp: true, date: Date()) }
+        XCTAssertTrue(store.notes.isEmpty)
+        XCTAssertTrue(store.notebooks.isEmpty)
+    }
+
+    /// 15:05 local time on the clock's day.
+    private func afternoon() -> Date {
+        Calendar.current.date(bySettingHour: 15, minute: 5, second: 0, of: clock)!
+    }
+
+    func testDailyCreateAndAppend() throws {
+        let (service, store) = makeService(dailyAvailable: true)
+        XCTAssertNil(try service.daily(date: clock, create: false))
+        let created = try XCTUnwrap(try service.daily(date: clock, create: true))
+        XCTAssertEqual(store.notebook(with: try XCTUnwrap(created.notebookID))?.name, NoteStore.dailyNotesNotebookName)
+        XCTAssertEqual(try service.daily(date: clock, create: false)?.id, created.id)
+        let appended = try service.appendToDaily(text: "Called Sam", format: .plain, timestamp: false, date: clock)
+        XCTAssertEqual(appended.id, created.id)
+        XCTAssertTrue(store.body(for: created.id).string.hasSuffix("\n- Called Sam"))
+        let tomorrow = Calendar.current.date(byAdding: .day, value: 1, to: clock)!
+        let other = try service.appendToDaily(text: "Later", format: .plain, timestamp: false, date: tomorrow)
+        XCTAssertNotEqual(other.id, created.id)
+        assertThrows(.invalidInput("Give the text to add.")) {
+            try service.appendToDaily(text: "  \n", format: .plain, timestamp: true, date: clock)
         }
+    }
+
+    func testDailyAppendGoesThroughDailyLogAppender() throws {
+        clock = afternoon()
+        let (service, store) = makeService(dailyAvailable: true)
+        let meta = try service.appendToDaily(text: "Shipped\nthe build", format: .plain, timestamp: true, date: clock)
+        let body = store.body(for: meta.id).string
+        let expected = try XCTUnwrap(DailyLogLine.format(text: "Shipped\nthe build", at: clock, timeZone: .current))
+        XCTAssertEqual(expected, "- 15:05 Shipped the build")
+        XCTAssertTrue(body.hasSuffix("\n" + expected), body)
+        XCTAssertFalse(body.contains("PM"))
+    }
+
+    func testDailyAppendMarkdownFormat() throws {
+        let (service, store) = makeService(dailyAvailable: true)
+        let meta = try service.appendToDaily(text: "Read **this** today", format: .markdown, timestamp: false, date: clock)
+        let body = store.body(for: meta.id)
+        XCTAssertTrue(body.string.hasSuffix("\n- Read this today"), body.string)
+        XCTAssertFalse(body.string.contains("**"))
+        let range = (body.string as NSString).range(of: "this", options: .backwards)
+        let font = try XCTUnwrap(body.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains(.bold))
+    }
+
+    func testDailyAppendWithoutTimestamp() throws {
+        clock = afternoon()
+        let (service, store) = makeService(dailyAvailable: true)
+        let meta = try service.appendToDaily(text: "No time", format: .plain, timestamp: false, date: clock)
+        _ = try service.appendToDaily(text: "With time", format: .plain, timestamp: true, date: clock)
+        let lines = store.body(for: meta.id).string.components(separatedBy: "\n")
+        XCTAssertEqual(Array(lines.suffix(2)), ["- No time", "- 15:05 With time"])
+    }
+
+    func testDailyAppendToLockedNoteFails() throws {
+        let (service, store) = makeService(dailyAvailable: true)
+        let meta = try XCTUnwrap(try service.daily(date: clock, create: true))
+        lock(store, meta.id)
+        assertThrows(.noteLocked) { try service.appendToDaily(text: "x", format: .plain, timestamp: true, date: clock) }
     }
 
     func testTextLimitIsEnforced() async throws {

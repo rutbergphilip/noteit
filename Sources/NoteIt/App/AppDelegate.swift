@@ -1,4 +1,5 @@
 import AppKit
+import CoreSpotlight
 import NoteItSync
 import SwiftUI
 
@@ -32,6 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             PrefKey.urlSchemeChangesWithoutAsking: false,
             PrefKey.localAPIEnabled: false,
             PrefKey.localAPIPort: 0,
+            PrefKey.spotlightEnabled: true,
+            PrefKey.spotlightIncludesText: true,
         ])
         URLSchemeHandler.shared.install()
         applyActivationPolicy()
@@ -42,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Unbundled runs (`swift run`) have no .icns; show the same artwork in the Dock.
             NSApp.applicationIconImage = artwork
         }
+        SpotlightIndexer.shared.start()
         NoteStore.shared.startRecentlyDeletedMaintenance()
         AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
@@ -102,8 +106,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         NoteStore.shared.flush()
+        SpotlightIndexer.shared.finishBeforeQuit()
         AutomationService.shared.staged.removeAll()
         LocalAPIController.shared.shutDown()
+    }
+
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        guard userActivity.activityType == CSSearchableItemActionType,
+              let raw = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+              let id = UUID(uuidString: raw) else { return false }
+        WindowRouter.showMainWindow()
+        NoteStore.shared.reveal(id)
+        return true
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

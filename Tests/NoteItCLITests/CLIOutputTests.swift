@@ -204,6 +204,27 @@ final class CLIOutputTests: XCTestCase {
         XCTAssertEqual(harness.responder.requests.value.map(\.method), ["POST", "GET", "POST"])
     }
 
+    func testTodayPrintsAndAppends() async throws {
+        let id = UUID()
+        let note = NoteDTO(summary: summary(id, title: "2026-10-21"), format: .markdown, body: "2026-10-21\n- 09:15 Stand-up")
+        let harness = try await harness { _ in .json(note) }
+        try harness.signIn()
+        harness.terminal.stdin = Data()
+        let printed = await harness.run(["today"])
+        XCTAssertEqual(printed, .ok)
+        XCTAssertEqual(harness.terminal.out, "2026-10-21\n- 09:15 Stand-up\n")
+        for arguments in [["today", "Called Sam"], ["append", "--today", "Called Sam"]] {
+            harness.terminal.stdin = nil
+            let exit = await harness.run(arguments)
+            XCTAssertEqual(exit, .ok, "\(arguments)")
+        }
+        let requests = harness.responder.requests.value
+        XCTAssertEqual(requests.map(\.path), ["/v1/daily", "/v1/daily/append", "/v1/daily/append"])
+        for request in requests.dropFirst() {
+            XCTAssertEqual(try APIJSON.decoder().decode(DailyAppendRequest.self, from: request.body), DailyAppendRequest(text: "Called Sam"))
+        }
+    }
+
     func testEditConflictSavesCopy() async throws {
         let id = UUID()
         let revision = UUID()

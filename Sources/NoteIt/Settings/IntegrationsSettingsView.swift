@@ -2,10 +2,12 @@ import AppKit
 import NoteItAPI
 import SwiftUI
 
-/// Settings › Integrations: the Local API, connected apps, the command line tool and links. Spotlight and Share
-/// sections come later.
+/// Settings › Integrations: the Local API, connected apps, the command line tool, links and Spotlight. The Share
+/// section comes later.
 struct IntegrationsSettingsView: View {
     @AppStorage(PrefKey.urlSchemeChangesWithoutAsking) private var changesWithoutAsking = false
+    @AppStorage(PrefKey.spotlightEnabled) private var spotlightEnabled = true
+    @AppStorage(PrefKey.spotlightIncludesText) private var spotlightIncludesText = true
     @AppStorage(PrefKey.localAPIEnabled) private var localAPIEnabled = false
     @AppStorage(PrefKey.localAPIPort) private var localAPIPort = 0
     @ObservedObject private var api = LocalAPIController.shared
@@ -64,6 +66,20 @@ struct IntegrationsSettingsView: View {
                 SettingsFootnote(text: "Links from other apps that create or add to a note ask first. Links that only open something never ask.")
             } header: {
                 Text("Links")
+            }
+
+            Section {
+                Toggle("Show notes in Spotlight", isOn: $spotlightEnabled)
+                Toggle("Include note text", isOn: $spotlightIncludesText)
+                    .disabled(!spotlightEnabled)
+                HStack {
+                    Spacer()
+                    Button("Rebuild Spotlight Index") { SpotlightIndexer.shared.rebuildNow() }
+                        .disabled(!spotlightEnabled)
+                }
+                SettingsFootnote(text: "Notes are added to this Mac's Spotlight index. They never leave your Mac.")
+            } header: {
+                Text("Spotlight")
             }
         }
         .formStyle(.grouped)

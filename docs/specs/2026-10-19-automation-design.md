@@ -138,7 +138,7 @@ Build: SwiftPM doesn't run Xcode's App Intents metadata step. `scripts/build_app
 - Indexing runs off the main actor in batches of 100. Plain text is read on the main actor one note at a time and handed over, so a 5,000-note library never blocks typing for more than one note read.
 - **A derived index.** `SpotlightIndexer` registers with organise's `DerivedIndex` registry like every other indexer (link index, image text, semantic index, tasks). `noteChanged` (a body change or a new note) reindexes the note, `noteRemoved` removes it (it is also called when a note is locked), `metadataChanged` (metadata-only changes, which never call `noteChanged`) reindexes or removes it after a pin, notebook move, tag change, move to Recently Deleted or restore from Recently Deleted, `rebuild` re-adds every note, and `flush` hands pending batches to Core Spotlight. Automation adds no hook to `NoteStore.swift`.
 - Spotlight doesn't subscribe to `LibraryChangeFeed`; every change arrives through the registry hooks above. Notebook rename updates nothing (Spotlight shows the notebook only through the domain).
-- Full rebuild when the setting is turned on, when **Rebuild Spotlight Index** is pressed, and when `spotlightIndexVersion` (UserDefaults, currently `1`) differs from the stored version.
+- Full rebuild when the setting is turned on, when **Rebuild Spotlight Index** is pressed, and when `spotlightIndexVersion` (UserDefaults, currently `1`) differs from the stored version, or at launch when `spotlightIndexDirty` shows a change may not have reached Spotlight (a quit before the hand-over or a failed Core Spotlight call).
 - Turning **Show notes in Spotlight** off calls `deleteAllSearchableItems`.
 - Opening a result arrives as an `NSUserActivity` of type `CSSearchableItemActionType`. `AppDelegate.application(_:continue:restorationHandler:)` reveals the note with `NoteStore.reveal(_:)`.
 - Exclusions (`SpotlightItemBuilder.shouldIndex(_:)`): Recently Deleted; locked notes (`NoteMeta.isLocked`; locking a note removes its item through the registry); unbundled runs (`swift run`, no bundle identifier), where the indexer stays off.
@@ -378,7 +378,7 @@ The **Integrations** tab, position 8 in the program's frozen Settings table, aft
 | Share | Footnote: "Share → NoteIt saves text, links and images from any app as a new note. Turn it on in System Settings › Extensions › Sharing." |
 | Spotlight | **Show notes in Spotlight** (on), **Include note text** (on), **Rebuild Spotlight Index**. |
 
-UserDefaults keys (in `PrefKey`): `localAPIEnabled`, `localAPIPort` (0 = automatic), `localAPIClientLastUsed`, `urlSchemeChangesWithoutAsking` (false), `spotlightEnabled`, `spotlightIncludesText`, `spotlightIndexVersion`.
+UserDefaults keys (in `PrefKey`): `localAPIEnabled`, `localAPIPort` (0 = automatic), `localAPIClientLastUsed`, `urlSchemeChangesWithoutAsking` (false), `spotlightEnabled`, `spotlightIncludesText`, `spotlightIndexVersion`, `spotlightIndexDirty`.
 
 ### 9. Menu and command palette
 

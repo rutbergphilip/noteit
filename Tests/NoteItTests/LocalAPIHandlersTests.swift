@@ -33,11 +33,11 @@ final class LocalAPIHandlersTests: XCTestCase {
         let registry: LocalAPIRouteRegistry
     }
 
-    private func makeFixture(loading: Bool = false, opened: ((UUID) -> Void)? = nil) -> Fixture {
+    private func makeFixture(loading: Bool = false, dailyAvailable: Bool = false, opened: ((UUID) -> Void)? = nil) -> Fixture {
         let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
         stores.append(store)
         let staged = StagedUploads(directory: root.appendingPathComponent("staged"))
-        let service = AutomationService(store: store, defaults: defaults, staged: staged, dailyNotesAvailable: { false },
+        let service = AutomationService(store: store, defaults: defaults, staged: staged, dailyNotesAvailable: { dailyAvailable },
                                         isLoading: { loading })
         let registry = LocalAPIRouteRegistry()
         let handlers = LocalAPIHandlers(service: service, registry: registry, openNote: { id in
@@ -493,13 +493,74 @@ final class LocalAPIHandlersTests: XCTestCase {
         XCTAssertNil(f.store.note(with: id))
     }
 
-    func testDailyNotImplementedWhileGateOff() async {
+    func testDailyUnavailableWhileGateOff() async {
         let f = makeFixture()
-        for (route, body) in [(RouteID.daily, Data()), (.dailyAppend, json(DailyAppendRequest(text: "x")))] {
-            let response = await call(f, route, body: body)
+        for (route, query, body) in [(RouteID.daily, ["create": "true"], Data()), (.dailyAppend, [:], json(DailyAppendRequest(text: "x")))] {
+            let response = await call(f, route, query: query, body: body)
             XCTAssertEqual(response.status, 501)
             XCTAssertEqual(errorCode(response), "not_implemented")
         }
+        XCTAssertTrue(f.store.notes.isEmpty)
+    }
+
+    func testDailyCreateAndAppend() async throws {
+        let f = makeFixture(dailyAvailable: true)
+        let appended = try decode(NoteDTO.self, await call(f, .dailyAppend,
+                                                           body: json(DailyAppendRequest(text: "Called Sam", timestamp: false))))
+        XCTAssertEqual(appended.format, .markdown)
+        XCTAssertTrue(appended.body.contains("- Called Sam"), appended.body)
+        let fetched = try decode(NoteDTO.self, await call(f, .daily))
+        XCTAssertEqual(fetched.summary.id, appended.summary.id)
+        XCTAssertEqual(fetched.summary.notebookName, NoteStore.dailyNotesNotebookName)
+
+        let other = try decode(NoteDTO.self, await call(f, .dailyAppend, body: json(DailyAppendRequest(text: "Earlier",
+                                                                                                    date: "2020-02-29"))))
+        XCTAssertNotEqual(other.summary.id, appended.summary.id)
+        XCTAssertTrue(other.body.contains(" Earlier"))
+        let leapDay = try decode(NoteDTO.self, await call(f, .daily, query: ["date": "2020-02-29"]))
+        XCTAssertEqual(leapDay.summary.id, other.summary.id)
+        for bad in ["2020-02-30", "today", "2020-2-1"] {
+            assertEqual(await call(f, .daily, query: ["date": bad]).status, 400, bad)
+        }
+        let markdown = try decode(NoteDTO.self, await call(f, .dailyAppend,
+                                                           body: json(DailyAppendRequest(text: "a **b**", timestamp: false,
+                                                                                         format: .markdown))))
+        XCTAssertTrue(markdown.body.contains("- a **b**"), markdown.body)
+        assertEqual(await call(f, .dailyAppend, body: json(DailyAppendRequest(text: " "))).status, 400)
+    }
+
+    func testDailyGetFormatParam() async throws {
+        let f = makeFixture(dailyAvailable: true)
+        _ = await call(f, .dailyAppend, body: json(DailyAppendRequest(text: "**bold**", timestamp: false, format: .markdown)))
+        let markdown = try decode(NoteDTO.self, await call(f, .daily))
+        XCTAssertEqual(markdown.format, .markdown)
+        XCTAssertTrue(markdown.body.contains("**bold**"))
+        let plain = try decode(NoteDTO.self, await call(f, .daily, query: ["format": "plain"]))
+        XCTAssertEqual(plain.format, .text)
+        XCTAssertTrue(plain.body.contains("- bold"))
+        XCTAssertFalse(plain.body.contains("**"))
+        assertEqual(await call(f, .daily, query: ["format": "html"]).status, 400)
+    }
+
+    func testDailyGetWithoutCreate404() async throws {
+        let f = makeFixture(dailyAvailable: true)
+        let response = await call(f, .daily)
+        XCTAssertEqual(response.status, 404)
+        XCTAssertEqual(errorCode(response), "not_found")
+        XCTAssertTrue(f.store.notes.isEmpty)
+        let created = try decode(NoteDTO.self, await call(f, .daily, query: ["create": "true"]))
+        XCTAssertEqual(f.store.notes.map(\.id), [created.summary.id])
+    }
+
+    func testDailyRouteCreateNeedsWrite() async throws {
+        let f = makeFixture(dailyAvailable: true)
+        let denied = await call(f, .daily, query: ["create": "true"], scopes: [.read])
+        XCTAssertEqual(denied.status, 403)
+        XCTAssertEqual(errorCode(denied), "forbidden_scope")
+        XCTAssertTrue(f.store.notes.isEmpty)
+        assertEqual(await call(f, .daily, scopes: [.read]).status, 404)
+        assertEqual(await call(f, .daily, query: ["create": "true"], scopes: [.write]).status, 200)
+        assertEqual(await call(f, .daily, scopes: [.read]).status, 200)
     }
 
     // MARK: Errors
@@ -530,12 +591,13 @@ final class LocalAPIHandlersTests: XCTestCase {
 
     private var controllers: [LocalAPIController] = []
 
-    private func makeController(defaults: UserDefaults? = nil, store: NoteStore? = nil) -> (LocalAPIController, NoteStore) {
+    private func makeController(defaults: UserDefaults? = nil, store: NoteStore? = nil,
+                                dailyAvailable: Bool = false) -> (LocalAPIController, NoteStore) {
         let store = store ?? NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
         stores.append(store)
         let service = AutomationService(store: store, defaults: defaults ?? self.defaults,
                                         staged: StagedUploads(directory: root.appendingPathComponent("staged")),
-                                        dailyNotesAvailable: { false }, isLoading: { false })
+                                        dailyNotesAvailable: { dailyAvailable }, isLoading: { false })
         let controller = LocalAPIController(service: service, defaults: defaults ?? self.defaults,
                                             clientStore: InMemoryClientStore(),
                                             discoveryDirectory: root.appendingPathComponent("discovery-\(controllers.count)"),
@@ -592,6 +654,45 @@ final class LocalAPIHandlersTests: XCTestCase {
             _ = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/ping")!)
             XCTFail("Still listening")
         } catch {}
+    }
+
+    func testPingHasDailyOnlyWhenAvailable() async throws {
+        defaults.set(true, forKey: PrefKey.localAPIEnabled)
+        var capabilities: [[String]] = []
+        for available in [false, true] {
+            let (controller, _) = makeController(dailyAvailable: available)
+            controller.reconcile()
+            await controller.settle()
+            guard case .on(let port) = controller.status else { return XCTFail("\(controller.status)") }
+            let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/ping")!)
+            capabilities.append(try APIJSON.decoder().decode(PingDTO.self, from: data).capabilities)
+            controller.shutDown()
+        }
+        XCTAssertFalse(capabilities[0].contains("daily"))
+        XCTAssertTrue(capabilities[1].contains("daily"))
+        XCTAssertTrue(capabilities.allSatisfy { $0.contains("events") && $0.contains("attachments") })
+    }
+
+    func testDailyOverHTTP() async throws {
+        defaults.set(true, forKey: PrefKey.localAPIEnabled)
+        let (controller, store) = makeController(dailyAvailable: true)
+        controller.reconcile()
+        await controller.settle()
+        guard case .on(let port) = controller.status else { return XCTFail("\(controller.status)") }
+        let (_, token) = try controller.registry.issue(name: "CLI", kind: .cli, scopes: [.read, .write], origin: nil)
+        var append = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/daily/append")!)
+        append.httpMethod = "POST"
+        append.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        append.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        append.httpBody = json(DailyAppendRequest(text: "From curl", timestamp: false))
+        let (appendData, appendResponse) = try await URLSession.shared.data(for: append)
+        XCTAssertEqual((appendResponse as? HTTPURLResponse)?.statusCode, 200, String(decoding: appendData, as: UTF8.self))
+        var get = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/daily?format=plain")!)
+        get.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, _) = try await URLSession.shared.data(for: get)
+        let note = try APIJSON.decoder().decode(NoteDTO.self, from: data)
+        XCTAssertTrue(note.body.contains("- From curl"), note.body)
+        XCTAssertEqual(store.notes.map(\.id), [note.summary.id])
     }
 
     func testPinnedPortInUseReportsStatus() async throws {

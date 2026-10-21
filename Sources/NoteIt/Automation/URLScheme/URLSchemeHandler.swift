@@ -199,7 +199,11 @@ final class URLSchemeHandler: NSObject {
     }
 
     private func append(to target: URLCommand.AppendTarget, text: String, position: AppendPosition, timestamp: Bool,
-                        callback: XCallback) throws -> Task<Void, Never> {
+                        callback: XCallback) throws -> Task<Void, Never>? {
+        if target == .daily {
+            try appendToDaily(text: text, timestamp: timestamp, callback: callback)
+            return nil
+        }
         let meta: NoteMeta
         do {
             meta = try appendTarget(target)
@@ -223,8 +227,28 @@ final class URLSchemeHandler: NSObject {
         }
     }
 
+    /// Through `DailyLogAppender`, which creates the day's note if needed, so nothing is created before the question.
+    private func appendToDaily(text: String, timestamp: Bool, callback: XCallback) throws {
+        let question = "A link wants to add text to today's daily note."
+        // One reading of the clock, so the note the user approves is the one written to, even across midnight.
+        let day = service.now()
+        let existing: NoteMeta?
+        do {
+            try requireDailyNotes()
+            existing = try service.daily(date: day, create: false)
+            if let existing {
+                if existing.isLocked { throw AutomationError.noteLocked }
+                if service.store.isBodyWriteBlocked(existing.id) { throw AutomationError.noteUnreadable }
+            }
+        } catch let error as AutomationError {
+            try concealFromWeb(error, callback: callback, question: question)
+        }
+        try askFirst(existing.map { "A link wants to add text to “\($0.displayTitle)”." } ?? question, callback: callback)
+        let meta = try service.appendToDaily(text: text, format: .plain, timestamp: timestamp, date: day)
+        succeed(callback, note: meta)
+    }
+
     private func appendTarget(_ target: URLCommand.AppendTarget) throws(AutomationError) -> NoteMeta {
-        if target == .daily { try requireDailyNotes() }
         try service.ensureReady()
         let meta: NoteMeta
         switch target {
@@ -234,8 +258,7 @@ final class URLSchemeHandler: NSObject {
             guard let match = service.findByTitle(title) else { throw .noteTitleNotFound }
             meta = match
         case .daily:
-            guard let daily = try service.daily(date: service.now(), create: true) else { throw .notFound }
-            meta = daily
+            throw .invalidInput(Self.unknownLinkMessage)
         }
         if meta.deletedAt != nil { throw .noteDeleted }
         if meta.isLocked { throw .noteLocked }
