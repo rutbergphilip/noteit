@@ -204,14 +204,18 @@ final class MarkdownImporter {
     }
 
     /// Resolves a wiki-link target to a note in the same import by file name (folded), preferring the one whose
-    /// folders end with the link's path (`[[Work/Plan]]`; a path no imported note matches skips this step), then to
-    /// an existing note with that title, else to an unresolved title link.
+    /// folders end with the link's path (`[[Work/Plan]]`, `[[../Work/Plan]]`), else whose folders end the link's path
+    /// (a vault path when a subfolder was imported); a path no imported note matches skips this step. Then an existing
+    /// note with that title, else an unresolved title link.
     static func wikiLinkResolver(names: [String: [WikiTarget]], existing: @escaping (String) -> UUID?) -> WikiLinkResolver {
         { target, heading, folders in
             let candidates = names[TextFold.fold(target)] ?? []
-            let wanted = folders.map(foldedPathPart)
+            let wanted = folders.filter { !["", ".", ".."].contains($0) }.map(foldedPathPart)
+            func endsWith(_ path: [String], _ tail: [String]) -> Bool {
+                !tail.isEmpty && path.count >= tail.count && Array(path.suffix(tail.count)) == tail
+            }
             let match = wanted.isEmpty ? candidates.first
-                : candidates.first { $0.folders.count >= wanted.count && Array($0.folders.suffix(wanted.count)) == wanted }
+                : candidates.first { endsWith($0.folders, wanted) } ?? candidates.first { endsWith(wanted, $0.folders) }
             if let id = match?.id ?? existing(target) { return .note(id: id, heading: heading) }
             return .unresolved(title: target, heading: heading)
         }

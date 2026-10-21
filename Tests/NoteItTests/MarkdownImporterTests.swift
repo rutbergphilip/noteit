@@ -389,6 +389,18 @@ final class MarkdownImporterTests: XCTestCase {
         XCTAssertEqual(withExisting("Plan", nil, ["Home"]), .note(id: existing, heading: nil))
     }
 
+    func testRelativeAndVaultPathLinksStillResolve() {
+        let plan = UUID(), other = UUID()
+        let names = ["plan": [MarkdownImporter.WikiTarget(id: other, folders: ["home"]),
+                              MarkdownImporter.WikiTarget(id: plan, folders: ["work"])]]
+        let resolve = MarkdownImporter.wikiLinkResolver(names: names, existing: { _ in nil })
+        XCTAssertEqual(resolve("Plan", nil, ["..", "Work"]), .note(id: plan, heading: nil))
+        XCTAssertEqual(resolve("Plan", nil, [".", "", "Work"]), .note(id: plan, heading: nil))
+        XCTAssertEqual(resolve("Plan", nil, ["Area", "Work"]), .note(id: plan, heading: nil), "vault path, subfolder imported")
+        XCTAssertEqual(resolve("Plan", nil, ["."]), .note(id: other, heading: nil))
+        XCTAssertEqual(resolve("Plan", nil, ["Area", "Misc"]), .unresolved(title: "Plan", heading: nil))
+    }
+
     func testLinksToNotesLeftOutBecomeTitleLinks() async throws {
         let vault = base.appendingPathComponent("Vault", isDirectory: true)
         try write("# Alpha\nSee [[Beta]] and [[Gamma#Top]].", to: "Alpha.md", in: vault)
