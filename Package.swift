@@ -71,7 +71,8 @@ let package = Package(
         .testTarget(
             name: "NoteItCoreTests",
             dependencies: ["NoteItCore"],
-            path: "Tests/NoteItCoreTests"
+            path: "Tests/NoteItCoreTests",
+            resources: [.copy("Vectors")]
         ),
         .testTarget(
             name: "NoteItDocTests",

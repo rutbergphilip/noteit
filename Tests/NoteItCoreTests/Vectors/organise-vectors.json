@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "tags": [
+    { "input": "#work", "tags": ["work"] },
+    { "input": "plan #Work/Acme/Invoices today", "tags": ["work/acme/invoices"] },
+    { "input": "#work/", "tags": ["work"] },
+    { "input": "#a/b/c/d/e/f", "tags": ["a/b/c/d/e"] },
+    { "input": "#a/1b", "tags": ["a"] },
+    { "input": "(#x) [#y] \"#z\" ,#w ;#v", "tags": ["x", "y", "z", "w", "v"] },
+    { "input": "site.com/#anchor ?q=#swift a#b", "tags": [] },
+    { "input": "#123 #_ok #été #日本 #mixed-Case_1", "tags": ["_ok", "été", "日本", "mixed-case_1"] },
+    { "input": "#dup #DUP #dup/sub", "tags": ["dup", "dup/sub"] }
+  ],
+  "tokens": [
+    { "input": "pay @due(2026-10-21)", "tokens": [{ "kind": "due", "value": "2026-10-21", "start": 4, "length": 16 }] },
+    { "input": "@due(2026-10-21 14:00)", "tokens": [{ "kind": "due", "value": "2026-10-21 14:00", "start": 0, "length": 22 }] },
+    { "input": "@remind(2026-10-20 09:00)", "tokens": [{ "kind": "remind", "value": "2026-10-20 09:00", "done": false, "start": 0, "length": 25 }] },
+    { "input": "x @remind(2026-10-20 09:00 done)", "tokens": [{ "kind": "remind", "value": "2026-10-20 09:00", "done": true, "start": 2, "length": 30 }] },
+    { "input": "@due(2026-02-30) @remind(2026-10-20) @due(fri)", "tokens": [] },
+    { "input": "#t @due(2026-12-31)", "tokens": [{ "kind": "tag", "value": "t", "start": 0, "length": 2 }, { "kind": "due", "value": "2026-12-31", "start": 3, "length": 16 }] }
+  ],
+  "dates": {
+    "now": "2026-10-19T10:00:00+02:00",
+    "timeZone": "Europe/Stockholm",
+    "cases": [
+      { "input": "today", "due": "2026-10-19", "remind": "2026-10-19 09:00" },
+      { "input": "tonight", "due": "2026-10-19 20:00", "remind": "2026-10-19 20:00" },
+      { "input": "tomorrow", "due": "2026-10-20", "remind": "2026-10-20 09:00" },
+      { "input": "call the supplier tomorrow 9am", "due": "2026-10-20 09:00", "remind": "2026-10-20 09:00" },
+      { "input": "tomorrow at 14:30", "due": "2026-10-20 14:30", "remind": "2026-10-20 14:30" },
+      { "input": "mon", "due": "2026-10-26", "remind": "2026-10-26 09:00" },
+      { "input": "fri", "due": "2026-10-23", "remind": "2026-10-23 09:00" },
+      { "input": "Friday 5pm", "due": "2026-10-23 17:00", "remind": "2026-10-23 17:00" },
+      { "input": "next tuesday", "due": "2026-10-27", "remind": "2026-10-27 09:00" },
+      { "input": "sunday", "due": "2026-10-25", "remind": "2026-10-25 09:00" },
+      { "input": "+3d", "due": "2026-10-22", "remind": "2026-10-22 09:00" },
+      { "input": "+2w", "due": "2026-11-02", "remind": "2026-11-02 09:00" },
+      { "input": "in 3 days", "due": "2026-10-22", "remind": "2026-10-22 09:00" },
+      { "input": "in 2 hours", "due": "2026-10-19 12:00", "remind": "2026-10-19 12:00" },
+      { "input": "14:00", "due": "2026-10-19 14:00", "remind": "2026-10-19 14:00" },
+      { "input": "8:00", "due": "2026-10-20 08:00", "remind": "2026-10-20 08:00" },
+      { "input": "2026-10-21", "due": "2026-10-21", "remind": "2026-10-21 09:00" },
+      { "input": "2026-10-21 14:00", "due": "2026-10-21 14:00", "remind": "2026-10-21 14:00" },
+      { "input": "nothing here", "due": null, "remind": null }
+    ]
+  }
+}
