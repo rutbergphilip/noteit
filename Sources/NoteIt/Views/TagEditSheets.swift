@@ -123,7 +123,7 @@ struct RenameTagSheet: View {
 
     private var problem: String? {
         guard TokenGrammar.normalizedTag(target) != TokenGrammar.normalizedTag(tag) else { return nil }
-        return TagRewriter.renameProblem(from: tag, to: target)
+        return TagRewriter.renameProblem(from: tag, to: target, tags: store.tagsInUse)
     }
 
     private var mergeCount: Int? {

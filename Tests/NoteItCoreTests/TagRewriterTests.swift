@@ -24,6 +24,10 @@ final class TagRewriterTests: XCTestCase {
         XCTAssertEqual(TagRewriter.renameProblem(from: "work", to: "work/sub"), TagRewriter.insideItselfMessage)
         XCTAssertEqual(TagRewriter.renameProblem(from: "work", to: "bad name"), TagRewriter.invalidNameMessage)
         XCTAssertNil(TagRewriter.renameProblem(from: "work", to: "#job"))
+        let tags = ["a", "a/b/c/d", "other/x/y/z/w"]
+        XCTAssertEqual(TagRewriter.renameProblem(from: "a", to: "x/y/z", tags: tags), TagRewriter.tooDeepMessage)
+        XCTAssertNil(TagRewriter.renameProblem(from: "a", to: "x/y", tags: tags))
+        XCTAssertNil(TagRewriter.renameProblem(from: "a/b", to: "x/y/z", tags: tags))
     }
 
     func testDeleteRemovesTagAndOneSpace() {

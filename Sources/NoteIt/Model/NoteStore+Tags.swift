@@ -29,7 +29,7 @@ extension NoteStore {
 
     /// Renames `from` (and the tags nested in it) to `to` in every note's text; merges when `to` exists.
     func renameTag(_ from: String, to: String, progress: ((Int, Int) -> Bool)? = nil) async -> TagEditResult {
-        guard TagRewriter.renameProblem(from: from, to: to) == nil else { return TagEditResult() }
+        guard TagRewriter.renameProblem(from: from, to: to, tags: tagsInUse) == nil else { return TagEditResult() }
         let target = to.hasPrefix("#") ? String(to.dropFirst()) : to
         var result = await applyTagEdit(.rename(from: from, to: target), tag: from, actionName: "Rename Tag", progress: progress)
         if !result.cancelled {
@@ -62,6 +62,11 @@ extension NoteStore {
             }
         }
         return leftAlone
+    }
+
+    /// Every tag written in a note, Recently Deleted included.
+    var tagsInUse: [String] {
+        Array(Set(notes.flatMap(\.tags)))
     }
 
     /// Notes not in Recently Deleted that carry `tag` or a tag nested in it.

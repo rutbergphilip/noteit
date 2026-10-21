@@ -77,7 +77,7 @@ enum OrganiseRoutes {
             switch routeID {
             case "organise.tagRename":
                 let request = try decode(TagRenameRequest.self, context, hint: "Send a JSON object with from and to.")
-                if let problem = TagRewriter.renameProblem(from: request.from, to: request.to) {
+                if let problem = TagRewriter.renameProblem(from: request.from, to: request.to, tags: store.tagsInUse) {
                     throw Failure(code: .badRequest, message: problem)
                 }
                 try requireTag(request.from, store: store)

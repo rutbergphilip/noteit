@@ -19,13 +19,19 @@ public struct TextEdit: Sendable, Equatable {
 public enum TagRewriter {
     public static let invalidNameMessage = "Tags can use letters, numbers, - and _, and / to nest."
     public static let insideItselfMessage = "A tag can’t be moved inside itself."
+    public static let tooDeepMessage = "Tags can nest up to \(TokenGrammar.maxTagDepth) levels, and this would put some deeper."
 
-    /// Why `to` can't replace `from`, or nil. Both without `#`.
-    public static func renameProblem(from: String, to: String) -> String? {
+    /// Why `to` can't replace `from`, or nil. Both without `#`. `tags` are the tags in use; a tag nested in `from`
+    /// must still fit within `TokenGrammar.maxTagDepth` levels under `to`.
+    public static func renameProblem(from: String, to: String, tags: [String] = []) -> String? {
         let target = to.hasPrefix("#") ? String(to.dropFirst()) : to
         guard TokenGrammar.isValidTagName(target) else { return invalidNameMessage }
         let source = TokenGrammar.normalizedTag(from), normalized = TokenGrammar.normalizedTag(target)
         if normalized != source, TagTree.matches(normalized, selected: source) { return insideItselfMessage }
+        let sourceDepth = source.split(separator: "/").count, targetDepth = normalized.split(separator: "/").count
+        let deepest = tags.lazy.map(TokenGrammar.normalizedTag).filter { TagTree.matches($0, selected: source) }
+            .map { $0.split(separator: "/").count - sourceDepth }.max() ?? 0
+        if targetDepth + deepest > TokenGrammar.maxTagDepth { return tooDeepMessage }
         return nil
     }
 

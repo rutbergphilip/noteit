@@ -38,6 +38,14 @@ final class TagEditTests: XCTestCase {
         XCTAssertEqual(store.notesTagged("job").map(\.id), [a])
     }
 
+    func testRenameRefusesToNestTagsTooDeep() async {
+        let store = makeStore()
+        let a = add(store, "Plan\n#a and #a/b/c/d")
+        let result = await store.renameTag("a", to: "x/y/z")
+        XCTAssertTrue(result.changed.isEmpty)
+        XCTAssertEqual(text(store, a), "Plan\n#a and #a/b/c/d")
+    }
+
     func testRenameOntoExistingTagMerges() async {
         let store = makeStore()
         let a = add(store, "A\n#work")
