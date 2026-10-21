@@ -361,6 +361,33 @@ final class LocalAPIHandlersTests: XCTestCase {
         assertEqual(await call(f, .search, query: ["q": "oat", "limit": "0"]).status, 400)
     }
 
+    private struct ImageText: ImageTextProviding {
+        var texts: [UUID: String]
+        func imageText(for noteID: UUID) -> String? { texts[noteID] }
+    }
+
+    func testKeywordSearchRanksWithQueryLanguageAndMarksImageMatches() async throws {
+        let f = makeFixture()
+        let work = f.store.createNotebook(name: "Work", symbol: "folder", colorHex: "#0A84FF")
+        let titled = addNote(f.store, "Oat ideas\nporridge oat oat #food", in: work.id)
+        let mentioned = addNote(f.store, "Breakfast\nsome oat")
+        let pictured = addNote(f.store, "Receipt\nnothing here")
+        f.store.registerImageTextProvider(ImageText(texts: [pictured: "oat milk 2.50"]))
+
+        let ranked = try decode(SearchResponseDTO.self, await call(f, .search, query: ["q": "oat"]))
+        XCTAssertEqual(ranked.results.first?.note.id, titled)
+        XCTAssertEqual(Set(ranked.results.map(\.note.id)), [titled, mentioned, pictured])
+        let title = ranked.results.first?.highlights?.first { $0.field == .title }
+        XCTAssertEqual(title?.ranges, [[0, 3]])
+        XCTAssertEqual(ranked.results.first { $0.note.id == pictured }?.matchedIn, "image")
+        XCTAssertNil(ranked.results.first { $0.note.id == mentioned }?.matchedIn)
+
+        let filtered = try decode(SearchResponseDTO.self, await call(f, .search, query: ["q": "oat tag:food"]))
+        XCTAssertEqual(filtered.results.map(\.note.id), [titled])
+        let scoped = try decode(SearchResponseDTO.self, await call(f, .search, query: ["q": "oat", "notebook": work.id.uuidString]))
+        XCTAssertEqual(scoped.results.map(\.note.id), [titled])
+    }
+
     func testUnknownSearchModeIs400() async {
         let f = makeFixture()
         let response = await call(f, .search, query: ["q": "x", "mode": "telepathy"])
@@ -381,8 +408,12 @@ final class LocalAPIHandlersTests: XCTestCase {
         let id = addNote(f.store, "Groceries\nBuy oat milk")
         let keyword = try object(await call(f, .search, query: ["q": "oat"]))
         let first = try XCTUnwrap((keyword["results"] as? [[String: Any]])?.first)
-        XCTAssertNil(first["score"])
-        XCTAssertNil(first["highlights"])
+        XCTAssertNotNil(first["score"] as? Double)
+        let bodyHighlight = try XCTUnwrap((first["highlights"] as? [[String: Any]])?.first)
+        XCTAssertEqual(bodyHighlight["field"] as? String, "body")
+        XCTAssertEqual(first["snippet"] as? String, "Buy oat milk")
+        XCTAssertEqual(bodyHighlight["ranges"] as? [[Int]], [[4, 3]])
+        XCTAssertNil(first["matchedIn"])
 
         let summary = try decode(NoteDTO.self, await call(f, .noteGet, params: ["id": id.uuidString])).summary
         f.registry.registerSearchMode("ranked") { query, _ in

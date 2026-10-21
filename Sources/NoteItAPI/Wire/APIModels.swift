@@ -319,21 +319,24 @@ public struct HighlightDTO: Codable, Sendable, Equatable {
     }
 }
 
-/// `score` and `highlights` are filled by organise's ranker, `matchedBy` by private-ai's modes.
+/// `score`, `highlights` and `matchedIn` are filled by organise's ranker, `matchedBy` by private-ai's modes.
 public struct SearchResultDTO: Codable, Sendable, Equatable {
     public var note: NoteSummaryDTO
     public var snippet: String
     public var score: Double?
     public var highlights: [HighlightDTO]?
     public var matchedBy: [String]?
+    /// `"image"` when the note matched only in text found in its images.
+    public var matchedIn: String?
 
     public init(note: NoteSummaryDTO, snippet: String, score: Double? = nil, highlights: [HighlightDTO]? = nil,
-                matchedBy: [String]? = nil) {
+                matchedBy: [String]? = nil, matchedIn: String? = nil) {
         self.note = note
         self.snippet = snippet
         self.score = score
         self.highlights = highlights
         self.matchedBy = matchedBy
+        self.matchedIn = matchedIn
     }
 }
 

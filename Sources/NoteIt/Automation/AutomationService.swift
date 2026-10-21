@@ -200,6 +200,48 @@ final class AutomationService {
         }
     }
 
+    struct RankedHit {
+        var meta: NoteMeta
+        var snippet: String
+        var score: Double?
+        /// UTF-16 ranges into `meta.title`.
+        var titleRanges: [NSRange]
+        /// UTF-16 ranges into `snippet`.
+        var snippetRanges: [NSRange]
+        var onlyInImage: Bool
+    }
+
+    /// The query language, ranked by best match the way the toolbar search ranks it. A notebook includes its
+    /// sub-notebooks and a tag its nested tags; locked notes match on their title only and give no snippet.
+    func rankedSearch(_ query: String, notebook: NotebookRef?, tag: String?, limit: Int) throws(AutomationError) -> [RankedHit] {
+        try ensureReady()
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { throw .invalidInput("Type something to search for.") }
+        let notebookID: UUID? = try notebook.map { ref throws(AutomationError) in try resolveNotebook(ref) ?? UUID() }
+        let tagPath = tag.map(Self.normalizedTag).flatMap { $0.isEmpty ? nil : $0 }
+        let selection: SidebarSelection = notebookID.map { .notebook($0) } ?? tagPath.map { .tag($0) } ?? .allNotes
+        var results = store.searchResults(for: selection, search: trimmed, order: .bestMatch, decorated: true, now: now())
+        if notebookID != nil, let tagPath {
+            results = results.filter { $0.note.tags.contains { TagTree.matches($0, selected: tagPath) } }
+        }
+        let terms = NoteItCore.SearchQuery.parse(trimmed).highlightTerms.joined(separator: " ")
+        return results.prefix(max(1, min(limit, Self.maxListLimit))).map { result in
+            let meta = result.note
+            let titleLength = (meta.title as NSString).length
+            var hit = RankedHit(meta: visible(meta), snippet: "", score: result.score,
+                                titleRanges: result.titleHighlights.filter { NSMaxRange($0) <= titleLength },
+                                snippetRanges: [], onlyInImage: result.foundInImage)
+            guard !meta.isLocked else { return hit }
+            if let snippet = result.snippet {
+                hit.snippet = snippet.text
+                hit.snippetRanges = snippet.highlights
+            } else {
+                hit.snippet = Self.snippet(NoteStore.bodyAfterTitle(store.plainText(for: meta.id)), query: terms)
+            }
+            return hit
+        }
+    }
+
     // MARK: Notebooks and tags
 
     func notebooks() -> [(Notebook, noteCount: Int)] {
@@ -410,7 +452,7 @@ final class AutomationService {
         return trimmed
     }
 
-    private static func symbol(_ symbol: String?) throws(AutomationError) -> String? {
+    static func symbol(_ symbol: String?) throws(AutomationError) -> String? {
         guard let symbol else { return nil }
         let trimmed = symbol.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, trimmed.count <= 100,

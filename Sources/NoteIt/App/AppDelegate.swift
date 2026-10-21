@@ -52,6 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
         LinkingAPIRoutes.register(in: .shared, store: NoteStore.shared)
+        OrganiseRoutes.register(in: .shared, store: NoteStore.shared)
         _ = LocalAPIController.shared
         PasteAndMatchStyleShortcut.install()
         ReminderNotifications.shared.configure()

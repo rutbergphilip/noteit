@@ -138,11 +138,29 @@ extension NoteStore {
 
     /// Checks or unchecks a task the way the checkbox in the editor does (marker and checked style), as one undoable
     /// change in an open editor. Doesn't record a version, like a click on the checkbox.
-    func setTaskChecked(_ ref: TaskRef, _ checked: Bool) throws {
+    /// Returns the task's paragraph index, which can differ from `ref.paragraph` when the line moved.
+    @discardableResult
+    func setTaskChecked(_ ref: TaskRef, _ checked: Bool) throws -> Int {
+        var paragraph = ref.paragraph
         try editBody(ref.noteID, actionName: checked ? "Check" : "Uncheck", versioning: .none) { body in
             let range = try Self.resolveTask(ref, in: body)
+            paragraph = Self.paragraphIndex(at: range.location, in: body)
             Self.setChecked(checked, paragraph: range, in: body)
         }
+        return paragraph
+    }
+
+    nonisolated static func paragraphIndex(at location: Int, in body: NSAttributedString) -> Int {
+        let ns = body.string as NSString
+        var count = 0
+        var cursor = 0
+        while cursor < location {
+            let found = ns.range(of: "\n", options: [], range: NSRange(location: cursor, length: location - cursor))
+            guard found.location != NSNotFound else { break }
+            count += 1
+            cursor = found.location + 1
+        }
+        return count
     }
 
     static func setChecked(_ checked: Bool, paragraph range: NSRange, in body: NSMutableAttributedString) {
@@ -161,12 +179,17 @@ extension NoteStore {
     }
 
     /// Writes, replaces or (with nil) removes the task's `@due(…)` token; a new token goes at the end of the line.
-    func setDue(_ ref: TaskRef, _ due: LocalDateTime?) throws {
+    /// Returns the task's paragraph index, as `setTaskChecked` does.
+    @discardableResult
+    func setDue(_ ref: TaskRef, _ due: LocalDateTime?) throws -> Int {
         let action = due == nil ? "Remove Due Date" : "Set Due Date"
+        var paragraph = ref.paragraph
         try editBody(ref.noteID, actionName: action, versioning: .none) { body in
             let range = try Self.resolveTask(ref, in: body)
+            paragraph = Self.paragraphIndex(at: range.location, in: body)
             Self.setToken(.due, value: due.map { "@due(\($0.token))" }, paragraph: range, in: body)
         }
+        return paragraph
     }
 
     enum LineToken { case due, remind }
