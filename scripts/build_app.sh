@@ -42,10 +42,21 @@ INTENT_PROTOCOLS="$BUILD_DIR/appintents-protocols.json"
 echo '["AppIntent","AppEntity","TransientAppEntity","AppEnum","EntityQuery","EntityStringQuery","EnumerableEntityQuery","EntityPropertyQuery","DynamicOptionsProvider","AppShortcutsProvider","AppIntentsPackage","_IntentValueRepresentable"]' > "$INTENT_PROTOCOLS"
 BUILD_FLAGS+=(-Xswiftc -emit-const-values -Xswiftc -Xfrontend -Xswiftc -const-gather-protocols-file -Xswiftc -Xfrontend -Xswiftc "$INTENT_PROTOCOLS")
 
-echo "==> Building release binary (${BUILD_FLAGS[*]})"
-swift build "${BUILD_FLAGS[@]}"
 BIN_DIR="$(swift build "${BUILD_FLAGS[@]}" --show-bin-path)"
 BIN="$BIN_DIR/$APP_NAME"
+# Where this build writes the app's swiftconstvalues, so a file left by another kind of build is never used:
+# SwiftPM puts $APP_NAME.swiftconstvalues next to the binary; universal builds go through Xcode's build system,
+# which writes $APP_NAME-primary.swiftconstvalues per architecture (the host's matches --target-triple below).
+if [[ "${NOTEIT_UNIVERSAL:-0}" == "1" ]]; then
+    OBJECTS_DIR="$(dirname "$(dirname "$BIN_DIR")")/Intermediates.noindex/$APP_NAME.build/$(basename "$BIN_DIR")/$APP_NAME.build/Objects-normal"
+    CONST_DIR="$OBJECTS_DIR/$(uname -m)"
+else
+    CONST_DIR="$BIN_DIR/$APP_NAME.build"
+fi
+CONST_NAMES=("$APP_NAME.swiftconstvalues" "$APP_NAME-primary.swiftconstvalues")
+
+echo "==> Building release binary (${BUILD_FLAGS[*]})"
+swift build "${BUILD_FLAGS[@]}"
 
 echo "==> Assembling $APP"
 rm -rf "$APP"
@@ -148,9 +159,16 @@ RESOURCE_BUNDLE="$(dirname "$BIN")/${APP_NAME}_${APP_NAME}.bundle"
 ditto "$RESOURCE_BUNDLE" "$APP/Contents/Resources/$(basename "$RESOURCE_BUNDLE")"
 
 echo "==> Generating App Intents metadata"
-# The newest one is this build's; universal builds write one per architecture and either will do.
-CONST_VALS="$(find "$ROOT/.build" -name "$APP_NAME.swiftconstvalues" -path "*/$APP_NAME.build/*" -print0 | xargs -0 ls -t 2>/dev/null | head -n 1)"
-[[ -n "$CONST_VALS" ]] || { echo "error: missing $APP_NAME.swiftconstvalues" >&2; exit 1; }
+CONST_VALS=""
+for name in "${CONST_NAMES[@]}"; do
+    if [[ -f "$CONST_DIR/$name" ]]; then
+        CONST_VALS="$CONST_DIR/$name"
+        break
+    fi
+done
+[[ -n "$CONST_VALS" ]] || { echo "error: missing $APP_NAME.swiftconstvalues in $CONST_DIR" >&2; exit 1; }
+# Its age can't be checked: the compiler leaves the file untouched when its contents wouldn't change.
+grep -q "CreateNoteIntent" "$CONST_VALS" || { echo "error: $CONST_VALS doesn't list CreateNoteIntent" >&2; exit 1; }
 INTENTS_WORK="$BUILD_DIR/appintents"
 rm -rf "$INTENTS_WORK"
 mkdir -p "$INTENTS_WORK"
@@ -171,6 +189,8 @@ xcrun appintentsmetadataprocessor \
 for f in extract.actionsdata version.json; do
     [[ -f "$APP/Contents/Resources/Metadata.appintents/$f" ]] || { echo "error: App Intents metadata is missing $f" >&2; exit 1; }
 done
+grep -q "CreateNoteIntent" "$APP/Contents/Resources/Metadata.appintents/extract.actionsdata" \
+    || { echo "error: App Intents metadata doesn't list CreateNoteIntent" >&2; exit 1; }
 
 # Signs inside-out with the flags given, without --deep: Sparkle's pieces in the order its documentation gives,
 # then the embedded rows deepest path first, then the app last with its own entitlements.
