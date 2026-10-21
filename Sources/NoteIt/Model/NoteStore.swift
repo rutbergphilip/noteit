@@ -201,8 +201,9 @@ final class NoteStore: ObservableObject {
 
     // MARK: - Queries
 
+    /// Every notebook in sidebar order: each one followed by the notebooks inside it.
     var sortedNotebooks: [Notebook] {
-        notebooks.sorted { $0.sortIndex < $1.sortIndex }
+        notebookTree.flattened(expanded: nil).compactMap { notebook(with: $0.id) }
     }
 
     func notebook(with id: UUID?) -> Notebook? {

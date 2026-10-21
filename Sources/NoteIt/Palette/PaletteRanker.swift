@@ -1,3 +1,4 @@
+import NoteItCore
 import Foundation
 
 struct PaletteCommandInfo: Equatable {
@@ -96,7 +97,7 @@ enum PaletteRanker {
                     id: "notebook:\(notebook.id.uuidString)",
                     kind: .notebook(notebook.id),
                     title: notebook.name,
-                    subtitle: count == 1 ? "1 note" : "\(count) notes",
+                    subtitle: notebookSubtitle(notebook, paths: names, count: count),
                     symbol: notebook.symbol,
                     shortcut: nil,
                     matchedIndices: match.matchedIndices
@@ -183,6 +184,13 @@ enum PaletteRanker {
         (title.first?.isWhitespace ?? false) || (title.last?.isWhitespace ?? false)
     }
 
+    /// A nested notebook names its parents, e.g. `Work › Clients · 3 notes`.
+    private static func notebookSubtitle(_ notebook: Notebook, paths: [UUID: String], count: Int) -> String {
+        let notes = count == 1 ? "1 note" : "\(count) notes"
+        guard let parent = notebook.parent, let path = paths[parent], paths[notebook.id] != notebook.name else { return notes }
+        return "\(path) · \(notes)"
+    }
+
     private static func noteItem(_ note: NoteMeta, names: [UUID: String], indices: [Int]) -> PaletteItem {
         PaletteItem(
             id: "note:\(note.id.uuidString)",
@@ -196,9 +204,12 @@ enum PaletteRanker {
     }
 
     private static func notebookNames(_ notebooks: [Notebook]) -> [UUID: String] {
+        let tree = NotebookTree(notebooks.map {
+            NotebookNodeInput(id: $0.id, parentID: $0.parent, sortIndex: $0.sortIndex, name: $0.name)
+        })
         var names: [UUID: String] = [:]
         for notebook in notebooks where names[notebook.id] == nil {
-            names[notebook.id] = notebook.name
+            names[notebook.id] = tree.path(of: notebook.id).joined(separator: " › ")
         }
         return names
     }

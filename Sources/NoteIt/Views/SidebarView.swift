@@ -27,11 +27,13 @@ struct SidebarView: View {
                 }
             }
 
-            Section("Notebooks") {
-                ForEach(store.sortedNotebooks) { notebook in
-                    notebookRow(notebook)
-                }
-                .onMove { store.moveNotebooks(from: $0, to: $1) }
+            Section {
+                NotebookOutlineRows(parent: nil) { notebookRow($0) }
+            } header: {
+                Text("Notebooks")
+                    .dropDestination(for: String.self) { items, _ in
+                        SidebarDragPayload.drop(items, on: nil, store: store)
+                    }
             }
 
             let tags = store.tagTree
@@ -84,8 +86,8 @@ struct SidebarView: View {
         ) { notebook in
             Button("Delete Notebook", role: .destructive) { store.deleteNotebook(notebook.id) }
             Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("Its notes will be moved to Recently Deleted.")
+        } message: { notebook in
+            Text(deleteMessage(notebook))
         }
     }
 
@@ -154,16 +156,25 @@ struct SidebarView: View {
         }
         .badge(store.count(for: .notebook(notebook.id)))
         .tag(SidebarSelection.notebook(notebook.id))
-        .dropDestination(for: String.self) { items, _ in
-            let ids = noteIDs(from: items)
-            for id in ids { store.moveNote(id, to: notebook.id) }
-            return !ids.isEmpty
-        }
         .contextMenu {
             Button("Rename") { beginRename(notebook) }
             Button("Edit Notebook…") { notebookDraft = NotebookDraft(notebook) }
+            Button("New Notebook Inside…") { notebookDraft = NotebookDraft(parentID: notebook.id) }
+                .disabled(store.notebookTree.depth(of: notebook.id) >= NotebookTree.maxDepth)
+            NotebookMoveMenu(notebook: notebook)
             Divider()
             Button("Delete Notebook…", role: .destructive) { notebookPendingDelete = notebook }
+        }
+    }
+
+    private func deleteMessage(_ notebook: Notebook) -> String {
+        let inner = store.notebookTree.descendants(of: notebook.id).count
+        let notes = store.count(for: .notebook(notebook.id))
+        let noteText = notes == 1 ? "1 note" : "\(notes) notes"
+        switch inner {
+        case 0: return "Its \(noteText) will be moved to Recently Deleted."
+        case 1: return "Its notebook inside and \(noteText) go too. The notes will be moved to Recently Deleted."
+        default: return "Its \(inner) notebooks inside and \(noteText) go too. The notes will be moved to Recently Deleted."
         }
     }
 

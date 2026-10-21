@@ -177,13 +177,13 @@ struct NoteListView: View {
     private func activeContextMenu(for note: NoteMeta) -> some View {
         Button(note.isPinned ? "Unpin" : "Pin") { store.togglePin(note.id) }
         Menu("Move to") {
-            ForEach(store.sortedNotebooks) { notebook in
+            ForEach(store.notebookPickerEntries) { entry in
                 Button {
-                    store.moveNote(note.id, to: notebook.id)
+                    store.moveNote(note.id, to: entry.id)
                 } label: {
-                    Label(notebook.name, systemImage: notebook.symbol)
+                    NotebookPickerLabel(entry)
                 }
-                .disabled(note.notebookID == notebook.id)
+                .disabled(note.notebookID == entry.id)
             }
             Divider()
             Button("No Notebook") { store.moveNote(note.id, to: nil) }

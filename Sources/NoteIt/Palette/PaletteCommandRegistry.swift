@@ -144,8 +144,9 @@ enum PaletteCommandRegistry {
 
         if let liveNote {
             for notebook in store.sortedNotebooks where notebook.id != liveNote.notebookID {
+                let path = store.notebookTree.path(of: notebook.id)
                 list.append(command("move.\(notebook.id.uuidString)", "Move to \(notebook.name)", symbol: notebook.symbol,
-                                    shortcut: nil, keywords: ["notebook", "folder"]) {
+                                    shortcut: nil, keywords: ["notebook", "folder"] + path.dropLast()) {
                     store.moveNote(liveNote.id, to: notebook.id)
                 })
             }

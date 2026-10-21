@@ -88,6 +88,40 @@ final class NestedNotebookTests: XCTestCase {
         XCTAssertEqual(store.notebookTree.roots, [orphan.id])
     }
 
+    func testSortedNotebooksAndPickerFollowTheTree() {
+        let store = makeStore()
+        let a = store.createNotebook(name: "A", symbol: "folder", colorHex: "#0A84FF")
+        let b = store.createNotebook(name: "B", symbol: "folder", colorHex: "#0A84FF")
+        let inner = store.createNotebook(name: "Inner", symbol: "folder", colorHex: "#0A84FF", parentID: a.id)
+        XCTAssertEqual(store.sortedNotebooks.map(\.id), [a.id, inner.id, b.id])
+        XCTAssertEqual(store.notebookPickerEntries.map(\.indentedName), ["A", "\u{2003}Inner", "B"])
+    }
+
+    func testDropPayloadsNestNotebooksAndMoveNotes() {
+        let store = makeStore()
+        let a = store.createNotebook(name: "A", symbol: "folder", colorHex: "#0A84FF")
+        let b = store.createNotebook(name: "B", symbol: "folder", colorHex: "#0A84FF")
+        let note = store.createNote(in: nil, initial: NSAttributedString(string: "N"))
+        XCTAssertTrue(SidebarDragPayload.drop([SidebarDragPayload.notebook(b.id), note.id.uuidString], on: a.id, store: store))
+        XCTAssertEqual(store.notebook(with: b.id)?.parent, a.id)
+        XCTAssertEqual(store.note(with: note.id)?.notebookID, a.id)
+        XCTAssertFalse(SidebarDragPayload.drop([SidebarDragPayload.notebook(a.id)], on: b.id, store: store))
+        XCTAssertTrue(SidebarDragPayload.drop([SidebarDragPayload.notebook(b.id)], on: nil, store: store))
+        XCTAssertNil(store.notebook(with: b.id)?.parent)
+    }
+
+    func testPaletteShowsNotebookPath() {
+        let store = makeStore()
+        let work = store.createNotebook(name: "Work", symbol: "folder", colorHex: "#0A84FF")
+        let clients = store.createNotebook(name: "Clients", symbol: "folder", colorHex: "#0A84FF", parentID: work.id)
+        let note = store.createNote(in: clients.id, initial: NSAttributedString(string: "Acme kickoff"))
+        let items = PaletteRanker.items(query: "acme", notes: store.activeNotes, notebooks: store.sortedNotebooks,
+                                        commands: [], bodyMatches: [:])
+        XCTAssertEqual(items.first { $0.kind == .note(note.id) }?.subtitle, "Work › Clients")
+        let books = PaletteRanker.items(query: "clients", notes: [], notebooks: store.sortedNotebooks, commands: [], bodyMatches: [:])
+        XCTAssertEqual(books.first?.subtitle, "Work · 0 notes")
+    }
+
     func testRevisionFieldsStableForTopLevel() {
         let top = Notebook(name: "A", symbol: "tray", colorHex: "#0A84FF", sortIndex: 1)
         XCTAssertEqual(NoteStore.revisionFields(top), ["notebook", "A", "tray", "#0A84FF", "1"])

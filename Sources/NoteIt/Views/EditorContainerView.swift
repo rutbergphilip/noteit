@@ -125,11 +125,11 @@ struct EditorHeader: View {
     var body: some View {
         HStack(spacing: 10) {
             Menu {
-                ForEach(store.sortedNotebooks) { nb in
+                ForEach(store.notebookPickerEntries) { entry in
                     Button {
-                        store.moveNote(note.id, to: nb.id)
+                        store.moveNote(note.id, to: entry.id)
                     } label: {
-                        Label(nb.name, systemImage: nb.symbol)
+                        NotebookPickerLabel(entry)
                     }
                 }
                 Divider()
