@@ -42,7 +42,7 @@ These can be built in parallel once wave 0 is done.
 
 - [ ] **Automation.** Links that create and open notes, Shortcuts actions, notes in Spotlight, Share to NoteIt from any app, a `noteit` command for the terminal and a local API ([spec](specs/2026-10-19-automation-design.md), [plan](plans/2026-10-19-automation.md)).
 - [ ] **Markdown storage.** Keep your library as a folder of plain Markdown files, with one-click and automatic backups, restore checks, and importers for Evernote and Notion ([spec](specs/2026-10-19-markdown-storage-design.md), [plan](plans/2026-10-19-markdown-storage.md)).
-- [ ] **Linking.** Link notes with `[[`, see backlinks, open today's note with one key, start notes from templates and jump between headings ([spec](specs/2026-10-19-linking-design.md), [plan](plans/2026-10-19-linking.md)).
+- [x] **Linking.** Link notes with `[[`, see backlinks and unlinked mentions, keep link text up to date when a note is renamed, open today's note with one key or from a calendar, start notes from templates and jump between headings ([spec](specs/2026-10-19-linking-design.md), [plan](plans/2026-10-19-linking.md)).
 - [ ] **Organise.** Nested tags and notebooks, renaming and merging tags, smart folders, ranked search with highlighted matches, one list of every checkbox with due dates, and reminders in plain words, so "Call the dentist tomorrow 9am" becomes a notification ([spec](specs/2026-10-19-organise-design.md), [plan](plans/2026-10-19-organise.md)).
 
 ### Wave 2

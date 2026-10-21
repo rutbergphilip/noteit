@@ -148,6 +148,10 @@ Each conversion can be undone with ⌘Z.
 
 Typing `[[` opens a list of notes under the caret that filters as you type. ↑/↓ (or ⌃P/⌃N) move through it, ↩ or Tab inserts the link, and Esc closes it and leaves what you typed. After `#` the list shows the note's headings.
 
+### Template picker and daily calendar
+
+In New Note from Template… and Edit › Insert Template…, ↑/↓ move through the templates, ↩ uses the highlighted one and Esc cancels. In File › Daily Note for Date…, the arrow keys move by a day (← →) or a week (↑ ↓), ↩ opens that day's note and Esc closes the calendar.
+
 ## Menu bar panel
 
 | Shortcut | Action |

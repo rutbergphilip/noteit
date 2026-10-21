@@ -30,6 +30,7 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 | `Hotkeys/` | `HotkeyAction`, `HotkeyManager` (Carbon `RegisterEventHotKey`), `KeyCombo` and the `ShortcutRecorder` view, whose recording session is shared with the menu shortcut recorder |
 | `Settings/` | The Settings window and its General, Shortcuts, Editor, Sync and About tabs, plus `Preferences` (defaults keys) |
 | `Sync/` | `SyncController`, `NoteStoreSyncAdapter`, `SyncConfiguration` (providers and settings) and `Keychain` |
+| `Linking/` | `LinkExtractor` (note links in a body), `LinkIndex` (outgoing links and backlinks), `LinkSuggester` (ranks the `[[` list), `MentionFinder` (unlinked mentions), `OutlineExtractor`, `NavigationHistory` and `NavigationModel` (Go Back and Go Forward), `TemplateExpander` and `LinkingAPIRoutes` (the `linking.*` Local API routes) |
 
 ## Storage
 
@@ -41,6 +42,7 @@ Your library lives in `~/Library/Application Support/NoteIt/`. Set `NOTEIT_DATA_
 ├── library.json                     notebooks and note metadata (pretty-printed, ISO-8601 dates); notes in Recently Deleted have a `deletedAt` date
 ├── library.corrupt-<ts>.json        backup of an unreadable library.json, if that ever happens
 ├── search-index.json                folded plain text of each note, for search
+├── link-index.json                  outgoing note links of each note, for backlinks (rebuilt if missing or stale)
 ├── seed-manifest.json               IDs and revisions of the sample content, until sync is connected
 ├── tombstones.json                  removed notes whose bodies haven't been moved to .trash yet
 ├── sync-state-<hash>.json           last-synced state per remote store (only while sync is set up)
@@ -82,6 +84,15 @@ The editor is an `NSTextView` that stores each note as RTFD.
 - **Markdown shortcuts** are handled in `MarkdownShortcuts.swift`, and every formatting command, with its menu title, toolbar icon and shortcut, is defined in `FormatCommand.swift`. The full list is in [keyboard-shortcuts.md](keyboard-shortcuts.md).
 - **Tags.** `#hashtags` are collected from note text, lowercased. A `#` counts only at the start of the text or after whitespace, an opening bracket or quote, `,` or `;`. Hashtags inside inline code, code blocks and links are ignored.
 - **Search** matches every word of the query against the title and full text. Matching ignores case, accents and character width, using the folded text in `search-index.json`.
+
+## Links, daily notes and templates
+
+- **Links.** A link to a note is an ordinary link whose URL is `noteit://note/<UUID>`, with `?heading=<text>` for a heading. A link to a note that doesn't exist yet is `noteit://note?title=<text>[&heading=<text>]`. `NoteLink` (in `NoteItCore`) parses both, ignoring case, and writes the canonical form. Typing `[[` opens `InlineCompletionController`, a list under the caret that never takes focus; the text view forwards ↑ ↓ ↩ ⇥ and Esc to it. `LinkSuggester` ranks titles with `FuzzyMatcher`.
+- **Link index.** `LinkIndex` is a `DerivedIndex` registered with `NoteStore` before `rebuildDerivedIndexes()` runs, so it's populated at launch. It keeps each note's outgoing links and reverse maps for backlinks and unresolved titles, saved to `link-index.json`. Bodies are parsed off the main thread and only for notes whose revision changed. Locked notes and notes in Recently Deleted contribute no links, so their text never reaches backlinks, previews or mentions.
+- **Inspector.** `LinksPanelView` shows backlinks with a line of context, outgoing links, unlinked mentions (found by `MentionFinder` on a background task) and the note's outline. `RenameTracker` watches the open note's title and `LinkRenameBanner` offers to update the text of links to it; the rewrite goes through `NoteStore.editBody` in batches, keeping a version of each note so it can be undone.
+- **Daily notes.** A daily note is a note in the daily notebook titled with a date (`DailyNoteTitle`, in any of its formats). Days are always counted in the Gregorian calendar in the current time zone (`DayKey.dailyCalendar()`), whatever the system calendar. `NoteStore+DailyUI` keeps a cached day index, reparsing only titles that changed, for Today, the calendar sheet and the header's ‹ › buttons.
+- **Templates.** Notes in the Templates notebook are templates. `TemplateExpander` fills in `{{title}}`, `{{date}}` and `{{time}}` (each with an optional format), `{{clipboard}}` and `{{cursor}}` when a note is created from one, and a notebook can have a default template.
+- **Export and import.** Markdown export writes note links as `[[Title]]` or relative links, and the folder importer turns `[[wiki links]]` back into note links once every file is in.
 
 ## Export
 

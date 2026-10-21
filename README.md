@@ -33,6 +33,13 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
   - Automatic `#hashtag` tags, plus Pinned and Recent (last 7 days) smart views.
   - Search across titles and full text that ignores case and accents.
   - A **command palette** (⌘O) to open notes and notebooks or run commands by typing a few letters.
+- **Link your notes**
+  - Type `[[` to link to another note or one of its headings. Clicking a link to a note that doesn't exist yet creates it.
+  - **Links and Outline** (⌥⌘I) shows the notes that link here, the links in this note, unlinked mentions of its title and its headings. Go Back and Go Forward (⌃⌘← / ⌃⌘→) retrace the notes you opened.
+  - Renaming a note offers to update the text of links to it.
+  - **Daily notes.** ⌃⌘T opens today's note, Today in the sidebar does the same, and a calendar opens any day. There's an optional global hotkey too.
+  - **Templates.** Notes in the Templates notebook can start new notes, with placeholders for the date, time, title and clipboard. A notebook can have a default template.
+  - Wiki links survive Markdown export and come back when you import a folder of Markdown files.
 - **Format richly**
   - Title, heading and subheading styles, bold, italic, underline, strikethrough and inline code.
   - Bulleted, numbered and checklist lists, tables, code blocks, quotes, dividers, links and images.
@@ -139,6 +146,7 @@ Sources/NoteIt/               the macOS app (SwiftUI + AppKit)
 ├── MenuBar/                  menu bar panel, Quick Capture
 ├── Hotkeys/                  Carbon global hotkeys, shortcut recorder
 ├── Settings/                 Settings tabs and preferences
+├── Linking/                  link index, backlinks, link suggestions, outline, templates
 └── Sync/                     SyncController, NoteStore adapter, provider config, Keychain
 Sources/NoteItSync/           sync engine with no AppKit dependency
 ├── Storage/                  folder and S3 backends, SigV4

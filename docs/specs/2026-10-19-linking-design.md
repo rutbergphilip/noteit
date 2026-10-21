@@ -338,6 +338,20 @@ Linking defines these metrics. The benchmarks themselves live in the suite owned
 - Updating heading links when a heading is renamed.
 - Converting `[[ ]]` text that's pasted or already in old notes. Only typing and importing create links.
 
+## As built
+
+The plan's "As built" notes ([plan](../plans/2026-10-19-linking.md)) have the detail. The deviations from this design:
+
+- `LinkIndex` is registered after `NoteStore` has loaded, then `rebuildDerivedIndexes()` runs, because the store loads in its `init`. `notesVersion` can only be changed by the store.
+- There is no Format menu, so **Link to Note…** and **Insert Template…** are in the Edit menu (and the editor's right-click Format submenu and the palette).
+- The sidebar **Today** row is an action that opens today's note; it isn't a list, and `LibraryQuery.today` returns no notes.
+- Daily-note days are always Gregorian days in the current time zone, whatever calendar the system uses, so titles and lookups agree.
+- Rename tracking drops a pending rename when you switch notes; the banner is offered only for the open note.
+- Wiki links are resolved on import only for folder imports (Markdown folders and Obsidian vaults), not single files.
+- Local API notes created from a template never read the clipboard (`{{clipboard}}` is left empty), and fall back to no notebook when the default notebook is Templates.
+- The Open Today's Note Shortcuts action (plan T17) isn't built here; Shortcuts use `noteit://daily` from the automation work.
+- Daily-note title parsing caches its date formatters and parses ISO titles directly, and the daily index reparses only changed titles: building it for 10,000 notes took about 5 s before.
+
 ## Open questions
 
 1. **Markdown export link style.** Wiki links (`[[Name]]`) or standard links (`[text](Name.md)`)? Default: wiki links, which Obsidian, Bear and Logseq read and which round-trip through NoteIt's importer. An export option can be added later.
