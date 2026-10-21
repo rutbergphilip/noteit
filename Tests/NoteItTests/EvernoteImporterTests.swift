@@ -126,6 +126,24 @@ final class EvernoteImporterTests: XCTestCase {
         XCTAssertEqual(ImportTags.sanitized("a/b/c/d/e/f/g"), "a/b/c/d/e-f-g")
         XCTAssertNil(ImportTags.sanitized("   "))
         XCTAssertNil(ImportTags.sanitized("!!!"))
+        XCTAssertEqual(ImportTags.sanitized("C++"), "c-plus-plus")
+        XCTAssertEqual(ImportTags.sanitized("C#"), "c-sharp")
+        XCTAssertEqual(ImportTags.sanitized("+++"), "plus-plus-plus")
+        XCTAssertEqual(ImportTags.sanitized("R&D"), "r-and-d")
+        XCTAssertEqual(ImportTags.sanitized("#todo"), "todo")
+    }
+
+    func testDistinctTagsStayDistinctAndDroppedOnesAreCounted() async throws {
+        let url = try enex([
+            note("One", content: "<div>x</div>", tags: ["C++", "C#", "!!!", "Work"]),
+            note("Two", content: "<div>y</div>", tags: ["c-sharp", "🎉", "work", "C#"]),
+        ], to: "Tags.enex")
+        let store = makeStore()
+        let report = await EvernoteImporter.importFiles([url], into: store)
+        XCTAssertEqual(Set(try meta("One", in: store).tags), ["c-plus-plus", "c-sharp", "work"])
+        XCTAssertEqual(Set(try meta("Two", in: store).tags), ["c-sharp-2", "c-sharp", "work"])
+        XCTAssertEqual(report.tagsSkipped, 2)
+        XCTAssertTrue(report.summary.contains("2 tags with no letters or numbers"), report.summary)
     }
 
     func testResourcesBecomeAttachments() async throws {

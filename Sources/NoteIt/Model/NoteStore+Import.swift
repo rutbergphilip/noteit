@@ -11,6 +11,8 @@ struct ImportReport: Equatable {
     var notesSkipped = 0
     /// Notes imported without the encrypted sections they had (Evernote `en-crypt`).
     var encryptedSectionsSkipped = 0
+    /// Distinct tag names left out because no letters or numbers were left after making them valid.
+    var tagsSkipped = 0
     /// Tables cut to their first `NotionImporter.maxTableRows` rows, by name.
     var truncatedTables: [String] = []
     var cancelled = false
@@ -34,6 +36,9 @@ struct ImportReport: Equatable {
         if attachmentsSkipped > 0 { skipped.append(Self.count(attachmentsSkipped, "attachment", "attachments")) }
         if filesSkipped > 0 { skipped.append(Self.count(filesSkipped, "unreadable file", "unreadable files")) }
         if notesSkipped > 0 { skipped.append(Self.count(notesSkipped, "unreadable note", "unreadable notes")) }
+        if tagsSkipped > 0 {
+            skipped.append(Self.count(tagsSkipped, "tag with no letters or numbers", "tags with no letters or numbers"))
+        }
         if !skipped.isEmpty { parts.append("Skipped \(Self.list(skipped)).") }
         if encryptedSectionsSkipped > 0 {
             parts.append(encryptedSectionsSkipped == 1 ? "1 note had encrypted sections that were skipped."
@@ -180,11 +185,56 @@ extension NoteStore {
     }
 }
 
-/// Tag names from other apps written in NoteIt's tag grammar.
-enum ImportTags {
-    /// `name` as a NoteIt tag without `#`: spaces and punctuation become `-`, a segment that doesn't start with a
-    /// letter gets a leading `_`, and levels past the fifth join the fifth. Nil when nothing usable is left.
+/// Tag names from other apps written in NoteIt's tag grammar. One value per import run keeps names that are
+/// different in the other app different here.
+struct ImportTags {
+    /// Folded original name → tag.
+    private var assigned: [String: String] = [:]
+    /// Tag → the folded original name it was given to.
+    private var owners: [String: String] = [:]
+    /// Folded original names nothing usable was left of.
+    private(set) var dropped: Set<String> = []
+
+    /// The tag for `name` in this run: the same name always gets the same tag, and a name whose tag another name
+    /// already has gets `-2`, `-3`… added.
+    mutating func tag(for name: String) -> String? {
+        let key = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if let tag = assigned[key] { return tag }
+        guard let base = Self.sanitized(name) else {
+            dropped.insert(key)
+            return nil
+        }
+        var tag = base
+        var n = 2
+        while let owner = owners[tag], owner != key {
+            tag = "\(base)-\(n)"
+            n += 1
+        }
+        guard TokenGrammar.isValidTagName(tag) else {
+            dropped.insert(key)
+            return nil
+        }
+        assigned[key] = tag
+        owners[tag] = key
+        return tag
+    }
+
+    /// A line of hashtags for `names`, leaving out tags `body` already has; nil when none are left.
+    mutating func line(for names: [String], excluding body: NSAttributedString) -> String? {
+        var seen = Set(NoteStore.parseTags(body))
+        let tags = names.compactMap { tag(for: $0) }.filter { seen.insert($0).inserted }
+        return tags.isEmpty ? nil : tags.map { "#" + $0 }.joined(separator: " ")
+    }
+
+    /// Symbols that carry meaning in tag names (`C++`, `C#`, `R&D`), spelled out.
+    private static let symbolWords: [Unicode.Scalar: String] = ["+": "plus", "#": "sharp", "&": "and", "@": "at"]
+
+    /// `name` as a NoteIt tag without `#`: `+ # & @` are spelled out, spaces and other punctuation become `-`, a
+    /// segment that doesn't start with a letter gets a leading `_`, and levels past the fifth join the fifth. Nil
+    /// when nothing usable is left.
     static func sanitized(_ name: String) -> String? {
+        var name = Substring(name.trimmingCharacters(in: .whitespacesAndNewlines))
+        while name.first == "#", name.dropFirst().contains(where: { $0.isLetter || $0.isNumber }) { name = name.dropFirst() }
         var segments = name.split(separator: "/").compactMap { segment($0) }
         guard !segments.isEmpty else { return nil }
         if segments.count > TokenGrammar.maxTagDepth {
@@ -193,13 +243,6 @@ enum ImportTags {
         }
         let tag = TokenGrammar.normalizedTag(segments.joined(separator: "/"))
         return TokenGrammar.isValidTagName(tag) ? tag : nil
-    }
-
-    /// A line of hashtags for `names`, leaving out tags `body` already has; nil when none are left.
-    static func line(for names: [String], excluding body: NSAttributedString) -> String? {
-        var seen = Set(NoteStore.parseTags(body))
-        let tags = names.compactMap(sanitized).filter { seen.insert($0).inserted }
-        return tags.isEmpty ? nil : tags.map { "#" + $0 }.joined(separator: " ")
     }
 
     private static func segment(_ raw: Substring) -> String? {
@@ -212,6 +255,10 @@ enum ImportTags {
                 if dash, !out.isEmpty { out.append("-") }
                 dash = false
                 out.append(scalar)
+            } else if let word = symbolWords[scalar] {
+                if !out.isEmpty { out.append("-") }
+                out.append(contentsOf: word.unicodeScalars)
+                dash = true
             } else {
                 dash = true
             }

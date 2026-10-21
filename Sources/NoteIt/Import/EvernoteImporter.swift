@@ -79,6 +79,7 @@ enum EvernoteImporter {
     static func importItems(_ items: [Item], into store: NoteStore,
                             progress: (ImportProgress) -> Void = { _ in }) async -> ImportReport {
         var report = ImportReport()
+        var tagNames = ImportTags()
         let total = await Task.detached { items.reduce(0) { $0 + ENEXReader.countNotes(in: $1.url) } }.value
         progress(ImportProgress(completed: 0, total: total))
         var created: [UUID] = []
@@ -107,7 +108,7 @@ enum EvernoteImporter {
                 if Task.isCancelled { report.cancelled = true; break files }
                 let notebook = store.notebookForImport(path: item.notebook)
                 let meta = autoreleasepool {
-                    store.createImportedNote(body: Self.body(for: note, title: title, report: &report), title: title,
+                    store.createImportedNote(body: Self.body(for: note, title: title, tagNames: &tagNames, report: &report), title: title,
                                              notebookID: notebook.id, createdAt: note.created, updatedAt: note.updated)
                 }
                 created.append(meta.id)
@@ -126,6 +127,7 @@ enum EvernoteImporter {
             if notesInFile == 0, !reader.isExport { report.filesSkipped += 1 }
         }
         progress(ImportProgress(completed: done, total: max(total, done)))
+        report.tagsSkipped = tagNames.dropped.count
         store.resolveTitleLinks(in: created, titles: titles)
         store.flush()
         return report
@@ -134,6 +136,12 @@ enum EvernoteImporter {
     // MARK: Note bodies
 
     static func body(for note: EvernoteNote, title: String, report: inout ImportReport) -> NSAttributedString {
+        var tagNames = ImportTags()
+        return body(for: note, title: title, tagNames: &tagNames, report: &report)
+    }
+
+    static func body(for note: EvernoteNote, title: String, tagNames: inout ImportTags,
+                     report: inout ImportReport) -> NSAttributedString {
         var resources: [String: EvernoteResource] = [:]
         var order: [String] = []
         for resource in note.resources {
@@ -164,7 +172,7 @@ enum EvernoteImporter {
         }
 
         var footer: [String] = []
-        if let tags = ImportTags.line(for: note.tags, excluding: body) { footer.append(tags) }
+        if let tags = tagNames.line(for: note.tags, excluding: body) { footer.append(tags) }
         if let reminder = note.reminder { footer.append(reminderToken(reminder, done: note.reminderDone)) }
         if !footer.isEmpty {
             ensureTrailingNewline(body)
