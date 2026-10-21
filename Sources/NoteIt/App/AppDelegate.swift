@@ -49,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NoteStore.shared.installLinkIndex()
         SpotlightIndexer.shared.start()
         NoteStore.shared.startRecentlyDeletedMaintenance()
+        NoteStore.shared.onMarkdownFolderMissing = { url in
+            DispatchQueue.main.async { LibraryLauncher.contentRootLost(url, dataDir: NoteStore.shared.rootURL) }
+        }
+        NoteStore.shared.startWatchingMarkdownFolder()
         AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
         LinkingAPIRoutes.register(in: .shared, store: NoteStore.shared)
@@ -122,6 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        NoteStore.shared.stopWatchingMarkdownFolder()
         NoteStore.shared.flush()
         SpotlightIndexer.shared.finishBeforeQuit()
         AutomationService.shared.staged.removeAll()

@@ -86,9 +86,35 @@ extension NoteStore {
 
     /// Scans the content folder and applies what changed outside NoteIt. Nothing happens while it is missing.
     func rescanMarkdownFolder() {
-        guard let storage = markdownStorage, storage.contentRootExists else { return }
+        guard let storage = markdownStorage else { return }
+        guard storage.contentRootExists else { return markdownFolderWentMissing() }
+        markdownFolderReportedMissing = false
         let result = FolderScanner.scan(contentRoot: storage.contentRootURL, index: storage.index)
+        guard storage.contentRootExists else { return markdownFolderWentMissing() }
         applyExternalChanges(result, atLaunch: false)
+    }
+
+    /// Starts the FSEvents watcher; the app calls this once the library is loaded.
+    func startWatchingMarkdownFolder() {
+        guard let storage = markdownStorage, markdownWatcher == nil else { return }
+        let watcher = MarkdownFolderWatcher(root: storage.contentRootURL, ledger: storage.ledger,
+                                            onChange: { [weak self] in self?.rescanMarkdownFolder() },
+                                            onRootChanged: { [weak self] in self?.rescanMarkdownFolder() })
+        guard watcher.start() else { return NSLog("NoteIt: couldn't watch \(storage.contentRootURL.path) for changes") }
+        markdownWatcher = watcher
+        rescanMarkdownFolder()
+    }
+
+    func stopWatchingMarkdownFolder() {
+        markdownWatcher?.stop()
+        markdownWatcher = nil
+    }
+
+    private func markdownFolderWentMissing() {
+        guard let storage = markdownStorage, !markdownFolderReportedMissing else { return }
+        markdownFolderReportedMissing = true
+        NSLog("NoteIt: the library folder \(storage.contentRootURL.path) is missing; nothing is written until it is back")
+        onMarkdownFolderMissing?(storage.contentRootURL)
     }
 
     /// At load: the folder is scanned and everything in it becomes the library, `library.json` filling in what
@@ -123,7 +149,7 @@ extension NoteStore {
         }
         var newFiles: [NewFile] = result.added.sorted().map { NewFile(id: nil, path: $0, assign: true) }
         newFiles += result.duplicateIDs.sorted().map { NewFile(id: nil, path: $0, assign: true) }
-        importFiles(newFiles, atLaunch: atLaunch)
+        importFiles(atLaunch ? newFiles : settledFiles(newFiles), atLaunch: atLaunch)
 
         let removed = result.removed.filter { id in
             guard let entry = storage.index.entry(id) else { return false }
@@ -356,6 +382,27 @@ extension NoteStore {
         var id: UUID?
         var path: String
         var assign: Bool
+    }
+
+    /// The files unchanged for `newFileSettleDelay`; a scan is scheduled for the others, which an app may still be
+    /// writing.
+    private func settledFiles(_ files: [NewFile]) -> [NewFile] {
+        guard let storage = markdownStorage else { return [] }
+        let now = markdownClock()
+        var wait: TimeInterval?
+        let settled = files.filter { file in
+            guard let stat = MarkdownFileStat.of(storage.url(of: file.path)) else { return true }
+            let age = now.timeIntervalSince(Date(timeIntervalSince1970: Double(stat.mtimeNs) / 1e9))
+            guard age < newFileSettleDelay else { return true }
+            wait = min(wait ?? .infinity, newFileSettleDelay - max(age, 0))
+            return false
+        }
+        if let wait {
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait + 0.1) { [weak self] in
+                MainActor.assumeIsolated { self?.markdownFolderNeedsScan() }
+            }
+        }
+        return settled
     }
 
     private func importFiles(_ files: [NewFile], atLaunch: Bool) {

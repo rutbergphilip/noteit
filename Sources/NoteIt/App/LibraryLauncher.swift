@@ -22,8 +22,9 @@ struct LibraryLauncher {
         case open(LibraryLocation)
         /// Inkwell is running and the user chose to quit NoteIt: nothing may be opened or written.
         case quitNoteIt
-        /// The Markdown library's content folder isn't there: nothing may be opened or written.
-        case contentRootMissing(URL)
+        /// The Markdown library's content folder isn't there: nothing may be opened or written until the user
+        /// locates it.
+        case contentRootMissing(URL, dataDir: URL)
         /// `library-location.json` is there but can't be used (newer version or format, read error): nothing may be
         /// opened or written. The reason is shown to the user.
         case libraryLocationUnreadable(String)
@@ -37,7 +38,9 @@ struct LibraryLauncher {
     var quitLegacyApp: () -> Bool
     var fileManager: FileManager = .default
     var log: (String) -> Void = { NSLog("%@", $0) }
-    var showContentRootMissing: (URL) -> Void = { LibraryLauncher.presentContentRootMissing($0) }
+    /// Shows the missing folder with the reason the last choice was refused, if any; returns the folder the user
+    /// located, or nil for Quit.
+    var showContentRootMissing: (URL, String?) -> URL? = { LibraryLauncher.presentContentRootMissing($0, refused: $1) }
     var showLibraryLocationUnreadable: (String) -> Void = { LibraryLauncher.presentLibraryLocationUnreadable($0) }
     /// Inspects the Markdown content folder, which may be on a NAS that went away: nil when it didn't answer in time.
     var checkContentRoot: (LibraryLocationFile) -> ContentRootCheck? = { file in
@@ -116,10 +119,10 @@ struct LibraryLauncher {
         guard file.format == .markdown else { return .open(location) }
         guard let check = checkContentRoot(file) else {
             log("NoteIt: the library folder \(file.path) didn't respond")
-            return .contentRootMissing(file.contentRootURL)
+            return .contentRootMissing(file.contentRootURL, dataDir: location.url)
         }
         record(check, in: &file, dataDir: location.url)
-        guard check.isFolder else { return .contentRootMissing(check.root) }
+        guard check.isFolder else { return .contentRootMissing(check.root, dataDir: location.url) }
         return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false, format: .markdown, contentRootURL: check.root,
                                      renameFilesOnTitleChange: file.renameFilesOnTitleChange))
     }
@@ -171,9 +174,16 @@ struct LibraryLauncher {
             log("NoteIt: quitting; Inkwell must quit before its notes can move")
             quit()
             return nil
-        case .contentRootMissing(let url):
+        case .contentRootMissing(let url, let dataDir):
+            var refused: String?
+            while let chosen = showContentRootMissing(url, refused) {
+                refused = Self.relocate(to: chosen, dataDir: dataDir, fileManager: fileManager)
+                if refused == nil {
+                    log("NoteIt: library folder located at \(chosen.path)")
+                    return launch(open: open, quit: quit)
+                }
+            }
             log("NoteIt: quitting; the library folder \(url.path) is missing")
-            showContentRootMissing(url)
             quit()
             return nil
         case .libraryLocationUnreadable(let reason):
@@ -184,16 +194,84 @@ struct LibraryLauncher {
         }
     }
 
-    /// Locate… comes with the folder watcher (markdown-storage Task 4.2).
-    static func presentContentRootMissing(_ url: URL) {
+    /// Points `library-location.json` at `folder` after checking that it holds this library's notes; returns why
+    /// it was refused, or nil. Nothing else is written, so a wrong choice changes nothing.
+    nonisolated static func relocate(to folder: URL, dataDir: URL, fileManager: FileManager = .default) -> String? {
+        let folder = folder.standardizedFileURL
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return "Choose a folder."
+        }
+        if LibraryConverter.overlapsLibrary(folder, dataDir: dataDir) {
+            return "This folder holds NoteIt’s own library files. Choose a folder outside them."
+        }
+        guard case .loaded(var file) = LibraryLocationFile.load(dataDir: dataDir, fileManager: fileManager), file.format == .markdown else {
+            return "NoteIt can’t read its library settings."
+        }
+        let known = MarkdownPathIndex(dataDir: dataDir).allEntries.values.map(\.path)
+            .filter { !$0.hasPrefix(MarkdownBodyStorage.trashFolder + "/") }
+        if !known.isEmpty, !known.contains(where: { fileManager.fileExists(atPath: folder.appendingPathComponent($0).path) }) {
+            return "\(LibraryLocationFile.displayPath(folder)) doesn’t have the notes of your library. Choose the folder that holds them."
+        }
+        file.path = LibraryLocationFile.displayPath(folder)
+        file.bookmark = try? folder.bookmarkData()
+        do {
+            try file.write(dataDir: dataDir)
+        } catch {
+            return "NoteIt couldn’t save the new location: \(error.localizedDescription)"
+        }
+        return nil
+    }
+
+    static let contentRootMissingTitle = "Your Markdown folder can’t be found"
+
+    /// "Your Markdown folder can't be found" with **Locate…** and **Quit** (spec §3.5).
+    static func presentContentRootMissing(_ url: URL, refused: String?) -> URL? {
         _ = NSApplication.shared
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "NoteIt can't find your library folder"
-        alert.informativeText = "Your notes are kept in \(LibraryLocationFile.displayPath(url)), which NoteIt can't reach. If it's on a disk or NAS that isn't connected, connect it and open NoteIt again."
+        alert.messageText = contentRootMissingTitle
+        alert.informativeText = refused ?? "Your notes are kept in \(LibraryLocationFile.displayPath(url)), which NoteIt can’t reach. If it’s on a disk or NAS that isn’t connected, connect it and choose Locate…, or find the folder if you moved it."
+        alert.addButton(withTitle: "Locate…")
         alert.addButton(withTitle: "Quit")
-        alert.runModal()
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Choose the folder that holds your notes."
+        let parent = url.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: parent.path) { panel.directoryURL = parent }
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    /// The folder went away while NoteIt was open. Locate… saves the new place and relaunches; Quit quits.
+    static func contentRootLost(_ url: URL, dataDir: URL) {
+        var refused: String?
+        while let chosen = presentContentRootMissing(url, refused: refused) {
+            refused = relocate(to: chosen, dataDir: dataDir)
+            if refused == nil {
+                relaunch()
+                return
+            }
+        }
+        NSApp.terminate(nil)
+    }
+
+    /// Quits and opens the app again once this process has exited. Outside an app bundle it only quits.
+    static func relaunch() {
+        let bundle = Bundle.main.bundleURL
+        if bundle.pathExtension == "app" {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/sh")
+            task.arguments = ["-c", "while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$0\"",
+                              bundle.path]
+            try? task.run()
+        }
+        NSApp.terminate(nil)
     }
 
     static func presentLibraryLocationUnreadable(_ reason: String) {

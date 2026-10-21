@@ -123,6 +123,12 @@ final class NoteStore: ObservableObject {
     var markdownClock: () -> Date = Date.init
     var hasPendingMarkdownRenames = false
     var markdownScanScheduled = false
+    var markdownWatcher: MarkdownFolderWatcher?
+    /// Called once when the content folder goes away while the library is open; the app asks the user to locate it.
+    var onMarkdownFolderMissing: ((URL) -> Void)?
+    var markdownFolderReportedMissing = false
+    /// New files wait until they have been unchanged this long before they become notes (spec §3.5).
+    var newFileSettleDelay: TimeInterval = 2
     /// Notes whose files disappeared in a batch the mass-deletion guard holds.
     var heldMarkdownDeletions: Set<UUID> = []
     /// Why a readable body is read-only (`StoredBody.readOnlyReason`); shown like a load error.

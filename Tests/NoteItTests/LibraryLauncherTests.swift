@@ -10,6 +10,8 @@ final class LibraryLauncherTests: XCTestCase {
     private let fm = FileManager.default
     private var logged: [String] = []
     private var missingAlerts: [URL] = []
+    private var refusals: [String?] = []
+    private var located: [URL] = []
     private var unreadableAlerts: [String] = []
 
     override func setUpWithError() throws {
@@ -17,6 +19,8 @@ final class LibraryLauncherTests: XCTestCase {
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
         logged = []
         missingAlerts = []
+        refusals = []
+        located = []
         unreadableAlerts = []
     }
 
@@ -40,7 +44,11 @@ final class LibraryLauncherTests: XCTestCase {
             isLegacyAppRunning: running,
             quitLegacyApp: quit,
             log: { [weak self] in self?.logged.append($0) },
-            showContentRootMissing: { [weak self] in self?.missingAlerts.append($0) },
+            showContentRootMissing: { [weak self] url, refused in
+                self?.missingAlerts.append(url)
+                self?.refusals.append(refused)
+                return self?.located.isEmpty == false ? self?.located.removeFirst() : nil
+            },
             showLibraryLocationUnreadable: { [weak self] in self?.unreadableAlerts.append($0) }
         )
     }
@@ -265,7 +273,7 @@ final class LibraryLauncherTests: XCTestCase {
         let content = base.appendingPathComponent("Gone", isDirectory: true)
         try writeLocationFile(markdownFile(at: content))
         let launcher = launcher(override: dataDir.path)
-        XCTAssertEqual(launcher.decide(), .contentRootMissing(content))
+        XCTAssertEqual(launcher.decide(), .contentRootMissing(content, dataDir: dataDir))
 
         let before = try snapshot()
         var quitCalled = 0, opened = 0
@@ -275,6 +283,34 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertEqual(quitCalled, 1)
         XCTAssertEqual(missingAlerts, [content])
         XCTAssertEqual(try snapshot(), before, "no library created in its place")
+    }
+
+    func testLocateRefusesWrongFoldersThenOpensTheChosenOne() throws {
+        let gone = base.appendingPathComponent("Gone", isDirectory: true)
+        let moved = base.appendingPathComponent("Elsewhere", isDirectory: true)
+        let other = base.appendingPathComponent("Other", isDirectory: true)
+        try fm.createDirectory(at: moved.appendingPathComponent("Work"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: other, withIntermediateDirectories: true)
+        try Data("# Plan\n".utf8).write(to: moved.appendingPathComponent("Work/Plan.md"))
+        try Data("# Unrelated\n".utf8).write(to: other.appendingPathComponent("Unrelated.md"))
+        try fm.createDirectory(at: dataDir.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        let index = MarkdownPathIndex(dataDir: dataDir)
+        index.set(MarkdownFileEntry(path: "Work/Plan.md"), for: UUID())
+        try index.save()
+        try writeLocationFile(markdownFile(at: gone))
+
+        located = [other, dataDir.appendingPathComponent("notes"), moved]
+        var quitCalled = 0
+        let opened: LibraryLocation? = launcher(override: dataDir.path).launch(open: { $0 }, quit: { quitCalled += 1 })
+        XCTAssertEqual(opened?.contentRootURL?.standardizedFileURL, moved.standardizedFileURL)
+        XCTAssertEqual(quitCalled, 0)
+        XCTAssertEqual(missingAlerts.count, 3)
+        XCTAssertNil(refusals[0])
+        XCTAssertTrue(refusals[1]?.contains("doesn’t have the notes of your library") == true)
+        XCTAssertTrue(refusals[2]?.contains("NoteIt’s own library files") == true)
+        guard case .loaded(let saved) = LibraryLocationFile.load(dataDir: dataDir) else { return XCTFail("not saved") }
+        XCTAssertEqual(saved.contentRootURL.standardizedFileURL, moved.standardizedFileURL)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: other.path), ["Unrelated.md"], "a refused folder isn't touched")
     }
 
     func testUnresponsiveContentFolderIsReportedWithoutHangingLaunch() throws {
