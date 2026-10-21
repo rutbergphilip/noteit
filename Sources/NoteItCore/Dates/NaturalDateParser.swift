@@ -65,7 +65,8 @@ public enum NaturalDateParser {
                   let leadTime = clock(lead, in: ns, hourGroup: 1, minuteGroup: 2, meridiemGroup: 3)
                     ?? clock(lead, in: ns, hourGroup: 4, minuteGroup: 5, meridiemGroup: nil)
                     ?? named(lead, in: ns, group: 6),
-                  let value = shortForm(day, in: ns, now: now, today: today, calendar: calendar, leadingTime: leadTime)
+                  let value = shortForm(day, in: ns, now: now, today: today, calendar: calendar, leadingTime: leadTime,
+                                        leadingMidnight: isMidnight(lead, in: ns, group: 6))
             else { continue }
             return result(value, NSUnionRange(lead.range, day.range))
         }
@@ -90,14 +91,18 @@ public enum NaturalDateParser {
     }
 
     private static func shortForm(_ match: NSTextCheckingResult, in ns: NSString, now: Date, today: LocalDateTime,
-                                  calendar: Calendar, leadingTime: (Int, Int)? = nil) -> LocalDateTime? {
+                                  calendar: Calendar, leadingTime: (Int, Int)? = nil,
+                                  leadingMidnight: Bool = false) -> LocalDateTime? {
         let word = ns.substring(with: match.range(at: 1)).lowercased()
-        let clockTime = clock(match, in: ns, hourGroup: 6, minuteGroup: 7, meridiemGroup: 8)
+        let trailingTime = clock(match, in: ns, hourGroup: 6, minuteGroup: 7, meridiemGroup: 8)
             ?? clock(match, in: ns, hourGroup: 9, minuteGroup: 10, meridiemGroup: nil)
             ?? named(match, in: ns, group: 11)
-            ?? leadingTime
+        let clockTime = trailingTime ?? leadingTime
+        // The word "midnight" ends the named day, as NSDataDetector reads it; "00:00" and "12am" start it.
+        let saysMidnight = trailingTime == nil ? leadingMidnight : isMidnight(match, in: ns, group: 11)
         func at(_ day: LocalDateTime) -> LocalDateTime {
             guard let clockTime else { return day }
+            if saysMidnight { return adding(days: 1, to: day, calendar: calendar).withTime(hour: 0, minute: 0) }
             return day.withTime(hour: clockTime.0, minute: clockTime.1)
         }
         // Midnight today or tonight is the one at the end of the day, not the one that has passed.
@@ -140,6 +145,11 @@ public enum NaturalDateParser {
     private static func isClockUnit(_ unit: String) -> Bool {
         let unit = unit.lowercased()
         return unit.hasPrefix("m") || unit.hasPrefix("h")
+    }
+
+    private static func isMidnight(_ match: NSTextCheckingResult, in ns: NSString, group: Int) -> Bool {
+        guard match.numberOfRanges > group, match.range(at: group).location != NSNotFound else { return false }
+        return ns.substring(with: match.range(at: group)).lowercased() == "midnight"
     }
 
     private static func named(_ match: NSTextCheckingResult, in ns: NSString, group: Int) -> (Int, Int)? {

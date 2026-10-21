@@ -63,8 +63,19 @@ final class NaturalDateParserTests: XCTestCase {
         XCTAssertEqual(parse("tonight at midnight"), "2026-10-20 00:00")
         XCTAssertEqual(parse("midnight tonight"), "2026-10-20 00:00")
         XCTAssertEqual(parse("today at midnight"), "2026-10-20 00:00")
-        XCTAssertEqual(parse("tomorrow at midnight"), "2026-10-20 00:00")
         XCTAssertEqual(parse("tonight at 11pm"), "2026-10-19 23:00")
+    }
+
+    func testMidnightIsTheEndOfTheNamedDay() {
+        XCTAssertEqual(parse("tomorrow at midnight"), "2026-10-21 00:00")
+        XCTAssertEqual(parse("midnight tomorrow"), "2026-10-21 00:00")
+        XCTAssertEqual(parse("friday at midnight"), "2026-10-24 00:00")
+        XCTAssertEqual(parse("midnight fri"), "2026-10-24 00:00")
+        XCTAssertEqual(parse("in 2 days at midnight"), "2026-10-22 00:00")
+        XCTAssertEqual(parse("+2d midnight"), "2026-10-22 00:00")
+        XCTAssertEqual(parse("October 23 at midnight"), "2026-10-24 00:00")
+        XCTAssertEqual(parse("friday at 00:00"), "2026-10-23 00:00")
+        XCTAssertEqual(parse("12am tomorrow"), "2026-10-20 00:00")
     }
 
     func testWeekdayNeverToday() {
