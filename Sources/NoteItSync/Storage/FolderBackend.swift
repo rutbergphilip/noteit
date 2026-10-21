@@ -245,7 +245,7 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
         let recorded = stateLock.withLock { rootIdentity }
         if let recorded, recorded != identity { throw unavailable() }
         if store != .unchecked {
-            let present = [RemoteLayout.root, RemoteLayout.legacyRoot].contains { isDirectory(root.appendingPathComponent($0).path) }
+            let present = try [RemoteLayout.root, RemoteLayout.legacyRoot].contains { try storeExists(at: $0) }
             let seen = stateLock.withLock {
                 if present { storeSeen = true }
                 return storeSeen
@@ -262,18 +262,25 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
     /// Whether a root without its store is a folder in use, so the store was deleted, rather than the empty folder
     /// an unmounted share leaves at its mount point: a mounted volume, or a folder with something in it.
     private func isLiveFolder(device: dev_t) throws -> Bool {
+        guard let entries = try? fileManager.contentsOfDirectory(atPath: root.path),
+              !entries.contains(where: { Self.storeFolders.contains($0) }) else { throw unavailable() }
         var parent = stat()
         let parentPath = (root.path as NSString).deletingLastPathComponent
         if stat(parentPath, &parent) == 0, parent.st_dev != device { return true }
-        guard let entries = try? fileManager.contentsOfDirectory(atPath: root.path) else { throw unavailable() }
         return entries.contains { !Self.systemEntries.contains($0) }
     }
 
     private static let systemEntries: Set<String> = [".DS_Store", ".localized"]
+    private static let storeFolders: Set<String> = Set([RemoteLayout.root, RemoteLayout.legacyRoot].map { String($0.prefix { $0 != "/" }) })
 
-    private func isDirectory(_ path: String) -> Bool {
+    /// Missing only when the lookup says so; any other failure (a share dropping, no permission) is `unavailable`.
+    private func storeExists(at relativePath: String) throws -> Bool {
         var st = stat()
-        return stat(path, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
+        guard stat(root.appendingPathComponent(relativePath).path, &st) == 0 else {
+            if errno == ENOENT || errno == ENOTDIR { return false }
+            throw unavailable()
+        }
+        return st.st_mode & S_IFMT == S_IFDIR
     }
 
     private func unavailable() -> StorageError {
@@ -291,13 +298,13 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
         }
     }
 
-    /// `notFound` only while the root is there; a missing root means the volume went away.
+    /// `notFound` only while the root is there; a missing root means the volume went away. Other failures are
+    /// reported as the root's when it can't be used either (a share dropping, a folder that can't be searched).
     private func storageError(_ code: Int32, key: String) -> StorageError {
-        if code == ENOENT || code == ENOTDIR {
-            do { try requireRoot() } catch let error as StorageError { return error } catch {}
-            return .notFound(key)
-        }
-        return Self.storageError(code, key: key)
+        let error = code == ENOENT || code == ENOTDIR ? StorageError.notFound(key) : Self.storageError(code, key: key)
+        if case .unavailable = error { return error }
+        do { try requireRoot() } catch let rootError as StorageError { return rootError } catch {}
+        return error
     }
 
     private func storageError(_ error: Error, key: String) -> StorageError {

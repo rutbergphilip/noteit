@@ -271,6 +271,26 @@ final class FolderUnreachableTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: root.path), ["Readme.txt"])
     }
 
+    /// A share reconnecting can answer for its root from cached attributes and fail lookups inside it.
+    func testStoreThatCantBeLookedUpIsUnavailableNotMissing() async throws {
+        try Data("mine".utf8).write(to: root.appendingPathComponent("Readme.txt"))
+        let backend = FolderBackend(root: root, store: .existing)
+        _ = try await backend.get(RemoteLayout.manifest())
+        try setPermissions(0o600, "")
+        defer { try? setPermissions(0o755, "") }
+        await assertUnavailable { try await backend.get(RemoteLayout.manifest()) }
+        await assertUnavailable { try await FolderBackend(root: root, store: .existing).list(prefix: RemoteLayout.root) }
+        try setPermissions(0o755, "")
+        _ = try await backend.get(RemoteLayout.manifest())
+    }
+
+    func testStoreFolderStillListedIsUnavailableNotMissing() async throws {
+        try FileManager.default.removeItem(at: root.appendingPathComponent(RemoteLayout.root))
+        await assertUnavailable { try await FolderBackend(root: root, store: .existing).get(RemoteLayout.manifest()) }
+        try FileManager.default.removeItem(at: root.appendingPathComponent(RemoteLayout.folder))
+        await assertStoreMissing { try await FolderBackend(root: root, store: .existing).get(RemoteLayout.manifest()) }
+    }
+
     /// A share's own root, mounted and empty, with the store deleted: a different volume from its parent.
     func testStoreDeletedFromAMountedEmptyVolumeIsReset() async throws {
         let image = dir.appendingPathComponent("share.dmg"), mount = dir.appendingPathComponent("Volume", isDirectory: true)
