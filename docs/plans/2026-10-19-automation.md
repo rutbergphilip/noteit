@@ -754,6 +754,7 @@ Steps:
 - [ ] Tests (temp dirs instead of `/usr/local/bin`, fake `runPrivileged`): `testStateNotInstalled`, `testInstallCreatesLink`, `testInstallFallsBackToPrivileged`, `testStatePointsElsewhere`, `testUninstallRefusesForeignLink`, `testQuotingInPrivilegedCommand`.
 - [ ] Verification: `NOTEIT_VERSION=x-test NOTEIT_BUILD=99999999999999 NOTEIT_INSTALL_DIR="$PWD/.selftest/app" ./scripts/build_app.sh` (exit 0); `codesign --verify --strict .selftest/app/NoteIt.app/Contents/Helpers/noteit` and `codesign --verify --deep --strict .selftest/app/NoteIt.app` (no output, exit 0); `.selftest/app/NoteIt.app/Contents/Helpers/noteit --version` prints `x-test`.
 - [ ] Commit `feat(cli): bundle noteit in the app and add installer`.
+- Note (T23 as built): the privileged command quotes every path, `mkdir -p '<folder>' && ln -sf '<tool>' '<link>'`, because tests point the link into a temp folder. `install()` replaces an existing link (Fix) but refuses a regular file at the link path; `uninstall()` also falls back to `runPrivileged("rm -f '<link>'")` when the folder isn't writable. The live `runPrivileged` is `do shell script … with administrator privileges` on `AppleScriptThread`; a cancelled password prompt is silent. The palette command only shows when the app contains `Contents/Helpers/noteit` and it isn't installed yet. The bundled tool's `--version` prints `noteit x-test` (the `noteit <version>` format from T16).
 
 ### M5 — Spotlight
 

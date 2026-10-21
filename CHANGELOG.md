@@ -12,6 +12,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `noteit://` links. Open a note, search, or create and add to notes from Shortcuts, Raycast, Alfred, scripts and web pages. Links that create or add to a note ask first; you can turn that off in Settings › Integrations.
 - Copy Note Link (⌃⌘L) in the Edit menu copies a link to the current note.
 - Local API. Turn on Allow apps on this Mac to use NoteIt in Settings › Integrations, and scripts, command line tools and browser extensions on this Mac can read and change your notes. Apps pair with a code that NoteIt shows, and the same settings list every connected app so you can revoke one, or make a token for your own scripts. The command palette has Turn Local API On and Off.
+- The `noteit` command line tool. Create, append to, list, search, show, edit and delete notes from Terminal and your scripts, with `--json` for machine-readable output. Install it from Settings › Integrations or with Install Command Line Tool… in the command palette, then run `noteit auth login` and enter the code NoteIt shows.
 
 ### Changed
 

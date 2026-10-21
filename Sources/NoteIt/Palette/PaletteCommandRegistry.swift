@@ -93,6 +93,10 @@ enum PaletteCommandRegistry {
                     keywords: ["automation", "integrations", "server", "cli"], available: localAPIEnabled) {
                 defaults.set(false, forKey: PrefKey.localAPIEnabled)
             },
+            command("installCLI", "Install Command Line Tool…", symbol: "terminal", shortcut: nil,
+                    keywords: ["cli", "noteit", "terminal", "shell"], available: cliInstallable) {
+                installCommandLineTool()
+            },
         ]
 
         if let liveNote {
@@ -104,6 +108,27 @@ enum PaletteCommandRegistry {
             }
         }
         return list
+    }
+
+    private static var cliInstallable: Bool {
+        let installer = CLIInstaller.live()
+        return installer.toolURL != nil && installer.state() != .installed
+    }
+
+    private static func installCommandLineTool() {
+        let installer = CLIInstaller.live()
+        Task { @MainActor in
+            do {
+                try await AppleScriptThread.shared.run { try installer.install() }
+                SettingsTabRouter.show(.integrations)
+            } catch CLIInstallerError.cancelled {
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Couldn't install the command line tool"
+                alert.informativeText = error.localizedDescription
+                alert.runModal()
+            }
+        }
     }
 
     static func availableCommands(for store: NoteStore, defaults: UserDefaults = .standard) -> [PaletteCommand] {

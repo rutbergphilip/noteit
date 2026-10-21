@@ -2,7 +2,7 @@ import AppKit
 import NoteItAPI
 import SwiftUI
 
-/// Settings › Integrations: the Local API, connected apps and links. Spotlight, Share and the command line tool
+/// Settings › Integrations: the Local API, connected apps, the command line tool and links. Spotlight and Share
 /// sections come later.
 struct IntegrationsSettingsView: View {
     @AppStorage(PrefKey.urlSchemeChangesWithoutAsking) private var changesWithoutAsking = false
@@ -56,6 +56,8 @@ struct IntegrationsSettingsView: View {
             } header: {
                 Text("Connected apps")
             }
+
+            CommandLineToolSection()
 
             Section {
                 Toggle("Allow links to change notes without asking", isOn: $changesWithoutAsking)
@@ -288,6 +290,67 @@ private struct NewTokenSheet: View {
             error = nil
         } catch {
             self.error = IntegrationsSettingsView.describe(error)
+        }
+    }
+}
+
+/// Install, fix or remove the `/usr/local/bin/noteit` link to the tool inside the app.
+struct CommandLineToolSection: View {
+    @State private var state = CLIInstaller.live().state()
+    @State private var working = false
+    @State private var error: String?
+    private let installer = CLIInstaller.live()
+
+    var body: some View {
+        Section {
+            LabeledContent("Status") {
+                HStack {
+                    Text(statusText).foregroundStyle(.secondary)
+                    if installer.toolURL != nil { button }
+                }
+            }
+            if let error {
+                SettingsFootnote(text: error, symbol: "xmark.octagon.fill", color: .red)
+            }
+            SettingsFootnote(text: "Also available with Homebrew: brew install --cask noteit")
+        } header: {
+            Text("Command line tool")
+        }
+        .onAppear { state = installer.state() }
+    }
+
+    private var statusText: String {
+        guard installer.toolURL != nil else { return "Not included in this copy of NoteIt" }
+        switch state {
+        case .notInstalled: return "Not installed"
+        case .installed: return "Installed at \(installer.linkURL.path)"
+        case .pointsElsewhere(let path):
+            return CLIInstaller.pointsIntoNoteItApp(URL(fileURLWithPath: path))
+                ? "Points to another copy of NoteIt" : "\(installer.linkURL.path) is used by something else"
+        }
+    }
+
+    @ViewBuilder private var button: some View {
+        switch state {
+        case .notInstalled: Button("Install…") { perform { try installer.install() } }.disabled(working)
+        case .installed: Button("Uninstall") { perform { try installer.uninstall() } }.disabled(working)
+        case .pointsElsewhere: Button("Fix") { perform { try installer.install() } }.disabled(working)
+        }
+    }
+
+    private func perform(_ action: @escaping @Sendable () throws -> Void) {
+        working = true
+        Task {
+            do {
+                try await AppleScriptThread.shared.run(action)
+                error = nil
+            } catch CLIInstallerError.cancelled {
+                error = nil
+            } catch {
+                self.error = error.localizedDescription
+            }
+            state = installer.state()
+            working = false
         }
     }
 }

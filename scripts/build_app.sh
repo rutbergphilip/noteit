@@ -68,7 +68,9 @@ add_rpath "$APP/Contents/MacOS/$APP_NAME"
 #   Contents/PlugIns/NoteItShare.appex       automation (the Share extension)
 #   Contents/Helpers/NoteItPluginHost        plugins
 #   Contents/PlugIns/NoteItClipper.appex     web-clipper (the Safari extension)
-EMBEDS=()
+EMBEDS=(
+    "Contents/Helpers/noteit|NoteItCLI||"
+)
 # Rows that were copied, as "<path in bundle>|<entitlements path or empty>", for signing.
 EMBEDDED=()
 
