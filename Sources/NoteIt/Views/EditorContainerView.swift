@@ -4,6 +4,7 @@ struct EditorContainerView: View {
     @EnvironmentObject private var store: NoteStore
     @StateObject private var editor = EditorController()
     @StateObject private var find = FindReplaceModel()
+    @StateObject private var renames = RenameTracker()
     @EnvironmentObject private var navigation: NavigationModel
     @ObservedObject private var linkState = LinkNavigationState.shared
     @AppStorage(PrefKey.inspectorVisible) private var inspectorVisible = false
@@ -23,6 +24,7 @@ struct EditorContainerView: View {
             let readOnly = writeBlocked || note.deletedAt != nil
             VStack(spacing: 0) {
                 EditorHeader(note: note)
+                LinkRenameBanner(tracker: renames)
                 if let missing = linkState.missingHeading, missing.note == id {
                     Text("Heading “\(missing.heading)” not found")
                         .font(.system(size: 11))
@@ -56,6 +58,11 @@ struct EditorContainerView: View {
             .onDisappear { find.close(refocusText: false) }
             .onChange(of: readOnly, initial: true) { find.allowsReplace = !readOnly }
             .onChange(of: id) { find.close(refocusText: false) }
+            .onChange(of: id, initial: true) { _, id in
+                renames.store = store
+                renames.open(id, title: note.title)
+            }
+            .onChange(of: note.title) { _, title in renames.titleChanged(title, of: id) }
             .background(Tokens.Color.surfaceEditor)
             .toolbar {
                 ToolbarItemGroup(placement: .navigation) {

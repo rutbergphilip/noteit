@@ -219,4 +219,128 @@ final class NoteStoreLinksTests: XCTestCase {
         XCTAssertEqual(LinkNavigationState.shared.missingHeading?.heading, "Outro")
         LinkNavigationState.shared.missingHeading = nil
     }
+
+    // MARK: Rename updates
+
+    private func linkTexts(_ store: NoteStore, _ id: UUID) -> [String] {
+        let text = store.body(for: id)
+        var result: [String] = []
+        text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, range, _ in
+            if value != nil { result.append((text.string as NSString).substring(with: range)) }
+        }
+        return result
+    }
+
+    private func renameFixture(_ store: NoteStore) -> (target: UUID, source: UUID) {
+        let target = store.createNote(in: nil, initial: body("Atlas")).id
+        let link = NoteLink.note(id: target, heading: nil)
+        let source = store.createNote(in: nil, initial: body("Source", linking: [("atlas", link), ("the map", link)])).id
+        store.updateBody(target, body("Atlas 2"))
+        return (target, source)
+    }
+
+    func testRewriteOnlyMatchingText() async {
+        let store = makeStore()
+        let (target, source) = renameFixture(store)
+        XCTAssertEqual(store.renameCandidates(for: target, oldTitle: "Atlas"), [source])
+        let result = await store.rewriteLinkText(targeting: target, from: "Atlas", to: "Atlas 2")
+        XCTAssertEqual(result.updated, 1)
+        XCTAssertEqual(result.skipped, 0)
+        XCTAssertEqual(linkTexts(store, source), ["Atlas 2", "the map"])
+        XCTAssertEqual(store.outgoingLinks(from: source).compactMap(\.link), [.note(id: target, heading: nil), .note(id: target, heading: nil)])
+    }
+
+    func testAliasesUntouched() async {
+        let store = makeStore()
+        let target = store.createNote(in: nil, initial: body("Atlas")).id
+        let source = store.createNote(in: nil, initial: body("Source", linking: [("Atlas map", .note(id: target, heading: nil))])).id
+        XCTAssertEqual(store.renameCandidates(for: target, oldTitle: "Atlas"), [])
+        let result = await store.rewriteLinkText(targeting: target, from: "Atlas", to: "Globe")
+        XCTAssertEqual(result.updated, 0)
+        XCTAssertEqual(linkTexts(store, source), ["Atlas map"])
+    }
+
+    func testCandidatesEmptyWhenNoLinks() {
+        let store = makeStore()
+        let target = store.createNote(in: nil, initial: body("Atlas")).id
+        _ = store.createNote(in: nil, initial: body("Other mentions Atlas"))
+        XCTAssertEqual(store.renameCandidates(for: target, oldTitle: "Atlas"), [])
+    }
+
+    func testSkipsDeletedAndLockedSources() async {
+        let store = makeStore()
+        let (target, source) = renameFixture(store)
+        let link = NoteLink.note(id: target, heading: nil)
+        let deleted = store.createNote(in: nil, initial: body("Deleted", linking: [("Atlas", link)])).id
+        let locked = store.createNote(in: nil, initial: body("Locked", linking: [("Atlas", link)])).id
+        _ = store.moveToRecentlyDeleted([deleted])
+        lock(store, locked)
+        XCTAssertEqual(store.renameCandidates(for: target, oldTitle: "Atlas"), [source])
+        let result = await store.rewriteLinkText(targeting: target, from: "Atlas", to: "Atlas 2")
+        XCTAssertEqual(result.updated, 1)
+        XCTAssertEqual(result.skipped, 1)
+        XCTAssertEqual(Set(result.notes.keys), [source])
+        XCTAssertEqual(linkTexts(store, deleted), ["Atlas"])
+    }
+
+    func testRewriteBumpsRevision() async {
+        let store = makeStore()
+        let (target, source) = renameFixture(store)
+        let before = store.note(with: source)?.revision
+        let result = await store.rewriteLinkText(targeting: target, from: "Atlas", to: "Atlas 2")
+        let after = store.note(with: source)?.revision
+        XCTAssertNotEqual(before, after)
+        XCTAssertEqual(result.notes[source], after)
+    }
+
+    func testRewriteRecordsVersionPerNote() async {
+        let store = makeStore()
+        let (target, source) = renameFixture(store)
+        let open = store.createNote(in: nil, initial: body("Open", linking: [("Atlas", .note(id: target, heading: nil))])).id
+        let harness = EditorHarness()
+        defer { harness.close() }
+        let editor = harness.open(store, open)
+        let before = (store.versions(of: source).count, store.versions(of: open).count)
+        let result = await store.rewriteLinkText(targeting: target, from: "Atlas", to: "Atlas 2")
+        XCTAssertEqual(result.updated, 2)
+        XCTAssertEqual(store.versions(of: source).count, before.0 + 1)
+        XCTAssertEqual(store.versions(of: open).count, before.1 + 1)
+        XCTAssertTrue(editor.view.string.contains("Atlas 2"))
+    }
+
+    func testOpenNoteChangedThroughEditBody() async {
+        let store = makeStore()
+        let target = store.createNote(in: nil, initial: body("Atlas")).id
+        let open = store.createNote(in: nil, initial: body("Open", linking: [("Atlas", .note(id: target, heading: nil))])).id
+        let harness = EditorHarness()
+        defer { harness.close() }
+        let editor = harness.open(store, open)
+        _ = await store.rewriteLinkText(targeting: target, from: "Atlas", to: "Globe")
+        XCTAssertEqual(linkTexts(store, open), ["Globe"])
+        EditorHarness.settle(editor.view.undoManager)
+        XCTAssertEqual(editor.view.undoManager?.undoActionName, "Update Links")
+        editor.view.undoManager?.undo()
+        XCTAssertTrue(editor.view.string.contains("see Atlas"))
+    }
+
+    func testUndoRestoresVersions() async {
+        let store = makeStore()
+        let (target, source) = renameFixture(store)
+        let result = await store.rewriteLinkText(targeting: target, from: "Atlas", to: "Atlas 2")
+        XCTAssertEqual(store.undoLinkRewrite(result), 0)
+        XCTAssertEqual(linkTexts(store, source), ["atlas", "the map"])
+    }
+
+    func testUndoLeavesEditedNotesAlone() async {
+        let store = makeStore()
+        let (target, source) = renameFixture(store)
+        let result = await store.rewriteLinkText(targeting: target, from: "Atlas", to: "Atlas 2")
+        let edited = NSMutableAttributedString(attributedString: store.body(for: source))
+        edited.append(NSAttributedString(string: "More."))
+        store.updateBody(source, edited)
+        XCTAssertEqual(store.undoLinkRewrite(result), 1)
+        XCTAssertTrue(store.body(for: source).string.hasSuffix("More."))
+        XCTAssertEqual(linkTexts(store, source), ["Atlas 2", "the map"])
+    }
 }
+

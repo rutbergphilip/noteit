@@ -9,6 +9,14 @@ enum LinkResolution: Equatable {
     case missing(UUID)
 }
 
+/// Notes changed by a rename update or Link All. `updated` counts links, `skipped` notes that couldn't be changed;
+/// `notes` maps each changed note to its revision right after the change.
+struct LinkRewriteResult {
+    var updated = 0
+    var skipped = 0
+    var notes: [UUID: UUID] = [:]
+}
+
 struct Backlink: Identifiable {
     var id: UUID { source }
     var source: UUID
@@ -292,4 +300,83 @@ extension NoteStore {
             return "This note no longer exists"
         }
     }
+
+    // MARK: Rename updates
+
+    static let rewriteBatchSize = 20
+
+    /// `.link` runs to `id` (by ID) whose text folds equal to `oldTitle`.
+    static func linkTextRanges(in text: NSAttributedString, targeting id: UUID, title oldTitle: String) -> [NSRange] {
+        let wanted = TextFold.fold(oldTitle.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !wanted.isEmpty else { return [] }
+        let ns = text.string as NSString
+        return linkRanges(in: text, matching: .note(id: id, heading: nil)).filter {
+            TextFold.fold(ns.substring(with: $0).trimmingCharacters(in: .whitespacesAndNewlines)) == wanted
+        }
+    }
+
+    /// Sources whose index entry has a link to `id` showing `oldTitle`, the note itself included.
+    private func linkTextSources(for id: UUID, oldTitle: String) -> [UUID] {
+        let wanted = TextFold.fold(oldTitle.trimmingCharacters(in: .whitespacesAndNewlines))
+        guard !wanted.isEmpty else { return [] }
+        return linkIndex.sources(linkingTo: id, title: "").filter { source in
+            linkIndex.outgoing(from: source).contains { item in
+                guard case .note(let target, _) = item.link, target == id else { return false }
+                return TextFold.fold(item.text.trimmingCharacters(in: .whitespacesAndNewlines)) == wanted
+            }
+        }.sorted { $0.uuidString < $1.uuidString }
+    }
+
+    /// Live, editable notes with links to `id` whose text is `oldTitle`.
+    func renameCandidates(for id: UUID, oldTitle: String) -> [UUID] {
+        linkTextSources(for: id, oldTitle: oldTitle).filter { source in
+            guard let meta = note(with: source), meta.deletedAt == nil, !meta.isLocked else { return false }
+            return !isBodyWriteBlocked(source)
+        }
+    }
+
+    /// Replaces the text of links to `id` that read `oldTitle` with `newTitle`, keeping their attributes, one
+    /// `editBody` per note (each records a version first). Notes that can't be changed are counted as skipped.
+    func rewriteLinkText(targeting id: UUID, from oldTitle: String, to newTitle: String) async -> LinkRewriteResult {
+        var result = LinkRewriteResult()
+        let replacement = String(newTitle.trimmingCharacters(in: .whitespacesAndNewlines).prefix(NoteLink.maxTextLength))
+        guard !replacement.isEmpty else { return result }
+        for (index, source) in linkTextSources(for: id, oldTitle: oldTitle).enumerated() {
+            if index > 0, index % Self.rewriteBatchSize == 0 { await Task.yield() }
+            var count = 0
+            do {
+                try editBody(source, actionName: "Update Links", versioning: .recordCurrent) { text in
+                    let ranges = Self.linkTextRanges(in: text, targeting: id, title: oldTitle)
+                    count = ranges.count
+                    for range in ranges.reversed() {
+                        let attributes = text.attributes(at: range.location, effectiveRange: nil)
+                        text.replaceCharacters(in: range, with: NSAttributedString(string: replacement, attributes: attributes))
+                    }
+                }
+            } catch {
+                result.skipped += 1
+                continue
+            }
+            guard count > 0, let revision = note(with: source)?.revision else { continue }
+            result.updated += count
+            result.notes[source] = revision
+        }
+        return result
+    }
+
+    /// Restores the version `editBody` recorded for each note in `result` that hasn't changed since. Returns how many
+    /// notes were left alone.
+    @discardableResult
+    func undoLinkRewrite(_ result: LinkRewriteResult) -> Int {
+        var leftAlone = 0
+        for (id, revision) in result.notes {
+            guard let meta = note(with: id), meta.revision == revision, let version = versions(of: id).first else {
+                leftAlone += 1
+                continue
+            }
+            do { try restoreVersion(version) } catch { leftAlone += 1 }
+        }
+        return leftAlone
+    }
 }
+
