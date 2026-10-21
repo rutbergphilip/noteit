@@ -37,6 +37,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Links and Outline explains itself: each section says what it lists and how to fill it (type `[[` to link a note), the section titles and buttons have tooltips, and found unlinked mentions say that Link turns them into links.
 - New libraries start with a refreshed welcome note, and no longer include a sample shortcuts note or Shortcuts notebook.
 - Search puts the best matches first, shows a line of matching text under each note and highlights the words you searched for in the list and in the open note. While searching, the sort menu switches between Best Match and Date Edited.
 - Local API search ranks its results like the app does and reports where each one matched, and a notebook filter includes the notebooks inside it.
