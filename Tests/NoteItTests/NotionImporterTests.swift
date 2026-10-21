@@ -374,6 +374,24 @@ final class NotionImporterTests: XCTestCase {
         XCTAssertTrue(out.hasSuffix("\n[After](https://example.com/g.png)"), out)
     }
 
+    func testCodeIsNeverRewritten() {
+        let fenced = """
+            ```
+            [T](Tasks%20abc.csv) ![I](https://example.com/i.png)
+            <aside>
+            not a callout
+            </aside>
+            ```
+            """
+        XCTAssertEqual(NotionImporter.prepared(fenced), fenced)
+        let tilde = "~~~\n[T](a_all.csv)\n~~~"
+        XCTAssertEqual(NotionImporter.prepared(tilde), tilde)
+        XCTAssertEqual(NotionImporter.prepared("See `[T](Tasks.csv)` or [T](Tasks.csv)"),
+                       "See `[T](Tasks.csv)` or [T](Tasks.md)")
+        XCTAssertEqual(NotionImporter.prepared("<aside>\n```\n[T](Tasks.csv)\n```\n</aside>\n[T](Tasks.csv)"),
+                       "> ```\n> [T](Tasks.csv)\n> ```\n[T](Tasks.md)")
+    }
+
     func testNames() {
         XCTAssertEqual(NotionNames.stripID("Plan \(projectsID)").title, "Plan")
         XCTAssertEqual(NotionNames.stripID("Plan \(projectsID.uppercased())").id, projectsID)

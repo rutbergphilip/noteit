@@ -253,11 +253,16 @@ enum NotionImporter {
     }
 
     /// `<aside>` callouts become quotes, links to a database's `.csv` point at its note, and images on the web
-    /// become links to them.
+    /// become links to them. Code (fenced blocks and code spans) is never changed.
     nonisolated static func prepared(_ markdown: String) -> String {
         var out: [String] = []
         var inAside = false
+        var fence = CodeFence()
         for line in markdown.components(separatedBy: "\n") {
+            if fence.isCode(line) {
+                out.append(inAside ? (line.isEmpty ? ">" : "> " + line) : line)
+                continue
+            }
             var rest = Substring(line)
             if !inAside, rest.trimmingCharacters(in: .whitespaces).hasPrefix("<aside>"),
                let open = rest.range(of: "<aside>") {
@@ -280,44 +285,59 @@ enum NotionImporter {
             let content = rest.trimmingCharacters(in: .whitespaces)
             out.append(content.isEmpty ? ">" : "> " + content)
         }
-        let text = out.joined(separator: "\n")
-        let ns = text as NSString
-        let linked = csvLink.stringByReplacingMatches(in: text, range: NSRange(location: 0, length: ns.length), withTemplate: "]($1.md)")
-        return remoteImagesAsLinks(linked)
+        return outsideCode(out.joined(separator: "\n")) { prose in
+            let ns = prose as NSString
+            let linked = csvLink.stringByReplacingMatches(in: prose, range: NSRange(location: 0, length: ns.length),
+                                                          withTemplate: "]($1.md)")
+            return imagesAsLinks(linked)
+        }
+    }
+
+    /// Tracks fenced code blocks (``` and ~~~, also inside quotes) line by line.
+    struct CodeFence {
+        private var open: (char: Character, count: Int)?
+
+        /// True for a fence line or a line inside a fenced block.
+        mutating func isCode(_ line: String) -> Bool {
+            let trimmed = line.drop { $0 == " " || $0 == "\t" || $0 == ">" }
+            let run = trimmed.prefix { $0 == "`" || $0 == "~" }
+            let marker = run.first.map { c in (char: c, count: run.prefix { $0 == c }.count) }
+            if let current = open {
+                if let marker, marker.char == current.char, marker.count >= current.count,
+                   trimmed.dropFirst(marker.count).allSatisfy(\.isWhitespace) {
+                    open = nil
+                }
+                return true
+            }
+            if let marker, marker.count >= 3, !(marker.char == "`" && trimmed.dropFirst(marker.count).contains("`")) {
+                open = marker
+                return true
+            }
+            return false
+        }
+    }
+
+    /// `text` with `rewrite` applied to everything outside fenced code blocks and backtick code spans, one line
+    /// of prose at a time.
+    nonisolated static func outsideCode(_ text: String, _ rewrite: (String) -> String) -> String {
+        var fence = CodeFence()
+        return text.components(separatedBy: "\n")
+            .map { fence.isCode($0) ? $0 : outsideCodeSpans($0, rewrite) }
+            .joined(separator: "\n")
     }
 
     nonisolated private static let remoteImage = try! NSRegularExpression(
         pattern: #"!\[((?:[^\[\]\\]|\\.)*)\]\(\s*(?:<(https?://[^<>\n]+)>|(https?://[^\s()]+))(?:\s+"[^"\n]*")?\s*\)"#,
         options: [.caseInsensitive])
 
-    /// `![alt](https://…)` → `[alt](https://…)`, named by the address when it has no alt text.
-    /// Code blocks (``` and ~~~ fences) and code spans are left as written.
+    /// `![alt](https://…)` → `[alt](https://…)`, named by the address when it has no alt text, outside code.
     nonisolated static func remoteImagesAsLinks(_ text: String) -> String {
-        var out: [String] = []
-        var fence: (char: Character, count: Int)?
-        for line in text.components(separatedBy: "\n") {
-            let trimmed = line.drop { $0 == " " || $0 == "\t" }
-            let run = trimmed.prefix { $0 == "`" || $0 == "~" }
-            let marker = run.first.map { c in (char: c, count: run.prefix { $0 == c }.count) }
-            if let open = fence {
-                if let marker, marker.char == open.char, marker.count >= open.count,
-                   trimmed.dropFirst(marker.count).allSatisfy(\.isWhitespace) {
-                    fence = nil
-                }
-                out.append(line)
-            } else if let marker, marker.count >= 3, !(marker.char == "`" && trimmed.dropFirst(marker.count).contains("`")) {
-                fence = marker
-                out.append(line)
-            } else {
-                out.append(imagesOutsideCodeSpans(line))
-            }
-        }
-        return out.joined(separator: "\n")
+        outsideCode(text, imagesAsLinks)
     }
 
     /// Rewrites the parts of `line` outside backtick code spans.
-    nonisolated private static func imagesOutsideCodeSpans(_ line: String) -> String {
-        guard line.contains("`") else { return imagesAsLinks(line) }
+    nonisolated private static func outsideCodeSpans(_ line: String, _ rewrite: (String) -> String) -> String {
+        guard line.contains("`") else { return rewrite(line) }
         let chars = Array(line)
         var out = ""
         var plain = ""
@@ -347,11 +367,11 @@ enum NotionImporter {
                 i += n
                 continue
             }
-            out += imagesAsLinks(plain) + String(chars[i..<(close + n)])
+            out += rewrite(plain) + String(chars[i..<(close + n)])
             plain = ""
             i = close + n
         }
-        return out + imagesAsLinks(plain)
+        return out + rewrite(plain)
     }
 
     nonisolated private static func imagesAsLinks(_ text: String) -> String {
