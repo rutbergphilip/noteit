@@ -103,6 +103,11 @@ let package = Package(
             name: "NoteItAPITests",
             dependencies: ["NoteItAPI", "NoteItCore", "NoteItSync"],
             path: "Tests/NoteItAPITests"
+        ),
+        .testTarget(
+            name: "NoteItCLITests",
+            dependencies: ["NoteItCLI", "NoteItAPI", "NoteItSync"],
+            path: "Tests/NoteItCLITests"
         )
     ]
 )

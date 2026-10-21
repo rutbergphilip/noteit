@@ -14,13 +14,15 @@ public struct NoteItAPIError: Error, Sendable, Equatable, LocalizedError {
 
     public var errorDescription: String? { message }
 
-    static func from(status: Int, data: Data) -> NoteItAPIError {
-        if let body = try? APIJSON.decoder().decode(APIErrorBody.self, from: data) {
-            return NoteItAPIError(status: status, code: body.error.code, message: body.error.message)
+    /// From a non-2xx response body: its `APIErrorBody`, or else the start of the body as the message.
+    public init(status: Int, body: Data) {
+        if let decoded = try? APIJSON.decoder().decode(APIErrorBody.self, from: body) {
+            self.init(status: status, code: decoded.error.code, message: decoded.error.message)
+            return
         }
-        let text = String(decoding: data.prefix(500), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        return NoteItAPIError(status: status, code: nil,
-                              message: text.isEmpty ? HTTPURLResponse.localizedString(forStatusCode: status) : text)
+        let text = String(decoding: body.prefix(500), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(status: status, code: nil,
+                  message: text.isEmpty ? HTTPURLResponse.localizedString(forStatusCode: status) : text)
     }
 }
 
@@ -52,7 +54,7 @@ public struct NoteItAPIClient: Sendable {
             allHeaders["Content-Type"] = "application/json"
         }
         let (status, data) = try await sendRaw(method, path, query: query, body: body, headers: allHeaders)
-        guard (200..<300).contains(status) else { throw NoteItAPIError.from(status: status, data: data) }
+        guard (200..<300).contains(status) else { throw NoteItAPIError(status: status, body: data) }
         if T.self == APINoContent.self, let empty = APINoContent() as? T { return empty }
         return try APIJSON.decoder().decode(T.self, from: data)
     }
@@ -138,7 +140,7 @@ public struct NoteItAPIClient: Sendable {
                 data.append(byte)
                 if data.count > 65_536 { break }
             }
-            throw NoteItAPIError.from(status: http.statusCode, data: data)
+            throw NoteItAPIError(status: http.statusCode, body: data)
         }
         // AsyncBytes.lines skips empty lines, and an empty line is what ends an SSE event.
         return AsyncThrowingStream { continuation in
