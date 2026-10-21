@@ -554,7 +554,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
                 previous[meta.id] = nil
                 return
             }
-            let path = index.uniquePath(stem: entry.stem, inFolder: Self.trashFolder, contentRoot: contentRootURL, keeping: nil)
+            let path = index.uniquePath(stem: entry.stem, inFolder: Self.trashFolder, contentRoot: contentRootURL, keeping: meta.id)
             let rendered = try BodyCodec.libraryMarkdown(of: text, extras: extras, frontMatter: BodyCodec.frontMatter(meta, extras: extras),
                                                          notePath: path, attachments: attachments, links: links, previous: nil)
             let data = Data(rendered.text.utf8)
@@ -631,7 +631,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
             }
             var path = entry.path
             if entry.folder != Self.trashFolder {
-                path = index.uniquePath(stem: entry.stem, inFolder: Self.trashFolder, contentRoot: contentRootURL, keeping: nil)
+                path = index.uniquePath(stem: entry.stem, inFolder: Self.trashFolder, contentRoot: contentRootURL, keeping: id)
                 try FileManager.default.createDirectory(at: url(of: Self.trashFolder), withIntermediateDirectories: true)
                 try Self.move(file, to: url(of: path))
             }

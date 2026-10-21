@@ -51,6 +51,19 @@ final class MarkdownPathIndexTests: XCTestCase {
         XCTAssertNoThrow(try FileManager.default.createDirectory(at: content.appendingPathComponent(folder), withIntermediateDirectories: true))
     }
 
+    func testAFormerNameOfAnotherNoteIsNotReused() {
+        let index = MarkdownPathIndex(dataDir: root)
+        let renamed = UUID()
+        index.set(MarkdownFileEntry(path: "Plan.md"), for: renamed)
+        index.move(renamed, to: "Plan old.md")
+        XCTAssertEqual(index.uniquePath(stem: "Plan", inFolder: "", contentRoot: content), "Plan 2.md")
+        XCTAssertEqual(index.uniquePath(stem: "Plan", inFolder: "Work", contentRoot: content), "Work/Plan 2.md")
+        XCTAssertEqual(index.uniquePath(stem: "Plan", inFolder: "", contentRoot: content, keeping: renamed), "Plan.md")
+
+        index.set(MarkdownFileEntry(path: index.uniquePath(stem: "Plan", inFolder: "Work", contentRoot: content)), for: UUID())
+        XCTAssertEqual(MarkdownLinkResolver(index: index).noteID(for: "Plan", fromNoteAt: "Other.md"), renamed)
+    }
+
     func testANameTakenOnDiskIsAvoided() throws {
         try Data("x".utf8).write(to: content.appendingPathComponent("PLAN.md"))
         let index = MarkdownPathIndex(dataDir: root)

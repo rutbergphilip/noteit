@@ -242,13 +242,17 @@ final class MarkdownPathIndex: @unchecked Sendable {
     }
 
     /// A free `<stem>.md` (or `<stem> 2.md` …) in `folder`, case-insensitively, against the index and the disk.
-    /// `keeping` is the note being named: its own current path counts as free.
+    /// `keeping` is the note being named: its own current path counts as free. A file name another note had before
+    /// is never given out, in any folder, so wiki links to that name keep finding that note.
     func uniquePath(stem: String, inFolder folder: String, contentRoot: URL, keeping id: UUID? = nil) -> String {
         let dir = folder.isEmpty ? contentRoot : contentRoot.appendingPathComponent(folder, isDirectory: true)
         var taken = Set(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).map { $0.lowercased() })
         lock.withLock {
-            for (other, entry) in entries where other != id && entry.folder.lowercased() == folder.lowercased() {
-                taken.insert(entry.fileName.lowercased())
+            for (other, entry) in entries where other != id {
+                if entry.folder.lowercased() == folder.lowercased() { taken.insert(entry.fileName.lowercased()) }
+                for former in entry.formerPaths where !former.hasPrefix(MarkdownBodyStorage.trashFolder + "/") {
+                    taken.insert((former as NSString).lastPathComponent.lowercased())
+                }
             }
             if let id, let own = entries[id], own.folder.lowercased() == folder.lowercased() {
                 taken.remove(own.fileName.lowercased())
