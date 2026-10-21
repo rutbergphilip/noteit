@@ -33,7 +33,9 @@ final class URLSchemeHandlerTests: XCTestCase {
     private func makeHandler(registry: URLRouteRegistry? = nil) -> (URLSchemeHandler, NoteStore) {
         let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
         let staged = StagedUploads(directory: root.appendingPathComponent("staged"))
-        let service = AutomationService(store: store, defaults: defaults, staged: staged, isLoading: { false })
+        let gate = dailyAvailable
+        let service = AutomationService(store: store, defaults: defaults, staged: staged, dailyNotesAvailable: { gate },
+                                        isLoading: { false })
         let environment = URLSchemeHandler.Environment(
             confirm: { [unowned self] in questions.append($0); return answer },
             notify: { [unowned self] in notices.append($0) },
@@ -122,7 +124,7 @@ final class URLSchemeHandlerTests: XCTestCase {
         XCTAssertEqual(searches, ["Nothing here", "milk"])
     }
 
-    func testDailyHostsUnavailableWhileGateOff() async {
+    func testDailyUnavailableWhileGateOff() async {
         let (handler, _) = makeHandler()
         await open(handler, "noteit://daily")
         await open(handler, "noteit://x-callback-url/append?daily=today&text=x&x-error=app://err")
@@ -130,6 +132,29 @@ final class URLSchemeHandlerTests: XCTestCase {
         XCTAssertTrue(questions.isEmpty)
         let error = URLComponents(url: try! XCTUnwrap(callbacks.first), resolvingAgainstBaseURL: false)
         XCTAssertEqual(error?.queryItems?.first { $0.name == "errorCode" }?.value, "not_implemented")
+    }
+
+    func testDailyHostsOpenAndAppendWhenAvailable() async throws {
+        dailyAvailable = true
+        let (handler, store) = makeHandler()
+        answer = false
+        await open(handler, "noteit://x-callback-url/append?daily=today&text=x&x-cancel=app://cancel")
+        XCTAssertEqual(questions, ["A link wants to add text to today's daily note."])
+        XCTAssertTrue(store.notes.isEmpty, "Don't Allow creates nothing")
+        XCTAssertEqual(callbacks.map(\.host), ["cancel"])
+
+        answer = true
+        await open(handler, "noteit://x-callback-url/append?daily=today&text=Called%20Sam&x-success=app://ok")
+        let daily = try XCTUnwrap(store.notes.first)
+        XCTAssertTrue(text(of: daily.id, in: store).hasSuffix("\n- Called Sam"))
+        XCTAssertEqual(callbacks.last?.host, "ok")
+        await open(handler, "noteit://append?daily=today&text=Again")
+        XCTAssertEqual(questions.last, "A link wants to add text to “\(daily.title)”.")
+        XCTAssertEqual(store.notes.count, 1)
+
+        await open(handler, "noteit://daily")
+        XCTAssertEqual(shown, [daily.id])
+        XCTAssertTrue(notices.isEmpty)
     }
 
     func testHTTPSuccessCallbackHasNoIdOrTitle() async {

@@ -15,6 +15,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - The `noteit` command line tool. Create, append to, list, search, show, edit and delete notes from Terminal and your scripts, with `--json` for machine-readable output. Install it from Settings › Integrations or with Install Command Line Tool… in the command palette, then run `noteit auth login` and enter the code NoteIt shows.
 - Spotlight. Your notes now show up in Spotlight by title and text, and choosing one opens it in NoteIt. Notes in Recently Deleted and locked notes stay out. You can leave out the note text, rebuild the index or turn it off in Settings › Integrations.
 - Shortcuts actions. Create Note, Append to Note, Open Note, Find Notes and Get Note Text are in the Shortcuts app, and you can say “Create a note in NoteIt”, “Search NoteIt” or “Add to a note in NoteIt” to Siri.
+- Daily notes from scripts and Shortcuts. `noteit today` prints today's daily note or adds a line to it, as does `noteit append --today`, and there's an Append to Daily Note action, `noteit://daily` links and Local API routes for it. They start working when daily notes arrive in NoteIt; until then they say daily notes aren't available yet.
 
 ### Changed
 

@@ -21,13 +21,14 @@ final class AutomationService {
     let defaults: UserDefaults
     let staged: StagedUploads
     let now: () -> Date
-    private let dailyNotesAvailable: () -> Bool
+    /// The `DailyNotes.isAvailable` gate, injected so tests can run the daily paths before linking flips it.
+    let dailyNotesAvailable: @Sendable () -> Bool
     private let isLoading: () -> Bool
     /// In-process issue, list and revoke, through the Local API server's client registry.
     lazy var clients: AutomationClients = LocalAPIController.shared.clients
 
     init(store: NoteStore, defaults: UserDefaults = .standard, staged: StagedUploads, now: @escaping () -> Date = Date.init,
-         dailyNotesAvailable: @escaping () -> Bool = { DailyNotes.isAvailable }, isLoading: (() -> Bool)? = nil) {
+         dailyNotesAvailable: @escaping @Sendable () -> Bool = { DailyNotes.isAvailable }, isLoading: (() -> Bool)? = nil) {
         self.store = store
         self.defaults = defaults
         self.staged = staged
@@ -242,14 +243,46 @@ final class AutomationService {
 
     // MARK: Daily notes
 
+    /// The day's note through `NoteStore.dailyNote(for:createIfMissing:)`; nil when there is none and `create` is false.
     func daily(date: Date, create: Bool) throws(AutomationError) -> NoteMeta? {
         try ensureReady()
-        throw .dailyNotesUnavailable
+        guard dailyNotesAvailable() else { throw .dailyNotesUnavailable }
+        do {
+            return try store.dailyNote(for: date, createIfMissing: create).map(visible)
+        } catch {
+            throw .noteUnreadable
+        }
     }
 
+    /// One entry through `DailyLogAppender`, which formats the line; Markdown arrives as `.attributed`.
     func appendToDaily(text: String, format: DailyFormat, timestamp: Bool, date: Date) throws(AutomationError) -> NoteMeta {
         try ensureReady()
-        throw .dailyNotesUnavailable
+        guard dailyNotesAvailable() else { throw .dailyNotesUnavailable }
+        try Self.checkSize([text])
+        let content: DailyLogContent
+        switch format {
+        case .plain: content = .plain(text)
+        case .markdown: content = .attributed(try attributedBody(from: text, format: .markdown))
+        }
+        if let existing = try daily(date: date, create: false) {
+            if existing.isLocked { throw .noteLocked }
+            if store.isBodyWriteBlocked(existing.id) { throw .noteUnreadable }
+        }
+        do {
+            return visible(try DailyLogAppender.append(content, timestamp: timestamp, to: date, in: store, now: now()))
+        } catch DailyLogError.emptyText {
+            throw .invalidInput("Give the text to add.")
+        } catch let error as BodyEditError {
+            switch error {
+            case .noteMissing: throw .notFound
+            case .inTrash: throw .noteDeleted
+            case .locked: throw .noteLocked
+            case .writeBlocked, .taskChanged: throw .noteUnreadable
+            case .versionNotSaved: throw .versionNotSaved
+            }
+        } catch {
+            throw .noteUnreadable
+        }
     }
 
     // MARK: Helpers

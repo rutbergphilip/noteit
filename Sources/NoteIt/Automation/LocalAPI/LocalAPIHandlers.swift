@@ -39,8 +39,8 @@ final class LocalAPIHandlers: LocalAPIResponder, @unchecked Sendable {
     @MainActor
     private func handle(_ route: RouteID, _ context: LocalAPIContext) async throws -> HTTPResponse {
         let request = context.request
-        if route == .daily || route == .dailyAppend {
-            return .error(.notImplemented, AutomationError.dailyNotesUnavailable.message)
+        if route == .daily || route == .dailyAppend, !service.dailyNotesAvailable() {
+            throw AutomationError.dailyNotesUnavailable
         }
         try service.ensureReady()
         switch route {
@@ -150,6 +150,24 @@ final class LocalAPIHandlers: LocalAPIResponder, @unchecked Sendable {
         case .notebookDelete:
             try service.deleteNotebook(try Self.notebookID(context))
             return HTTPResponse(status: 204)
+
+        case .daily:
+            let query = request.query
+            let date = try Self.day(query["date"]) ?? service.now()
+            let create = query["create"].map(Self.isTrue) ?? false
+            if create { try Self.requireWrite(context) }
+            let format: BodyFormatDTO = try Self.dailyFormat(query["format"]) == .plain ? .text : .markdown
+            guard let meta = try service.daily(date: date, create: create) else {
+                throw Failure(.notFound, "There's no daily note for that day.")
+            }
+            return try noteResponse(meta, format: format)
+
+        case .dailyAppend:
+            let body = try Self.decode(DailyAppendRequest.self, request)
+            let date = try Self.day(body.date) ?? service.now()
+            let meta = try service.appendToDaily(text: body.text, format: body.format ?? .plain, timestamp: body.timestamp ?? true,
+                                                 date: date)
+            return try noteResponse(meta, format: .markdown)
 
         case .tags:
             if request.query["tree"].map(Self.isTrue) == true {
@@ -335,6 +353,36 @@ final class LocalAPIHandlers: LocalAPIResponder, @unchecked Sendable {
     static func contentType(_ request: HTTPRequest) -> String {
         let value = request.headers["Content-Type"]?.split(separator: ";").first?.trimmingCharacters(in: .whitespaces) ?? ""
         return value.isEmpty ? "application/octet-stream" : value.lowercased()
+    }
+
+    /// `YYYY-MM-DD` (Gregorian), read as that day in the current time zone.
+    static func day(_ value: String?) throws -> Date? {
+        guard let value else { return nil }
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+              let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]) else {
+            throw Failure(.badRequest, "date must be YYYY-MM-DD.")
+        }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let components = DateComponents(year: year, month: month, day: day, hour: 12)
+        guard let date = calendar.date(from: components),
+              calendar.dateComponents([.year, .month, .day], from: date) == DateComponents(year: year, month: month, day: day) else {
+            throw Failure(.badRequest, "date must be YYYY-MM-DD.")
+        }
+        return date
+    }
+
+    static func dailyFormat(_ value: String?) throws -> DailyFormat {
+        guard let value else { return .markdown }
+        guard let format = DailyFormat(rawValue: value) else { throw Failure(.badRequest, "format must be plain or markdown.") }
+        return format
+    }
+
+    static func requireWrite(_ context: LocalAPIContext) throws {
+        guard context.client?.scopes.contains(where: { $0.allows(.write) }) == true else {
+            throw Failure(.forbiddenScope, "This needs the write scope.")
+        }
     }
 
     static func requireAdmin(_ context: LocalAPIContext) throws {

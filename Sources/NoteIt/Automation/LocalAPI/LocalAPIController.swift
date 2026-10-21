@@ -64,10 +64,11 @@ final class LocalAPIController: ObservableObject {
         self.lastUsed = lastUsed
         clients = AutomationClients(registry: registry, lastUsed: { lastUsed.date(for: $0) })
         let version = appVersion
+        let dailyAvailable = service.dailyNotesAvailable
         server = LocalHTTPServer(
             registry: registry, pairing: pairing, changes: hub, limiter: RateLimiter(),
             responder: LocalAPIHandlers(service: service, registry: routeRegistry),
-            ping: { PingDTO(name: "NoteIt", apiVersion: 1, appVersion: version, capabilities: ["events", "attachments"]) },
+            ping: { PingDTO(name: "NoteIt", apiVersion: 1, appVersion: version, capabilities: (dailyAvailable() ? ["daily"] : []) + ["events", "attachments"]) },
             routeRegistry: routeRegistry)
         server.onAuthenticated = { [weak lastUsed] id in lastUsed?.touch(id) }
         server.lastUsed = { [weak lastUsed] id in lastUsed?.date(for: id) }

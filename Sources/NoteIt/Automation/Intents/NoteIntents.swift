@@ -99,6 +99,34 @@ struct AppendToNoteIntent: AppIntent {
     }
 }
 
+/// Always listed, since App Intents can't be registered conditionally; it fails while daily notes are unavailable.
+struct AppendToDailyNoteIntent: AppIntent {
+    static var title: LocalizedStringResource = "Append to Daily Note"
+    static var description = IntentDescription("Adds a line to today's daily note.")
+    static var openAppWhenRun = false
+
+    @Parameter(title: "Text", inputOptions: String.IntentInputOptions(multiline: true))
+    var text: String
+
+    @Parameter(title: "Add Time", default: true)
+    var addTime: Bool
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Add \(\.$text) to today's daily note") {
+            \.$addTime
+        }
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<NoteEntity> {
+        let service = AutomationService.shared
+        let meta = try IntentError.run { () throws(AutomationError) in
+            try service.appendToDaily(text: text, format: .plain, timestamp: addTime, date: service.now())
+        }
+        return .result(value: service.noteEntity(meta))
+    }
+}
+
 struct OpenNoteIntent: AppIntent {
     static var title: LocalizedStringResource = "Open Note"
     static var description = IntentDescription("Opens a note in NoteIt.")
