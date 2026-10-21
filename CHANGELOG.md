@@ -9,6 +9,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- Import from Evernote. Choose one or more `.enex` files, or a folder of them, in File › Import…. Each file becomes a notebook and folders become notebooks around them. Notes keep their dates, tags, checklists, images and attachments, reminders and links to each other.
+- Import from Notion. Choose the `.zip` from Notion's Export › Markdown & CSV in File › Import…. Pages keep their images and links to each other, subpages go into a notebook named after their top page, and databases become tables.
 - `noteit://` links. Open a note, search, or create and add to notes from Shortcuts, Raycast, Alfred, scripts and web pages. Links that create or add to a note ask first; you can turn that off in Settings › Integrations.
 - Copy Note Link (⌃⌘L) in the Edit menu copies a link to the current note.
 - Local API. Turn on Allow apps on this Mac to use NoteIt in Settings › Integrations, and scripts, command line tools and browser extensions on this Mac can read and change your notes. Apps pair with a code that NoteIt shows, and the same settings list every connected app so you can revoke one, or make a token for your own scripts. The command palette has Turn Local API On and Off.

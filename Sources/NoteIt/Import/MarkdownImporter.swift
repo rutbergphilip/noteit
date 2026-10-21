@@ -105,27 +105,11 @@ final class MarkdownImporter {
             await Task.yield()
         }
         progress(ImportProgress(completed: report.cancelled ? report.notesImported : items.count, total: items.count))
-        unresolveLinksToSkipped(planned: Dictionary(zip(ids, items.map { $0.url.deletingPathExtension().lastPathComponent }),
-                                                    uniquingKeysWith: { a, _ in a }))
+        store.unresolveLinksToSkipped(in: createdIDs,
+                                      planned: Dictionary(zip(ids, items.map { $0.url.deletingPathExtension().lastPathComponent }),
+                                                          uniquingKeysWith: { a, _ in a }))
         store.flush()
         return report
-    }
-
-    /// Links to notes that a cancel or an unreadable file kept out of the import become title links.
-    private func unresolveLinksToSkipped(planned: [UUID: String]) {
-        let missing = planned.filter { store.note(with: $0.key) == nil }
-        guard !missing.isEmpty else { return }
-        for id in createdIDs {
-            let body = NSMutableAttributedString(attributedString: store.body(for: id))
-            var changed = false
-            body.enumerateAttribute(.link, in: NSRange(location: 0, length: body.length)) { value, range, _ in
-                guard let url = value as? URL, case let .note(target, heading)? = NoteLink(url: url),
-                      let title = missing[target] else { return }
-                body.addAttribute(.link, value: NoteLink.unresolved(title: title, heading: heading).clamped.url, range: range)
-                changed = true
-            }
-            if changed { store.replaceImportedBody(id, body) }
-        }
     }
 
     /// Imports one file or bundle. Returns false when it couldn't be read.
@@ -134,7 +118,7 @@ final class MarkdownImporter {
                     report: inout ImportReport) -> Bool {
         let ext = item.url.pathExtension.lowercased()
         if ext == "textpack" {
-            guard let unpacked = unzip(item.url) else { return false }
+            guard let unpacked = Self.unzip(item.url) else { return false }
             defer { try? fileManager.removeItem(at: unpacked) }
             guard let bundle = Self.textBundle(in: unpacked) else { return false }
             return importBundle(bundle, named: item.url.deletingPathExtension().lastPathComponent, item: item, id: id, report: &report)
@@ -222,9 +206,11 @@ final class MarkdownImporter {
         }
     }
 
-    /// Unpacks a `.textpack` into a temporary folder, refusing archives with entries that would land outside it.
-    private func unzip(_ url: URL) -> URL? {
-        guard let entries = Self.zipEntries(url), entries.allSatisfy(Self.isSafeZipEntry) else { return nil }
+    /// Unpacks a zip archive (a `.textpack`, a Notion export) into a temporary folder, refusing archives with
+    /// entries that would land outside it.
+    nonisolated static func unzip(_ url: URL) -> URL? {
+        let fileManager = FileManager.default
+        guard let entries = zipEntries(url), entries.allSatisfy(isSafeZipEntry) else { return nil }
         let destination = fileManager.temporaryDirectory.appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
@@ -237,7 +223,7 @@ final class MarkdownImporter {
         } catch {
             return nil
         }
-        guard process.terminationStatus == 0, Self.staysInside(destination) else {
+        guard process.terminationStatus == 0, staysInside(destination) else {
             try? fileManager.removeItem(at: destination)
             return nil
         }
