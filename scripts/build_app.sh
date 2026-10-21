@@ -113,6 +113,16 @@ for row in ${EMBEDS[@]+"${EMBEDS[@]}"}; do
     EMBEDDED+=("$embed_path|$embed_entitlements")
 done
 
+# Shell completion scripts, linked by Settings › Integrations › Install (CLIInstaller.completionLinks).
+if [[ -x "$APP/Contents/Helpers/noteit" ]]; then
+    echo "==> Generating shell completions"
+    COMPLETIONS="$APP/Contents/Resources/completions"
+    mkdir -p "$COMPLETIONS"
+    "$BIN_DIR/NoteItCLI" completion zsh > "$COMPLETIONS/_noteit"
+    "$BIN_DIR/NoteItCLI" completion bash > "$COMPLETIONS/noteit.bash"
+    "$BIN_DIR/NoteItCLI" completion fish > "$COMPLETIONS/noteit.fish"
+fi
+
 VERSION="${NOTEIT_VERSION:-${INKWELL_VERSION:-0.1.0}}"
 BUILD_NUMBER="${NOTEIT_BUILD:-${INKWELL_BUILD:-$(date +%Y%m%d%H%M)}}"
 PLIST="$APP/Contents/Info.plist"

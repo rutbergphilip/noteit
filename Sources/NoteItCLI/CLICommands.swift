@@ -3,13 +3,19 @@ import NoteItAPI
 import NoteItSync
 import UniformTypeIdentifiers
 
-/// One row of the command table, which drives both parsing and `noteit help`.
+/// One row of the command table, which drives parsing, `noteit help` and the shell completion scripts.
 struct CommandSpec {
     let name: String
     let usage: String
     let summary: String
     var valueOptions: [String] = []
     var flags: [String] = []
+    /// What each positional argument completes to, in order.
+    var arguments: [CompletionArgument] = []
+    /// What a value option completes to; options not listed take free text.
+    var optionValues: [String: CompletionValues] = [:]
+    /// More help, printed after the summary.
+    var details: String?
 
     static let globalValueOptions = ["profile"]
     static let globalFlags = ["json", "no-launch", "help"]
@@ -17,36 +23,53 @@ struct CommandSpec {
     static let all: [CommandSpec] = [
         CommandSpec(name: "new", usage: "noteit new [TEXT|-] [--title T] [--notebook N] [--tag t]… [--open]",
                     summary: "Create a note and print its id. Reads stdin when TEXT is - or stdin is piped.",
-                    valueOptions: ["title", "notebook", "tag"], flags: ["open"]),
+                    valueOptions: ["title", "notebook", "tag"], flags: ["open"],
+                    arguments: [CompletionArgument("text")], optionValues: ["notebook": .notebooks, "tag": .tags]),
         CommandSpec(name: "append", usage: "noteit append (ID | --title T | --today) [TEXT|-] [--start] [--time]",
                     summary: "Add text to the end of a note, or to the start with --start. --time adds the time.",
-                    valueOptions: ["title"], flags: ["today", "start", "time"]),
+                    valueOptions: ["title"], flags: ["today", "start", "time"],
+                    arguments: [CompletionArgument("note", .notes), CompletionArgument("text")]),
         CommandSpec(name: "show", usage: "noteit show ID [--format markdown|text|html]",
-                    summary: "Print a note's text.", valueOptions: ["format"]),
+                    summary: "Print a note's text.", valueOptions: ["format"],
+                    arguments: [CompletionArgument("note", .notes)],
+                    optionValues: ["format": .choices(["markdown", "text", "html"])]),
         CommandSpec(name: "list", usage: "noteit list [--notebook N] [--tag t] [--limit n]",
                     summary: "List notes, one per line: id, last edited, title.",
-                    valueOptions: ["notebook", "tag", "limit"]),
+                    valueOptions: ["notebook", "tag", "limit"], optionValues: ["notebook": .notebooks, "tag": .tags]),
         CommandSpec(name: "search", usage: "noteit search QUERY [--limit n]",
-                    summary: "Search notes and print each match with a snippet.", valueOptions: ["limit"]),
+                    summary: "Search notes and print each match with a snippet.", valueOptions: ["limit"],
+                    arguments: [CompletionArgument("query")]),
         CommandSpec(name: "edit", usage: "noteit edit ID",
-                    summary: "Edit a note's Markdown in $VISUAL or $EDITOR (vi if neither is set)."),
+                    summary: "Edit a note's Markdown in $VISUAL or $EDITOR (vi if neither is set).",
+                    arguments: [CompletionArgument("note", .notes)]),
         CommandSpec(name: "rm", usage: "noteit rm ID [--permanent]",
                     summary: "Move a note to Recently Deleted. --permanent deletes a note already there for good.",
-                    flags: ["permanent"]),
-        CommandSpec(name: "open", usage: "noteit open ID", summary: "Show a note in NoteIt."),
+                    flags: ["permanent"], arguments: [CompletionArgument("note", .notes)]),
+        CommandSpec(name: "open", usage: "noteit open ID", summary: "Show a note in NoteIt.",
+                    arguments: [CompletionArgument("note", .notes)]),
         CommandSpec(name: "notebooks", usage: "noteit notebooks", summary: "List notebooks."),
         CommandSpec(name: "tags", usage: "noteit tags", summary: "List tags with their note counts."),
-        CommandSpec(name: "attach", usage: "noteit attach ID FILE", summary: "Add a file to the end of a note."),
+        CommandSpec(name: "attach", usage: "noteit attach ID FILE", summary: "Add a file to the end of a note.",
+                    arguments: [CompletionArgument("note", .notes), CompletionArgument("file", .files)]),
         CommandSpec(name: "today", usage: "noteit today [TEXT|-]",
-                    summary: "Print today's daily note, or add a line to it."),
+                    summary: "Print today's daily note, or add a line to it.", arguments: [CompletionArgument("text")]),
         CommandSpec(name: "watch", usage: "noteit watch", summary: "Print changes to your notes as JSON lines."),
         CommandSpec(name: "api", usage: "noteit api METHOD PATH [--data JSON|@file]",
                     summary: "Send a request to the Local API and print the response, for scripts.",
-                    valueOptions: ["data"]),
+                    valueOptions: ["data"],
+                    arguments: [CompletionArgument("method", .choices(["GET", "POST", "PATCH", "DELETE"])),
+                                CompletionArgument("path")]),
         CommandSpec(name: "auth", usage: "noteit auth login [--scopes read,write] | logout | status",
-                    summary: "Pair with NoteIt, sign out, or show who you're signed in as.", valueOptions: ["scopes"]),
+                    summary: "Pair with NoteIt, sign out, or show who you're signed in as.", valueOptions: ["scopes"],
+                    arguments: [CompletionArgument("action", .choices(["login", "logout", "status"]))],
+                    optionValues: ["scopes": .choices(["read", "read,write", "read,write,admin"])]),
         CommandSpec(name: "status", usage: "noteit status", summary: "Show whether NoteIt and the Local API are reachable."),
-        CommandSpec(name: "help", usage: "noteit help [COMMAND]", summary: "Show help for noteit or one command."),
+        CommandSpec(name: "completion", usage: "noteit completion zsh|bash|fish",
+                    summary: "Print the tab completion script for a shell.",
+                    arguments: [CompletionArgument("shell", .choices(CompletionShell.allCases.map(\.rawValue)))],
+                    details: CompletionScript.setupHelp),
+        CommandSpec(name: "help", usage: "noteit help [COMMAND]", summary: "Show help for noteit or one command.",
+                    arguments: [CompletionArgument("command", .commands)]),
     ]
 
     static func named(_ name: String) -> CommandSpec? { all.first { $0.name == name } }
@@ -129,6 +152,8 @@ struct CLI {
         case "--help", "-h":
             io.out(Self.overview())
             return
+        case CompletionCandidates.command:
+            return await CompletionCandidates(context: context).run(Array(arguments.dropFirst()))
         case "mcp":
             io.errorLine(Self.mcpMessage)
             throw CLIQuietExit(exit: .usage)
@@ -142,6 +167,7 @@ struct CLI {
             return
         }
         if name == "help" { return try help(parsed) }
+        if name == "completion" { return try completion(parsed) }
         let profile = try CLIProfile.resolve(flag: parsed.value("profile"), environment: context.environment)
         let command = Command(cli: self, parsed: parsed, profile: profile)
         switch name {
@@ -180,6 +206,13 @@ struct CLI {
         io.out(Self.help(for: spec))
     }
 
+    private func completion(_ parsed: CLIInvocation) throws {
+        guard parsed.positionals.count == 1, let shell = CompletionShell(rawValue: parsed.positionals[0]) else {
+            throw CLIUsageError(message: "Give a shell: zsh, bash or fish.")
+        }
+        io.out(CompletionScript.generate(for: shell))
+    }
+
     static func overview() -> String {
         let width = CommandSpec.all.map(\.name.count).max() ?? 0
         let rows = CommandSpec.all.map { "  " + $0.name.padding(toLength: width + 2, withPad: " ", startingAt: 0) + $0.summary }
@@ -188,7 +221,8 @@ struct CLI {
     }
 
     static func help(for spec: CommandSpec) -> String {
-        (["usage: \(spec.usage)", "", spec.summary, ""] + globalOptionLines()).joined(separator: "\n") + "\n"
+        let details = spec.details.map { [$0, ""] } ?? []
+        return (["usage: \(spec.usage)", "", spec.summary, ""] + details + globalOptionLines()).joined(separator: "\n") + "\n"
     }
 
     private static func globalOptionLines() -> [String] {

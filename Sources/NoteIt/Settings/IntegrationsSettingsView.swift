@@ -310,7 +310,7 @@ private struct NewTokenSheet: View {
     }
 }
 
-/// Install, fix or remove the `/usr/local/bin/noteit` link to the tool inside the app.
+/// Install, fix or remove the `/usr/local/bin/noteit` link to the tool inside the app, and its shell completion links.
 struct CommandLineToolSection: View {
     @State private var state = CLIInstaller.live().state()
     @State private var working = false
@@ -328,6 +328,9 @@ struct CommandLineToolSection: View {
             if let error {
                 SettingsFootnote(text: error, symbol: "xmark.octagon.fill", color: .red)
             }
+            if state == .installed, !installer.bundledCompletions.isEmpty {
+                SettingsFootnote(text: "Tab completion in zsh needs this line in ~/.zshrc: autoload -Uz compinit && compinit")
+            }
             SettingsFootnote(text: "Also available with Homebrew: brew install --cask noteit")
         } header: {
             Text("Command line tool")
@@ -340,6 +343,7 @@ struct CommandLineToolSection: View {
         switch state {
         case .notInstalled: return "Not installed"
         case .installed: return "Installed at \(installer.linkURL.path)"
+        case .completionsMissing: return "Installed without shell completion"
         case .otherCopy: return "Points to another copy of NoteIt"
         case .pointsElsewhere: return "\(installer.linkURL.path) is used by something else"
         }
@@ -349,7 +353,7 @@ struct CommandLineToolSection: View {
         switch state {
         case .notInstalled: Button("Install…") { perform { try installer.install() } }.disabled(working)
         case .installed: Button("Uninstall") { perform { try installer.uninstall() } }.disabled(working)
-        case .otherCopy: Button("Fix") { perform { try installer.install() } }.disabled(working)
+        case .otherCopy, .completionsMissing: Button("Fix") { perform { try installer.install() } }.disabled(working)
         case .pointsElsewhere: EmptyView()
         }
     }
