@@ -93,6 +93,7 @@ enum OrganiseRoutes {
             case "organise.smartFolderCreate":
                 let request = try decode(SmartFolderRequest.self, context, hint: "Send a JSON object with a name and a query.")
                 let symbol = try validSymbol(request.symbol) ?? SmartFolder.defaultSymbol
+                try validQuery(request.query)
                 let folder = try smartFolderEdit {
                     try store.createSmartFolder(name: request.name ?? "", query: request.query ?? "", symbol: symbol)
                 }
@@ -107,6 +108,7 @@ enum OrganiseRoutes {
                 let folder = try smartFolder(context, store: store)
                 let request = try decode(SmartFolderRequest.self, context, hint: "Send a JSON object with a name, query or symbol.")
                 let symbol = try validSymbol(request.symbol) ?? folder.symbol
+                try validQuery(request.query)
                 try smartFolderEdit {
                     try store.updateSmartFolder(folder.id, name: request.name ?? folder.name, query: request.query ?? folder.query,
                                                 symbol: symbol)
@@ -204,6 +206,12 @@ enum OrganiseRoutes {
             return try edit()
         } catch let error as SmartFolderError {
             throw Failure(code: error == .notFound ? .notFound : .badRequest, message: SmartFolderEditSheet.message(for: error))
+        }
+    }
+
+    private static func validQuery(_ query: String?) throws {
+        if let query, let issue = SearchQuery.parse(query).issues.first {
+            throw Failure(code: .badRequest, message: issue.message)
         }
     }
 

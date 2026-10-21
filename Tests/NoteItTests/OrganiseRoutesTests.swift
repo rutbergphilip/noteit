@@ -148,6 +148,15 @@ final class OrganiseRoutesTests: XCTestCase {
         let empty = await call("organise.smartFolderUpdate", store, params: ["id": folder.id.uuidString],
                                body: json(SmartFolderRequest(query: " ")))
         XCTAssertEqual(errorCode(empty), "bad_request")
+        let unbalanced = await call("organise.smartFolderUpdate", store, params: ["id": folder.id.uuidString],
+                                    body: json(SmartFolderRequest(query: "tag:work )")))
+        XCTAssertEqual(errorCode(unbalanced), "bad_request")
+        XCTAssertEqual((try? APIJSON.decoder().decode(APIErrorBody.self, from: unbalanced.body))?.error.message,
+                       "This “)” has no matching “(”.")
+        XCTAssertEqual(store.smartFolder(with: folder.id)?.query, "tag:work")
+        let badCreate = await call("organise.smartFolderCreate", store, body: json(SmartFolderRequest(name: "Bad", query: "(tag:work")))
+        XCTAssertEqual(errorCode(badCreate), "bad_request")
+        XCTAssertEqual(store.smartFolders.count, 1)
 
         let deleted = await call("organise.smartFolderDelete", store, params: ["id": folder.id.uuidString])
         XCTAssertEqual(deleted.status, 204)
