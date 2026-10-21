@@ -396,6 +396,16 @@ final class NoteStore: ObservableObject {
 
     nonisolated static func fold(_ string: String) -> String { TextFold.fold(string) }
 
+    /// The folded search text of `ids` that have one; locked notes are left out.
+    func foldedSearchText(of ids: [UUID]) -> [UUID: String] {
+        var result: [UUID: String] = [:]
+        for id in ids {
+            guard let text = searchIndex[id], note(with: id)?.isLocked == false else { continue }
+            result[id] = text
+        }
+        return result
+    }
+
     private func setIndexEntry(_ id: UUID, text: String) {
         searchIndex[id] = Self.fold(text)
         searchIndexDirty = true

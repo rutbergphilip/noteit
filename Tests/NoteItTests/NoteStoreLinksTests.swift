@@ -342,5 +342,57 @@ final class NoteStoreLinksTests: XCTestCase {
         XCTAssertTrue(store.body(for: source).string.hasSuffix("More."))
         XCTAssertEqual(linkTexts(store, source), ["Atlas 2", "the map"])
     }
+
+    // MARK: Unlinked mentions
+
+    private func waitForSearchIndex(_ store: NoteStore, _ ids: [UUID]) async {
+        await waitUntil { store.foldedSearchText(of: ids).count == ids.count }
+    }
+
+    func testMentionsExcludeLinkingNotesAndTemplates() async {
+        let store = makeStore()
+        let target = store.createNote(in: nil, initial: body("Atlas")).id
+        let plain = store.createNote(in: nil, initial: body("Plain\nI read the atlas today.")).id
+        let linking = store.createNote(in: nil, initial: body("Linking\nAtlas again", linking: [("Atlas", .note(id: target, heading: nil))])).id
+        let deleted = store.createNote(in: nil, initial: body("Deleted\nAtlas here")).id
+        _ = store.moveToRecentlyDeleted([deleted])
+        await waitForSearchIndex(store, [plain, linking])
+        let results = await store.unlinkedMentions(of: target)
+        XCTAssertEqual(results.map(\.source), [plain])
+        XCTAssertEqual(results.first?.count, 1)
+        XCTAssertEqual(results.first?.contexts, ["I read the atlas today."])
+    }
+
+    func testShortTitlesSkipped() async {
+        let store = makeStore()
+        let short = store.createNote(in: nil, initial: body("Go")).id
+        let dated = store.createNote(in: nil, initial: body("2026-10-19")).id
+        let other = store.createNote(in: nil, initial: body("Other\nGo to 2026-10-19 now")).id
+        await waitForSearchIndex(store, [other])
+        XCTAssertFalse(store.mentionsAreSearched(for: short))
+        XCTAssertFalse(store.mentionsAreSearched(for: dated))
+        let none = await store.unlinkedMentions(of: short)
+        XCTAssertEqual(none.count, 0)
+        let noneDated = await store.unlinkedMentions(of: dated)
+        XCTAssertEqual(noneDated.count, 0)
+    }
+
+    func testLinkAllRecordsVersionsAndUndoes() async {
+        let store = makeStore()
+        let target = store.createNote(in: nil, initial: body("Atlas")).id
+        let a = store.createNote(in: nil, initial: body("A\nAtlas and atlas")).id
+        let b = store.createNote(in: nil, initial: body("B\nthe Atlas")).id
+        let before = (store.versions(of: a).count, store.versions(of: b).count)
+        let (linked, result) = await store.linkMentions(of: target, in: [a, b], versioning: .recordCurrent)
+        XCTAssertEqual(linked, 3)
+        XCTAssertEqual(Set(result.notes.keys), [a, b])
+        XCTAssertEqual(store.versions(of: a).count, before.0 + 1)
+        XCTAssertEqual(store.versions(of: b).count, before.1 + 1)
+        XCTAssertEqual(Set(store.backlinks(to: target).map(\.source)), [a, b])
+        XCTAssertEqual(linkTexts(store, a), ["Atlas", "atlas"])
+        XCTAssertEqual(store.undoLinkRewrite(result), 0)
+        XCTAssertEqual(linkTexts(store, a), [])
+        XCTAssertEqual(store.backlinks(to: target).count, 0)
+    }
 }
 

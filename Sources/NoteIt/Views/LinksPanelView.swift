@@ -65,6 +65,8 @@ private struct LinksTab: View {
     @EnvironmentObject private var store: NoteStore
     let note: NoteMeta
     @ObservedObject var index: LinkIndex
+    @StateObject private var mentions = MentionsModel()
+    @AppStorage(PrefKey.unlinkedMentionsExpanded) private var mentionsExpanded = false
 
     var body: some View {
         let backlinks = store.backlinks(to: note.id)
@@ -86,6 +88,21 @@ private struct LinksTab: View {
                     BacklinkRow(backlink: backlink)
                 }
             }
+            Section {
+                DisclosureGroup(isExpanded: $mentionsExpanded) {
+                    MentionsList(model: mentions, note: note)
+                } label: {
+                    HStack {
+                        Text(mentions.results.map { "Unlinked Mentions (\($0.count))" } ?? "Unlinked Mentions")
+                        Spacer()
+                        if mentionsExpanded, let results = mentions.results, !results.isEmpty {
+                            Button("Link All") { mentions.confirmingLinkAll = true }
+                                .controlSize(.small)
+                                .disabled(mentions.isLinking)
+                        }
+                    }
+                }
+            }
             Section("In This Note (\(outgoing.count))") {
                 if outgoing.isEmpty {
                     Text(note.isLocked ? "This note is locked" : "No links in this note")
@@ -97,11 +114,161 @@ private struct LinksTab: View {
             }
         }
         .listStyle(.sidebar)
+        .task(id: MentionsModel.Key(note: note.id, title: note.title, version: index.version, expanded: mentionsExpanded)) {
+            guard mentionsExpanded else { mentions.clear(); return }
+            await mentions.load(note.id, store: store)
+        }
+        .alert(linkAllTitle, isPresented: $mentions.confirmingLinkAll) {
+            Button("Link All") { Task { await mentions.linkAll(note.id, store: store) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Each changed note keeps its current version in Version History.")
+        }
+    }
+
+    private var linkAllTitle: String {
+        let notes = mentions.results?.count ?? 0
+        let count = mentions.results?.reduce(0) { $0 + $1.count } ?? 0
+        return "Link \(count) \(count == 1 ? "mention" : "mentions") in \(notes) \(notes == 1 ? "note" : "notes")?"
+    }
+}
+
+@MainActor
+final class MentionsModel: ObservableObject {
+    struct Key: Equatable {
+        var note: UUID
+        var title: String
+        var version: Int
+        var expanded: Bool
+    }
+
+    static let shownLimit = 100
+
+    @Published private(set) var results: [MentionResult]?
+    @Published private(set) var searched = true
+    @Published var showAll = false
+    @Published var confirmingLinkAll = false
+    @Published private(set) var isLinking = false
+    @Published private(set) var outcome: (message: String, result: LinkRewriteResult?)?
+    private var noteID: UUID?
+
+    func clear() {
+        results = nil
+    }
+
+    func load(_ id: UUID, store: NoteStore) async {
+        if noteID != id {
+            noteID = id
+            showAll = false
+            outcome = nil
+            results = nil
+        }
+        searched = store.mentionsAreSearched(for: id)
+        guard searched else { results = []; return }
+        let found = await store.unlinkedMentions(of: id)
+        guard !Task.isCancelled, noteID == id else { return }
+        results = found
+    }
+
+    func link(_ source: UUID, of id: UUID, store: NoteStore) async {
+        _ = await store.linkMentions(of: id, in: [source], versioning: EditBodyVersioning.none)
+    }
+
+    func linkAll(_ id: UUID, store: NoteStore) async {
+        guard let results, !results.isEmpty else { return }
+        isLinking = true
+        let (linked, result) = await store.linkMentions(of: id, in: results.map(\.source), versioning: .recordCurrent)
+        isLinking = false
+        let notes = result.notes.count
+        var message = "Linked \(linked) \(linked == 1 ? "mention" : "mentions") in \(notes) \(notes == 1 ? "note" : "notes")."
+        if result.skipped > 0 {
+            message += result.skipped == 1 ? " 1 note couldn't be changed." : " \(result.skipped) notes couldn't be changed."
+        }
+        outcome = (message, result.notes.isEmpty ? nil : result)
+    }
+
+    func undo(store: NoteStore) {
+        guard let result = outcome?.result else { return }
+        let leftAlone = store.undoLinkRewrite(result)
+        outcome = (leftAlone == 0 ? "Mentions unlinked again."
+                   : "\(leftAlone) \(leftAlone == 1 ? "note was" : "notes were") edited since and left as \(leftAlone == 1 ? "it is" : "they are").", nil)
+    }
+}
+
+private struct MentionsList: View {
+    @EnvironmentObject private var store: NoteStore
+    @ObservedObject var model: MentionsModel
+    let note: NoteMeta
+
+    var body: some View {
+        if let outcome = model.outcome {
+            HStack {
+                Text(outcome.message).font(.system(size: 11)).foregroundStyle(.secondary)
+                Spacer()
+                if outcome.result != nil {
+                    Button("Undo") { model.undo(store: store) }.controlSize(.small)
+                }
+            }
+        }
+        if !model.searched {
+            Text("Titles this short aren't searched.").font(.system(size: 12)).foregroundStyle(.secondary)
+        } else if let results = model.results {
+            if results.isEmpty {
+                Text("No unlinked mentions").font(.system(size: 12)).foregroundStyle(.secondary)
+            }
+            let shown = model.showAll ? results : Array(results.prefix(MentionsModel.shownLimit))
+            ForEach(shown) { mention in
+                MentionRow(mention: mention, title: note.title) {
+                    Task { await model.link(mention.source, of: note.id, store: store) }
+                }
+            }
+            if !model.showAll, results.count > MentionsModel.shownLimit {
+                Button("Show All (\(results.count))") { model.showAll = true }
+                    .buttonStyle(.link)
+                    .font(.system(size: 11))
+            }
+        } else {
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Searching…").font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+private struct MentionRow: View {
+    @EnvironmentObject private var store: NoteStore
+    let mention: MentionResult
+    let title: String
+    let link: () -> Void
+
+    var body: some View {
+        let meta = store.note(with: mention.source)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 4) {
+                Button { store.navigate(to: mention.source, heading: nil) } label: {
+                    Text(meta?.displayTitle ?? "").font(.system(size: 12, weight: .semibold)).lineLimit(1)
+                }
+                .buttonStyle(.plain)
+                Spacer(minLength: 4)
+                Button("Link", action: link)
+                    .controlSize(.small)
+                    .accessibilityLabel("Link the mentions in “\(meta?.displayTitle ?? "")”")
+            }
+            ForEach(Array(mention.contexts.enumerated()), id: \.offset) { _, context in
+                contextText(context, bold: title)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
 private func contextText(_ context: String, bold: String) -> Text {
-    guard !bold.isEmpty, let range = context.range(of: bold) else { return Text(context) }
+    guard !bold.isEmpty, let range = context.range(of: bold, options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive])
+    else { return Text(context) }
     return Text(context[..<range.lowerBound]) + Text(context[range]).bold() + Text(context[range.upperBound...])
 }
 

@@ -17,6 +17,13 @@ struct LinkRewriteResult {
     var notes: [UUID: UUID] = [:]
 }
 
+struct MentionResult: Identifiable {
+    var id: UUID { source }
+    var source: UUID
+    var contexts: [String]
+    var count: Int
+}
+
 struct Backlink: Identifiable {
     var id: UUID { source }
     var source: UUID
@@ -377,6 +384,83 @@ extension NoteStore {
             do { try restoreVersion(version) } catch { leftAlone += 1 }
         }
         return leftAlone
+    }
+
+    // MARK: Unlinked mentions
+
+    /// Titles too short, or only a date, to search for.
+    func mentionsAreSearched(for id: UUID) -> Bool {
+        guard let title = note(with: id)?.title.trimmingCharacters(in: .whitespacesAndNewlines) else { return false }
+        return title.count >= MentionFinder.minimumTitleLength && DailyNoteTitle.parse(title, locale: .current) == nil
+    }
+
+    /// Live notes that mention `id`'s title in plain text and don't link to it, newest first, each with the context
+    /// of its first 3 mentions. Scans the folded search text off the main actor; stops early when cancelled.
+    func unlinkedMentions(of id: UUID) async -> [MentionResult] {
+        guard let target = note(with: id), mentionsAreSearched(for: id) else { return [] }
+        let title = target.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let folded = TextFold.fold(title)
+        let templates = templatesNotebookIDIfSet
+        let linking = linkIndex.sources(linkingTo: id, title: title)
+        let candidates = notes.filter { meta in
+            meta.id != id && meta.deletedAt == nil && !meta.isLocked && !linking.contains(meta.id)
+                && (templates == nil || meta.notebookID != templates)
+        }
+        let order = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0.updatedAt) })
+        let texts = foldedSearchText(of: candidates.map(\.id))
+        let matches: [UUID]? = await Task.detached(priority: .userInitiated) {
+            var found: [UUID] = []
+            for (index, entry) in texts.enumerated() {
+                if index % 500 == 0, Task.isCancelled { return nil }
+                if MentionFinder.mayMention(folded, inFolded: entry.value) { found.append(entry.key) }
+            }
+            return found
+        }.value
+        guard var matches, !Task.isCancelled else { return [] }
+        matches.sort { (order[$0] ?? .distantPast) > (order[$1] ?? .distantPast) }
+        var results: [MentionResult] = []
+        for (index, source) in matches.enumerated() {
+            if index > 0, index % Self.rewriteBatchSize == 0 {
+                await Task.yield()
+                if Task.isCancelled { return [] }
+            }
+            guard let meta = note(with: source), meta.deletedAt == nil, !meta.isLocked else { continue }
+            let text = body(for: source)
+            let ranges = MentionFinder.ranges(of: title, in: text)
+            guard !ranges.isEmpty else { continue }
+            let ns = text.string as NSString
+            let contexts = ranges.prefix(3).map { LinkExtractor.context(around: $0, in: ns) }
+            results.append(MentionResult(source: source, contexts: contexts, count: ranges.count))
+        }
+        return results
+    }
+
+    /// Turns the mentions of `target`'s title in each source into links to it, keeping the text. One source is
+    /// changed with `versioning: .none` (one Undo step in an open editor); several record a version each.
+    func linkMentions(of target: UUID, in sources: [UUID],
+                      versioning: EditBodyVersioning? = nil) async -> (linked: Int, result: LinkRewriteResult) {
+        var result = LinkRewriteResult()
+        guard let title = note(with: target)?.title else { return (0, result) }
+        let url = NoteLink.note(id: target, heading: nil).url
+        let versioning = versioning ?? (sources.count > 1 ? .recordCurrent : .none)
+        for (index, source) in sources.enumerated() {
+            if index > 0, index % Self.rewriteBatchSize == 0 { await Task.yield() }
+            var count = 0
+            do {
+                try editBody(source, actionName: "Link Mention", versioning: versioning) { text in
+                    let ranges = MentionFinder.ranges(of: title, in: text)
+                    count = ranges.count
+                    for range in ranges { text.addAttribute(.link, value: url, range: range) }
+                }
+            } catch {
+                result.skipped += 1
+                continue
+            }
+            guard count > 0, let revision = note(with: source)?.revision else { continue }
+            result.updated += count
+            result.notes[source] = revision
+        }
+        return (result.updated, result)
     }
 }
 
