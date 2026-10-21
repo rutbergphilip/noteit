@@ -7,14 +7,32 @@ import Foundation
 /// thread or Swift's cooperative pool, because a dead mount can block a system call for minutes. A missing root
 /// or an unreachable volume throws `unavailable`, never `notFound`, and a listing either sees every object or
 /// throws: a partial listing would look like deletions made on another Mac.
+///
+/// When the root is a share's mount point, an empty local folder can be left at its path after an unmount. So
+/// the root's identity (device and inode) is recorded on first use and a different folder at the same path is
+/// `unavailable`, and with `store` set a root without a NoteIt store in it is too (see `StorePolicy`).
 public final class FolderBackend: StorageBackend, @unchecked Sendable {
+    /// How a root without a NoteIt store (`RemoteLayout.root`, or Inkwell's `legacyRoot`) in it is treated.
+    public enum StorePolicy: Sendable {
+        /// No store needed; any keys.
+        case unchecked
+        /// A missing store means this isn't the folder that was synced: every call throws `unavailable`.
+        case existing
+        /// Connecting to a folder: a missing store reads as empty and may be created. Once seen, like `existing`.
+        case creatable
+    }
+
     private static let ioQueue = DispatchQueue(label: "NoteIt.FolderBackend.io", qos: .utility, attributes: .concurrent)
 
     static let hashedSizeLimit: Int64 = 256 * 1024
     static let lockFileName = ".noteit-lock"
 
     public let root: URL
+    public let store: StorePolicy
     private let lock = NSLock()
+    private let stateLock = NSLock()
+    private var rootIdentity: RootIdentity?
+    private var storeSeen = false
     private let fileManager = FileManager.default
     private let cacheLock = NSLock()
     private var hashCache: [String: (stamp: Stamp, etag: String)] = [:]
@@ -23,8 +41,9 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
     /// Number of small files read to compute an etag; lets tests check that `list` stays cheap.
     var hashedFileReads: Int { cacheLock.withLock { _hashedFileReads } }
 
-    public init(root: URL) {
+    public init(root: URL, store: StorePolicy = .unchecked) {
         self.root = root.standardizedFileURL
+        self.store = store
     }
 
     public func list(prefix: String) async throws -> [RemoteObject] {
@@ -178,6 +197,7 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
     /// locking, falls back to the in-process lock only.
     private func withStoreLock<T>(_ body: () throws -> T) throws -> T {
         try lock.withLock {
+            try requireRoot()
             let fd = Darwin.open(root.appendingPathComponent(Self.lockFileName).path, O_RDWR | O_CREAT | O_CLOEXEC, 0o644)
             guard fd >= 0 else { return try body() }
             defer { close(fd) }
@@ -212,6 +232,7 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
         }
     }
 
+    /// The root is the folder this backend first used, and holds a store unless `store` is `unchecked`.
     private func requireRoot() throws {
         var st = stat()
         guard stat(root.path, &st) == 0 else {
@@ -219,6 +240,25 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
             throw code == ENOENT || code == ENOTDIR ? unavailable() : Self.storageError(code, key: root.path)
         }
         guard st.st_mode & S_IFMT == S_IFDIR else { throw unavailable() }
+        if store != .unchecked {
+            let present = [RemoteLayout.root, RemoteLayout.legacyRoot].contains { isDirectory(root.appendingPathComponent($0).path) }
+            let seen = stateLock.withLock {
+                if present { storeSeen = true }
+                return storeSeen
+            }
+            if !present, store == .existing || seen { throw unavailable() }
+        }
+        let identity = RootIdentity(device: st.st_dev, inode: st.st_ino)
+        let recorded = stateLock.withLock {
+            if rootIdentity == nil { rootIdentity = identity }
+            return rootIdentity
+        }
+        guard recorded == identity else { throw unavailable() }
+    }
+
+    private func isDirectory(_ path: String) -> Bool {
+        var st = stat()
+        return stat(path, &st) == 0 && st.st_mode & S_IFMT == S_IFDIR
     }
 
     private func unavailable() -> StorageError {
@@ -319,6 +359,11 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
             current = error.userInfo[NSUnderlyingErrorKey] as? NSError
         }
         return nil
+    }
+
+    private struct RootIdentity: Equatable {
+        var device: dev_t
+        var inode: ino_t
     }
 
     private struct Stamp: Equatable {

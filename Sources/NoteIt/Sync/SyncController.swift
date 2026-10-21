@@ -174,7 +174,7 @@ final class SyncController: ObservableObject {
     /// Validates the destination, creates or joins the remote library, stores secrets and starts syncing.
     func connect(_ config: SyncConfiguration, accessKey: String?, secret: String?, passphrase: String?) async throws {
         var config = config
-        let destination = try await makeDestination(config, accessKey: accessKey, secret: secret)
+        let destination = try await makeDestination(config, accessKey: accessKey, secret: secret, creatingStore: true)
         let encryptNew = config.encrypted
         let deviceName = config.deviceName
         let migrationRecord = migrationRecord(for: config)
@@ -343,7 +343,7 @@ final class SyncController: ObservableObject {
 
     func testConnection(_ config: SyncConfiguration, accessKey: String?, secret: String?) async -> Result<RemoteInspection, Error> {
         do {
-            let destination = try await makeDestination(config, accessKey: accessKey, secret: secret)
+            let destination = try await makeDestination(config, accessKey: accessKey, secret: secret, creatingStore: true)
             let inspection = try await withAccess(destination) {
                 try await Self.offMain { () async throws -> RemoteInspection in
                     try await destination.backend.probe()
@@ -718,7 +718,9 @@ final class SyncController: ObservableObject {
 
     // MARK: - Backends
 
-    private func makeDestination(_ config: SyncConfiguration, accessKey: String?, secret: String?) async throws -> Destination {
+    /// creatingStore: connecting, so a folder without a store is empty rather than a share that went away.
+    private func makeDestination(_ config: SyncConfiguration, accessKey: String?, secret: String?,
+                                 creatingStore: Bool = false) async throws -> Destination {
         if config.provider == .folder {
             let resolved = try await Self.checkFolder(config, access: folderAccess, timeout: folderCheckTimeout)
             if let refreshed = resolved.refreshedBookmark, var current = configuration, current == config {
@@ -726,7 +728,8 @@ final class SyncController: ObservableObject {
                 configuration = current
                 if ephemeralSecrets == nil { current.save() }
             }
-            return Destination(backend: FolderBackend(root: resolved.url), folder: resolved.url, scoped: resolved.scoped)
+            let backend = FolderBackend(root: resolved.url, store: creatingStore ? .creatable : .existing)
+            return Destination(backend: backend, folder: resolved.url, scoped: resolved.scoped)
         }
         guard let s3 = config.s3 else { throw SyncSetupError.missingField("the bucket details") }
         guard let scheme = s3.endpoint.scheme?.lowercased(), ["http", "https"].contains(scheme), s3.endpoint.host != nil else {
