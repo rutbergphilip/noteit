@@ -179,6 +179,17 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         return true
     }
 
+    override func resignFirstResponder() -> Bool {
+        guard super.resignFirstResponder() else { return false }
+        inlineCompletion.cancel()
+        return true
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { inlineCompletion.cancel() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override func didChangeText() {
         normalizePendingEdits()
         codeStyler.flush(typing: true)

@@ -39,12 +39,20 @@ final class InlineCompletionController {
     private var source: InlineCompletionSource?
     private var start = 0
     private let model = InlineCompletionModel()
-    private var panel: InlineCompletionPanel?
+    private nonisolated(unsafe) var panel: InlineCompletionPanel?
     private var resignObserver: NSObjectProtocol?
     private var cancelOnEnd = false
 
     init(textView: NoteItTextView) {
         self.textView = textView
+    }
+
+    deinit {
+        guard let panel else { return }
+        MainActor.assumeIsolated {
+            panel.parent?.removeChildWindow(panel)
+            panel.orderOut(nil)
+        }
     }
 
     var isActive: Bool { source != nil }
@@ -125,7 +133,8 @@ final class InlineCompletionController {
         resignObserver = nil
     }
 
-    private func cancel() {
+    /// Closes the list as Esc does.
+    func cancel() {
         guard let source else { return }
         let caret = textView.selectedRange().location
         let location = min(start, textView.storage.length)

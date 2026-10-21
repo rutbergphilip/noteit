@@ -73,6 +73,7 @@ struct RichTextEditor: NSViewRepresentable {
             controller.refresh()
         }
         if coordinator.noteID != noteID {
+            coordinator.closeCompletion()
             coordinator.commit(deferred: true)
             coordinator.noteID = noteID
             coordinator.load()
@@ -82,6 +83,7 @@ struct RichTextEditor: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         // Runs inside a SwiftUI view update: snapshot now, publish to the store on the next turn.
+        coordinator.closeCompletion()
         coordinator.commit(deferred: true)
         coordinator.stopObserving()
         if let textView = coordinator.textView { OpenEditorRegistry.shared.unregister(textView) }
@@ -98,6 +100,7 @@ struct RichTextEditor: NSViewRepresentable {
         let store: NoteStore
         private let undo = UndoManager()
         private var isLoading = false
+        private var isClosingCompletion = false
         private var remoteUpdates: AnyCancellable?
         private var notesChanges: AnyCancellable?
         /// Edits not yet written to the store.
@@ -206,6 +209,15 @@ struct RichTextEditor: NSViewRepresentable {
             }
         }
 
+        /// Closes an open suggestion list as Esc does (Link to Note… takes its `[[` back) before the editor
+        /// leaves this note, without touching SwiftUI state, which may be mid-update.
+        func closeCompletion() {
+            guard let textView, textView.inlineCompletion.isActive else { return }
+            isClosingCompletion = true
+            defer { isClosingCompletion = false }
+            textView.inlineCompletion.cancel()
+        }
+
         private func scheduleCommit() {
             hasPendingChanges = true
             cancelScheduledCommit()
@@ -309,11 +321,13 @@ struct RichTextEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             if !isLoading { scheduleCommit() }
+            if isClosingCompletion { return }
             controller.refresh()
             textView?.inlineCompletion.refresh()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
+            if isClosingCompletion { return }
             controller.refresh()
             textView?.inlineCompletion.refresh()
         }

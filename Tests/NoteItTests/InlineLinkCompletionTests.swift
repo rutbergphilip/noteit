@@ -67,4 +67,45 @@ final class InlineLinkCompletionTests: XCTestCase {
         XCTAssertEqual(textView.string, "Hello")
         XCTAssertEqual(textView.selectedRange(), NSRange(location: 5, length: 0))
     }
+
+    private func openList() {
+        _ = host.store.createNote(in: nil, initial: EditorStyle.paragraph("Atlas", kind: .title))
+        window.makeFirstResponder(textView)
+        textView.linkToNote(nil)
+        XCTAssertTrue(textView.inlineCompletion.isActive)
+        XCTAssertEqual(window.childWindows?.count, 1)
+    }
+
+    func testLeavingTheEditorClosesTheList() {
+        openList()
+        window.makeFirstResponder(nil)
+        XCTAssertFalse(textView.inlineCompletion.isActive)
+        XCTAssertEqual(window.childWindows?.count ?? 0, 0)
+        XCTAssertEqual(textView.string, "Hello")
+    }
+
+    func testRemovingTheEditorClosesTheList() {
+        openList()
+        textView.enclosingScrollView?.removeFromSuperview()
+        XCTAssertFalse(textView.inlineCompletion.isActive)
+        XCTAssertEqual(window.childWindows?.count ?? 0, 0)
+    }
+
+    func testSwitchingNotesTakesTheOpeningBack() async throws {
+        let store = host.store
+        let coordinator = RichTextEditor.Coordinator(noteID: host.noteID, controller: EditorController(), store: store)
+        coordinator.textView = textView
+        textView.delegate = coordinator
+        textView.linkHost = coordinator
+        textView.storage.append(NSAttributedString(string: " world", attributes: EditorStyle.bodyAttributes))
+        textView.setSelectedRange(NSRange(location: textView.storage.length, length: 0))
+        openList()
+        XCTAssertEqual(textView.string, "Hello world[[")
+        RichTextEditor.dismantleNSView(try XCTUnwrap(textView.enclosingScrollView), coordinator: coordinator)
+        XCTAssertFalse(textView.inlineCompletion.isActive)
+        XCTAssertEqual(window.childWindows?.count ?? 0, 0)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(store.body(for: host.noteID).string, "Hello world")
+    }
 }
+
