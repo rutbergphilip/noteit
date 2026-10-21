@@ -72,11 +72,21 @@ final class NoteStore: ObservableObject {
     private var indexSaveWorkItem: DispatchWorkItem?
 
     /// Position hints for `note(with:)`; rebuilt only after `notes` changed and a lookup misses.
-    private var notesVersion = 0
+    private(set) var notesVersion = 0
+    /// Daily notes by day; rebuilt by `dailyNoteIndex` after `notes` change.
+    var dailyNoteIndexCache: DailyNoteIndex?
+    /// The pick among several "Daily Notes" notebooks, for `notesVersion` and those notebooks.
+    var dailyNotebookChoiceCache: (notesVersion: Int, named: [UUID], choice: UUID?)?
+    /// How often that pick scanned the notes (tests).
+    var dailyNotebookChoiceScans = 0
     private var noteIndexVersion = -1
     private var noteIndexByID: [UUID: Int] = [:]
     /// Editor snapshots taken during a view update and handed to `updateBody` on the next main-queue turn.
     private var stagedEditorBodies: [UUID: NSAttributedString] = [:]
+    /// Titles changed by typing in an editor; not by sync, Restore Version, link rewrites or the API.
+    let editorTitleCommits = PassthroughSubject<(id: UUID, title: String), Never>()
+    /// Set while `editBody` saves its own change through the open editor, which isn't a rename the user typed.
+    var savingProgrammaticEdit = false
 
     /// Read failures for note bodies, keyed by note ID (message suitable for UI).
     private var loadErrors: [UUID: String] = [:]
@@ -335,8 +345,16 @@ final class NoteStore: ObservableObject {
     @discardableResult
     func commitStagedEditorBody(_ id: UUID) -> Bool {
         guard let snapshot = stagedEditorBodies.removeValue(forKey: id) else { return false }
-        updateBody(id, snapshot)
+        commitEditorBody(id, snapshot)
         return true
+    }
+
+    /// `updateBody` for the editor's own commits; reports a changed title on `editorTitleCommits`.
+    func commitEditorBody(_ id: UUID, _ snapshot: NSAttributedString) {
+        let before = note(with: id)?.title
+        updateBody(id, snapshot)
+        guard !savingProgrammaticEdit else { return }
+        if let after = note(with: id)?.title, after != before { editorTitleCommits.send((id, after)) }
     }
 
     func hasStagedEditorBody(_ id: UUID) -> Bool {
@@ -395,6 +413,16 @@ final class NoteStore: ObservableObject {
     // MARK: - Search index
 
     nonisolated static func fold(_ string: String) -> String { TextFold.fold(string) }
+
+    /// The folded search text of `ids` that have one; locked notes are left out.
+    func foldedSearchText(of ids: [UUID]) -> [UUID: String] {
+        var result: [UUID: String] = [:]
+        for id in ids {
+            guard let text = searchIndex[id], note(with: id)?.isLocked == false else { continue }
+            result[id] = text
+        }
+        return result
+    }
 
     private func setIndexEntry(_ id: UUID, text: String) {
         searchIndex[id] = Self.fold(text)
@@ -491,11 +519,13 @@ final class NoteStore: ObservableObject {
     // MARK: - Notes
 
     @discardableResult
-    func createNote(in notebookID: UUID?, initial: NSAttributedString? = nil, postsLocalChange: Bool = true) -> NoteMeta {
+    /// An `id` already used by a note, live or in Recently Deleted, is replaced by a new one.
+    func createNote(in notebookID: UUID?, initial: NSAttributedString? = nil, postsLocalChange: Bool = true,
+                    id: UUID? = nil) -> NoteMeta {
         let now = Date()
         let body = initial ?? NSAttributedString()
         var meta = NoteMeta(
-            id: UUID(),
+            id: id.flatMap { note(with: $0) == nil ? $0 : nil } ?? UUID(),
             notebookID: notebookID,
             title: "",
             preview: "",
@@ -522,6 +552,16 @@ final class NoteStore: ObservableObject {
     /// Creates a note in the notebook implied by the current sidebar selection and selects it.
     @discardableResult
     func createNoteInCurrentContext(initial: NSAttributedString? = nil) -> NoteMeta {
+        let notebookID = prepareCurrentContextForNewNote()
+        let template = initial == nil ? defaultTemplateID(for: notebookID) : nil
+        let meta = template.map { createNote(fromTemplate: $0, title: "", in: notebookID) }
+            ?? createNote(in: notebookID, initial: initial)
+        selectedNoteID = meta.id
+        return meta
+    }
+
+    /// The selected notebook, if any; leaves a selection the new note would be hidden in, and clears the search.
+    func prepareCurrentContextForNewNote() -> UUID? {
         var notebookID: UUID?
         switch selection {
         case .notebook(let id):
@@ -532,9 +572,7 @@ final class NoteStore: ObservableObject {
             break
         }
         searchText = ""
-        let meta = createNote(in: notebookID, initial: initial)
-        selectedNoteID = meta.id
-        return meta
+        return notebookID
     }
 
     /// Persists the metadata removal first, then moves the body into `.trash` (never deleted outright).
@@ -1327,8 +1365,10 @@ final class NoteStore: ObservableObject {
         return fields
     }
 
-    nonisolated private static func revisionFields(_ nb: Notebook) -> [String] {
-        ["notebook", nb.name, nb.symbol, nb.colorHex, String(nb.sortIndex)]
+    nonisolated static func revisionFields(_ nb: Notebook) -> [String] {
+        let fields = ["notebook", nb.name, nb.symbol, nb.colorHex, String(nb.sortIndex)]
+        guard let template = nb.defaultTemplateID else { return fields }
+        return fields + ["template \(template.uuidString)"]
     }
 
     /// SHA-256 over the id, the stable fields and the body package's files (sorted by path), as a v8 UUID.

@@ -115,8 +115,8 @@ extension NoteStore {
         let undo = view.undoManager
         view.breakUndoCoalescing()
         undo?.beginUndoGrouping()
-        if newExtras != nil, let undo {
-            registerExtrasUndo(id, restoring: bodyExtras[id] ?? .empty, undo: undo, view: view)
+        if let undo {
+            registerExtrasUndo(id, restoring: newExtras == nil ? nil : bodyExtras[id] ?? .empty, undo: undo, view: view)
         }
         if textChanged {
             let selection = view.selectedRange()
@@ -154,7 +154,9 @@ extension NoteStore {
                                 extras: ContainerExtras?) {
         if let coordinator, coordinator.hasPendingChanges {
             if let extras { setBodyExtras(extras, for: id) }
+            savingProgrammaticEdit = true
             coordinator.commit()
+            savingProgrammaticEdit = false
         }
         let text = view?.attributedString() ?? body(for: id)
         updateBody(id, text, extras: extras)
@@ -162,21 +164,22 @@ extension NoteStore {
         externallyUpdatedNoteID = id
     }
 
-    /// The Undo action of an editBody call that changed the extras. Registered first in the call's undo group, so it
-    /// runs after the text has been reverted; it registers its own inverse for Redo. The save waits until the whole
-    /// undo or redo step is done, so the restored text and extras go out in one body write.
-    private func registerExtrasUndo(_ id: UUID, restoring extras: ContainerExtras, undo: UndoManager,
+    /// The Undo action of every editBody call on an open note. Registered first in the call's undo group, so it runs
+    /// after the text has been reverted; it registers its own inverse for Redo. The save waits until the whole undo
+    /// or redo step is done, so the restored text and extras go out in one body write, and it is saved as the
+    /// programmatic edit it reverts, not as typing. nil `extras`: the call kept them, and so do undo and redo.
+    private func registerExtrasUndo(_ id: UUID, restoring extras: ContainerExtras?, undo: UndoManager,
                                     view: NoteItTextView) {
         undo.registerUndo(withTarget: self) { [weak view] store in
             MainActor.assumeIsolated {
                 guard let view else { return }
-                store.registerExtrasUndo(id, restoring: store.bodyExtras[id] ?? .empty, undo: undo, view: view)
+                store.registerExtrasUndo(id, restoring: extras == nil ? nil : store.bodyExtras[id] ?? .empty, undo: undo, view: view)
                 store.saveAfterUndoStep(id, extras: extras, undo: undo, view: view)
             }
         }
     }
 
-    private func saveAfterUndoStep(_ id: UUID, extras: ContainerExtras, undo: UndoManager, view: NoteItTextView) {
+    private func saveAfterUndoStep(_ id: UUID, extras: ContainerExtras?, undo: UndoManager, view: NoteItTextView) {
         let once = UndoStepObservation()
         let finish: @Sendable (Notification) -> Void = { [weak self, weak view] _ in
             MainActor.assumeIsolated {

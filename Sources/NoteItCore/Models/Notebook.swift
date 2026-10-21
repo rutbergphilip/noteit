@@ -9,6 +9,7 @@ public struct Notebook: Identifiable, Codable, Hashable, Sendable {
     public var sortIndex: Int
     public var revision: UUID? = nil
     public var modifiedAt: Date? = nil
+    public var defaultTemplateID: UUID? = nil
 
     public init(
         id: UUID = UUID(),
@@ -17,7 +18,8 @@ public struct Notebook: Identifiable, Codable, Hashable, Sendable {
         colorHex: String,
         sortIndex: Int,
         revision: UUID? = nil,
-        modifiedAt: Date? = nil
+        modifiedAt: Date? = nil,
+        defaultTemplateID: UUID? = nil
     ) {
         self.id = id
         self.name = name
@@ -26,5 +28,6 @@ public struct Notebook: Identifiable, Codable, Hashable, Sendable {
         self.sortIndex = sortIndex
         self.revision = revision
         self.modifiedAt = modifiedAt
+        self.defaultTemplateID = defaultTemplateID
     }
 }

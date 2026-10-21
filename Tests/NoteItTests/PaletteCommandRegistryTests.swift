@@ -10,6 +10,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
 
     private let noteCommandIDs: Set<String> = [
         "find", "findReplace", "export", "print", "copyMarkdown", "versionHistory", "togglePin", "deleteNote",
+        "showBacklinks", "showOutline",
     ]
 
     private var shortcutSuite = ""
@@ -66,6 +67,25 @@ final class PaletteCommandRegistryTests: XCTestCase {
         }
         let all = Set(PaletteCommandRegistry.commands(for: store).map(\.info.id))
         XCTAssertTrue(noteCommandIDs.isSubset(of: all))
+    }
+
+    func testInspectorCommandsOpenTheirTab() {
+        let store = makeStore()
+        store.selectedNoteID = addNote(store, "Alpha")
+        XCTAssertTrue(availableIDs(store).isSuperset(of: ["showBacklinks", "showOutline"]))
+
+        PaletteCommandRegistry.showInspector(.outline, defaults: prefs, showWindow: false)
+        XCTAssertTrue(prefs.bool(forKey: PrefKey.inspectorVisible))
+        XCTAssertEqual(prefs.string(forKey: PrefKey.inspectorTab), "outline")
+        PaletteCommandRegistry.showInspector(.links, defaults: prefs, showWindow: false)
+        XCTAssertEqual(prefs.string(forKey: PrefKey.inspectorTab), "links")
+    }
+
+    func testNoDuplicateCopyLinkCommand() {
+        let store = makeStore()
+        store.selectedNoteID = addNote(store, "Alpha")
+        let ids = PaletteCommandRegistry.commands(for: store, defaults: prefs).map(\.info.id)
+        XCTAssertEqual(ids.filter { $0.localizedCaseInsensitiveContains("copy") && $0.localizedCaseInsensitiveContains("link") }, ["copyNoteLink"])
     }
 
     func testPaletteHasCopyNoteLinkOnlyWithNote() throws {
@@ -139,8 +159,8 @@ final class PaletteCommandRegistryTests: XCTestCase {
         store.selectedNoteID = id
 
         let expected: Set<String> = [
-            "newNote", "newNotebook", "searchNotes", "find", "findReplace", "export", "print", "copyMarkdown",
-            "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn",
+            "newNote", "newNoteFromTemplate", "newTemplate", "openToday", "dailyNoteForDate", "newNotebook", "searchNotes", "find", "findReplace", "export",
+            "print", "copyMarkdown", "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn",
         ]
         XCTAssertEqual(availableIDs(store), expected)
         XCTAssertEqual(try XCTUnwrap(command("deleteNote", in: store)).info.title, "Delete Now…")
@@ -161,6 +181,10 @@ final class PaletteCommandRegistryTests: XCTestCase {
             "print": MenuShortcutCommand.print.defaultShortcut,
             "copyMarkdown": MenuShortcutCommand.copyAsMarkdown.defaultShortcut,
             "copyNoteLink": MenuShortcutCommand.copyNoteLink.defaultShortcut,
+            "newNoteFromTemplate": MenuShortcutCommand.newNoteFromTemplate.defaultShortcut,
+            "newTemplate": nil,
+            "openToday": MenuShortcutCommand.openToday.defaultShortcut,
+            "dailyNoteForDate": nil,
             "versionHistory": MenuShortcutCommand.versionHistory.defaultShortcut,
             "deleteNote": MenuShortcutCommand.deleteNote.defaultShortcut,
             "settings": MenuShortcuts.settings,
@@ -175,10 +199,10 @@ final class PaletteCommandRegistryTests: XCTestCase {
     }
 
     func testShortcutDisplayUsesMenuGlyphOrder() {
-        XCTAssertEqual(MenuShortcutCommand.copyAsMarkdown.defaultShortcut.display, "⌥⇧⌘C")
-        XCTAssertEqual(MenuShortcutCommand.newNotebook.defaultShortcut.display, "⇧⌘N")
-        XCTAssertEqual(MenuShortcutCommand.versionHistory.defaultShortcut.display, "⌥⌘Y")
-        XCTAssertEqual(MenuShortcutCommand.deleteNote.defaultShortcut.display, "⌘⌫")
+        XCTAssertEqual(MenuShortcutCommand.copyAsMarkdown.defaultShortcut?.display, "⌥⇧⌘C")
+        XCTAssertEqual(MenuShortcutCommand.newNotebook.defaultShortcut?.display, "⇧⌘N")
+        XCTAssertEqual(MenuShortcutCommand.versionHistory.defaultShortcut?.display, "⌥⌘Y")
+        XCTAssertEqual(MenuShortcutCommand.deleteNote.defaultShortcut?.display, "⌘⌫")
         XCTAssertEqual(MenuShortcuts.settings.display, "⌘,")
         XCTAssertEqual(MenuShortcut("k", [.command, .control]).display, "⌃⌘K")
     }
@@ -208,6 +232,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
             .newNote: "newNote", .newNotebook: "newNotebook", .searchNotes: "searchNotes", .find: "find",
             .findAndReplace: "findReplace", .exportNote: "export", .print: "print", .copyAsMarkdown: "copyMarkdown",
             .copyNoteLink: "copyNoteLink", .versionHistory: "versionHistory", .deleteNote: "deleteNote",
+            .newNoteFromTemplate: "newNoteFromTemplate",
         ]
         for (command, id) in paletteIDs {
             XCTAssertEqual(titles[id], command.title, id)

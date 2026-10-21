@@ -1,3 +1,4 @@
+import NoteItCore
 import AppKit
 
 struct PaletteCommand {
@@ -24,6 +25,42 @@ enum PaletteCommandRegistry {
         var list: [PaletteCommand] = [
             command("newNote", "New Note", symbol: "square.and.pencil", shortcut: shortcuts.current(.newNote)?.display, keywords: ["create", "add"]) {
                 NotificationCenter.default.post(name: .noteItNewNote, object: nil)
+            },
+            command("newNoteFromTemplate", "New Note from Template…", symbol: "doc.on.doc", shortcut: shortcuts.current(.newNoteFromTemplate)?.display,
+                    keywords: ["create", "add", "template"]) {
+                WindowRouter.showMainWindow()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    NotificationCenter.default.post(name: .noteItShowTemplatePicker, object: TemplatePickerRequest(mode: .newNote))
+                }
+            },
+            command("insertTemplate", "Insert Template…", symbol: "doc.on.doc", shortcut: nil, keywords: ["template", "snippet"],
+                    available: hasLiveNote && liveNote?.isLocked != true) {
+                WindowRouter.showMainWindow()
+                WindowRouter.focusEditor()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NSApp.sendAction(#selector(NoteItTextView.showInsertTemplatePicker(_:)), to: nil, from: nil)
+                }
+            },
+            command("newTemplate", "New Template", symbol: "doc.on.doc", shortcut: nil, keywords: ["create", "add", "template"]) {
+                let meta = store.createTemplate()
+                WindowRouter.showMainWindow()
+                store.searchText = ""
+                if let notebookID = meta.notebookID { store.selection = .notebook(notebookID) }
+                store.selectedNoteID = meta.id
+                WindowRouter.focusEditor()
+            },
+            command("openToday", "Today's Note", symbol: "calendar", shortcut: shortcuts.current(.openToday)?.display,
+                    keywords: ["daily", "journal", "today"], available: DailyNotes.isAvailable) {
+                WindowRouter.showMainWindow()
+                store.openDailyNote(for: Date())
+                WindowRouter.focusEditor()
+            },
+            command("dailyNoteForDate", "Daily Note for Date…", symbol: "calendar", shortcut: shortcuts.current(.dailyNoteForDate)?.display,
+                    keywords: ["daily", "journal", "calendar", "date"], available: DailyNotes.isAvailable) {
+                WindowRouter.showMainWindow()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                    NotificationCenter.default.post(name: .noteItShowDailyCalendar, object: nil)
+                }
             },
             command("newNotebook", "New Notebook…", symbol: "folder.badge.plus", shortcut: shortcuts.current(.newNotebook)?.display, keywords: ["create", "add", "folder"]) {
                 WindowRouter.showMainWindow()
@@ -56,6 +93,12 @@ enum PaletteCommandRegistry {
             },
             command("copyNoteLink", "Copy Note Link", symbol: "link", shortcut: shortcuts.current(.copyNoteLink)?.display, keywords: ["url", "clipboard"], available: hasLiveNote) {
                 if let liveNote { CopyNoteLink.perform(noteID: liveNote.id, store: store) }
+            },
+            command("showBacklinks", "Show Backlinks", symbol: "link", shortcut: nil, keywords: ["links", "inspector", "references"], available: hasLiveNote) {
+                showInspector(.links, defaults: defaults)
+            },
+            command("showOutline", "Show Outline", symbol: "list.bullet.indent", shortcut: nil, keywords: ["headings", "inspector", "toc"], available: hasLiveNote) {
+                showInspector(.outline, defaults: defaults)
             },
             command("versionHistory", "Version History…", symbol: "clock.arrow.circlepath", shortcut: shortcuts.current(.versionHistory)?.display, keywords: ["revisions", "restore"], available: hasLiveNote) {
                 if let liveNote { NoteMenuActions.showVersionHistory(of: liveNote) }
@@ -108,6 +151,12 @@ enum PaletteCommandRegistry {
             }
         }
         return list
+    }
+
+    static func showInspector(_ tab: InspectorTab, defaults: UserDefaults, showWindow: Bool = true) {
+        defaults.set(tab.rawValue, forKey: PrefKey.inspectorTab)
+        defaults.set(true, forKey: PrefKey.inspectorVisible)
+        if showWindow { WindowRouter.showMainWindow() }
     }
 
     private static var cliInstallable: Bool {

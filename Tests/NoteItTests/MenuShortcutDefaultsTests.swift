@@ -4,7 +4,7 @@ import XCTest
 
 final class MenuShortcutDefaultsTests: XCTestCase {
     func testExistingDefaultsUnchanged() {
-        let expected: [(MenuShortcutCommand, MenuShortcut)] = [
+        let expected: [(MenuShortcutCommand, MenuShortcut?)] = [
             (.newNote, MenuShortcut("n", .command)),
             (.newNotebook, MenuShortcut("n", [.shift, .command])),
             (.openQuickly, MenuShortcut("o", .command)),
@@ -18,6 +18,13 @@ final class MenuShortcutDefaultsTests: XCTestCase {
             (.copyNoteLink, MenuShortcut("l", [.control, .command])),
             (.versionHistory, MenuShortcut("y", [.option, .command])),
             (.deleteNote, MenuShortcut(.delete, .command)),
+            (.goBack, MenuShortcut(.leftArrow, [.control, .command])),
+            (.goForward, MenuShortcut(.rightArrow, [.control, .command])),
+            (.linkToNote, MenuShortcut("k", [.shift, .command])),
+            (.newNoteFromTemplate, MenuShortcut("n", [.option, .command])),
+            (.toggleInspector, MenuShortcut("i", [.option, .command])),
+            (.openToday, MenuShortcut("t", [.control, .command])),
+            (.dailyNoteForDate, nil),
         ]
         XCTAssertEqual(MenuShortcutCommand.allCases, expected.map(\.0))
         for (command, shortcut) in expected {
@@ -26,7 +33,7 @@ final class MenuShortcutDefaultsTests: XCTestCase {
     }
 
     func testDefaultsAreUnique() {
-        var all: [(String, MenuShortcut)] = MenuShortcutCommand.allCases.map { ($0.rawValue, $0.defaultShortcut) }
+        var all: [(String, MenuShortcut)] = MenuShortcutCommand.allCases.compactMap { command in command.defaultShortcut.map { (command.rawValue, $0) } }
         all += PlannedMenuShortcuts.rows.compactMap { row in row.shortcut.map { (row.command, $0) } }
         for (index, entry) in all.enumerated() {
             for other in all[(index + 1)...] where other.1 == entry.1 {
@@ -52,6 +59,6 @@ final class MenuShortcutDefaultsTests: XCTestCase {
     func testPlannedCommandsUnique() {
         let commands = PlannedMenuShortcuts.rows.map(\.command)
         XCTAssertEqual(Set(commands).count, commands.count)
-        XCTAssertEqual(commands.count, 21)
+        XCTAssertEqual(commands.count, 14)
     }
 }

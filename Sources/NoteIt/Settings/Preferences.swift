@@ -18,6 +18,19 @@ enum PrefKey {
     static let dailyNotesNotebookID = "dailyNotesNotebookID"
     /// A `DailyTitleFormat` raw value for new daily notes; unset means `iso`.
     static let dailyNoteTitleFormat = "dailyNoteTitleFormat"
+    /// `ask`, `always` or `never`: what happens to links showing a note's old title after a rename.
+    static let linkRenameUpdates = "linkRenameUpdates"
+    /// `source` (the linking note's notebook) or `default` (the notebook for new notes).
+    static let linkNewNoteNotebook = "linkNewNoteNotebook"
+    /// The daily note template's UUID string; empty for none.
+    static let dailyNoteTemplateID = "dailyNoteTemplateID"
+    static let showTodayInSidebar = "showTodayInSidebar"
+    /// The Templates notebook's UUID string; empty means found by name or created on first use.
+    static let templatesNotebookID = "templatesNotebookID"
+    static let inspectorVisible = "inspectorVisible"
+    /// `links` or `outline`.
+    static let inspectorTab = "inspectorTab"
+    static let unlinkedMentionsExpanded = "unlinkedMentionsExpanded"
     /// Settings › Integrations › Links: `noteit://new` and `append` links run without asking. Off by default.
     static let urlSchemeChangesWithoutAsking = "urlSchemeChangesWithoutAsking"
     /// Settings › Integrations › Local API. Off by default.
@@ -41,6 +54,10 @@ enum PrefDefault {
     static let editorFontSize: Double = 15
     /// Stored in `defaultNotebookID` to mean "no notebook" (as opposed to unset == automatic).
     static let noNotebook = "none"
+    static let linkRenameUpdates = "ask"
+    static let linkNewNoteNotebook = "source"
+    static let showTodayInSidebar = true
+    static let inspectorTab = "links"
 }
 
 /// Opens the Settings scene and brings it to the front, also in menu-bar-only (`.accessory`) mode.

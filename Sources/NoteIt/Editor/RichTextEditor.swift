@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import NoteItCore
 import SwiftUI
 
 /// Bridges the toolbar (SwiftUI) and the active text view.
@@ -46,6 +47,7 @@ struct RichTextEditor: NSViewRepresentable {
         coordinator.textView = textView
         textView.isEditable = isEditable
         textView.delegate = coordinator
+        textView.linkHost = coordinator
         coordinator.controller.textView = textView
         textView.formattingDidChange = { [weak coordinator] in coordinator?.controller.refresh() }
         coordinator.load()
@@ -71,6 +73,7 @@ struct RichTextEditor: NSViewRepresentable {
             controller.refresh()
         }
         if coordinator.noteID != noteID {
+            coordinator.closeCompletion()
             coordinator.commit(deferred: true)
             coordinator.noteID = noteID
             coordinator.load()
@@ -80,6 +83,7 @@ struct RichTextEditor: NSViewRepresentable {
 
     static func dismantleNSView(_ nsView: NSScrollView, coordinator: Coordinator) {
         // Runs inside a SwiftUI view update: snapshot now, publish to the store on the next turn.
+        coordinator.closeCompletion()
         coordinator.commit(deferred: true)
         coordinator.stopObserving()
         if let textView = coordinator.textView { OpenEditorRegistry.shared.unregister(textView) }
@@ -89,14 +93,16 @@ struct RichTextEditor: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, NoteLinkHost {
         var noteID: UUID
         var controller: EditorController
         weak var textView: NoteItTextView?
         let store: NoteStore
         private let undo = UndoManager()
         private var isLoading = false
+        private var isClosingCompletion = false
         private var remoteUpdates: AnyCancellable?
+        private var notesChanges: AnyCancellable?
         /// Edits not yet written to the store.
         private(set) var hasPendingChanges = false
 
@@ -113,6 +119,7 @@ struct RichTextEditor: NSViewRepresentable {
 
         func load() {
             guard let textView else { return }
+            textView.inlineCompletion.end()
             cancelScheduledCommit()
             hasPendingChanges = false
             isLoading = true
@@ -122,11 +129,13 @@ struct RichTextEditor: NSViewRepresentable {
             NoteItTextView.refreshTableColors(in: textView.storage)
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
+            styleLinks()
             let caret = RichTextEditor.pendingCaret.removeValue(forKey: noteID).map { min(max($0, 0), textView.storage.length) }
             textView.setSelectedRange(NSRange(location: caret ?? 0, length: 0))
             if let caret, caret > 0 {
                 textView.typingAttributes = EditorStyle.bodyAttributes
                 textView.scrollRangeToVisible(NSRange(location: caret, length: 0))
+                DispatchQueue.main.async { [weak textView] in textView?.scrollToTopThird(caret) }
             } else if body.length == 0 {
                 textView.typingAttributes = EditorStyle.attributes(for: .title)
                 DispatchQueue.main.async { [weak textView] in
@@ -170,6 +179,7 @@ struct RichTextEditor: NSViewRepresentable {
             NoteItTextView.refreshTableColors(in: textView.storage)
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
+            styleLinks()
             let length = textView.storage.length
             let location = min(selection.location, length)
             textView.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
@@ -195,8 +205,17 @@ struct RichTextEditor: NSViewRepresentable {
             if deferred {
                 store.stageEditorCommit(id, snapshot)
             } else {
-                store.updateBody(id, snapshot)
+                store.commitEditorBody(id, snapshot)
             }
+        }
+
+        /// Closes an open suggestion list as Esc does (Link to Note… takes its `[[` back) before the editor
+        /// leaves this note, without touching SwiftUI state, which may be mid-update.
+        func closeCompletion() {
+            guard let textView, textView.inlineCompletion.isActive else { return }
+            isClosingCompletion = true
+            defer { isClosingCompletion = false }
+            textView.inlineCompletion.cancel()
         }
 
         private func scheduleCommit() {
@@ -232,6 +251,36 @@ struct RichTextEditor: NSViewRepresentable {
                         self.remoteUpdateArrived()
                     }
                 }
+            // A link's target was renamed, deleted or created.
+            notesChanges = store.$notes
+                .dropFirst()
+                .debounce(for: .seconds(0.3), scheduler: DispatchQueue.main)
+                .sink { [weak self] _ in
+                    MainActor.assumeIsolated { self?.styleLinks(onlyNoteLinks: true) }
+                }
+        }
+
+        func styleLinks(onlyNoteLinks: Bool = false) {
+            guard let textView else { return }
+            let styler = textView.linkStyler
+            if styler.resolve == nil {
+                styler.resolve = { [weak self] link in
+                    guard let self else { return .note(UUID(), heading: nil) }
+                    return self.store.resolve(link, from: self.noteID)
+                }
+            }
+            if onlyNoteLinks {
+                var hasNoteLink = false
+                let storage = textView.storage
+                storage.enumerateAttribute(.link, in: NSRange(location: 0, length: storage.length)) { value, _, stop in
+                    if let url = value.flatMap(NoteStore.url(from:)), NoteLink(url: url) != nil {
+                        hasNoteLink = true
+                        stop.pointee = true
+                    }
+                }
+                guard hasNoteLink else { return }
+            }
+            styler.restyleAll()
         }
 
         /// Sync is about to replace or delete a note: hand it our pending edits first so it can see them.
@@ -249,6 +298,7 @@ struct RichTextEditor: NSViewRepresentable {
         func stopObserving() {
             NotificationCenter.default.removeObserver(self)
             remoteUpdates = nil
+            notesChanges = nil
             cancelScheduledCommit()
         }
 
@@ -271,11 +321,21 @@ struct RichTextEditor: NSViewRepresentable {
 
         func textDidChange(_ notification: Notification) {
             if !isLoading { scheduleCommit() }
+            if isClosingCompletion { return }
             controller.refresh()
+            textView?.inlineCompletion.refresh()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
+            if isClosingCompletion { return }
             controller.refresh()
+            textView?.inlineCompletion.refresh()
+        }
+
+        /// Arrow keys, Return, Tab and Esc go to an open suggestion list; ⌃P/⌃N arrive as moveUp:/moveDown:.
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard let textView = textView as? NoteItTextView else { return false }
+            return textView.inlineCompletion.handle(commandSelector)
         }
 
         func textViewDidChangeTypingAttributes(_ notification: Notification) {
@@ -301,10 +361,22 @@ struct RichTextEditor: NSViewRepresentable {
         }
 
         func textView(_ textView: NSTextView, clickedOnLink link: Any, at charIndex: Int) -> Bool {
-            let url = (link as? URL) ?? (link as? String).flatMap(URL.init(string:))
-            guard let url else { return false }
+            guard let url = NoteStore.url(from: link) else { return false }
+            if let noteLink = NoteLink(url: url) {
+                commit()
+                store.followLink(noteLink, from: noteID)
+                return true
+            }
             NSWorkspace.shared.open(url)
             return true
+        }
+
+        /// The target's title and notebook for note links instead of the raw URL.
+        func textView(_ textView: NSTextView, willDisplayToolTip tooltip: String, forCharacterAt characterIndex: Int) -> String? {
+            guard let storage = textView.textStorage, characterIndex < storage.length,
+                  let url = storage.attribute(.link, at: characterIndex, effectiveRange: nil).flatMap(NoteStore.url(from:)),
+                  let link = NoteLink(url: url) else { return tooltip }
+            return store.linkToolTip(for: link, from: noteID)
         }
     }
 }

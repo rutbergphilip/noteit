@@ -42,8 +42,14 @@ enum ExportActions {
         return store.body(for: note.id)
     }
 
+    /// Note links written with the linked notes' current titles.
+    static var noteTitles: ExportLinkContext {
+        let store = store
+        return .titles { store.note(with: $0)?.displayTitle }
+    }
+
     static func markdown(of note: NoteMeta) -> String {
-        MarkdownWriter.write(body(of: note), title: ExportNaming.sanitized(note.displayTitle)).markdown
+        MarkdownWriter.write(body(of: note), title: ExportNaming.sanitized(note.displayTitle), links: noteTitles).markdown
     }
 
     // MARK: Copy as Markdown
@@ -55,9 +61,9 @@ enum ExportActions {
         let markdown: String
         if let textView = window?.firstResponder as? NoteItTextView, textView.selectedRange().length > 0 {
             let selection = textView.attributedString().attributedSubstring(from: textView.selectedRange())
-            markdown = MarkdownWriter.write(selection, title: title).markdown
+            markdown = MarkdownWriter.write(selection, title: title, links: noteTitles).markdown
         } else {
-            markdown = MarkdownWriter.write(body(of: note), title: title).markdown
+            markdown = MarkdownWriter.write(body(of: note), title: title, links: noteTitles).markdown
         }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -123,7 +129,7 @@ enum ExportActions {
             let format = picker.format
             lastFormat = format
             do {
-                try NoteExporter.write(body(of: note), title: note.displayTitle, format: format, to: url)
+                try NoteExporter.write(body(of: note), title: note.displayTitle, format: format, to: url, links: noteTitles)
             } catch {
                 showError(error, message: "Couldn’t export “\(note.displayTitle)”")
             }

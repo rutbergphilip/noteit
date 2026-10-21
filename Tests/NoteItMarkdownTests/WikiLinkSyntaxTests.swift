@@ -25,6 +25,14 @@ final class WikiLinkSyntaxTests: XCTestCase {
         XCTAssertEqual(serialize([linked("Plan", "noteit://note?title=Plan")], noteLinkName: { _ in nil }), "See [[Plan]]\n")
     }
 
+    func testLongTargetsAndHeadingsAreWrittenBackInFull() throws {
+        let long = String(repeating: "x", count: 130)
+        let markdown = "See [[\(long)]] and [[Plan#\(long)]] and [[\(long)|short]]\n"
+        let parsed = try MarkdownCodec.parse(markdown, resolveNoteLink: MarkdownFixture.resolveNoteLink)
+        XCTAssertEqual(MarkdownCodec.serialize(parsed.body, frontMatter: .empty, profile: .library, attachmentPath: { $0 },
+                                               noteLinkName: MarkdownFixture.noteLinkName, previous: nil), markdown)
+    }
+
     func testTableCellEscapesThePipe() throws {
         let cell = { (content: [Inline]) in TableCell(header: false, content: [.paragraph(align: nil, indent: nil, content: content)]) }
         let table = DocNode.table(columnWidths: nil, rows: [[cell([.text("shown", marks: [.link(href: planHref)])]),

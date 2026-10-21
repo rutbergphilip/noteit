@@ -40,7 +40,8 @@ public struct WikiLink: Sendable, Equatable {
     // MARK: noteit:// links
 
     /// `noteit://note/<UUID>` when the target resolves, else `noteit://note?title=<target>`; a heading is added as
-    /// `heading=`.
+    /// `heading=`. A title or heading longer than NoteLink.maxTextLength (120) is kept in full so the file is written
+    /// back unchanged; that href isn't a NoteLink, so the text isn't a note link in NoteIt.
     func href(resolve: (String) -> UUID?) -> String {
         if let id = resolve(target) {
             var href = "noteit://note/\(id.uuidString)"

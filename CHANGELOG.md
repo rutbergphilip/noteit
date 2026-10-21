@@ -16,6 +16,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Spotlight. Your notes now show up in Spotlight by title and text, and choosing one opens it in NoteIt. Notes in Recently Deleted and locked notes stay out. You can leave out the note text, rebuild the index or turn it off in Settings › Integrations.
 - Shortcuts actions. Create Note, Append to Note, Open Note, Find Notes and Get Note Text are in the Shortcuts app, and you can say “Create a note in NoteIt”, “Search NoteIt” or “Add to a note in NoteIt” to Siri.
 - Daily notes from scripts and Shortcuts. `noteit today` prints today's daily note or adds a line to it, as does `noteit append --today`, and there's an Append to Daily Note action, `noteit://daily` links and Local API routes for it. They start working when daily notes arrive in NoteIt; until then they say daily notes aren't available yet.
+- Links between notes. Type `[[` to pick a note, or one of its headings after `#`, and press ↩ to link it. Edit › Link to Note… (⇧⌘K) links the selected text. Clicking a link to a note that doesn't exist yet creates it.
+- Links and Outline (⌥⌘I). See the notes that link to the open note, with a line of context, the links in it, mentions of its title that aren't links yet (link them with one click) and its headings. Go Back and Go Forward (⌃⌘← and ⌃⌘→) move through the notes you've opened.
+- When you rename a note, NoteIt offers to update the text of the links to it, and you can undo it.
+- Daily notes. Open Today's Note (⌃⌘T), the Today row in the sidebar, or an optional global hotkey open today's note, creating it in a Daily Notes notebook the first time. File › Daily Note for Date… opens a calendar, and ‹ › in a daily note's header go to the day before and after. Choose the notebook, title format and template in Settings › Editor.
+- Templates. Notes in the Templates notebook can start new notes with New Note from Template… (⌥⌘N) or be added to the open note with Edit › Insert Template…. Templates can fill in the date, time, title and clipboard and place the cursor, and each notebook can have a default template for its new notes.
+- Markdown export keeps links between notes as `[[wiki links]]`, and importing a folder of Markdown files or an Obsidian vault turns `[[wiki links]]` back into links.
+- The Local API can list a note's backlinks, links and outline, list templates and create a note from a template.
 
 ### Changed
 

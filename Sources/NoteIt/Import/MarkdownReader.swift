@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 
 /// The front matter fields NoteIt uses; everything else is dropped.
 struct MarkdownFrontMatter: Equatable {
@@ -14,13 +15,18 @@ struct MarkdownNote {
     var frontMatter: MarkdownFrontMatter
 }
 
+/// Turns an Obsidian link target (file name without folders) and heading into a note link; nil keeps plain text.
+/// `folders` holds the path written before the name, as in `[[Trips/Atlas]]`.
+typealias WikiLinkResolver = (_ target: String, _ heading: String?, _ folders: [String]) -> NoteLink?
+
 /// Markdown → NoteIt rich text, built with the editor's own block styles so imported notes behave
 /// exactly like typed ones. The inverse of the export mapping:
 ///
 /// - `#` title, `##` heading, `###`–`######` subheading; `**`/`__`, `*`/`_`, `~~`, `` ` ``, `[text](url)`
 /// - `- `, `* `, `+ ` bullets, `1. ` numbered, `- [ ] ` / `- [x] ` checklist, nested by indentation
 /// - `> ` quote, fenced code, `---` divider, GFM tables, `![](path)` and `![[image.png]]`
-/// - Obsidian `[[Note]]` and `[[Note|alias]]` become plain text.
+/// - Obsidian `[[Note]]`, `[[Note|alias]]` and `[[Note#Heading]]` become note links when a `WikiLinkResolver`
+///   is given, otherwise plain text.
 ///
 /// Lines without a blank line between them are one paragraph, with a line break between the lines, as
 /// Obsidian shows them. Blank lines only separate blocks, however many there are.
@@ -31,9 +37,11 @@ enum MarkdownReader {
     /// A full note: the title comes from front matter, a leading `#` heading or `fallbackTitle`, and
     /// front matter tags are added as a last line of hashtags.
     @MainActor
-    static func note(from markdown: String, fallbackTitle: String, resolveImage: @escaping ImageResolver = { _ in nil }) -> MarkdownNote {
+    static func note(from markdown: String, fallbackTitle: String, resolveImage: @escaping ImageResolver = { _ in nil },
+                     resolveWikiLink: WikiLinkResolver? = nil) -> MarkdownNote {
         let (frontMatter, content) = splitFrontMatter(markdown)
-        let body = NSMutableAttributedString(attributedString: attributedString(from: content, resolveImage: resolveImage))
+        let body = NSMutableAttributedString(attributedString: attributedString(from: content, resolveImage: resolveImage,
+                                                                                 resolveWikiLink: resolveWikiLink))
         let first = firstParagraph(of: body)
 
         let title: String
@@ -62,8 +70,9 @@ enum MarkdownReader {
 
     /// Markdown without front matter handling → NoteIt body.
     @MainActor
-    static func attributedString(from markdown: String, resolveImage: @escaping ImageResolver = { _ in nil }) -> NSAttributedString {
-        var builder = BlockBuilder(resolveImage: resolveImage)
+    static func attributedString(from markdown: String, resolveImage: @escaping ImageResolver = { _ in nil },
+                                 resolveWikiLink: WikiLinkResolver? = nil) -> NSAttributedString {
+        var builder = BlockBuilder(resolveImage: resolveImage, resolveWikiLink: resolveWikiLink)
         builder.parse(lines(of: markdown))
         let ts = NSTextStorage(attributedString: builder.output)
         if ts.length > 0 { NoteItTextView.normalize(ts, around: NSRange(location: 0, length: ts.length)) }
@@ -198,14 +207,16 @@ enum MarkdownReader {
 @MainActor
 private struct BlockBuilder {
     let resolveImage: MarkdownReader.ImageResolver
+    let resolveWikiLink: WikiLinkResolver?
     let output = NSMutableAttributedString()
 
     private var listIndents: [Int] = []
     private var listCounters: [Int: Int] = [:]
     private var lastWasTable = false
 
-    init(resolveImage: @escaping MarkdownReader.ImageResolver) {
+    init(resolveImage: @escaping MarkdownReader.ImageResolver, resolveWikiLink: WikiLinkResolver?) {
         self.resolveImage = resolveImage
+        self.resolveWikiLink = resolveWikiLink
     }
 
     private static let heading = try! NSRegularExpression(pattern: "^ {0,3}(#{1,6})(?:[ \\t]+(.*?))?(?:[ \\t]+#+)?[ \\t]*$")
@@ -401,7 +412,7 @@ private struct BlockBuilder {
 
     private func appendParagraph(_ text: String, kind: BlockKind, indentLevel: Int = 0) {
         let font = EditorStyle.font(for: kind)
-        let content = InlineParser(baseFont: font, resolveImage: resolveImage).parse(Self.stripHardBreak(text))
+        let content = InlineParser(baseFont: font, resolveImage: resolveImage, resolveWikiLink: resolveWikiLink).parse(Self.stripHardBreak(text))
         content.append(NSAttributedString(string: "\n", attributes: [.font: font]))
         content.addAttribute(.paragraphStyle, value: EditorStyle.paragraphStyle(for: kind, indentLevel: indentLevel),
                              range: NSRange(location: 0, length: content.length))
@@ -410,7 +421,7 @@ private struct BlockBuilder {
 
     private func appendListItem(_ text: String, kind: ListMarker.Kind, level: Int, checked: Bool) {
         let item = NSMutableAttributedString(string: EditorStyle.markerText(kind, level: level), attributes: EditorStyle.markerAttributes(level: level))
-        let content = InlineParser(baseFont: EditorStyle.bodyFont, resolveImage: resolveImage).parse(Self.stripHardBreak(text))
+        let content = InlineParser(baseFont: EditorStyle.bodyFont, resolveImage: resolveImage, resolveWikiLink: resolveWikiLink).parse(Self.stripHardBreak(text))
         content.append(NSAttributedString(string: "\n", attributes: [.font: EditorStyle.bodyFont]))
         if checked { NoteItTextView.applyCheckedStyle(content) }
         item.append(content)
@@ -435,7 +446,7 @@ private struct BlockBuilder {
                 let font = (attrs[.font] as? NSFont) ?? EditorStyle.bodyFont
                 guard let ps = (attrs[.paragraphStyle] as? NSParagraphStyle)?.mutableCopy() as? NSMutableParagraphStyle else { continue }
                 ps.alignment = alignments[c]
-                let content = InlineParser(baseFont: font, resolveImage: resolveImage).parse(raw)
+                let content = InlineParser(baseFont: font, resolveImage: resolveImage, resolveWikiLink: resolveWikiLink).parse(raw)
                 content.append(NSAttributedString(string: "\n", attributes: [.font: font]))
                 content.addAttribute(.paragraphStyle, value: ps, range: NSRange(location: 0, length: content.length))
                 table.replaceCharacters(in: para, with: content)
@@ -572,6 +583,7 @@ private struct InlineParser {
 
     let baseFont: NSFont
     let resolveImage: MarkdownReader.ImageResolver
+    var resolveWikiLink: WikiLinkResolver?
 
     func parse(_ text: String) -> NSMutableAttributedString {
         let out = NSMutableAttributedString()
@@ -678,6 +690,8 @@ private struct InlineParser {
                 let target = inner.split(separator: "|", maxSplits: 1).first.map(String.init) ?? inner
                 if MarkdownReader.isImagePath(target), let url = resolveImage(target), let attachment = MarkdownReader.attachment(for: url) {
                     appendAttachment(attachment)
+                } else if !MarkdownReader.isImagePath(target), let (text, link) = wikiLink(inner) {
+                    appendLink(text, link.url)
                 } else {
                     buffer += Self.wikiText(inner)
                 }
@@ -686,7 +700,12 @@ private struct InlineParser {
             }
 
             if c == "[", Self.hasPrefix(chars, i, "[["), let close = Self.find(chars, "]]", from: i + 2) {
-                buffer += Self.wikiText(String(chars[(i + 2)..<close]))
+                let inner = String(chars[(i + 2)..<close])
+                if let (text, link) = wikiLink(inner) {
+                    appendLink(text, link.url)
+                } else {
+                    buffer += Self.wikiText(inner)
+                }
                 i = close + 2
                 continue
             }
@@ -883,6 +902,17 @@ private struct InlineParser {
             j += 1
         }
         return nil
+    }
+
+    /// The text and note link for `[[folder/Note#Heading|alias]]`, or nil without a resolver or a match.
+    private func wikiLink(_ inner: String) -> (String, NoteLink)? {
+        guard let resolveWikiLink else { return nil }
+        let query = LinkQuery(inner.replacingOccurrences(of: "\\|", with: "|"))
+        var parts = query.title.split(separator: "/").map(String.init)
+        var name = parts.popLast() ?? query.title
+        if (name as NSString).pathExtension.lowercased() == "md" { name = (name as NSString).deletingPathExtension }
+        guard !name.isEmpty, let link = resolveWikiLink(name, query.heading, parts)?.clamped else { return nil }
+        return (query.alias ?? query.heading.map { "\(name) › \($0)" } ?? name, link)
     }
 
     /// `[[Note]]` → "Note", `[[Note|alias]]` → "alias", `[[Note#Part]]` → "Note › Part".

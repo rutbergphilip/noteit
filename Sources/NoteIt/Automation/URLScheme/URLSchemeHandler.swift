@@ -23,7 +23,10 @@ final class URLSchemeHandler: NSObject {
                 confirm: URLSchemeHandler.askToAllow,
                 notify: URLSchemeHandler.showNotice,
                 openCallback: { NSWorkspace.shared.open($0) },
-                showNote: URLSchemeHandler.reveal,
+                showNote: { id, heading in
+                    WindowRouter.showMainWindow()
+                    NoteStore.shared.followLink(.note(id: id, heading: heading), from: nil)
+                },
                 showSaved: { meta, notebookName in
                     let outcome = CaptureOutcome.saved(noteID: meta.id, notebookName: notebookName, title: meta.title)
                     CaptureToastController.shared.show(CaptureToastContent(outcome)) { event in
@@ -367,19 +370,26 @@ final class URLSchemeHandler: NSObject {
         }
     }
 
-    /// The start of the first title, heading or subheading paragraph whose text is `heading`, ignoring case.
+    /// The start of the first title, heading or subheading paragraph whose text is `heading`, ignoring case. A
+    /// heading of exactly `NoteLink.maxTextLength` characters was cut to fit a link, so it matches the start of a
+    /// longer one when no heading equals it.
     static func headingLocation(_ heading: String, in body: NSAttributedString) -> Int? {
         let wanted = heading.trimmingCharacters(in: .whitespaces)
+        let all = headings(in: body)
+        if let exact = all.first(where: { $0.text.caseInsensitiveCompare(wanted) == .orderedSame }) { return exact.location }
+        guard heading.count == NoteLink.maxTextLength, !wanted.isEmpty else { return nil }
+        return all.first { $0.text.range(of: wanted, options: [.caseInsensitive, .anchored]) != nil }?.location
+    }
+
+    private static func headings(in body: NSAttributedString) -> [(text: String, location: Int)] {
         let text = body.string as NSString
-        var found: Int?
-        text.enumerateSubstrings(in: NSRange(location: 0, length: text.length), options: .byParagraphs) { line, range, _, stop in
-            guard let line, range.length > 0,
-                  line.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(wanted) == .orderedSame else { return }
+        var found: [(text: String, location: Int)] = []
+        text.enumerateSubstrings(in: NSRange(location: 0, length: text.length), options: .byParagraphs) { line, range, _, _ in
+            guard let line, range.length > 0 else { return }
             let kind = EditorStyle.blockKind(paragraphStyle: body.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle,
                                              font: body.attribute(.font, at: range.location, effectiveRange: nil) as? NSFont)
             guard kind == .title || kind == .heading || kind == .subheading else { return }
-            found = range.location
-            stop.pointee = true
+            found.append((line.trimmingCharacters(in: .whitespaces), range.location))
         }
         return found
     }

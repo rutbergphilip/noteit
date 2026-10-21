@@ -48,6 +48,7 @@ final class CodeStyler {
     func restyleAll() {
         noteEdit(NSRange(location: 0, length: storage.length))
         flush(typing: false)
+        textView.linkStyler.restyleAll()
         textView.needsDisplay = true
     }
 
@@ -232,9 +233,11 @@ final class CodeStyler {
             let para = ns.paragraphRange(for: NSRange(location: loc, length: 0))
             defer { loc = max(NSMaxRange(para), loc + 1) }
             guard para.length > 0, kind(at: para.location) != .code else { continue }
-            lm.removeTemporaryAttribute(.foregroundColor, forCharacterRange: para)
+            // Link colors belong to LinkStyler.
             storage.enumerateAttributes(in: para) { attrs, r, _ in
-                if EditorStyle.isInlineCode(attrs), attrs[.link] == nil {
+                guard attrs[.link] == nil else { return }
+                lm.removeTemporaryAttribute(.foregroundColor, forCharacterRange: r)
+                if EditorStyle.isInlineCode(attrs) {
                     lm.addTemporaryAttribute(.foregroundColor, value: color, forCharacterRange: r)
                 }
             }

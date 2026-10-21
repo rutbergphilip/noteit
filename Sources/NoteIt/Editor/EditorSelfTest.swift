@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 import NoteItSync
 
 #if DEBUG
@@ -171,7 +172,136 @@ enum EditorSelfTest {
         }
         checkHeadingSentinels()
         await checkDebounce(store: store)
+        await checkLinks(store: store)
+        await checkCompletion(store: store)
         log("done")
+    }
+
+    // MARK: Note links
+
+    private static func checkLinks(store: NoteStore) async {
+        func ok(_ pass: Bool) -> String { pass ? "ok" : "FAIL" }
+        let target = store.createNote(in: nil, initial: NoteStore.linkedNoteBody(title: "Link Target"))
+        let source = NSMutableAttributedString(string: "Link Source\n", attributes: EditorStyle.attributes(for: .title))
+        source.append(NSAttributedString(string: "See ", attributes: EditorStyle.bodyAttributes))
+        var resolvedAttrs = EditorStyle.bodyAttributes
+        resolvedAttrs[.link] = NoteLink.note(id: target.id, heading: nil).url
+        source.append(NSAttributedString(string: "Link Target", attributes: resolvedAttrs))
+        source.append(NSAttributedString(string: " and ", attributes: EditorStyle.bodyAttributes))
+        var unresolvedAttrs = EditorStyle.bodyAttributes
+        unresolvedAttrs[.link] = NoteLink.unresolved(title: "Brand New Target", heading: nil).url
+        source.append(NSAttributedString(string: "Brand New Target", attributes: unresolvedAttrs))
+        let sourceMeta = store.createNote(in: nil, initial: source)
+        store.reveal(sourceMeta.id)
+        await sleep(1)
+        guard let tv = textView, let lm = tv.layoutManager else { log("links: no text view"); return }
+        let ns = tv.string as NSString
+        let resolvedAt = ns.range(of: "Link Target", options: .backwards).location
+        let unresolvedAt = ns.range(of: "Brand New Target").location
+
+        // Spike: temporary attributes over a .link run show with linkTextAttributes reduced to the cursor.
+        let color = lm.temporaryAttribute(.foregroundColor, atCharacterIndex: resolvedAt, effectiveRange: nil) as? NSColor
+        let underline = lm.temporaryAttribute(.underlineStyle, atCharacterIndex: unresolvedAt, effectiveRange: nil) as? Int
+        log("links: temporary color on note link \(ok(color == NSColor.controlAccentColor))")
+        log("links: dotted underline on unresolved link \(ok(underline == NSUnderlineStyle.single.union(.patternDot).rawValue))")
+        let end = NSMaxRange(ns.paragraphRange(for: NSRange(location: resolvedAt, length: 0))) - 1
+        tv.setSelectedRange(NSRange(location: end, length: 0))
+        tv.insertText("!", replacementRange: tv.selectedRange())
+        let typing = lm.temporaryAttribute(.foregroundColor, atCharacterIndex: resolvedAt, effectiveRange: nil) as? NSColor
+        _ = tv.replace(NSRange(location: end, length: 1), with: NSAttributedString())
+        await sleep(0.3)
+        let after = lm.temporaryAttribute(.foregroundColor, atCharacterIndex: resolvedAt, effectiveRange: nil) as? NSColor
+        log("links: styling survives typing in the paragraph \(ok(typing == NSColor.controlAccentColor && after == NSColor.controlAccentColor))")
+
+        _ = tv.delegate?.textView?(tv, clickedOnLink: NoteLink.note(id: target.id, heading: nil).url, at: resolvedAt)
+        await sleep(0.5)
+        log("links: clicking a resolved link selects the target \(ok(store.selectedNoteID == target.id))")
+
+        NotificationCenter.default.post(name: .noteItGoBack, object: nil)
+        await sleep(0.5)
+        log("links: Go Back returns \(ok(store.selectedNoteID == sourceMeta.id))")
+        NotificationCenter.default.post(name: .noteItGoForward, object: nil)
+        await sleep(0.5)
+        log("links: Go Forward returns \(ok(store.selectedNoteID == target.id))")
+        store.reveal(sourceMeta.id)
+        await sleep(0.5)
+
+        guard let tv2 = textView else { log("links: no text view"); return }
+        let before = store.notes.count
+        _ = tv2.delegate?.textView?(tv2, clickedOnLink: NoteLink.unresolved(title: "Brand New Target", heading: nil).url, at: unresolvedAt)
+        await sleep(0.5)
+        let created = store.notes.first { $0.title == "Brand New Target" }
+        log("links: clicking an unresolved link creates and opens a note \(ok(store.notes.count == before + 1 && created != nil && store.selectedNoteID == created?.id))")
+        let rewritten = store.outgoingLinks(from: sourceMeta.id).contains { $0.link == .note(id: created?.id ?? UUID(), heading: nil) }
+            || {
+                var found = false
+                let body = store.body(for: sourceMeta.id)
+                body.enumerateAttribute(.link, in: NSRange(location: 0, length: body.length)) { value, _, _ in
+                    if let url = value.flatMap(NoteStore.url(from:)), NoteLink(url: url) == .note(id: created?.id ?? UUID(), heading: nil) { found = true }
+                }
+                return found
+            }()
+        log("links: the clicked link now points at the new note \(ok(rewritten))")
+    }
+
+    private static func linkRuns(_ tv: NoteItTextView) -> [(String, NoteLink)] {
+        var runs: [(String, NoteLink)] = []
+        tv.storage.enumerateAttribute(.link, in: NSRange(location: 0, length: tv.storage.length)) { value, range, _ in
+            if let url = value.flatMap(NoteStore.url(from:)), let link = NoteLink(url: url) {
+                runs.append((tv.nsString.substring(with: range), link))
+            }
+        }
+        return runs
+    }
+
+    private static func checkCompletion(store: NoteStore) async {
+        func ok(_ pass: Bool) -> String { pass ? "ok" : "FAIL" }
+        let atlas = store.createNote(in: nil, initial: NoteStore.linkedNoteBody(title: "Atlas Project"))
+        let atlantic = store.createNote(in: nil, initial: NoteStore.linkedNoteBody(title: "Atlantic"))
+        _ = store.createNoteInCurrentContext()
+        await sleep(1)
+        guard let tv = textView else { log("completion: no text view"); return }
+        tv.window?.makeFirstResponder(tv)
+        tv.undoManager?.groupsByEvent = false
+        await type("Completion\nSee [[atl", into: tv)
+        await sleep(0.3)
+        let opened = tv.inlineCompletion.isActive && tv.inlineCompletion.rows.count >= 2
+        log("completion: [[ opens the list \(ok(opened))")
+        let second = tv.inlineCompletion.rows.count > 1 ? tv.inlineCompletion.rows[1].id : ""
+        event(tv) { tv.doCommand(by: #selector(NSResponder.moveDown(_:))) }
+        event(tv) { tv.doCommand(by: #selector(NSResponder.insertNewline(_:))) }
+        await sleep(0.3)
+        let runs = linkRuns(tv)
+        let expected = [atlas, atlantic].first { second == "note:\($0.id.uuidString)" }
+        let accepted = runs.count == 1 && runs.first?.1 == .note(id: expected?.id ?? UUID(), heading: nil)
+            && runs.first?.0 == expected?.title && !tv.string.contains("[[") && !tv.inlineCompletion.isActive
+        log("completion: ↓ ↩ inserts one link run \(ok(accepted))")
+        tv.undoManager?.undo()
+        let undone = tv.string.hasSuffix("See [[atl") && linkRuns(tv).isEmpty
+        log("completion: one undo step restores the typed text \(ok(undone))")
+        tv.undoManager?.redo()
+        tv.setSelectedRange(NSRange(location: tv.storage.length, length: 0))
+
+        await type(" and [[New thing]]", into: tv)
+        await sleep(0.3)
+        let typed = linkRuns(tv).last
+        log("completion: typing [[New thing]] makes an unresolved link \(ok(typed?.0 == "New thing" && typed?.1 == .unresolved(title: "New thing", heading: nil) && !tv.string.contains("]]")))")
+
+        let guide = NSMutableAttributedString(string: "Harbor Guide\n", attributes: EditorStyle.attributes(for: .title))
+        guide.append(NSAttributedString(string: "Docking\n", attributes: EditorStyle.attributes(for: .heading)))
+        let harbor = store.createNote(in: nil, initial: guide)
+        await type(" [[Harbor Guide#dock", into: tv)
+        await sleep(0.3)
+        let headingRow = tv.inlineCompletion.rows.first?.id == "heading:\(harbor.id.uuidString):Docking"
+        event(tv) { tv.doCommand(by: #selector(NSResponder.insertNewline(_:))) }
+        await sleep(0.3)
+        let headed = linkRuns(tv).last?.1 == .note(id: harbor.id, heading: "Docking")
+        log("completion: [[Note#Head lists the heading and links to it \(ok(headingRow && headed))")
+
+        await type(" [[esc", into: tv)
+        event(tv) { tv.doCommand(by: #selector(NSResponder.cancelOperation(_:))) }
+        await sleep(0.2)
+        log("completion: Esc closes the list and leaves the text \(ok(!tv.inlineCompletion.isActive && tv.string.hasSuffix("[[esc")))")
     }
 
     // MARK: Heading sentinels

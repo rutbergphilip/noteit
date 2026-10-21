@@ -61,6 +61,68 @@ final class DailyNoteStoreTests: XCTestCase {
         XCTAssertNotEqual(replacement, id, "a deleted notebook is replaced")
     }
 
+    func testExistingDailyNotesNotebookIsAdoptedWithoutPreference() throws {
+        let store = makeStore()
+        let synced = store.createNotebook(name: "daily notes ", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
+        let existing = store.createNote(in: synced.id, initial: NSAttributedString(string: "2026-10-12"))
+        for raw in [nil, "", UUID().uuidString] {
+            defaults.set(raw, forKey: PrefKey.dailyNotesNotebookID)
+            XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), synced.id, String(describing: raw))
+        }
+        let note = try XCTUnwrap(store.dailyNote(for: day(12), createIfMissing: true))
+        XCTAssertEqual(note.id, existing.id)
+        XCTAssertEqual(store.notebooks.count, 1)
+        XCTAssertEqual(defaults.string(forKey: PrefKey.dailyNotesNotebookID), synced.id.uuidString)
+    }
+
+    func testTwoDailyNotesNotebooksConvergeOnEveryMac() throws {
+        let store = makeStore()
+        let first = store.createNotebook(name: "Daily Notes", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
+        let second = store.createNotebook(name: "Daily Notes", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
+        let oldest = store.createNote(in: first.id, initial: NSAttributedString(string: "2026-10-12"))
+        let others = [store.createNote(in: first.id, initial: NSAttributedString(string: "Shopping")),
+                      store.createNote(in: first.id, initial: NSAttributedString(string: "Ideas"))]
+        _ = store.createNote(in: second.id, initial: NSAttributedString(string: "2026-10-13"))
+        _ = store.createNote(in: second.id, initial: NSAttributedString(string: "2026-10-14"))
+
+        for pinned in [nil, first.id.uuidString, second.id.uuidString] {
+            defaults.set(pinned, forKey: PrefKey.dailyNotesNotebookID)
+            XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id, "most notes, whatever their titles")
+        }
+        defaults.set(second.id.uuidString, forKey: PrefKey.dailyNotesNotebookID)
+        let note = try XCTUnwrap(store.dailyNote(for: day(12), createIfMissing: true))
+        XCTAssertEqual(note.id, oldest.id)
+        XCTAssertEqual(defaults.string(forKey: PrefKey.dailyNotesNotebookID), first.id.uuidString, "re-pinned")
+        XCTAssertEqual(store.notebooks.count, 2)
+
+        _ = store.moveToRecentlyDeleted(others.map(\.id))
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), second.id, "notes in Recently Deleted don't count")
+        _ = store.createNote(in: first.id, initial: NSAttributedString(string: "Later"))
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id, "a tie goes to the notebook with the oldest note")
+
+        let custom = store.createNotebook(name: "Journal", symbol: "book", colorHex: Tokens.Hex.notebookBlue)
+        defaults.set(custom.id.uuidString, forKey: PrefKey.dailyNotesNotebookID)
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), custom.id, "a notebook the user picked stays")
+    }
+
+    func testNotebookChoiceIsWorkedOutOncePerChange() {
+        let store = makeStore()
+        let first = store.createNotebook(name: "Daily Notes", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
+        let second = store.createNotebook(name: "Daily Notes", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
+        _ = store.createNote(in: second.id, initial: NSAttributedString(string: "2026-10-13"))
+        for _ in 0..<5 { XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), second.id) }
+        XCTAssertEqual(store.dailyNotebookChoiceScans, 1)
+        _ = store.createNote(in: first.id, initial: NSAttributedString(string: "A"))
+        _ = store.createNote(in: first.id, initial: NSAttributedString(string: "B"))
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id)
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id)
+        XCTAssertEqual(store.dailyNotebookChoiceScans, 2)
+        var renamed = second
+        renamed.name = "Archive"
+        store.updateNotebook(renamed)
+        XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), first.id)
+    }
+
     func testSameDayReturnsSameNote() throws {
         let store = makeStore()
         XCTAssertNil(try store.dailyNote(for: day(19), createIfMissing: false))
@@ -70,6 +132,20 @@ final class DailyNoteStoreTests: XCTestCase {
         XCTAssertEqual(try store.dailyNote(for: day(19), createIfMissing: false)?.id, note.id)
         XCTAssertNotEqual(try store.dailyNote(for: day(20), createIfMissing: true)?.id, note.id)
         XCTAssertEqual(dailyNotes(store).count, 2)
+    }
+
+    func testNonGregorianSystemCalendarFindsTheSameNote() throws {
+        let store = makeStore()
+        var buddhist = Calendar(identifier: .buddhist)
+        buddhist.timeZone = .current
+        var japanese = Calendar(identifier: .japanese)
+        japanese.timeZone = .current
+        let first = try XCTUnwrap(store.dailyNote(for: day(21), createIfMissing: true, systemCalendar: buddhist))
+        XCTAssertEqual(first.title, "2026-10-21")
+        let again = try XCTUnwrap(store.dailyNote(for: day(21, hour: 18), createIfMissing: true, systemCalendar: buddhist))
+        XCTAssertEqual(again.id, first.id)
+        XCTAssertEqual(try store.dailyNote(for: day(21), createIfMissing: false, systemCalendar: japanese)?.id, first.id)
+        XCTAssertEqual(dailyNotes(store).count, 1)
     }
 
     func testOldestMatchWins() throws {

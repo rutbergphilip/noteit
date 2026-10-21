@@ -72,6 +72,15 @@ public enum NoteLink: Equatable, Hashable, Sendable {
         }
     }
 
+    /// The link with its title and heading cut to `maxTextLength`, so its URL can be read back.
+    public var clamped: NoteLink {
+        let heading = heading.map { String($0.prefix(Self.maxTextLength)) }
+        switch self {
+        case let .note(id, _): return .note(id: id, heading: heading)
+        case let .unresolved(title, _): return .unresolved(title: String(title.prefix(Self.maxTextLength)), heading: heading)
+        }
+    }
+
     public func withHeading(_ heading: String?) -> NoteLink {
         switch self {
         case let .note(id, _): return .note(id: id, heading: heading)

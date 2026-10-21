@@ -1,3 +1,4 @@
+import NoteItCore
 import SwiftUI
 
 struct SidebarView: View {
@@ -8,11 +9,17 @@ struct SidebarView: View {
     @State private var renameText = ""
     @State private var notebookPendingDelete: Notebook?
     @FocusState private var renameFocused: Bool
+    @AppStorage(PrefKey.showTodayInSidebar) private var showToday = PrefDefault.showTodayInSidebar
+    @State private var todayNumber = Self.currentDayNumber()
+    @State private var showsTodayCalendar = false
 
     var body: some View {
         List(selection: $store.selection) {
             Section("Library") {
                 libraryRow("All Notes", symbol: "note.text", tint: Tokens.Color.accent, selection: .allNotes)
+                if showToday && DailyNotes.isAvailable {
+                    todayRow
+                }
                 libraryRow("Pinned", symbol: "pin.fill", tint: Tokens.Color.pinned, selection: .pinned)
                 libraryRow("Recent", symbol: "clock", tint: Tokens.Color.recent, selection: .recent)
                 if store.count(for: .conflicts) > 0 || store.selection == .conflicts {
@@ -52,6 +59,9 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
+            todayNumber = Self.currentDayNumber()
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             HStack {
                 Button {
@@ -82,6 +92,33 @@ struct SidebarView: View {
         } message: { _ in
             Text("Its notes will be moved to Recently Deleted.")
         }
+    }
+
+    /// An action, not a list: it opens today's note in the daily notes notebook.
+    private var todayRow: some View {
+        Label {
+            Text("Today")
+        } icon: {
+            Image(systemName: "calendar").foregroundStyle(Tokens.Color.today)
+        }
+        .badge(Text(todayNumber))
+        .contentShape(Rectangle())
+        .onTapGesture { store.openDailyNote(for: Date()) }
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { store.openDailyNote(for: Date()) }
+        .help("Open Today's Note")
+        .contextMenu {
+            Button("Open Today's Note") { store.openDailyNote(for: Date()) }
+            Button("Open Note for Date…") { showsTodayCalendar = true }
+        }
+        .popover(isPresented: $showsTodayCalendar, arrowEdge: .trailing) {
+            DailyCalendarView { showsTodayCalendar = false }
+                .environmentObject(store)
+        }
+    }
+
+    private static func currentDayNumber() -> String {
+        String(DayKey(Date(), calendar: DayKey.dailyCalendar()).day)
     }
 
     private func libraryRow(_ title: String, symbol: String, tint: Color, selection: SidebarSelection) -> some View {

@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 
 /// Imports Markdown and plain-text files, Obsidian vaults and Bear exports (`.textbundle` folders,
 /// `.textpack` zips or plain Markdown).
@@ -21,6 +22,7 @@ final class MarkdownImporter {
 
     private let store: NoteStore
     private let fileManager = FileManager.default
+    private var createdIDs: [UUID] = []
 
     init(store: NoteStore) {
         self.store = store
@@ -82,33 +84,62 @@ final class MarkdownImporter {
     func run(_ items: [Item], progress: (ImportProgress) -> Void) async -> ImportReport {
         var report = ImportReport()
         var nameIndexes: [URL: [String: URL]] = [:]
+        let ids = items.map { _ in UUID() }
+        var names: [String: [WikiTarget]] = [:]
+        for (item, id) in zip(items, ids) {
+            let key = TextFold.fold(item.url.deletingPathExtension().lastPathComponent)
+            names[key, default: []].append(WikiTarget(id: id, folders: Self.folders(of: item)))
+        }
+        let store = store
+        let resolveWikiLink = Self.wikiLinkResolver(names: names) { store.noteID(forTitle: $0, preferring: nil) }
         progress(ImportProgress(completed: 0, total: items.count))
         for (index, item) in items.enumerated() {
             if Task.isCancelled { report.cancelled = true; break }
             progress(ImportProgress(completed: index, total: items.count, currentName: item.url.deletingPathExtension().lastPathComponent))
             if item.indexesRoot, nameIndexes[item.root] == nil { nameIndexes[item.root] = Self.fileIndex(under: item.root) }
-            if importItem(item, nameIndex: item.indexesRoot ? nameIndexes[item.root] ?? [:] : [:], report: &report) == false {
+            if importItem(item, nameIndex: item.indexesRoot ? nameIndexes[item.root] ?? [:] : [:], id: ids[index],
+                          resolveWikiLink: item.indexesRoot ? resolveWikiLink : nil, report: &report) == false {
                 report.filesSkipped += 1
             }
             await Task.yield()
         }
         progress(ImportProgress(completed: report.cancelled ? report.notesImported : items.count, total: items.count))
+        unresolveLinksToSkipped(planned: Dictionary(zip(ids, items.map { $0.url.deletingPathExtension().lastPathComponent }),
+                                                    uniquingKeysWith: { a, _ in a }))
         store.flush()
         return report
     }
 
+    /// Links to notes that a cancel or an unreadable file kept out of the import become title links.
+    private func unresolveLinksToSkipped(planned: [UUID: String]) {
+        let missing = planned.filter { store.note(with: $0.key) == nil }
+        guard !missing.isEmpty else { return }
+        for id in createdIDs {
+            let body = NSMutableAttributedString(attributedString: store.body(for: id))
+            var changed = false
+            body.enumerateAttribute(.link, in: NSRange(location: 0, length: body.length)) { value, range, _ in
+                guard let url = value as? URL, case let .note(target, heading)? = NoteLink(url: url),
+                      let title = missing[target] else { return }
+                body.addAttribute(.link, value: NoteLink.unresolved(title: title, heading: heading).clamped.url, range: range)
+                changed = true
+            }
+            if changed { store.replaceImportedBody(id, body) }
+        }
+    }
+
     /// Imports one file or bundle. Returns false when it couldn't be read.
     @discardableResult
-    func importItem(_ item: Item, nameIndex: [String: URL] = [:], report: inout ImportReport) -> Bool {
+    func importItem(_ item: Item, nameIndex: [String: URL] = [:], id: UUID? = nil, resolveWikiLink: WikiLinkResolver? = nil,
+                    report: inout ImportReport) -> Bool {
         let ext = item.url.pathExtension.lowercased()
         if ext == "textpack" {
             guard let unpacked = unzip(item.url) else { return false }
             defer { try? fileManager.removeItem(at: unpacked) }
             guard let bundle = Self.textBundle(in: unpacked) else { return false }
-            return importBundle(bundle, named: item.url.deletingPathExtension().lastPathComponent, item: item, report: &report)
+            return importBundle(bundle, named: item.url.deletingPathExtension().lastPathComponent, item: item, id: id, report: &report)
         }
         if ext == "textbundle" {
-            return importBundle(item.url, named: item.url.deletingPathExtension().lastPathComponent, item: item, report: &report)
+            return importBundle(item.url, named: item.url.deletingPathExtension().lastPathComponent, item: item, id: id, report: &report)
         }
         guard let text = Self.readText(item.url) else { return false }
         let fileDates = Self.fileDates(item.url)
@@ -118,15 +149,15 @@ final class MarkdownImporter {
         let name = item.url.deletingPathExtension().lastPathComponent
         let note: MarkdownNote = ext == "txt"
             ? Self.plainTextNote(text, fallbackTitle: name)
-            : MarkdownReader.note(from: text, fallbackTitle: name, resolveImage: resolver)
+            : MarkdownReader.note(from: text, fallbackTitle: name, resolveImage: resolver, resolveWikiLink: resolveWikiLink)
         report.attachmentsSkipped += skipped.count
         save(note, notebook: item.notebook, created: note.frontMatter.created ?? fileDates.created,
-             updated: note.frontMatter.updated ?? fileDates.modified, report: &report)
+             updated: note.frontMatter.updated ?? fileDates.modified, id: id, report: &report)
         return true
     }
 
     /// A TextBundle: `text.md` (or `.markdown`/`.txt`) plus an `assets` folder; Bear adds its dates to `info.json`.
-    private func importBundle(_ bundle: URL, named name: String, item: Item, report: inout ImportReport) -> Bool {
+    private func importBundle(_ bundle: URL, named name: String, item: Item, id: UUID?, report: inout ImportReport) -> Bool {
         let candidates = ["text.md", "text.markdown", "text.txt"].map { bundle.appendingPathComponent($0) }
         let textURL = candidates.first { fileManager.fileExists(atPath: $0.path) }
             ?? ((try? fileManager.contentsOfDirectory(at: bundle, includingPropertiesForKeys: nil)) ?? [])
@@ -142,15 +173,52 @@ final class MarkdownImporter {
         let fileDates = Self.fileDates(item.url)
         save(note, notebook: item.notebook,
              created: note.frontMatter.created ?? info.created ?? fileDates.created,
-             updated: note.frontMatter.updated ?? info.modified ?? fileDates.modified, report: &report)
+             updated: note.frontMatter.updated ?? info.modified ?? fileDates.modified, id: id, report: &report)
         return true
     }
 
-    private func save(_ note: MarkdownNote, notebook: String, created: Date?, updated: Date?, report: inout ImportReport) {
+    private func save(_ note: MarkdownNote, notebook: String, created: Date?, updated: Date?, id: UUID?, report: inout ImportReport) {
         let nb = store.notebookForImport(named: notebook)
-        store.createImportedNote(body: note.body, title: note.title, notebookID: nb.id, createdAt: created, updatedAt: updated)
+        createdIDs.append(store.createImportedNote(body: note.body, title: note.title, notebookID: nb.id,
+                                                   createdAt: created, updatedAt: updated, id: id).id)
         report.notesImported += 1
         report.notebookIDs.insert(nb.id)
+    }
+
+    /// A note in the import that wiki links can name: its id and the folded folders above it, starting with
+    /// the chosen folder.
+    struct WikiTarget {
+        var id: UUID
+        var folders: [String]
+    }
+
+    nonisolated static func folders(of item: Item) -> [String] {
+        let base = item.root.deletingLastPathComponent().standardizedFileURL.pathComponents
+        let dir = item.url.deletingLastPathComponent().standardizedFileURL.pathComponents
+        guard dir.starts(with: base) else { return [] }
+        return dir.dropFirst(base.count).map(foldedPathPart)
+    }
+
+    nonisolated static func foldedPathPart(_ folder: String) -> String {
+        TextFold.fold(ExportLinkContext.linkPathPart(folder))
+    }
+
+    /// Resolves a wiki-link target to a note in the same import by file name (folded), preferring the one whose
+    /// folders end with the link's path (`[[Work/Plan]]`, `[[../Work/Plan]]`), else whose folders end the link's path
+    /// (a vault path when a subfolder was imported); a path no imported note matches skips this step. Then an existing
+    /// note with that title, else an unresolved title link.
+    static func wikiLinkResolver(names: [String: [WikiTarget]], existing: @escaping (String) -> UUID?) -> WikiLinkResolver {
+        { target, heading, folders in
+            let candidates = names[TextFold.fold(target)] ?? []
+            let wanted = folders.filter { !["", ".", ".."].contains($0) }.map(foldedPathPart)
+            func endsWith(_ path: [String], _ tail: [String]) -> Bool {
+                !tail.isEmpty && path.count >= tail.count && Array(path.suffix(tail.count)) == tail
+            }
+            let match = wanted.isEmpty ? candidates.first
+                : candidates.first { endsWith($0.folders, wanted) } ?? candidates.first { endsWith(wanted, $0.folders) }
+            if let id = match?.id ?? existing(target) { return .note(id: id, heading: heading) }
+            return .unresolved(title: target, heading: heading)
+        }
     }
 
     /// Unpacks a `.textpack` into a temporary folder, refusing archives with entries that would land outside it.

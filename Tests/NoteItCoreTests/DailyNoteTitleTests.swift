@@ -35,9 +35,27 @@ final class DailyNoteTitleTests: XCTestCase {
         }
     }
 
+    func testNamedMonthTitlesUseLatinDigitsInEveryLocale() {
+        for identifier in ["fa_IR", "ar_EG", "my_MM", "hi_IN@numbers=deva"] {
+            let locale = Locale(identifier: identifier)
+            for format in [DailyTitleFormat.long, .weekdayLong] {
+                let title = DailyNoteTitle.title(for: day, format: format, locale: locale)
+                XCTAssertTrue(title.contains("2026") && title.contains("19"), "\(identifier) \(title)")
+                XCTAssertEqual(DailyNoteTitle.parse(title, locale: locale), day, "\(identifier) \(title)")
+            }
+        }
+    }
+
+    func testParseReadsNativeDigitsAndOtherLanguages() {
+        let arabic = "١٩ أكتوبر ٢٠٢٦"
+        XCTAssertEqual(DailyNoteTitle.parse(arabic, locale: Locale(identifier: "ar_EG")), day, arabic)
+        let english = DailyNoteTitle.title(for: day, format: .weekdayLong, locale: en)
+        XCTAssertEqual(DailyNoteTitle.parse(english, locale: sv), day, "after switching the Mac to Swedish")
+    }
+
     func testParseRejectsOtherTitles() {
         for title in ["", "Meeting notes", "2026-10-19 standup", "2026-13-01", "2026-02-30", "Tuesday, 19 October 2026",
-                      "19 October", "2026-1-5"] {
+                      "19 October", "2026-1-5", "2023-02-29", "Budget 2026", "0000-01-01"] {
             XCTAssertNil(DailyNoteTitle.parse(title, locale: en), title)
         }
     }
@@ -52,7 +70,7 @@ final class DailyNoteTitleTests: XCTestCase {
         XCTAssertLessThan(DayKey(year: 2025, month: 12, day: 31), day)
     }
 
-    func testGateIsClosed() {
-        XCTAssertFalse(DailyNotes.isAvailable)
+    func testGateIsOpen() {
+        XCTAssertTrue(DailyNotes.isAvailable)
     }
 }

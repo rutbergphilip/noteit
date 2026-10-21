@@ -25,6 +25,7 @@ enum Tokens {
         // SwiftUI's vibrancy treatment in the sidebar (a `Color(nsColor:)` wrapper renders flatter there).
         static let pinned = SwiftUI.Color.orange
         static let recent = SwiftUI.Color.teal
+        static let today = SwiftUI.Color.red
         static let success = SwiftUI.Color.green
         static let destructive = SwiftUI.Color.red
 
@@ -47,6 +48,7 @@ enum Tokens {
         static let tileOpenQuickly = notebookTeal
         static let tileCommandPalette = notebookPurple
         static let tileCaptureSelection = notebookGreen
+        static let tileOpenToday = notebookRed
 
         // Brand (fixed): app icon, Quick Capture tile, marketing. Never note content or app chrome.
         static let brandViolet = SwiftUI.Color(hex: Hex.brandViolet)

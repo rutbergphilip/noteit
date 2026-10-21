@@ -13,6 +13,9 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     private var isNormalizing = false
     private var lineBreakEditLocation: Int?
     private(set) lazy var codeStyler = CodeStyler(textView: self)
+    private(set) lazy var linkStyler = LinkStyler(textView: self)
+    private(set) lazy var inlineCompletion = InlineCompletionController(textView: self)
+    weak var linkHost: (any NoteLinkHost)?
     private var hoverTrackingArea: NSTrackingArea?
 
     // MARK: Setup
@@ -65,11 +68,8 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         smartInsertDeleteEnabled = true
         displaysLinkToolTips = true
         usesFontPanel = true
-        linkTextAttributes = [
-            .foregroundColor: NSColor.linkColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .cursor: NSCursor.pointingHand,
-        ]
+        // Colors come from LinkStyler's temporary attributes.
+        linkTextAttributes = [.cursor: NSCursor.pointingHand]
         (layoutManager as? NoteItLayoutManager)?.codeSettings = codeStyler.settings
     }
 
@@ -179,6 +179,17 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         return true
     }
 
+    override func resignFirstResponder() -> Bool {
+        guard super.resignFirstResponder() else { return false }
+        inlineCompletion.cancel()
+        return true
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { inlineCompletion.cancel() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override func didChangeText() {
         normalizePendingEdits()
         codeStyler.flush(typing: true)
@@ -248,6 +259,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             guard !isNormalizing, !codeStyler.isApplying else { return }
             let r = NSRange(location: editedRange.location, length: max(editedRange.length, 0))
             codeStyler.noteEdit(r)
+            if editedMask.contains(.editedAttributes) || editedMask.contains(.editedCharacters) { linkStyler.noteEdit(r) }
             pendingNormalizeRange = pendingNormalizeRange.map { NSUnionRange($0, r) } ?? r
             if let p = pendingNormalizeRange, NSMaxRange(p) > textStorage.length {
                 pendingNormalizeRange = NSRange(location: min(p.location, textStorage.length), length: textStorage.length - min(p.location, textStorage.length))
@@ -541,6 +553,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         guard let text, !hasMarkedText(), replacementRange.location == NSNotFound,
               selectedRange().length == 0, handleMarkdownTrigger(text, dryRun: true) else {
             super.insertText(string, replacementRange: replacementRange)
+            if let text { beginLinkCompletionIfNeeded(afterTyping: text) }
             return
         }
         // Type the character first, then convert on the next run-loop turn: the conversion becomes
@@ -772,7 +785,15 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         ]
         for (i, group) in groups.enumerated() {
             if i > 0 { format.addItem(.separator()) }
-            for cmd in group { format.addItem(menuItem(for: cmd)) }
+            for cmd in group {
+                format.addItem(menuItem(for: cmd))
+                if case .link = cmd, canInsertNoteLink {
+                    let item = NSMenuItem(title: "Link to Note…", action: #selector(linkToNote(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)
+                    format.addItem(item)
+                }
+            }
         }
         let formatItem = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
         formatItem.submenu = format

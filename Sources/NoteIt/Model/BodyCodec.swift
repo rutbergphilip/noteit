@@ -128,8 +128,8 @@ enum BodyCodec: String, CaseIterable, Sendable {
     }
 
     @MainActor
-    static func html(of text: NSAttributedString, title: String) -> String {
-        HTMLWriter.write(text, title: title)
+    static func html(of text: NSAttributedString, title: String, links: ExportLinkContext = .titlesOnly) -> String {
+        HTMLWriter.write(text, title: title, links: links)
     }
 
     // MARK: noteit-doc container

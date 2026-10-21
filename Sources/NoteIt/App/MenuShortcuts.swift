@@ -115,6 +115,13 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
     case copyNoteLink
     case versionHistory
     case deleteNote
+    case goBack
+    case goForward
+    case linkToNote
+    case newNoteFromTemplate
+    case toggleInspector
+    case openToday
+    case dailyNoteForDate
 
     var id: String { rawValue }
 
@@ -134,10 +141,18 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
         case .copyNoteLink: "Copy Note Link"
         case .versionHistory: "Version History…"
         case .deleteNote: "Delete Note"
+        case .goBack: "Go Back"
+        case .goForward: "Go Forward"
+        case .linkToNote: "Link to Note…"
+        case .newNoteFromTemplate: "New Note from Template…"
+        case .toggleInspector: "Show Links and Outline"
+        case .openToday: "Open Today's Note"
+        case .dailyNoteForDate: "Daily Note for Date…"
         }
     }
 
-    var defaultShortcut: MenuShortcut {
+    /// nil for a command with no shortcut until one is recorded.
+    var defaultShortcut: MenuShortcut? {
         switch self {
         case .newNote: MenuShortcut("n", .command)
         case .newNotebook: MenuShortcut("n", [.command, .shift])
@@ -152,6 +167,13 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
         case .copyNoteLink: MenuShortcut("l", [.command, .control])
         case .versionHistory: MenuShortcut("y", [.command, .option])
         case .deleteNote: MenuShortcut(.delete, .command)
+        case .goBack: MenuShortcut(.leftArrow, [.control, .command])
+        case .goForward: MenuShortcut(.rightArrow, [.control, .command])
+        case .linkToNote: MenuShortcut("k", [.shift, .command])
+        case .newNoteFromTemplate: MenuShortcut("n", [.option, .command])
+        case .toggleInspector: MenuShortcut("i", [.option, .command])
+        case .openToday: MenuShortcut("t", [.control, .command])
+        case .dailyNoteForDate: nil
         }
     }
 }
@@ -171,6 +193,13 @@ enum MenuShortcuts {
     static var copyNoteLink: MenuShortcut? { current(.copyNoteLink) }
     static var versionHistory: MenuShortcut? { current(.versionHistory) }
     static var deleteNote: MenuShortcut? { current(.deleteNote) }
+    static var goBack: MenuShortcut? { current(.goBack) }
+    static var goForward: MenuShortcut? { current(.goForward) }
+    static var linkToNote: MenuShortcut? { current(.linkToNote) }
+    static var newNoteFromTemplate: MenuShortcut? { current(.newNoteFromTemplate) }
+    static var toggleInspector: MenuShortcut? { current(.toggleInspector) }
+    static var openToday: MenuShortcut? { current(.openToday) }
+    static var dailyNoteForDate: MenuShortcut? { current(.dailyNoteForDate) }
     /// SwiftUI's own Settings… item; listed so the palette can show it. It can't be changed.
     static let settings = MenuShortcut(",", .command)
 

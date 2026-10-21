@@ -31,7 +31,8 @@ final class ModelCodingTests: XCTestCase {
 
     private let fullNotebook = """
     {"id":"0B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F","name":"Inbox","symbol":"tray","colorHex":"#0A84FF",
-     "sortIndex":2,"revision":"1B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F","modifiedAt":"2026-01-02T03:04:05Z"}
+     "sortIndex":2,"revision":"1B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F","modifiedAt":"2026-01-02T03:04:05Z",
+     "defaultTemplateID":"2B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F"}
     """
 
     private let minimalNotebook = """

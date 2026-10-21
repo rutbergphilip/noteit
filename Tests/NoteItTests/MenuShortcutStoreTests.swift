@@ -35,6 +35,24 @@ final class MenuShortcutStoreTests: XCTestCase {
 
     // MARK: - Store
 
+    func testNewCommandDefaultTakenByUserShortcutStartsEmpty() throws {
+        storeJSON(#"{"find":{"key":"k","modifiers":["shift","command"]}}"#)
+        let store = makeStore()
+        XCTAssertNil(store.current(.linkToNote))
+        XCTAssertEqual(store.current(.find), MenuShortcut("k", [.shift, .command]))
+        XCTAssertEqual(store.commands(using: MenuShortcut("k", [.shift, .command])), [.find])
+        let saved = MenuShortcutCoding.decode(try XCTUnwrap(defaults.data(forKey: MenuShortcutStore.defaultsKey)))
+        XCTAssertEqual(saved[.linkToNote], MenuShortcutOverride.noShortcut)
+        XCTAssertNil(makeStore().current(.linkToNote))
+    }
+
+    func testConflictNamesEveryCommandUsingTheShortcut() {
+        storeJSON(#"{"find":{"key":"j","modifiers":["command"]},"print":{"key":"j","modifiers":["command"]}}"#)
+        let store = makeStore()
+        XCTAssertEqual(evaluate(MenuShortcut("j", .command), for: .newNote, in: store),
+                       .reject("⌘J is already used for “\(MenuShortcutCommand.find.title)” and “\(MenuShortcutCommand.print.title)”."))
+    }
+
     func testStartsWithTheDefaults() {
         let store = makeStore()
         for command in MenuShortcutCommand.allCases {
@@ -64,7 +82,7 @@ final class MenuShortcutStoreTests: XCTestCase {
     func testSettingTheDefaultIsNotACustomization() {
         let store = makeStore()
         store.set(MenuShortcut("j", .command), for: .find)
-        store.set(MenuShortcutCommand.find.defaultShortcut, for: .find)
+        store.set(MenuShortcutCommand.find.defaultShortcut!, for: .find)
         XCTAssertFalse(store.isCustomized(.find))
         XCTAssertNil(defaults.data(forKey: MenuShortcutStore.defaultsKey))
     }
@@ -144,7 +162,7 @@ final class MenuShortcutStoreTests: XCTestCase {
 
     func testCopyNoteLinkDefaultShortcutHasNoConflict() {
         let store = makeStore()
-        let shortcut = MenuShortcutCommand.copyNoteLink.defaultShortcut
+        let shortcut = MenuShortcutCommand.copyNoteLink.defaultShortcut!
         XCTAssertEqual(shortcut.display, "⌃⌘L")
         XCTAssertNil(MenuShortcutRules.reservedName(for: shortcut))
         XCTAssertEqual(evaluate(shortcut, for: .copyNoteLink, in: store), .accept(warning: nil))
@@ -204,7 +222,7 @@ final class MenuShortcutStoreTests: XCTestCase {
 
     func testRestoringADefaultThatIsNowTakenDoesNothing() {
         let store = makeStore()
-        let open = MenuShortcutCommand.openQuickly.defaultShortcut
+        let open = MenuShortcutCommand.openQuickly.defaultShortcut!
         store.clear(.openQuickly)
         store.set(open, for: .find)
         XCTAssertEqual(store.resetBlocker(for: .openQuickly), .find)

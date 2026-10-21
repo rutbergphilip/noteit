@@ -45,10 +45,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Unbundled runs (`swift run`) have no .icns; show the same artwork in the Dock.
             NSApp.applicationIconImage = artwork
         }
+        NoteStore.shared.installLinkIndex()
         SpotlightIndexer.shared.start()
         NoteStore.shared.startRecentlyDeletedMaintenance()
         AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
+        LinkingAPIRoutes.register(in: .shared, store: NoteStore.shared)
         _ = LocalAPIController.shared
         PasteAndMatchStyleShortcut.install()
         let center = NotificationCenter.default
@@ -90,6 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 PaletteController.shared.hotkeyToggle(mode: .commands)
             case .captureSelection:
                 CaptureController.shared.captureSelection()
+            case .openToday:
+                WindowRouter.showMainWindow()
+                NoteStore.shared.openDailyNote(for: Date())
+                WindowRouter.focusEditor()
             }
         }
         HotkeyManager.shared.start()

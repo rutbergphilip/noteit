@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 import XCTest
 @testable import NoteIt
 
@@ -334,5 +335,128 @@ final class MarkdownImporterTests: XCTestCase {
         report.lockedSkipped = 1
         report.attachmentsSkipped = 2
         XCTAssertEqual(report.summary, "Imported 132 notes into 6 notebooks. Skipped 1 locked note and 2 attachments.")
+    }
+
+    // MARK: Wiki links
+
+    private func links(in store: NoteStore, _ id: UUID) -> [NoteLink] {
+        var out: [NoteLink] = []
+        let body = store.body(for: id)
+        body.enumerateAttribute(.link, in: NSRange(location: 0, length: body.length)) { value, _, _ in
+            if let url = value as? URL, let link = NoteLink(url: url) { out.append(link) }
+        }
+        return out
+    }
+
+    func testVaultLinksResolveBetweenImportedNotes() async throws {
+        let vault = base.appendingPathComponent("Vault", isDirectory: true)
+        try write("# Home\nGo to [[Trips/Atlas|maps]] and [[atlas#Routes]].", to: "Home.md", in: vault)
+        try write("# The Atlas\nBack [[Home]].", to: "Trips/Atlas.md", in: vault)
+        let store = makeStore()
+        _ = await importAll([vault], into: store)
+        let home = try note(titled: "Home", in: store), atlas = try note(titled: "The Atlas", in: store)
+        XCTAssertEqual(links(in: store, home.id), [.note(id: atlas.id, heading: nil), .note(id: atlas.id, heading: "Routes")])
+        XCTAssertEqual(links(in: store, atlas.id), [.note(id: home.id, heading: nil)])
+        for _ in 0..<500 where store.backlinks(to: atlas.id).isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(Set(store.backlinks(to: atlas.id).map(\.source)), [home.id])
+    }
+
+    func testLinkToExistingNoteByTitle() async throws {
+        let store = makeStore()
+        let existing = store.createNote(in: nil, initial: EditorStyle.paragraph("Garden", kind: .title)).id
+        let vault = base.appendingPathComponent("Vault", isDirectory: true)
+        try write("# Plan\nSee [[Garden]].", to: "Plan.md", in: vault)
+        _ = await importAll([vault], into: store)
+        XCTAssertEqual(links(in: store, try note(titled: "Plan", in: store).id), [.note(id: existing, heading: nil)])
+    }
+
+    func testUnknownTargetIsUnresolved() async throws {
+        let store = makeStore()
+        let vault = base.appendingPathComponent("Vault", isDirectory: true)
+        try write("# Plan\nSee [[Nowhere#Top]].", to: "Plan.md", in: vault)
+        _ = await importAll([vault], into: store)
+        XCTAssertEqual(links(in: store, try note(titled: "Plan", in: store).id), [.unresolved(title: "Nowhere", heading: "Top")])
+    }
+
+    func testPathLinkWithoutANoteInThatFolderIsNotSentElsewhere() {
+        let plan = UUID(), existing = UUID()
+        let names = ["plan": [MarkdownImporter.WikiTarget(id: plan, folders: ["vault", "work"])]]
+        let resolve = MarkdownImporter.wikiLinkResolver(names: names, existing: { _ in nil })
+        XCTAssertEqual(resolve("Plan", nil, []), .note(id: plan, heading: nil))
+        XCTAssertEqual(resolve("Plan", nil, ["Work"]), .note(id: plan, heading: nil))
+        XCTAssertEqual(resolve("Plan", nil, ["Home"]), .unresolved(title: "Plan", heading: nil))
+        let withExisting = MarkdownImporter.wikiLinkResolver(names: names, existing: { $0 == "Plan" ? existing : nil })
+        XCTAssertEqual(withExisting("Plan", nil, ["Home"]), .note(id: existing, heading: nil))
+    }
+
+    func testRelativeAndVaultPathLinksStillResolve() {
+        let plan = UUID(), other = UUID()
+        let names = ["plan": [MarkdownImporter.WikiTarget(id: other, folders: ["home"]),
+                              MarkdownImporter.WikiTarget(id: plan, folders: ["work"])]]
+        let resolve = MarkdownImporter.wikiLinkResolver(names: names, existing: { _ in nil })
+        XCTAssertEqual(resolve("Plan", nil, ["..", "Work"]), .note(id: plan, heading: nil))
+        XCTAssertEqual(resolve("Plan", nil, [".", "", "Work"]), .note(id: plan, heading: nil))
+        XCTAssertEqual(resolve("Plan", nil, ["Area", "Work"]), .note(id: plan, heading: nil), "vault path, subfolder imported")
+        XCTAssertEqual(resolve("Plan", nil, ["."]), .note(id: other, heading: nil))
+        XCTAssertEqual(resolve("Plan", nil, ["Area", "Misc"]), .unresolved(title: "Plan", heading: nil))
+    }
+
+    func testLinksToNotesLeftOutBecomeTitleLinks() async throws {
+        let vault = base.appendingPathComponent("Vault", isDirectory: true)
+        try write("# Alpha\nSee [[Beta]] and [[Gamma#Top]].", to: "Alpha.md", in: vault)
+        try write("# Beta\nText", to: "Beta.md", in: vault)
+        let gamma = try write("# Gamma\nText", to: "Gamma.md", in: vault)
+        try fm.setAttributes([.posixPermissions: 0], ofItemAtPath: gamma.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: gamma.path) }
+        let store = makeStore()
+        let items = MarkdownImporter.items(for: [vault])
+        XCTAssertEqual(items.map { $0.url.lastPathComponent }, ["Alpha.md", "Beta.md", "Gamma.md"])
+        let task = Task { @MainActor in
+            await MarkdownImporter(store: store).run(items) { progress in
+                if progress.completed == 0, !progress.currentName.isEmpty { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        let report = await task.value
+        XCTAssertTrue(report.cancelled)
+        XCTAssertEqual(links(in: store, try note(titled: "Alpha", in: store).id),
+                       [.unresolved(title: "Beta", heading: nil), .unresolved(title: "Gamma", heading: "Top")])
+
+        let full = NoteStore(location: LibraryLocation(url: base.appendingPathComponent("Library2", isDirectory: true), seedsFreshLibrary: false))
+        _ = await importAll([vault], into: full)
+        let beta = try note(titled: "Beta", in: full)
+        XCTAssertEqual(links(in: full, try note(titled: "Alpha", in: full).id),
+                       [.note(id: beta.id, heading: nil), .unresolved(title: "Gamma", heading: "Top")])
+    }
+
+    func testLongWikiLinkTargetsStayInTheIndex() async throws {
+        let long = String(repeating: "Long name ", count: 14)
+        let vault = base.appendingPathComponent("Vault", isDirectory: true)
+        try write("# Plan\nSee [[\(long)]] and [[Atlas#\(long)]].", to: "Plan.md", in: vault)
+        try write("# Atlas\nText", to: "Atlas.md", in: vault)
+        let store = makeStore()
+        store.installLinkIndex()
+        _ = await importAll([vault], into: store)
+        let plan = try note(titled: "Plan", in: store), atlas = try note(titled: "Atlas", in: store)
+        let cut = String(long.prefix(NoteLink.maxTextLength))
+        XCTAssertEqual(links(in: store, plan.id), [.unresolved(title: cut, heading: nil), .note(id: atlas.id, heading: cut)])
+        for _ in 0..<500 where store.outgoingLinks(from: plan.id).count < 2 { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(store.outgoingLinks(from: plan.id).compactMap(\.link), [.unresolved(title: cut, heading: nil), .note(id: atlas.id, heading: cut)])
+    }
+
+    func testIDCollisionGetsNewID() {
+        let store = makeStore()
+        let first = store.createNote(in: nil, initial: EditorStyle.paragraph("One", kind: .title)).id
+        let deleted = store.createNote(in: nil, initial: EditorStyle.paragraph("Two", kind: .title)).id
+        _ = store.moveToRecentlyDeleted([deleted])
+        let fresh = UUID()
+        XCTAssertEqual(store.createImportedNote(body: NSAttributedString(string: "x"), title: "x", notebookID: nil,
+                                                createdAt: nil, updatedAt: nil, id: fresh).id, fresh)
+        for used in [first, deleted] {
+            let meta = store.createImportedNote(body: NSAttributedString(string: "y"), title: "y", notebookID: nil,
+                                                createdAt: nil, updatedAt: nil, id: used)
+            XCTAssertNotEqual(meta.id, used)
+            XCTAssertNotNil(store.note(with: meta.id))
+        }
+        XCTAssertEqual(store.body(for: first).string, "One\n")
     }
 }

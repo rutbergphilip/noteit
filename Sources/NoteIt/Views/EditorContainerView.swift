@@ -1,16 +1,39 @@
+import NoteItCore
 import SwiftUI
 
 struct EditorContainerView: View {
     @EnvironmentObject private var store: NoteStore
     @StateObject private var editor = EditorController()
     @StateObject private var find = FindReplaceModel()
+    @StateObject private var renames = RenameTracker()
+    @EnvironmentObject private var navigation: NavigationModel
+    @ObservedObject private var linkState = LinkNavigationState.shared
+    @AppStorage(PrefKey.inspectorVisible) private var inspectorVisible = false
 
     var body: some View {
+        content
+            .inspector(isPresented: $inspectorVisible) {
+                LinksPanelView(noteID: store.selectedNoteID)
+                    .inspectorColumnWidth(min: 240, ideal: 280, max: 420)
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
             let writeBlocked = store.isBodyWriteBlocked(id)
             let readOnly = writeBlocked || note.deletedAt != nil
             VStack(spacing: 0) {
                 EditorHeader(note: note)
+                LinkRenameBanner(tracker: renames)
+                if let missing = linkState.missingHeading, missing.note == id {
+                    Text("Heading “\(missing.heading)” not found")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .transition(.opacity)
+                }
                 if let deletedAt = note.deletedAt {
                     DeletedNoteBanner(note: note, deletedAt: deletedAt)
                 }
@@ -36,10 +59,24 @@ struct EditorContainerView: View {
             .onDisappear { find.close(refocusText: false) }
             .onChange(of: readOnly, initial: true) { find.allowsReplace = !readOnly }
             .onChange(of: id) { find.close(refocusText: false) }
+            .onChange(of: id, initial: true) { _, id in
+                renames.store = store
+                renames.open(id, title: note.title)
+            }
+            .onChange(of: note.title) { _, title in renames.titleObserved(title, of: id) }
             .background(Tokens.Color.surfaceEditor)
             .toolbar {
+                ToolbarItemGroup(placement: .navigation) {
+                    NavigationButtons(navigation: navigation)
+                }
                 ToolbarItem(placement: .primaryAction) {
                     ShareToolbarButton(note: note)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { inspectorVisible.toggle() } label: {
+                        Label("Links and Outline", systemImage: "sidebar.trailing")
+                    }
+                    .help(inspectorVisible ? "Hide Links and Outline" : "Show Links and Outline")
                 }
             }
         } else {
@@ -54,9 +91,28 @@ struct EditorContainerView: View {
     }
 }
 
+private struct NavigationButtons: View {
+    @EnvironmentObject private var store: NoteStore
+    @ObservedObject var navigation: NavigationModel
+
+    var body: some View {
+        ControlGroup {
+            Button { navigation.goBack(in: store) } label: { Image(systemName: "chevron.backward") }
+                .help("Go Back")
+                .accessibilityLabel("Go Back")
+                .disabled(!navigation.history.canGoBack)
+            Button { navigation.goForward(in: store) } label: { Image(systemName: "chevron.forward") }
+                .help("Go Forward")
+                .accessibilityLabel("Go Forward")
+                .disabled(!navigation.history.canGoForward)
+        }
+    }
+}
+
 struct EditorHeader: View {
     @EnvironmentObject private var store: NoteStore
     let note: NoteMeta
+    @State private var showsCalendar = false
 
     private var notebook: Notebook? { store.notebook(with: note.notebookID) }
 
@@ -92,6 +148,10 @@ struct EditorHeader: View {
                 ConflictBadge(source: source) { store.markConflictResolved(note.id) }
             }
 
+            if DailyNotes.isAvailable, note.deletedAt == nil, let day = store.dailyDay(of: note.id) {
+                dailyControls(day)
+            }
+
             Button {
                 store.togglePin(note.id)
             } label: {
@@ -107,6 +167,32 @@ struct EditorHeader: View {
         .padding(.top, 8)
         .padding(.bottom, 2)
     }
+
+    @ViewBuilder
+    private func dailyControls(_ day: DayKey) -> some View {
+        let previous = store.adjacentDailyNote(to: note.id, forward: false)
+        let next = store.adjacentDailyNote(to: note.id, forward: true)
+        HStack(spacing: 2) {
+            Button { store.openAdjacentDailyNote(to: note.id, forward: false) } label: { Image(systemName: "chevron.left").frame(width: 18, height: 22) }
+                .disabled(previous == nil)
+                .help(previous.map { "Previous Daily Note: \($0.displayTitle)" } ?? "No earlier daily note")
+                .accessibilityLabel("Previous Daily Note")
+            Button { showsCalendar = true } label: { Image(systemName: "calendar").frame(width: 22, height: 22) }
+                .help("Daily Note for Date…")
+                .accessibilityLabel("Daily Note for Date")
+                .popover(isPresented: $showsCalendar, arrowEdge: .bottom) {
+                    DailyCalendarView(selected: day) { showsCalendar = false }
+                        .environmentObject(store)
+                }
+            Button { store.openAdjacentDailyNote(to: note.id, forward: true) } label: { Image(systemName: "chevron.right").frame(width: 18, height: 22) }
+                .disabled(next == nil)
+                .help(next.map { "Next Daily Note: \($0.displayTitle)" } ?? "No later daily note")
+                .accessibilityLabel("Next Daily Note")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+    }
+
 }
 
 /// Shown on a sync conflict copy; "Resolved" clears the badge (also cleared by editing the copy).
