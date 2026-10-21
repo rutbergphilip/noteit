@@ -361,7 +361,8 @@ final class CaptureFormatterTests: XCTestCase {
         let text = NoteStore.capturedText(title: "T", body: "B")
         XCTAssertEqual(text.string, "T\nB")
         XCTAssertEqual(text.attribute(.font, at: 2, effectiveRange: nil) as? NSFont, NSFont.systemFont(ofSize: size))
-        XCTAssertEqual(text.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor, NSColor.labelColor)
+        XCTAssertNil(text.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        XCTAssertNil(text.attribute(.foregroundColor, at: 2, effectiveRange: nil))
         XCTAssertEqual(NoteStore.capturedText(title: "T", body: "").string, "T")
         XCTAssertEqual(NoteStore.capturedText(title: "", body: "B").string, "B")
     }

@@ -18,6 +18,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - New libraries start with a refreshed welcome note, and no longer include a sample shortcuts note or Shortcuts notebook.
 
+### Fixed
+
+- Notes made with Quick Capture or Capture from any app no longer export with white text when you export to HTML or PDF in Dark Mode.
+
 ## [0.5.0] - 2026-10-20
 
 ### Added

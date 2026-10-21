@@ -448,6 +448,31 @@ final class AutomationServiceTests: XCTestCase {
         await assertThrows(.tooLarge) { try await service.patch(id, title: half, body: (half, .text), notebookID: nil, pinned: nil, ifRevision: nil) }
     }
 
+    func testProgrammaticTextExportsWithoutColor() async throws {
+        let (service, store) = makeService()
+        let id = try service.create(title: "From curl", body: "Pack bags", format: .text, notebook: nil,
+                                    tags: ["travel"], pinned: false).id
+        _ = try await service.append(id, text: "later", format: .text, position: .end, timestamp: false, ifRevision: nil)
+        let captured = try XCTUnwrap(store.captureNote(title: "Captured", body: "quote", in: nil)).id
+        let titled = try service.create(title: nil, body: "x", format: .text, notebook: nil, tags: [], pinned: false).id
+        _ = try await service.patch(titled, title: "Renamed", body: ("", .text), notebookID: nil, pinned: nil, ifRevision: nil)
+        for note in [id, captured, titled] {
+            let exported = try service.body(note, format: .markdown)
+            XCTAssertFalse(exported.contains("<span style=\"color"), exported)
+        }
+        XCTAssertTrue(try service.body(id, format: .markdown).contains("# From curl"))
+    }
+
+    func testUserTextColorStillExports() throws {
+        let (service, store) = makeService()
+        let id = try service.create(title: "Colors", body: "red words", format: .text, notebook: nil, tags: [], pinned: false).id
+        try store.editBody(id, actionName: "Text Color") { storage in
+            storage.addAttribute(.foregroundColor, value: EditorStyle.textColors[0].color,
+                                 range: (storage.string as NSString).range(of: "red"))
+        }
+        XCTAssertTrue(try service.body(id, format: .markdown).contains("<span style=\"color: #DB332E\">red</span>"))
+    }
+
     func testMarkdownRoundTripThroughNoteItMarkdown() async throws {
         let (service, store) = makeService()
         let staged = try service.staged.stage(pngData())

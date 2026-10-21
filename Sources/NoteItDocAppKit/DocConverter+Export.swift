@@ -201,7 +201,7 @@ struct DocExporter {
             marks.append(.link(href: href))
         }
         if let color = attrs[.foregroundColor] as? NSColor, !(checked && DocParagraphModel.isCheckedGray(color)),
-           let hex = ConverterSupport.hex(color) {
+           !DocParagraphModel.isSystemTextColor(color), let hex = ConverterSupport.hex(color) {
             marks.append(.textColor(hex))
         }
         if let color = attrs[.backgroundColor] as? NSColor, !DocParagraphModel.isLegacyInlineCodeBackground(color),

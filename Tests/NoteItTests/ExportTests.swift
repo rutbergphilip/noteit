@@ -277,6 +277,17 @@ final class ExportTests: XCTestCase {
         XCTAssertTrue(html.contains("<ul>\n<li>Fruit<ul>\n<li>Apples<ul>\n<li>Pears</li></ul>\n</li></ul>\n</li></ul>"), html)
     }
 
+    func testHTMLLeavesOutSystemTextColorInDarkMode() throws {
+        let text = NoteStore.capturedText(title: "", body: NSAttributedString(string: "Quote", attributes: [
+            .font: EditorStyle.bodyFont, .foregroundColor: NSColor.labelColor,
+        ]))
+        var html = ""
+        try XCTUnwrap(NSAppearance(named: .darkAqua)).performAsCurrentDrawingAppearance {
+            html = HTMLWriter.write(text, title: "Dark")
+        }
+        XCTAssertFalse(html.contains("<span style=\"color"), html)
+    }
+
     func testHTMLStrikesThroughOnlyTheCheckedItemItself() {
         let tv = editor(["Parent", "Child", "Sibling"])
         tv.setSelectedRange(NSRange(location: range(of: "Parent", in: tv).location, length: range(of: "Sibling", in: tv).upperBound - range(of: "Parent", in: tv).location))

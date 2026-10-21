@@ -1,4 +1,5 @@
 import AppKit
+import NoteItDocAppKit
 
 /// Converts a NoteIt note body to a self-contained HTML page. Images are embedded as data URLs, and
 /// colors, highlights, underline and alignment are kept.
@@ -157,6 +158,7 @@ enum HTMLWriter {
 
     /// Black and near-black text is the default ink; leaving it out keeps it readable in dark mode.
     private static func isDefaultTextColor(_ color: NSColor) -> Bool {
+        if DocParagraphModel.isSystemTextColor(color) { return true }
         guard let rgb = color.usingColorSpace(.sRGB) else { return false }
         return max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) < 0.2
     }

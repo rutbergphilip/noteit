@@ -23,10 +23,7 @@ extension NoteStore {
     /// A bold first-line title followed by the body, in the editor's font size.
     static func capturedText(title: String, body: String) -> NSAttributedString {
         let size = capturedTextSize
-        let styledBody = NSAttributedString(string: body, attributes: [
-            .font: NSFont.systemFont(ofSize: size),
-            .foregroundColor: NSColor.labelColor,
-        ])
+        let styledBody = NSAttributedString(string: body, attributes: [.font: NSFont.systemFont(ofSize: size)])
         return capturedText(title: title, body: styledBody)
     }
 
@@ -35,10 +32,7 @@ extension NoteStore {
         let size = capturedTextSize
         let text = NSMutableAttributedString()
         if !title.isEmpty {
-            text.append(NSAttributedString(string: title, attributes: [
-                .font: NSFont.systemFont(ofSize: round(size * 1.6), weight: .bold),
-                .foregroundColor: NSColor.labelColor,
-            ]))
+            text.append(NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: round(size * 1.6), weight: .bold)]))
             if body.length > 0 { text.append(NSAttributedString(string: "\n", attributes: [.font: NSFont.systemFont(ofSize: size)])) }
         }
         if body.length > 0 {
