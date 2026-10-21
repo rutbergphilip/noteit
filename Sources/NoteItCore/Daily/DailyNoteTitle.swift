@@ -56,29 +56,63 @@ public enum DailyNoteTitle {
     }
 
     /// Parses `title` in every `DailyTitleFormat` (all of `allCases`, not just the chosen one), so a note titled
-    /// under an earlier format is still found after the user switches; nil when no format matches.
+    /// under an earlier format is still found after the user switches; nil when no format matches. Digits in any
+    /// script are read, and month and weekday names in `locale`, the user's preferred languages or English, so a
+    /// title still matches after the Mac's language changes.
     public static func parse(_ text: String, locale: Locale) -> DayKey? {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = latinDigits(text.trimmingCharacters(in: .whitespacesAndNewlines))
         guard !trimmed.isEmpty, trimmed.count <= 64 else { return nil }
         if let day = isoDay(trimmed) { return day }
         // Every other format ends in a four-digit year; skip the formatters for titles that cannot match.
         let scalars = Array(trimmed.unicodeScalars)
         guard scalars.count > 4, scalars.suffix(4).allSatisfy({ ("0"..."9").contains($0) }) else { return nil }
-        for format in DailyTitleFormat.allCases where format != .iso {
+        let formats = DailyTitleFormat.allCases.filter { format in
             switch format {
-            case .long: guard ("0"..."9").contains(scalars[0]) else { continue }
-            case .weekdayLong: guard trimmed.contains(", ") else { continue }
-            case .iso: continue
+            case .long: ("0"..."9").contains(scalars[0])
+            case .weekdayLong: trimmed.contains(", ")
+            case .iso: false
             }
-            let formatter = makeFormatter(format, locale: locale)
-            guard let date = formatter.date(from: trimmed) else { continue }
-            let day = DayKey(date, calendar: formatter.calendar)
-            // Strict: only a title that reads back exactly (ignoring case) is a daily title.
-            if title(for: day, format: format, locale: locale).compare(trimmed, options: .caseInsensitive) == .orderedSame {
-                return day
+        }
+        guard !formats.isEmpty else { return nil }
+        for candidate in parseLocales(locale) {
+            for format in formats {
+                let formatter = makeFormatter(format, locale: candidate)
+                guard let date = formatter.date(from: trimmed) else { continue }
+                let day = DayKey(date, calendar: formatter.calendar)
+                // Strict: only a title that reads back exactly (ignoring case) is a daily title.
+                if title(for: day, format: format, locale: candidate).compare(trimmed, options: .caseInsensitive) == .orderedSame {
+                    return day
+                }
             }
         }
         return nil
+    }
+
+    private static func parseLocales(_ locale: Locale) -> [Locale] {
+        var seen: Set<String> = []
+        return ([locale] + Locale.preferredLanguages.map(Locale.init(identifier:)) + [Locale(identifier: "en_US_POSIX")])
+            .filter { seen.insert($0.identifier).inserted }
+    }
+
+    /// Decimal digits in any script (Arabic-Indic, Persian, Burmese…) as ASCII digits.
+    private static func latinDigits(_ text: String) -> String {
+        guard text.unicodeScalars.contains(where: { !$0.isASCII }) else { return text }
+        var out = String.UnicodeScalarView()
+        for scalar in text.unicodeScalars {
+            if !scalar.isASCII, scalar.properties.numericType == .decimal, let value = scalar.properties.numericValue {
+                out.append(Unicode.Scalar(UInt8(ascii: "0") + UInt8(value)))
+            } else {
+                out.append(scalar)
+            }
+        }
+        return String(out)
+    }
+
+    /// `locale` writing Latin digits, so titles look the same in every language and stay findable.
+    private static func latinNumerals(_ locale: Locale) -> Locale {
+        var components = Locale.Components(locale: locale)
+        components.numberingSystem = "latn"
+        return Locale(components: components)
     }
 
     /// "yyyy-MM-dd" without a formatter; nil for anything else, including invalid dates.
@@ -121,7 +155,7 @@ public enum DailyNoteTitle {
         let formatter = DateFormatter()
         formatter.calendar = calendar
         formatter.timeZone = calendar.timeZone
-        formatter.locale = format == .iso ? Locale(identifier: "en_US_POSIX") : locale
+        formatter.locale = format == .iso ? Locale(identifier: "en_US_POSIX") : latinNumerals(locale)
         formatter.dateFormat = format.pattern
         formatter.isLenient = false
         return formatter
