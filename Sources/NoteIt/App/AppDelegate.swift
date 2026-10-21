@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NoteStore.shared.startRecentlyDeletedMaintenance()
         AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
+        LinkingAPIRoutes.register(in: .shared, store: NoteStore.shared)
         _ = LocalAPIController.shared
         PasteAndMatchStyleShortcut.install()
         let center = NotificationCenter.default

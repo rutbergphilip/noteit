@@ -56,10 +56,11 @@ extension NoteStore {
         createNote(in: templatesNotebookID(createIfMissing: true))
     }
 
-    func expandedTemplate(_ id: UUID, title: String, date: Date) -> TemplateExpansion? {
+    /// `readsClipboard` false leaves `{{clipboard}}` empty (the Local API never reads the clipboard).
+    func expandedTemplate(_ id: UUID, title: String, date: Date, readsClipboard: Bool = true) -> TemplateExpansion? {
         guard usableTemplate(id) != nil else { return nil }
         let context = TemplateContext(title: title, date: date, clipboard: {
-            NSPasteboard.general.string(forType: .string)
+            readsClipboard ? NSPasteboard.general.string(forType: .string) : nil
         })
         return TemplateExpander.expand(body(for: id), context: context)
     }
@@ -71,8 +72,9 @@ extension NoteStore {
 
     /// A note from the expanded template, or a plain note (a title paragraph when `title` isn't empty) without one.
     @discardableResult
-    func createNote(fromTemplate templateID: UUID?, title: String, in notebookID: UUID?, date: Date = Date()) -> NoteMeta {
-        if let templateID, let expansion = expandedTemplate(templateID, title: title, date: date) {
+    func createNote(fromTemplate templateID: UUID?, title: String, in notebookID: UUID?, date: Date = Date(),
+                    readsClipboard: Bool = true) -> NoteMeta {
+        if let templateID, let expansion = expandedTemplate(templateID, title: title, date: date, readsClipboard: readsClipboard) {
             let meta = createNote(in: notebookID, initial: expansion.text)
             if let caret = expansion.caret { RichTextEditor.pendingCaret[meta.id] = caret }
             return meta
