@@ -34,6 +34,7 @@ struct LinksPanelView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .help("Links: notes that link to this one and the links in it. Outline: this note's headings.")
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             Divider()
@@ -61,6 +62,29 @@ private func placeholder(_ text: String, tip: String? = nil) -> some View {
 
 // MARK: - Links
 
+enum LinksHelp {
+    static let backlinks = "Notes with a link to this note. Click one to open it at the link."
+    static let backlinksEmpty = "Notes that link here appear here. Type [[ in any note to link to this one."
+    static let mentions = "Notes that mention this note's title without linking to it."
+    static let mentionsEmpty = "Notes that mention this note's title without linking appear here. Click Link to turn a mention into a link."
+    static let mentionsFound = "Click Link to turn a mention into a link."
+    static let outgoing = "Links in this note to other notes. Click one to open it."
+    static let outgoingEmpty = "Type [[ to link to another note."
+}
+
+private struct LinksHint: View {
+    let text: String
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
 private struct LinksTab: View {
     @EnvironmentObject private var store: NoteStore
     let note: NoteMeta
@@ -80,13 +104,15 @@ private struct LinksTab: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Section("Backlinks (\(backlinks.count))") {
+            Section {
                 if backlinks.isEmpty {
-                    Text("No notes link here yet").foregroundStyle(.secondary).font(.system(size: 12))
+                    LinksHint(LinksHelp.backlinksEmpty)
                 }
                 ForEach(backlinks) { backlink in
                     BacklinkRow(backlink: backlink)
                 }
+            } header: {
+                Text("Backlinks (\(backlinks.count))").help(LinksHelp.backlinks)
             }
             Section {
                 DisclosureGroup(isExpanded: $mentionsExpanded) {
@@ -94,23 +120,26 @@ private struct LinksTab: View {
                 } label: {
                     HStack {
                         Text(mentions.results.map { "Unlinked Mentions (\($0.count))" } ?? "Unlinked Mentions")
+                            .help(LinksHelp.mentions)
                         Spacer()
                         if mentionsExpanded, let results = mentions.results, !results.isEmpty {
                             Button("Link All") { mentions.confirmingLinkAll = true }
                                 .controlSize(.small)
+                                .help("Turn every mention below into a link")
                                 .disabled(mentions.isLinking)
                         }
                     }
                 }
             }
-            Section("In This Note (\(outgoing.count))") {
+            Section {
                 if outgoing.isEmpty {
-                    Text(note.isLocked ? "This note is locked" : "No links in this note")
-                        .foregroundStyle(.secondary).font(.system(size: 12))
+                    LinksHint(note.isLocked ? "This note is locked." : LinksHelp.outgoingEmpty)
                 }
                 ForEach(Array(outgoing.enumerated()), id: \.offset) { _, item in
                     OutgoingRow(source: note.id, item: item)
                 }
+            } header: {
+                Text("In This Note (\(outgoing.count))").help(LinksHelp.outgoing)
             }
         }
         .listStyle(.sidebar)
@@ -213,9 +242,7 @@ private struct MentionsList: View {
         if !model.searched {
             Text("Titles this short aren't searched.").font(.system(size: 12)).foregroundStyle(.secondary)
         } else if let results = model.results {
-            if results.isEmpty {
-                Text("No unlinked mentions").font(.system(size: 12)).foregroundStyle(.secondary)
-            }
+            LinksHint(results.isEmpty ? LinksHelp.mentionsEmpty : LinksHelp.mentionsFound)
             let shown = model.showAll ? results : Array(results.prefix(MentionsModel.shownLimit))
             ForEach(shown) { mention in
                 MentionRow(mention: mention, title: note.title) {
@@ -253,6 +280,7 @@ private struct MentionRow: View {
                 Spacer(minLength: 4)
                 Button("Link", action: link)
                     .controlSize(.small)
+                    .help("Turn the mentions in this note into links to “\(title)”")
                     .accessibilityLabel("Link the mentions in “\(meta?.displayTitle ?? "")”")
             }
             ForEach(Array(mention.contexts.enumerated()), id: \.offset) { _, context in
@@ -334,6 +362,7 @@ private struct OutgoingRow: View {
                     if let link { store.rewriteLinks(in: source, matching: link, to: meta.id) }
                 }
                 .controlSize(.small)
+                .help("No note is called “\(title)” yet. Create it.")
                 .accessibilityLabel("Create note “\(title)”")
             }
         }

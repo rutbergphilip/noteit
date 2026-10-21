@@ -11,8 +11,9 @@ struct NoteListView: View {
     private var order: SearchSortOrder { SearchSortOrder(rawValue: sortOrder) ?? .bestMatch }
     private var isSearching: Bool { !store.searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
-    private var showsNotebookDot: Bool {
-        if case .notebook = selection { return false }
+    /// In a notebook, only notes from its nested notebooks name where they live.
+    private func showsNotebook(of note: NoteMeta) -> Bool {
+        if case .notebook(let id) = selection { return note.notebookID != id }
         return true
     }
 
@@ -43,7 +44,7 @@ struct NoteListView: View {
                         let note = result.note
                         NoteRow(
                             note: note,
-                            notebook: showsNotebookDot ? store.notebook(with: note.notebookID) : nil,
+                            notebook: showsNotebook(of: note) ? store.notebook(with: note.notebookID) : nil,
                             search: result
                         )
                         .tag(note.id)
@@ -74,7 +75,7 @@ struct NoteListView: View {
             }
         }
         .navigationTitle(title)
-        .navigationSubtitle(results.count == 1 ? "1 note" : "\(results.count) notes")
+        .navigationSubtitle(subtitle(count: results.count))
         .searchable(text: $store.searchText, placement: .toolbar, prompt: "Search")
         .toolbar {
             if let issue = query.issues.first {
@@ -117,9 +118,17 @@ struct NoteListView: View {
                 }
             }
         }
-        .onChange(of: store.selection) { _, _ in store.reconcileSelection() }
+        .onChange(of: store.selection, initial: true) { _, _ in store.reconcileSelection() }
         .onChange(of: store.searchText) { _, _ in store.reconcileSelection() }
         .onChange(of: store.notes) { _, _ in store.reconcileSelection() }
+    }
+
+    private func subtitle(count: Int) -> String {
+        let notes = count == 1 ? "1 note" : "\(count) notes"
+        if case .notebook(let id) = selection, !store.notebookTree.children(of: id).isEmpty {
+            return "\(notes), including nested notebooks"
+        }
+        return notes
     }
 
     @ViewBuilder

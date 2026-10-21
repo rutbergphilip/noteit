@@ -31,7 +31,7 @@ struct SidebarView: View {
                         Label {
                             Text("Tasks")
                         } icon: {
-                            Image(systemName: "checklist").foregroundStyle(Tokens.Color.tasks)
+                            SidebarIcon(symbol: "checklist", tint: Tokens.Color.tasks)
                         }
                         .badge(store.openDueTodayOrOverdueCount)
                         .tag(SidebarSelection.tasks)
@@ -125,7 +125,7 @@ struct SidebarView: View {
         Label {
             Text(folder.name)
         } icon: {
-            Image(systemName: folder.symbol).foregroundStyle(Tokens.Color.accent)
+            SidebarIcon(symbol: folder.symbol, tint: Tokens.Color.accent)
         }
         .badge(store.count(for: .smartFolder(folder.id)))
         .tag(SidebarSelection.smartFolder(folder.id))
@@ -143,7 +143,7 @@ struct SidebarView: View {
         Label {
             Text("Today")
         } icon: {
-            Image(systemName: "calendar").foregroundStyle(Tokens.Color.today)
+            SidebarIcon(symbol: "calendar", tint: Tokens.Color.today)
         }
         .badge(Text(todayNumber))
         .contentShape(Rectangle())
@@ -169,7 +169,7 @@ struct SidebarView: View {
         Label {
             Text(title)
         } icon: {
-            Image(systemName: symbol).foregroundStyle(tint)
+            SidebarIcon(symbol: symbol, tint: tint)
         }
         .badge(store.count(for: selection))
         .tag(selection)
@@ -198,8 +198,7 @@ struct SidebarView: View {
                 Text(notebook.name)
             }
         } icon: {
-            Image(systemName: notebook.symbol)
-                .foregroundStyle(notebook.color)
+            SidebarIcon(symbol: notebook.symbol, tint: notebook.color)
         }
         .badge(store.count(for: .notebook(notebook.id)))
         .tag(SidebarSelection.notebook(notebook.id))
@@ -262,6 +261,18 @@ enum SidebarSection: Hashable, CaseIterable {
     }
 }
 
+/// A sidebar row icon in its own colour, white on an emphasised (focused, accent) selection like Finder and Notes.
+struct SidebarIcon: View {
+    @Environment(\.backgroundProminence) private var prominence
+    let symbol: String
+    let tint: Color
+
+    var body: some View {
+        Image(systemName: symbol)
+            .foregroundStyle(prominence == .increased ? Tokens.Color.onAccent : tint)
+    }
+}
+
 /// A tag and, under a disclosure triangle, the tags nested in it.
 struct TagTreeRow: View {
     @EnvironmentObject private var store: NoteStore
@@ -283,7 +294,7 @@ struct TagTreeRow: View {
         Label {
             Text(node.name)
         } icon: {
-            Image(systemName: "number").foregroundStyle(.secondary)
+            SidebarIcon(symbol: "number", tint: .secondary)
         }
         .badge(node.totalCount)
         .tag(SidebarSelection.tag(node.path))

@@ -37,12 +37,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Links and Outline explains itself: each section says what it lists and how to fill it (type `[[` to link a note), the section titles and buttons have tooltips, and found unlinked mentions say that Link turns them into links.
 - New libraries start with a refreshed welcome note, and no longer include a sample shortcuts note or Shortcuts notebook.
 - Search puts the best matches first, shows a line of matching text under each note and highlights the words you searched for in the list and in the open note. While searching, the sort menu switches between Best Match and Date Edited.
 - Local API search ranks its results like the app does and reports where each one matched, and a notebook filter includes the notebooks inside it.
 
 ### Fixed
 
+- Sidebar icons turn white on the selected row, so a notebook icon in a colour close to the selection colour (such as a blue notebook) stays visible, including notebooks inside other notebooks, tags and smart folders.
+- With no note open, the editor is now simply blank instead of repeating the note list's “No Notes Yet” and New Note button.
+- Going from Tasks to a notebook, tag or other list no longer leaves a note from elsewhere open; the first note in the list opens instead.
+- A notebook with notebooks inside it now says so under its title (“including nested notebooks”), and notes from those inner notebooks show which notebook they're in.
 - HTML export in Dark Mode no longer gives captured text, or notes made in Open Quickly, a fixed colour that could come out near-white.
 - NoteIt no longer freezes when a sync folder on a NAS or network drive becomes unreachable. Sync shows “Can't reach” the folder and picks up again when it's back, and notes on this Mac are never removed because the folder couldn't be read.
 
