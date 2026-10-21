@@ -74,9 +74,9 @@ extension NoteStore {
         return leftAlone
     }
 
-    /// Every tag written in a note, Recently Deleted included.
+    /// The tags a rename rewrites: those in notes outside Recently Deleted that aren't locked.
     var tagsInUse: [String] {
-        Array(Set(notes.flatMap(\.tags)))
+        Array(Set(activeNotes.filter { !$0.isLocked }.flatMap(\.tags)))
     }
 
     /// Notes not in Recently Deleted that carry `tag` or a tag nested in it.

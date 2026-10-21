@@ -46,6 +46,17 @@ final class TagEditTests: XCTestCase {
         XCTAssertEqual(text(store, a), "Plan\n#a and #a/b/c/d")
     }
 
+    func testDepthOfTrashedNotesDoesNotBlockARename() async {
+        let store = makeStore()
+        let a = add(store, "Plan\n#a")
+        let trashed = add(store, "Old\n#a/b/c/d")
+        _ = store.moveToRecentlyDeleted([trashed])
+        let result = await store.renameTag("a", to: "x/y/z")
+        XCTAssertEqual(Array(result.changed.keys), [a])
+        XCTAssertEqual(text(store, a), "Plan\n#x/y/z")
+        XCTAssertEqual(text(store, trashed), "Old\n#a/b/c/d")
+    }
+
     func testRenameOntoExistingTagMerges() async {
         let store = makeStore()
         let a = add(store, "A\n#work")
