@@ -154,7 +154,9 @@ extension NoteStore {
                                 extras: ContainerExtras?) {
         if let coordinator, coordinator.hasPendingChanges {
             if let extras { setBodyExtras(extras, for: id) }
+            savingProgrammaticEdit = true
             coordinator.commit()
+            savingProgrammaticEdit = false
         }
         let text = view?.attributedString() ?? body(for: id)
         updateBody(id, text, extras: extras)

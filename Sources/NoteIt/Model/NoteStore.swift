@@ -81,6 +81,8 @@ final class NoteStore: ObservableObject {
     private var stagedEditorBodies: [UUID: NSAttributedString] = [:]
     /// Titles changed by typing in an editor; not by sync, Restore Version, link rewrites or the API.
     let editorTitleCommits = PassthroughSubject<(id: UUID, title: String), Never>()
+    /// Set while `editBody` saves its own change through the open editor, which isn't a rename the user typed.
+    var savingProgrammaticEdit = false
 
     /// Read failures for note bodies, keyed by note ID (message suitable for UI).
     private var loadErrors: [UUID: String] = [:]
@@ -347,6 +349,7 @@ final class NoteStore: ObservableObject {
     func commitEditorBody(_ id: UUID, _ snapshot: NSAttributedString) {
         let before = note(with: id)?.title
         updateBody(id, snapshot)
+        guard !savingProgrammaticEdit else { return }
         if let after = note(with: id)?.title, after != before { editorTitleCommits.send((id, after)) }
     }
 

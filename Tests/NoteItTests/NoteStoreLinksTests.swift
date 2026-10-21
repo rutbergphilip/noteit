@@ -263,14 +263,26 @@ final class NoteStoreLinksTests: XCTestCase {
         tracker.store = store
         tracker.open(target, title: "Atlas")
 
-        store.updateBody(target, body("Globe"))
+        let harness = EditorHarness()
+        defer { harness.close() }
+        let editor = harness.open(store, target)
+        let version = try XCTUnwrap(store.history.record(body("Globe"), extras: .empty, of: target))
+        try store.restoreVersion(version)
+        XCTAssertEqual(store.note(with: target)?.title, "Globe")
         tracker.titleObserved("Globe", of: target)
         try await Task.sleep(for: .milliseconds(150))
-        XCTAssertNil(tracker.prompt, "a rename from sync or Restore Version")
+        XCTAssertNil(tracker.prompt, "Restore Version in the open note")
 
         store.updateBody(target, body("Atlas"))
         tracker.titleObserved("Atlas", of: target)
-        store.commitEditorBody(target, body("Atlas 2"))
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertNil(tracker.prompt, "a rename from sync")
+
+        editor.coordinator.load()
+        editor.view.setSelectedRange(NSRange(location: 5, length: 0))
+        editor.view.insertText(" 2", replacementRange: NSRange(location: 5, length: 0))
+        editor.coordinator.commit()
+        XCTAssertEqual(store.note(with: target)?.title, "Atlas 2")
         tracker.titleObserved("Atlas 2", of: target)
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertEqual(tracker.prompt?.oldTitle, "Atlas")
