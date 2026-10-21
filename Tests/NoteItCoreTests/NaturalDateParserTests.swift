@@ -47,6 +47,18 @@ final class NaturalDateParserTests: XCTestCase {
         XCTAssertEqual(String(text[result.range]), "tomorrow 9am")
     }
 
+    func testTimeBeforeTheDayWord() throws {
+        XCTAssertEqual(parse("3pm tomorrow"), "2026-10-20 15:00")
+        XCTAssertEqual(parse("10:00 friday"), "2026-10-23 10:00")
+        XCTAssertEqual(parse("noon tomorrow"), "2026-10-20 12:00")
+        XCTAssertEqual(parse("at 7am on wed", defaultHour: 9), "2026-10-21 07:00")
+        XCTAssertEqual(parse("tomorrow at noon"), "2026-10-20 12:00")
+        XCTAssertEqual(parse("call at 9pm in 2 hours"), "2026-10-19 12:00")
+        let text = "ring Ana 3pm tomorrow ok"
+        let result = try XCTUnwrap(NaturalDateParser.parse(text, now: now, calendar: calendar, defaultHour: 9))
+        XCTAssertEqual(String(text[result.range]), "3pm tomorrow")
+    }
+
     func testWeekdayNeverToday() {
         XCTAssertEqual(parse("monday"), "2026-10-26")
         XCTAssertEqual(parse("mon 08:00"), "2026-10-26 08:00")

@@ -18,13 +18,17 @@ public enum NaturalDateParser {
         (["saturday", "sat"], 7),
     ]
 
-    private static let time = "(?:\\s+(?:at\\s+)?(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)|\\s+(?:at\\s+)?(\\d{1,2}):(\\d{2}))?"
+    private static let time = "(?:\\s+(?:at\\s+)?(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)|\\s+(?:at\\s+)?(\\d{1,2}):(\\d{2})|\\s+(?:at\\s+)?(noon|midnight))?"
     private static let weekdayAlternation = weekdays.flatMap(\.names).sorted { $0.count > $1.count }.joined(separator: "|")
 
     private static let isoRegex = try! NSRegularExpression(
         pattern: "(?<![\\d-])(\\d{4}-\\d{2}-\\d{2})(?:[ T](\\d{2}):(\\d{2}))?(?![\\d:])")
     private static let clockRegex = try! NSRegularExpression(
         pattern: "(?<![\\w:.])(?:at\\s+)?(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)(?!\\w)|(?<![\\w:.])(?:at\\s+)?(\\d{1,2}):(\\d{2})(?![\\w:])",
+        options: [.caseInsensitive])
+    /// A time written before the day word ("3pm tomorrow", "noon friday").
+    private static let leadingTimeRegex = try! NSRegularExpression(
+        pattern: "(?<![\\w:.])(?:at\\s+)?(?:(\\d{1,2})(?::(\\d{2}))?\\s*(am|pm)|(\\d{1,2}):(\\d{2})|(noon|midnight))\\s+(?:on\\s+)?",
         options: [.caseInsensitive])
     private static let shortRegex = try! NSRegularExpression(
         pattern: "(?<![\\w+])(today|tonight|tomorrow|tmrw|(?:next\\s+)?(?:\(weekdayAlternation))|\\+(\\d{1,3})([dw])|in\\s+(\\d{1,3})\\s+(minutes?|mins?|hours?|hrs?|days?|weeks?))(?!\\w)\(time)(?!\\w)",
@@ -52,8 +56,20 @@ public enum NaturalDateParser {
             if let value = LocalDateTime(token: token) { return result(value, match.range) }
         }
 
-        if let match = shortRegex.firstMatch(in: text, range: full),
-           let value = shortForm(match, in: ns, now: now, today: today, calendar: calendar) {
+        let shortMatch = shortRegex.firstMatch(in: text, range: full)
+        for lead in leadingTimeRegex.matches(in: text, range: full) {
+            if let shortMatch, shortMatch.range.location < lead.range.location { break }
+            let end = NSMaxRange(lead.range)
+            guard let day = shortRegex.firstMatch(in: text, options: [.anchored], range: NSRange(location: end, length: ns.length - end)),
+                  day.range(at: 4).location == NSNotFound || !isClockUnit(ns.substring(with: day.range(at: 5))),
+                  let leadTime = clock(lead, in: ns, hourGroup: 1, minuteGroup: 2, meridiemGroup: 3)
+                    ?? clock(lead, in: ns, hourGroup: 4, minuteGroup: 5, meridiemGroup: nil)
+                    ?? named(lead, in: ns, group: 6),
+                  let value = shortForm(day, in: ns, now: now, today: today, calendar: calendar, leadingTime: leadTime)
+            else { continue }
+            return result(value, NSUnionRange(lead.range, day.range))
+        }
+        if let match = shortMatch, let value = shortForm(match, in: ns, now: now, today: today, calendar: calendar) {
             return result(value, match.range)
         }
 
@@ -74,10 +90,12 @@ public enum NaturalDateParser {
     }
 
     private static func shortForm(_ match: NSTextCheckingResult, in ns: NSString, now: Date, today: LocalDateTime,
-                                  calendar: Calendar) -> LocalDateTime? {
+                                  calendar: Calendar, leadingTime: (Int, Int)? = nil) -> LocalDateTime? {
         let word = ns.substring(with: match.range(at: 1)).lowercased()
         let clockTime = clock(match, in: ns, hourGroup: 6, minuteGroup: 7, meridiemGroup: 8)
             ?? clock(match, in: ns, hourGroup: 9, minuteGroup: 10, meridiemGroup: nil)
+            ?? named(match, in: ns, group: 11)
+            ?? leadingTime
         func at(_ day: LocalDateTime) -> LocalDateTime {
             guard let clockTime else { return day }
             return day.withTime(hour: clockTime.0, minute: clockTime.1)
@@ -113,6 +131,16 @@ public enum NaturalDateParser {
             ahead += 7
         }
         return at(adding(days: ahead, to: today, calendar: calendar))
+    }
+
+    private static func isClockUnit(_ unit: String) -> Bool {
+        let unit = unit.lowercased()
+        return unit.hasPrefix("m") || unit.hasPrefix("h")
+    }
+
+    private static func named(_ match: NSTextCheckingResult, in ns: NSString, group: Int) -> (Int, Int)? {
+        guard match.numberOfRanges > group, match.range(at: group).location != NSNotFound else { return nil }
+        return ns.substring(with: match.range(at: group)).lowercased() == "noon" ? (12, 0) : (0, 0)
     }
 
     private static func clock(_ match: NSTextCheckingResult, in ns: NSString, hourGroup: Int, minuteGroup: Int,

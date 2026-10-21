@@ -24,6 +24,8 @@ final class TaskViewTests: XCTestCase {
     func testClosingParenthesisWritesTheFullDate() {
         XCTAssertEqual(rewrite("☐\tpay rent @due(fri)"), "☐\tpay rent @due(2026-10-23)")
         XCTAssertEqual(rewrite("x @due(tomorrow)"), "x @due(2026-10-22)")
+        XCTAssertEqual(rewrite("x @remind(3pm tomorrow)"), "x @remind(2026-10-22 15:00)")
+        XCTAssertEqual(rewrite("x @due(10:00 fri)"), "x @due(2026-10-23 10:00)")
         XCTAssertEqual(rewrite("x @due(+3d)"), "x @due(2026-10-24)")
         XCTAssertEqual(rewrite("x @due(next tuesday 14:30)"), "x @due(2026-10-27 14:30)")
     }
