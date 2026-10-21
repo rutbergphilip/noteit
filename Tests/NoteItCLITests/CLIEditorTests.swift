@@ -92,6 +92,33 @@ extension CLIEditorTests {
         XCTAssertEqual(CLIEditor.abandon(file, child: 0, signal: SIGHUP), 129)
     }
 
+    /// A SIGTERM sent while the editor is being spawned waits for its pid instead of leaving it running.
+    func testStopSignalDuringSpawnReachesTheEditor() throws {
+        let file = try temporaryDirectory().appendingPathComponent("note.md")
+        try Data("draft".utf8).write(to: file)
+        let stopped = expectation(description: "stop handler runs")
+        let stopGuard = CLIEditor.StopSignalGuard(file: file) { code in
+            XCTAssertEqual(code, 128 + SIGTERM)
+            stopped.fulfill()
+        }
+        defer { stopGuard.cancel() }
+        let editor = Process()
+        editor.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        editor.arguments = ["30"]
+        stopGuard.recordChild {
+            try? editor.run()
+            kill(getpid(), SIGTERM)
+            Thread.sleep(forTimeInterval: 0.3)
+            return editor.processIdentifier
+        }
+        wait(for: [stopped], timeout: 10)
+        editor.waitUntilExit()
+        XCTAssertEqual(editor.terminationReason, .uncaughtSignal)
+        XCTAssertEqual(editor.terminationStatus, SIGTERM)
+        XCTAssertEqual(stopGuard.caught, SIGTERM)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: file.path))
+    }
+
     /// Stops the built `noteit edit` with SIGTERM and SIGHUP while its editor is running.
     func testStopSignalRemovesTemporaryFile() async throws {
         let binary = Bundle(for: Self.self).bundleURL.deletingLastPathComponent().appendingPathComponent("NoteItCLI")

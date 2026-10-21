@@ -73,10 +73,12 @@ enum CLIEditor {
         let arguments = ["/bin/sh", "-c", command + " \"$1\"", "sh", file.path]
         var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
         defer { argv.forEach { free($0) } }
-        var pid: pid_t = 0
-        let spawned = posix_spawn(&pid, "/bin/sh", nil, &attributes, &argv, environ)
-        guard spawned == 0 else { throw POSIXError(POSIXErrorCode(rawValue: spawned) ?? .EIO) }
-        stopGuard.child = pid
+        let pid = try stopGuard.recordChild {
+            var pid: pid_t = 0
+            let spawned = posix_spawn(&pid, "/bin/sh", nil, &attributes, &argv, environ)
+            guard spawned == 0 else { throw POSIXError(POSIXErrorCode(rawValue: spawned) ?? .EIO) }
+            return pid
+        }
         let termination = try wait(for: pid)
         if let number = stopGuard.caught { _exit(abandon(file, child: 0, signal: number)) }
         return termination
@@ -101,15 +103,20 @@ enum CLIEditor {
         private var sources: [DispatchSourceSignal] = []
         private var previous: [(Int32, sig_t?)] = []
 
-        var child: pid_t {
-            get { lock.withLock { pid } }
-            set { lock.withLock { pid = newValue } }
+        /// Runs the spawn holding the lock the handlers take, so a SIGTERM or SIGHUP that arrives meanwhile waits
+        /// for the pid and still reaches the editor. Masking the signals wouldn't help: a dispatch signal source
+        /// fires when the signal is sent, whatever the thread masks are.
+        func recordChild(_ spawn: () throws -> pid_t) rethrows -> pid_t {
+            lock.lock()
+            defer { lock.unlock() }
+            pid = try spawn()
+            return pid
         }
 
         /// Set before the editor is signalled, so the waiting thread, woken by its exit, leaves the same way.
         var caught: Int32? { lock.withLock { caughtSignal } }
 
-        init(file: URL) {
+        init(file: URL, stop: @escaping @Sendable (Int32) -> Void = { _exit($0) }) {
             for number in Self.signals {
                 let source = DispatchSource.makeSignalSource(signal: number, queue: .global())
                 source.setEventHandler { [unowned self] in
@@ -117,7 +124,7 @@ enum CLIEditor {
                         self.caughtSignal = number
                         return self.pid
                     }
-                    _exit(CLIEditor.abandon(file, child: child, signal: number))
+                    stop(CLIEditor.abandon(file, child: child, signal: number))
                 }
                 source.resume()
                 sources.append(source)
