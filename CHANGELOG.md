@@ -20,7 +20,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- Notes made with Quick Capture or Capture from any app no longer export with white text when you export to HTML or PDF in Dark Mode.
+- HTML export in Dark Mode no longer gives captured text, or notes made in Open Quickly, a fixed colour that could come out near-white.
 
 ## [0.5.0] - 2026-10-20
 
