@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 import UniformTypeIdentifiers
 
 enum ExportFormat: String, CaseIterable, Identifiable {
@@ -138,31 +139,34 @@ enum NoteExporter {
         var totalCount: Int
     }
 
-    /// Writes one notebook as a folder named after it, inside `destination`.
-    static func exportNotebook(_ notebook: Notebook, notes: [NoteMeta], format: ExportFormat, to destination: URL,
-                               body: @escaping (UUID) -> NSAttributedString) throws -> Result {
-        try prepareNotebook(notebook, notes: notes, format: format, to: destination, body: body).writeAll()
+    /// Writes one notebook as a folder named after it, inside `destination`, with its nested notebooks
+    /// (from `notebooks`) as subfolders.
+    static func exportNotebook(_ notebook: Notebook, notebooks: [Notebook] = [], notes: [NoteMeta], format: ExportFormat,
+                               to destination: URL, body: @escaping (UUID) -> NSAttributedString) throws -> Result {
+        try prepareNotebook(notebook, notebooks: notebooks, notes: notes, format: format, to: destination, body: body).writeAll()
     }
 
-    /// Writes every notebook as a folder inside a new `NoteIt Export` folder in `destination`.
-    /// Notes without a notebook go in `No Notebook`.
+    /// Writes every notebook as a folder inside a new `NoteIt Export` folder in `destination`, nested
+    /// notebooks as subfolders. Notes without a notebook go in `No Notebook`.
     static func exportAll(notebooks: [Notebook], notes: [NoteMeta], format: ExportFormat, to destination: URL,
                           body: @escaping (UUID) -> NSAttributedString) throws -> Result {
         try prepareAll(notebooks: notebooks, notes: notes, format: format, to: destination, body: body).writeAll()
     }
 
-    /// Creates the notebook's folder and returns the export, ready to write its notes.
-    static func prepareNotebook(_ notebook: Notebook, notes: [NoteMeta], format: ExportFormat, to destination: URL,
-                                body: @escaping (UUID) -> NSAttributedString) throws -> NotesExport {
+    /// Creates the notebook's folder and its nested notebooks' folders, and returns the export, ready to
+    /// write its notes.
+    static func prepareNotebook(_ notebook: Notebook, notebooks: [Notebook] = [], notes: [NoteMeta], format: ExportFormat,
+                                to destination: URL, body: @escaping (UUID) -> NSAttributedString) throws -> NotesExport {
         let name = ExportNaming.uniqueOnDisk(ExportNaming.sanitized(notebook.name, fallback: "Notebook"), extension: "", in: destination)
         let folder = destination.appendingPathComponent(name, isDirectory: true)
-        let notebookNotes = exportableNotes(in: notes).filter { $0.notebookID == notebook.id }
-        let files = try prepareFolder(folder, notes: notebookNotes, format: format)
+        let all = notebooks.contains { $0.id == notebook.id } ? notebooks : notebooks + [notebook]
+        let layout = FolderLayout(notebooks: all, notes: exportableNotes(in: notes), format: format)
+        let files = try layout.prepare(notebook.id, in: folder)
         return NotesExport(folder: folder, format: format, files: files, body: body, links: linkContext(files, notes: notes))
     }
 
-    /// Creates the `NoteIt Export` folder and a folder per notebook, and returns the export, ready to
-    /// write the notes.
+    /// Creates the `NoteIt Export` folder and a folder per notebook, nested like the notebooks, and
+    /// returns the export, ready to write the notes.
     static func prepareAll(notebooks: [Notebook], notes: [NoteMeta], format: ExportFormat, to destination: URL,
                            body: @escaping (UUID) -> NSAttributedString) throws -> NotesExport {
         let root = destination.appendingPathComponent(
@@ -170,20 +174,51 @@ enum NoteExporter {
         let allNotes = notes
         let notes = exportableNotes(in: notes)
         let notebookIDs = Set(notebooks.map(\.id))
-        var groups: [(name: String, notes: [NoteMeta])] = notebooks.map { nb in
-            (ExportNaming.sanitized(nb.name, fallback: "Notebook"), notes.filter { $0.notebookID == nb.id })
-        }
+        let layout = FolderLayout(notebooks: notebooks, notes: notes, format: format)
         let loose = notes.filter { $0.notebookID.map { !notebookIDs.contains($0) } ?? true }
-        if !loose.isEmpty { groups.append((noNotebookFolderName, loose)) }
 
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var taken = Set<String>()
         var files: [NotesExport.File] = []
-        for group in groups {
-            let folder = root.appendingPathComponent(ExportNaming.unique(group.name, extension: "", taken: &taken), isDirectory: true)
-            files += try prepareFolder(folder, notes: group.notes, format: format)
+        for id in layout.tree.roots {
+            files += try layout.prepare(id, in: root.appendingPathComponent(layout.folderName(id, taken: &taken), isDirectory: true))
+        }
+        if !loose.isEmpty {
+            let folder = root.appendingPathComponent(ExportNaming.unique(noNotebookFolderName, extension: "", taken: &taken), isDirectory: true)
+            files += try prepareFolder(folder, notes: loose, format: format)
         }
         return NotesExport(folder: root, format: format, files: files, body: body, links: linkContext(files, notes: allNotes))
+    }
+
+    /// Folder names for a notebook tree: each notebook's notes, then its nested notebooks as subfolders.
+    @MainActor
+    private struct FolderLayout {
+        let tree: NotebookTree
+        let byID: [UUID: Notebook]
+        let notesByNotebook: [UUID: [NoteMeta]]
+        let format: ExportFormat
+
+        init(notebooks: [Notebook], notes: [NoteMeta], format: ExportFormat) {
+            tree = NotebookTree(notebooks.map {
+                NotebookNodeInput(id: $0.id, parentID: $0.parent, sortIndex: $0.sortIndex, name: $0.name)
+            })
+            byID = Dictionary(notebooks.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            notesByNotebook = Dictionary(grouping: notes.filter { $0.notebookID != nil }) { $0.notebookID! }
+            self.format = format
+        }
+
+        func folderName(_ id: UUID, taken: inout Set<String>) -> String {
+            ExportNaming.unique(ExportNaming.sanitized(byID[id]?.name ?? "", fallback: "Notebook"), extension: "", taken: &taken)
+        }
+
+        func prepare(_ id: UUID, in folder: URL) throws -> [NotesExport.File] {
+            var taken = Set<String>()
+            var files = try prepareFolder(folder, notes: notesByNotebook[id] ?? [], format: format, taken: &taken)
+            for child in tree.children(of: id) {
+                files += try prepare(child, in: folder.appendingPathComponent(folderName(child, taken: &taken), isDirectory: true))
+            }
+            return files
+        }
     }
 
     /// Links to notes in the same export use their planned file names; other links use titles.
@@ -194,8 +229,14 @@ enum NoteExporter {
     /// Creates `folder` and names one file per note, oldest first, so the first of several same-named
     /// notes keeps the plain name.
     private static func prepareFolder(_ folder: URL, notes: [NoteMeta], format: ExportFormat) throws -> [NotesExport.File] {
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         var taken = Set<String>()
+        return try prepareFolder(folder, notes: notes, format: format, taken: &taken)
+    }
+
+    /// Like `prepareFolder(_:notes:format:)`, adding the names it uses to `taken`.
+    private static func prepareFolder(_ folder: URL, notes: [NoteMeta], format: ExportFormat,
+                                      taken: inout Set<String>) throws -> [NotesExport.File] {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         let ordered = notes.sorted { ($0.createdAt, $0.id.uuidString) < ($1.createdAt, $1.id.uuidString) }
         return ordered.map { note in
             let name = ExportNaming.unique(ExportNaming.sanitized(note.displayTitle), extension: format.fileExtension, taken: &taken)

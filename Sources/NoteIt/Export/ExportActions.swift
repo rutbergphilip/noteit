@@ -139,7 +139,7 @@ enum ExportActions {
     static func exportCurrentNotebook() {
         guard let notebook = currentNotebook else { return }
         chooseFolder(title: "Export “\(notebook.name)”") { folder, format in
-            try NoteExporter.prepareNotebook(notebook, notes: store.notes, format: format, to: folder, body: body(ofNoteWith:))
+            try NoteExporter.prepareNotebook(notebook, notebooks: store.notebooks, notes: store.notes, format: format, to: folder, body: body(ofNoteWith:))
         }
     }
 

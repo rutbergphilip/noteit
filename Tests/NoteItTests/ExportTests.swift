@@ -519,6 +519,30 @@ final class ExportTests: XCTestCase {
         XCTAssertEqual(files(in: second.folder), ["Trip.txt"])
     }
 
+    func testExportsNestNotebookFolders() throws {
+        let work = notebook("Work", 0), home = notebook("Home", 1)
+        var clients = notebook("Clients", 0), acme = notebook("Acme", 0), plan = notebook("Plan.md", 1)
+        clients.parent = work.id
+        acme.parent = clients.id
+        plan.parent = work.id
+        let notes = [
+            meta("Plan", in: work, created: 1),
+            meta("Brief", in: acme, created: 1),
+            meta("Call", in: clients, created: 1),
+            meta("Garden", in: home, created: 1),
+        ]
+        let all = [work, home, clients, acme, plan]
+        let result = try NoteExporter.exportAll(notebooks: all, notes: notes, format: .markdown, to: folder) { _ in NSAttributedString() }
+        XCTAssertEqual(files(in: result.folder), [
+            "Home", "Home/Garden.md", "Work", "Work/Clients", "Work/Clients/Acme", "Work/Clients/Acme/Brief.md",
+            "Work/Clients/Call.md", "Work/Plan.md", "Work/Plan.md 2",
+        ])
+
+        let one = try NoteExporter.exportNotebook(clients, notebooks: all, notes: notes, format: .plainText, to: folder) { _ in NSAttributedString() }
+        XCTAssertEqual(one.noteCount, 2)
+        XCTAssertEqual(files(in: one.folder), ["Acme", "Acme/Brief.txt", "Call.txt"])
+    }
+
     func testEveryFormatWritesAFile() throws {
         let tv = try fullNote()
         let body = tv.attributedString()

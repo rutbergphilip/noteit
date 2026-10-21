@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 
 /// Progress and results of one import run.
 struct ImportReport: Equatable {
@@ -95,16 +96,29 @@ extension NoteStore {
         if let index = noteIndex(id) { notes[index].updatedAt = updated }
     }
 
-    /// An existing notebook with this name (ignoring case), or a new one.
-    func notebookForImport(named name: String) -> Notebook {
+    /// An existing notebook with this name (ignoring case) among the children of `parentID`, or a new one there.
+    func notebookForImport(named name: String, parentID: UUID? = nil) -> Notebook {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let tree = notebookTree
         if let existing = notebooks.first(where: {
-            $0.name.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(trimmed) == .orderedSame
+            tree.effectiveParent(of: $0.id) == parentID
+                && $0.name.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(trimmed) == .orderedSame
         }) {
             return existing
         }
         let palette = NotebookPalette.colors
         let color = palette.isEmpty ? Tokens.Hex.notebookBlue : palette[notebooks.count % palette.count]
-        return createNotebook(name: trimmed.isEmpty ? "Imported" : trimmed, symbol: "folder", colorHex: color)
+        return createNotebook(name: trimmed.isEmpty ? "Imported" : trimmed, symbol: "folder", colorHex: color, parentID: parentID)
+    }
+
+    /// Nested notebooks for a folder path, up to the deepest level allowed; deeper folders are named
+    /// `Folder / Subfolder` inside the deepest notebook.
+    func notebookForImport(path: [String]) -> Notebook {
+        let names = path.isEmpty ? ["Imported"] : path
+        let nested = Array(names.prefix(NotebookTree.maxDepth - 1))
+            + [names.dropFirst(NotebookTree.maxDepth - 1).joined(separator: " / ")].filter { !$0.isEmpty }
+        var notebook = notebookForImport(named: nested[0])
+        for name in nested.dropFirst() { notebook = notebookForImport(named: name, parentID: notebook.id) }
+        return notebook
     }
 }

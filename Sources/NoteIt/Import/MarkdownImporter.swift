@@ -13,7 +13,8 @@ final class MarkdownImporter {
     /// One note to import, with the notebook it goes into.
     struct Item: Equatable {
         var url: URL
-        var notebook: String
+        /// Folder names from the chosen folder down; each becomes a nested notebook.
+        var notebook: [String]
         /// Images must stay inside this folder; for a chosen folder, `![[image.png]]` names are looked up anywhere in it.
         var root: URL
         /// False for loose files, whose images are only looked up next to them.
@@ -31,22 +32,22 @@ final class MarkdownImporter {
     // MARK: Walking
 
     /// The files to import from the chosen files and folders. Folders become notebooks named after
-    /// them, subfolders `Folder / Subfolder`; loose files go into a notebook named after their folder.
+    /// them and subfolders nested notebooks; loose files go into a notebook named after their folder.
     nonisolated static func items(for urls: [URL]) -> [Item] {
         var result: [Item] = []
         for url in urls {
             let url = url.standardizedFileURL
             if isDirectory(url), !isBundle(url) {
-                walk(url, notebook: url.lastPathComponent, root: url, into: &result)
+                walk(url, notebook: [url.lastPathComponent], root: url, into: &result)
             } else if isImportable(url) {
                 let parent = url.deletingLastPathComponent()
-                result.append(Item(url: url, notebook: parent.lastPathComponent, root: parent, indexesRoot: false))
+                result.append(Item(url: url, notebook: [parent.lastPathComponent], root: parent, indexesRoot: false))
             }
         }
         return result
     }
 
-    nonisolated private static func walk(_ folder: URL, notebook: String, root: URL, into result: inout [Item]) {
+    nonisolated private static func walk(_ folder: URL, notebook: [String], root: URL, into result: inout [Item]) {
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
         )) ?? []
@@ -57,7 +58,7 @@ final class MarkdownImporter {
             if isImportable(url), isInside(url, root: root) { result.append(Item(url: url, notebook: notebook, root: root)) }
         }
         for url in sorted where isDirectory(url) && !isBundle(url) {
-            walk(url, notebook: notebook + " / " + url.lastPathComponent, root: root, into: &result)
+            walk(url, notebook: notebook + [url.lastPathComponent], root: root, into: &result)
         }
     }
 
@@ -177,8 +178,8 @@ final class MarkdownImporter {
         return true
     }
 
-    private func save(_ note: MarkdownNote, notebook: String, created: Date?, updated: Date?, id: UUID?, report: inout ImportReport) {
-        let nb = store.notebookForImport(named: notebook)
+    private func save(_ note: MarkdownNote, notebook: [String], created: Date?, updated: Date?, id: UUID?, report: inout ImportReport) {
+        let nb = store.notebookForImport(path: notebook)
         createdIDs.append(store.createImportedNote(body: note.body, title: note.title, notebookID: nb.id,
                                                    createdAt: created, updatedAt: updated, id: id).id)
         report.notesImported += 1

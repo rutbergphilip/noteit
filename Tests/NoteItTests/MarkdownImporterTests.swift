@@ -54,15 +54,16 @@ final class MarkdownImporterTests: XCTestCase {
 
         XCTAssertEqual(report.notesImported, 4)
         XCTAssertEqual(report.notebooksUsed, 3)
-        XCTAssertEqual(Set(store.notebooks.map(\.name)), ["Vault", "Vault / Projects", "Vault / Projects / Archive"])
-        func notebookName(_ title: String) throws -> String? {
+        XCTAssertEqual(Set(store.notebooks.map { store.notebookPathTitle($0.id) }),
+                       ["Vault", "Vault › Projects", "Vault › Projects › Archive"])
+        func notebookPath(_ title: String) throws -> String? {
             let meta = try note(titled: title, in: store)
-            return store.notebooks.first { $0.id == meta.notebookID }?.name
+            return meta.notebookID.map { store.notebookPathTitle($0) }
         }
-        XCTAssertEqual(try notebookName("Inbox note"), "Vault")
-        XCTAssertEqual(try notebookName("Garden"), "Vault / Projects")
-        XCTAssertEqual(try notebookName("Deep"), "Vault / Projects / Archive")
-        XCTAssertEqual(try notebookName("Todo"), "Vault / Projects")
+        XCTAssertEqual(try notebookPath("Inbox note"), "Vault")
+        XCTAssertEqual(try notebookPath("Garden"), "Vault › Projects")
+        XCTAssertEqual(try notebookPath("Deep"), "Vault › Projects › Archive")
+        XCTAssertEqual(try notebookPath("Todo"), "Vault › Projects")
         XCTAssertFalse(store.notes.contains { $0.title == "ignored" || $0.title == "Secret" || $0.title == "Old" })
 
         let todo = store.body(for: try note(titled: "Todo", in: store).id)
@@ -80,6 +81,25 @@ final class MarkdownImporterTests: XCTestCase {
 
         XCTAssertEqual(store.notebooks.count, 1)
         XCTAssertEqual(try note(titled: "Bread", in: store).notebookID, existing.id)
+    }
+
+    func testDeepFoldersNestUpToTheLimitThenJoinNames() async throws {
+        let root = base.appendingPathComponent("A", isDirectory: true)
+        try write("deep", to: "B/C/D/E/Five.md", in: root)
+        try write("four", to: "B/C/D/Four.md", in: root)
+        let store = makeStore()
+        let existing = store.createNotebook(name: "b", symbol: "book", colorHex: Tokens.Hex.notebookRed)
+
+        _ = await importAll([root], into: store)
+
+        let five = try XCTUnwrap(note(titled: "Five", in: store).notebookID)
+        let four = try XCTUnwrap(note(titled: "Four", in: store).notebookID)
+        XCTAssertEqual(store.notebookPathTitle(five), "A › B › C › D / E")
+        XCTAssertEqual(store.notebookPathTitle(four), "A › B › C › D")
+        XCTAssertEqual(store.notebookTree.depth(of: five), NotebookTree.maxDepth)
+        // A top-level notebook with a matching name isn't reused for a nested folder.
+        XCTAssertNotEqual(store.notebookTree.effectiveParent(of: four), existing.id)
+        XCTAssertEqual(store.notebooks.count, 6)
     }
 
     func testLooseFilesGoIntoTheirFolderNotebook() async throws {
