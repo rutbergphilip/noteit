@@ -6,9 +6,23 @@ import Foundation
 extension NoteStore {
     static let dailyNotesNotebookName = "Daily Notes"
 
-    func dailyNotesNotebookID(createIfMissing: Bool) -> UUID? {
+    /// The notebook from the preference, else the first one named "Daily Notes" (synced from another Mac,
+    /// imported, or left after the preference was reset). Never creates one or writes the preference.
+    var dailyNotesNotebookIDIfSet: UUID? {
         if let raw = preferences.string(forKey: PrefKey.dailyNotesNotebookID), let id = UUID(uuidString: raw),
            notebook(with: id) != nil {
+            return id
+        }
+        return sortedNotebooks.first {
+            $0.name.trimmingCharacters(in: .whitespaces).caseInsensitiveCompare(Self.dailyNotesNotebookName) == .orderedSame
+        }?.id
+    }
+
+    func dailyNotesNotebookID(createIfMissing: Bool) -> UUID? {
+        if let id = dailyNotesNotebookIDIfSet {
+            if createIfMissing, preferences.string(forKey: PrefKey.dailyNotesNotebookID) != id.uuidString {
+                preferences.set(id.uuidString, forKey: PrefKey.dailyNotesNotebookID)
+            }
             return id
         }
         guard createIfMissing else { return nil }

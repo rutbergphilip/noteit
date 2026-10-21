@@ -61,6 +61,20 @@ final class DailyNoteStoreTests: XCTestCase {
         XCTAssertNotEqual(replacement, id, "a deleted notebook is replaced")
     }
 
+    func testExistingDailyNotesNotebookIsAdoptedWithoutPreference() throws {
+        let store = makeStore()
+        let synced = store.createNotebook(name: "daily notes ", symbol: "calendar", colorHex: Tokens.Hex.notebookBlue)
+        let existing = store.createNote(in: synced.id, initial: NSAttributedString(string: "2026-10-12"))
+        for raw in [nil, "", UUID().uuidString] {
+            defaults.set(raw, forKey: PrefKey.dailyNotesNotebookID)
+            XCTAssertEqual(store.dailyNotesNotebookID(createIfMissing: false), synced.id, String(describing: raw))
+        }
+        let note = try XCTUnwrap(store.dailyNote(for: day(12), createIfMissing: true))
+        XCTAssertEqual(note.id, existing.id)
+        XCTAssertEqual(store.notebooks.count, 1)
+        XCTAssertEqual(defaults.string(forKey: PrefKey.dailyNotesNotebookID), synced.id.uuidString)
+    }
+
     func testSameDayReturnsSameNote() throws {
         let store = makeStore()
         XCTAssertNil(try store.dailyNote(for: day(19), createIfMissing: false))
