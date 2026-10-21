@@ -10,6 +10,7 @@ final class LocalAPIHandlersTests: XCTestCase {
     private var defaults: UserDefaults!
     private var suiteName: String!
     private let fm = FileManager.default
+    private var stores: [NoteStore] = []
 
     override func setUpWithError() throws {
         root = fm.temporaryDirectory.appendingPathComponent("noteit-localapi-\(UUID().uuidString)", isDirectory: true)
@@ -18,7 +19,11 @@ final class LocalAPIHandlersTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        stores.forEach { $0.flush() }
+        stores = []
+        controllers = []
         defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
         try? fm.removeItem(at: root)
     }
 
@@ -30,6 +35,7 @@ final class LocalAPIHandlersTests: XCTestCase {
 
     private func makeFixture(loading: Bool = false, opened: ((UUID) -> Void)? = nil) -> Fixture {
         let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
+        stores.append(store)
         let staged = StagedUploads(directory: root.appendingPathComponent("staged"))
         let service = AutomationService(store: store, defaults: defaults, staged: staged, dailyNotesAvailable: { false },
                                         isLoading: { loading })
@@ -526,6 +532,7 @@ final class LocalAPIHandlersTests: XCTestCase {
 
     private func makeController(defaults: UserDefaults? = nil, store: NoteStore? = nil) -> (LocalAPIController, NoteStore) {
         let store = store ?? NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
+        stores.append(store)
         let service = AutomationService(store: store, defaults: defaults ?? self.defaults,
                                         staged: StagedUploads(directory: root.appendingPathComponent("staged")),
                                         dailyNotesAvailable: { false }, isLoading: { false })

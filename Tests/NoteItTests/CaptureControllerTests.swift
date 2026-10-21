@@ -35,7 +35,11 @@ final class CaptureControllerTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        store?.flush()
+        store = nil
+        toastHandlers = []
         defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
         try? FileManager.default.removeItem(at: base)
     }
 
