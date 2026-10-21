@@ -89,8 +89,10 @@ enum NotionImporter {
         var budget = limits
         var finished = false
         defer { if !finished { for folder in temporary { try? fm.removeItem(at: folder) } } }
+        var listedParts: [String: Int64] = [:]
         if !isDir.boolValue {
-            guard url.pathExtension.lowercased() == "zip", let unpacked = try MarkdownImporter.unzip(url, within: &budget, excludingTopLevelZips: true) else {
+            listedParts = MarkdownImporter.topLevelZipSizes(url) ?? [:]
+            guard url.pathExtension.lowercased() == "zip", let unpacked = try MarkdownImporter.unzip(url, within: &budget) else {
                 throw ImportError.unreadableArchive(url.lastPathComponent)
             }
             temporary.append(unpacked)
@@ -101,10 +103,16 @@ enum NotionImporter {
         let top = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         for zip in top.filter({ $0.pathExtension.lowercased() == "zip" })
             .sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
-            guard let unpacked = try MarkdownImporter.unzip(zip, within: &budget) else {
+            // A part was charged in full as a file of the outer archive; once it is opened and charged at its
+            // unpacked size, that first charge is given back. Parts that aren't opened stay charged.
+            let onDisk = ((try? zip.resourceValues(forKeys: [.fileSizeKey]))?.fileSize).map(Int64.init) ?? 0
+            var opened = budget
+            opened.maxBytes += min(listedParts[zip.lastPathComponent] ?? 0, onDisk)
+            guard let unpacked = try MarkdownImporter.unzip(zip, within: &opened) else {
                 failed.append(zip.lastPathComponent)
                 continue
             }
+            budget = opened
             temporary.append(unpacked)
             roots.append(unpacked)
         }

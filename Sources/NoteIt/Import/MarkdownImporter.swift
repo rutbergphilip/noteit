@@ -223,12 +223,9 @@ final class MarkdownImporter {
 
     /// `unzip(_:)` that also takes the archive's entries and unpacked size off `limits`, throwing
     /// `ImportError.archiveTooLarge` when they don't fit. Nil when the archive can't be opened.
-    /// With `excludingTopLevelZips`, ZIP files at the archive's top level aren't counted in the size, for a caller
-    /// that unpacks and charges them itself.
-    nonisolated static func unzip(_ url: URL, within limits: inout ZipLimits,
-                                  excludingTopLevelZips: Bool = false) throws -> URL? {
+    nonisolated static func unzip(_ url: URL, within limits: inout ZipLimits) throws -> URL? {
         let fileManager = FileManager.default
-        guard let totals = zipTotals(url, excludingTopLevelZips: excludingTopLevelZips) else { return nil }
+        guard let totals = zipTotals(url) else { return nil }
         guard totals.entries <= limits.maxEntries, totals.bytes <= limits.maxBytes else {
             throw ImportError.archiveTooLarge(url.lastPathComponent)
         }
@@ -273,9 +270,17 @@ final class MarkdownImporter {
         return text.split(whereSeparator: \.isNewline).map(String.init)
     }
 
-    /// The number of entries in a zip archive and their unpacked size, as its directory states them, optionally
-    /// leaving out the size of `.zip` files at its top level.
-    nonisolated static func zipTotals(_ url: URL, excludingTopLevelZips: Bool = false) -> (entries: Int, bytes: Int64)? {
+    /// The number of entries in a zip archive and their unpacked size, as its directory states them.
+    nonisolated static func zipTotals(_ url: URL) -> (entries: Int, bytes: Int64)? {
+        zipListing(url).map { ($0.entries, $0.bytes) }
+    }
+
+    /// The unpacked size the archive's directory states for each `.zip` file at its top level, by name.
+    nonisolated static func topLevelZipSizes(_ url: URL) -> [String: Int64]? {
+        zipListing(url)?.topLevelZips
+    }
+
+    nonisolated private static func zipListing(_ url: URL) -> (entries: Int, bytes: Int64, topLevelZips: [String: Int64])? {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
@@ -295,17 +300,16 @@ final class MarkdownImporter {
         guard let summary = lines.last else { return nil }
         let words = summary.split(whereSeparator: { $0 == " " || $0 == "," })
         guard words.count > 3, let entries = Int(words[0]), words[1].hasPrefix("file"),
-              var bytes = Int64(words[2]), words[3] == "bytes" else { return nil }
-        if excludingTopLevelZips {
-            for line in lines.dropLast() {
-                let ns = String(line) as NSString
-                guard let match = zipEntryLine.firstMatch(in: String(line), range: NSRange(location: 0, length: ns.length)),
-                      let size = Int64(ns.substring(with: match.range(at: 1))) else { continue }
-                let name = ns.substring(with: match.range(at: 2))
-                if !name.contains("/"), name.lowercased().hasSuffix(".zip") { bytes -= size }
-            }
+              let bytes = Int64(words[2]), words[3] == "bytes" else { return nil }
+        var zips: [String: Int64] = [:]
+        for line in lines.dropLast() {
+            let ns = String(line) as NSString
+            guard let match = zipEntryLine.firstMatch(in: String(line), range: NSRange(location: 0, length: ns.length)),
+                  let size = Int64(ns.substring(with: match.range(at: 1))) else { continue }
+            let name = ns.substring(with: match.range(at: 2))
+            if !name.contains("/"), name.lowercased().hasSuffix(".zip") { zips[name] = size }
         }
-        return (entries, max(0, bytes))
+        return (entries, bytes, zips)
     }
 
     /// An entry in `zipinfo -s` output: "-rw-r--r--  2.1 unx      513 bX defN 26-Oct-21 15:11 Part 1.zip".

@@ -216,7 +216,7 @@ final class NotionImporterTests: XCTestCase {
         try zip(export, to: part)
         let outer = base.appendingPathComponent("Notion.zip")
         try zip(staging, to: outer, keepParent: false)
-        let outerTotals = try XCTUnwrap(MarkdownImporter.zipTotals(outer, excludingTopLevelZips: true))
+        let outerTotals = try XCTUnwrap(MarkdownImporter.zipTotals(outer))
         let partTotals = try XCTUnwrap(MarkdownImporter.zipTotals(part))
         XCTAssertGreaterThan(partTotals.entries, 5)
 
@@ -261,6 +261,37 @@ final class NotionImporterTests: XCTestCase {
         } catch {
             XCTFail("\(error)")
         }
+    }
+
+    func testFilesInTheArchiveThatArentOpenedStayCharged() async throws {
+        let export = try makeExport()
+        try Data(repeating: 65, count: 2_000_000).write(to: export.appendingPathComponent("Filler.bin"))
+        let staging = base.appendingPathComponent("Outer", isDirectory: true)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        let part = staging.appendingPathComponent("Export-1234-Part-1.zip")
+        try zip(export, to: part)
+        let zeros = Data(count: 3_000_000)
+        try zeros.write(to: staging.appendingPathComponent("bomb.zip"))
+        try zeros.write(to: staging.appendingPathComponent(".big.zip"))
+        let outer = base.appendingPathComponent("Notion.zip")
+        try zip(staging, to: outer, keepParent: false)
+        let outerTotals = try XCTUnwrap(MarkdownImporter.zipTotals(outer))
+        let partTotals = try XCTUnwrap(MarkdownImporter.zipTotals(part))
+        let partListed = try XCTUnwrap(fm.attributesOfItem(atPath: part.path)[.size] as? Int64)
+        let exact = outerTotals.bytes - partListed + partTotals.bytes
+        XCTAssertGreaterThan(exact, outerTotals.bytes)
+
+        do {
+            _ = try await NotionImporter.importExport(outer, into: makeStore(),
+                                                      limits: ZipLimits(maxEntries: .max, maxBytes: exact - 1))
+            XCTFail("No error thrown")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .archiveTooLarge("Export-1234-Part-1.zip"))
+        }
+        let report = try await NotionImporter.importExport(outer, into: makeStore(),
+                                                           limits: ZipLimits(maxEntries: .max, maxBytes: exact))
+        XCTAssertEqual(report.notesImported, 4)
+        XCTAssertEqual(report.archivesSkipped, ["bomb.zip"])
     }
 
     func testHTMLExportAndEmptyFoldersAreRefused() async throws {
