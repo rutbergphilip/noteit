@@ -23,8 +23,9 @@ final class TaskStoreTests: XCTestCase {
         try? fm.removeItem(at: root)
     }
 
-    private func makeStore() -> NoteStore {
-        NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false))
+    private func makeStore(_ name: String? = nil) -> NoteStore {
+        let url: URL = name.map { root.appendingPathComponent($0, isDirectory: true) } ?? root
+        return NoteStore(location: LibraryLocation(url: url, seedsFreshLibrary: false))
     }
 
     private func body(_ string: String) -> NSAttributedString {
@@ -144,6 +145,48 @@ final class TaskStoreTests: XCTestCase {
         store.moveToRecentlyDeleted([id])
         store.reconcileSelection()
         XCTAssertNil(store.selectedNoteID)
+    }
+
+    // MARK: - Sync
+
+    private func ref(_ store: NoteStore, _ text: String) throws -> TaskRef {
+        let all = store.tasks(query: "", includeCompleted: true, now: now, calendar: calendar).values.flatMap { $0 }
+        return try XCTUnwrap(all.first { TaskParser.displayText($0.line.text) == text }).ref
+    }
+
+    func testTaskChangedBySyncIsReportedAndMovedTaskIsFound() throws {
+        let a = makeStore("a")
+        let b = makeStore("b")
+        let id = add(a, "Errands\n☐\tbuy milk\n☐\tcall bank")
+        a.flush()
+        try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
+        let milk = try ref(b, "buy milk")
+        let bank = try ref(b, "call bank")
+
+        a.updateBody(id, body("Errands\nintro\n☐\tbuy oat milk\n☐\tcall bank"))
+        a.flush()
+        try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
+
+        XCTAssertThrowsError(try b.setTaskChecked(milk, true)) { XCTAssertEqual($0 as? BodyEditError, .taskChanged) }
+        try b.setTaskChecked(bank, true)
+        XCTAssertEqual(b.body(for: id).string, "Errands\nintro\n☐\tbuy oat milk\n☑\tcall bank")
+        XCTAssertEqual(try ref(b, "call bank").paragraph, 3, "the list follows the synced body")
+    }
+
+    func testTaskCheckedOnAnotherMacIsNotCheckedAgain() throws {
+        let a = makeStore("a")
+        let b = makeStore("b")
+        let id = add(a, "Errands\n☐\tbuy milk")
+        a.flush()
+        try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
+        let stale = try ref(b, "buy milk")
+
+        try a.setTaskChecked(try ref(a, "buy milk"), true)
+        a.flush()
+        try b.applyRemote(a.exportPayload(id: id, kind: .note, deviceID: "A"))
+
+        XCTAssertThrowsError(try b.setTaskChecked(stale, true)) { XCTAssertEqual($0 as? BodyEditError, .taskChanged) }
+        XCTAssertEqual(b.tasks(query: "", includeCompleted: true, now: now, calendar: calendar)[.completed]?.count, 1)
     }
 
     func testFiveThousandNotesTasksUnderBudget() {
