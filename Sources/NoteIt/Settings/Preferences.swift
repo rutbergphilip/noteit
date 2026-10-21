@@ -32,6 +32,9 @@ enum PrefKey {
     static let spotlightIncludesText = "spotlightIncludesText"
     /// The index version the Spotlight items were last built with; a different version rebuilds them.
     static let spotlightIndexVersion = "spotlightIndexVersion"
+    /// Set before a change is handed to Spotlight and cleared once Spotlight has taken every change; still set at
+    /// launch, it rebuilds the items (a change may have been lost to a crash or a failed Core Spotlight call).
+    static let spotlightIndexDirty = "spotlightIndexDirty"
 }
 
 enum PrefDefault {

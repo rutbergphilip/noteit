@@ -10,16 +10,25 @@ final class FakeSpotlightIndex: SpotlightIndexing, @unchecked Sendable {
         case deleteAll
     }
 
+    struct Failure: Error {}
+
     private let lock = NSLock()
     private var recorded: [Call] = []
     private var stored: [String: SpotlightItem] = [:]
+    private var failing = false
 
     var calls: [Call] { lock.withLock { recorded } }
     var items: [String: SpotlightItem] { lock.withLock { stored } }
+    /// Makes every `index` and `delete` call throw without changing anything.
+    var fails: Bool {
+        get { lock.withLock { failing } }
+        set { lock.withLock { failing = newValue } }
+    }
 
     func reset() { lock.withLock { recorded.removeAll() } }
 
     func index(_ items: [SpotlightItem]) async throws {
+        if fails { throw Failure() }
         lock.withLock {
             recorded.append(.index(items.map(\.id)))
             for item in items { stored[item.id] = item }
@@ -27,6 +36,7 @@ final class FakeSpotlightIndex: SpotlightIndexing, @unchecked Sendable {
     }
 
     func delete(_ ids: [String]) async throws {
+        if fails { throw Failure() }
         lock.withLock {
             recorded.append(.delete(ids))
             for id in ids { stored[id] = nil }
@@ -63,9 +73,9 @@ final class SpotlightItemBuilderTests: XCTestCase {
                  createdAt: Date(timeIntervalSince1970: 100), updatedAt: Date(timeIntervalSince1970: 200), tags: tags)
     }
 
-    private func makeIndexer() -> (NoteStore, SpotlightIndexer, FakeSpotlightIndex) {
-        let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
-        let fake = FakeSpotlightIndex()
+    private func makeIndexer(fake: FakeSpotlightIndex = FakeSpotlightIndex(),
+                             library: String = "lib") -> (NoteStore, SpotlightIndexer, FakeSpotlightIndex) {
+        let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent(library), seedsFreshLibrary: false))
         let indexer = SpotlightIndexer(store: store, defaults: defaults, index: fake, isSupported: true, flushDelay: 60)
         return (store, indexer, fake)
     }
@@ -255,5 +265,85 @@ final class SpotlightItemBuilderTests: XCTestCase {
             return nil
         }
         XCTAssertEqual(sizes, [100, 100, 50])
+    }
+
+    private var isDirty: Bool { defaults.bool(forKey: PrefKey.spotlightIndexDirty) }
+
+    /// Waits for a rebuild started while the index version is still current to clear the dirty flag.
+    private func settleRepair(_ indexer: SpotlightIndexer, file: StaticString = #filePath, line: UInt = #line) async {
+        let deadline = Date().addingTimeInterval(5)
+        while isDirty {
+            guard Date() < deadline else { return XCTFail("The repair didn't finish", file: file, line: line) }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+        await indexer.settle()
+    }
+
+    func testFailedDeleteStaysDirtyAndNextStartRebuilds() async {
+        let (store, indexer, fake) = makeIndexer()
+        defaults.set(SpotlightIndexer.indexVersion, forKey: PrefKey.spotlightIndexVersion)
+        indexer.start()
+        let id = create(store, "Private")
+        await settle(indexer)
+        XCTAssertNotNil(fake.items[id.uuidString])
+        XCTAssertFalse(isDirty)
+
+        fake.fails = true
+        indexer.noteRemoved(id)
+        await settle(indexer)
+        XCTAssertNotNil(fake.items[id.uuidString])
+        fake.fails = false
+        _ = create(store, "Later")
+        await settle(indexer)
+        XCTAssertTrue(isDirty, "a later success doesn't hide the failure")
+
+        let (relaunchedStore, relaunched, _) = makeIndexer(fake: fake, library: "relaunched")
+        fake.reset()
+        relaunched.start()
+        await settleRepair(relaunched)
+        withExtendedLifetime(relaunchedStore) {}
+        XCTAssertEqual(fake.calls.first, .deleteAll)
+        XCTAssertNil(fake.items[id.uuidString])
+        XCTAssertFalse(isDirty)
+    }
+
+    func testIndexVersionWrittenOnlyAfterRebuildSucceeds() async {
+        let (store, indexer, fake) = makeIndexer()
+        defaults.set(SpotlightIndexer.indexVersion, forKey: PrefKey.spotlightIndexVersion)
+        indexer.start()
+        _ = create(store, "One")
+        await settle(indexer)
+
+        fake.fails = true
+        await indexer.rebuild(notes: store.notes) { store.body(for: $0) }
+        await indexer.settle()
+        XCTAssertNil(defaults.object(forKey: PrefKey.spotlightIndexVersion))
+        XCTAssertTrue(isDirty)
+
+        fake.fails = false
+        await indexer.rebuild(notes: store.notes) { store.body(for: $0) }
+        await indexer.settle()
+        XCTAssertEqual(defaults.integer(forKey: PrefKey.spotlightIndexVersion), SpotlightIndexer.indexVersion)
+        XCTAssertFalse(isDirty)
+    }
+
+    func testChangesLostBeforeHandOverRebuildAtNextStart() async {
+        let (store, indexer, fake) = makeIndexer()
+        defaults.set(SpotlightIndexer.indexVersion, forKey: PrefKey.spotlightIndexVersion)
+        indexer.start()
+        let id = create(store, "Private")
+        await settle(indexer)
+        XCTAssertFalse(isDirty)
+
+        store.moveToRecentlyDeleted([id])
+        XCTAssertTrue(isDirty, "set before the change is handed over")
+        XCTAssertNotNil(fake.items[id.uuidString], "the quit comes before the hand-over")
+
+        let (relaunchedStore, relaunched, _) = makeIndexer(fake: fake, library: "relaunched")
+        relaunched.start()
+        await settleRepair(relaunched)
+        withExtendedLifetime(relaunchedStore) {}
+        XCTAssertNil(fake.items[id.uuidString])
+        XCTAssertFalse(isDirty)
     }
 }

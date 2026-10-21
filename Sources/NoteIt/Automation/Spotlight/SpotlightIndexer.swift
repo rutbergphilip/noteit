@@ -35,6 +35,59 @@ final class CoreSpotlightIndex: SpotlightIndexing, @unchecked Sendable {
     }
 }
 
+/// Whether Spotlight has every change, shared with the Core Spotlight queue, which records failures and clears
+/// `spotlightIndexDirty` in queue order.
+private final class SpotlightIndexHealth: @unchecked Sendable {
+    private let lock = NSLock()
+    private let defaults: UserDefaults
+    private var changes = 0
+    private var failures = 0
+    private var failuresAtRebuildStart = 0
+    /// A failed call since the last good rebuild: the dirty flag stays set until a rebuild succeeds.
+    private var failedSinceRebuild = false
+
+    init(defaults: UserDefaults) {
+        self.defaults = defaults
+    }
+
+    var changeCount: Int { lock.withLock { changes } }
+
+    func markDirty() {
+        lock.withLock {
+            changes += 1
+            if !defaults.bool(forKey: PrefKey.spotlightIndexDirty) { defaults.set(true, forKey: PrefKey.spotlightIndexDirty) }
+        }
+    }
+
+    func recordFailure() {
+        lock.withLock {
+            failures += 1
+            failedSinceRebuild = true
+        }
+    }
+
+    /// Clears the dirty flag when nothing has changed since `change` was taken and nothing has failed.
+    func clean(asOf change: Int) {
+        lock.withLock {
+            if change == changes, !failedSinceRebuild { defaults.removeObject(forKey: PrefKey.spotlightIndexDirty) }
+        }
+    }
+
+    func rebuildStarted() {
+        lock.withLock { failuresAtRebuildStart = failures }
+    }
+
+    /// Writes the index version only when every call since the rebuild started succeeded.
+    func rebuildFinished(asOf change: Int, version: Int) {
+        lock.withLock {
+            guard failures == failuresAtRebuildStart else { return }
+            failedSinceRebuild = false
+            defaults.set(version, forKey: PrefKey.spotlightIndexVersion)
+            if change == changes { defaults.removeObject(forKey: PrefKey.spotlightIndexDirty) }
+        }
+    }
+}
+
 /// Keeps the notes in Spotlight. A `DerivedIndex`: every change arrives through the registry hooks. It stays
 /// registered while Spotlight is turned off and then ignores every hook; turning it back on rebuilds.
 @MainActor
@@ -50,12 +103,14 @@ final class SpotlightIndexer: DerivedIndex {
     private let isSupported: Bool
     private let flushDelay: TimeInterval
     private let logger = Logger(subsystem: AppIdentity.bundleID, category: "Spotlight")
+    private let health: SpotlightIndexHealth
 
     private var pendingItems: [String: SpotlightItem] = [:]
     private var pendingDeletes: Set<String> = []
     private var flushScheduled = false
     private var queue: Task<Void, Never>?
     private var rebuildGeneration = 0
+    private var isRebuilding = false
     /// Items a running rebuild has read but not handed over; a hook for one of them drops it from here.
     private var rebuildBatch: [SpotlightItem] = []
     private var lastEnabled = false
@@ -70,6 +125,7 @@ final class SpotlightIndexer: DerivedIndex {
         self.index = index
         self.isSupported = isSupported
         self.flushDelay = flushDelay
+        health = SpotlightIndexHealth(defaults: defaults)
     }
 
     var isEnabled: Bool {
@@ -81,7 +137,7 @@ final class SpotlightIndexer: DerivedIndex {
     }
 
     /// Registers with the store's derived-index registry (once per store open) and rebuilds when the stored index
-    /// version is out of date.
+    /// version is out of date or the last run left changes Spotlight may not have.
     func start() {
         guard let store, store.canRegisterDerivedIndex(indexID) else { return }
         store.registerDerivedIndex(self)
@@ -91,8 +147,11 @@ final class SpotlightIndexer: DerivedIndex {
                                                           queue: nil) { [weak self] _ in
             Task { @MainActor [weak self] in self?.preferencesChanged() }
         }
-        if isEnabled, defaults.integer(forKey: PrefKey.spotlightIndexVersion) != Self.indexVersion {
+        let dirty = defaults.bool(forKey: PrefKey.spotlightIndexDirty)
+        if isEnabled, dirty || defaults.integer(forKey: PrefKey.spotlightIndexVersion) != Self.indexVersion {
             rebuildNow()
+        } else if isSupported, !isEnabled, dirty {
+            removeAll()
         }
     }
 
@@ -107,13 +166,20 @@ final class SpotlightIndexer: DerivedIndex {
         if enabled {
             rebuildNow()
         } else if wasEnabled {
-            rebuildGeneration += 1
-            rebuildBatch.removeAll()
-            pendingItems.removeAll()
-            pendingDeletes.removeAll()
-            defaults.removeObject(forKey: PrefKey.spotlightIndexVersion)
-            enqueue { try await $0.deleteAll() }
+            removeAll()
         }
+    }
+
+    private func removeAll() {
+        rebuildGeneration += 1
+        isRebuilding = false
+        rebuildBatch.removeAll()
+        pendingItems.removeAll()
+        pendingDeletes.removeAll()
+        health.markDirty()
+        defaults.removeObject(forKey: PrefKey.spotlightIndexVersion)
+        enqueue { try await $0.deleteAll() }
+        enqueueClean()
     }
 
     /// Rebuild Spotlight Index, and the rebuilds the indexer schedules itself.
@@ -184,15 +250,21 @@ final class SpotlightIndexer: DerivedIndex {
 
     // MARK: Batches
 
-    /// Re-adds every note in batches. Text is read on the main actor one note at a time, yielding between notes.
+    /// Removes every item, then re-adds every note in batches. Text is read on the main actor one note at a time,
+    /// yielding between notes. The index version is written once Core Spotlight has taken every batch.
     private func performRebuild(notes: [NoteMeta], text: @MainActor (UUID) -> String?) async {
         rebuildGeneration += 1
         let generation = rebuildGeneration
+        isRebuilding = true
+        defer { if generation == rebuildGeneration { isRebuilding = false } }
         pendingItems.removeAll()
         pendingDeletes.removeAll()
         rebuildBatch.removeAll()
+        health.markDirty()
         defaults.removeObject(forKey: PrefKey.spotlightIndexVersion)
         let includeText = includesText
+        let health = health
+        enqueue { _ in health.rebuildStarted() }
         enqueue { try await $0.deleteAll() }
         for original in notes {
             guard generation == rebuildGeneration, isEnabled else { return }
@@ -210,7 +282,10 @@ final class SpotlightIndexer: DerivedIndex {
         }
         guard generation == rebuildGeneration, isEnabled else { return }
         handOverRebuildBatch()
-        defaults.set(Self.indexVersion, forKey: PrefKey.spotlightIndexVersion)
+        handOverPending()
+        let change = health.changeCount
+        let version = Self.indexVersion
+        enqueue { _ in health.rebuildFinished(asOf: change, version: version) }
     }
 
     private func handOverRebuildBatch() {
@@ -221,6 +296,7 @@ final class SpotlightIndexer: DerivedIndex {
     }
 
     private func stage(_ item: SpotlightItem) {
+        health.markDirty()
         rebuildBatch.removeAll { $0.id == item.id }
         pendingDeletes.remove(item.id)
         pendingItems[item.id] = item
@@ -228,6 +304,7 @@ final class SpotlightIndexer: DerivedIndex {
     }
 
     private func stageDelete(_ id: UUID) {
+        health.markDirty()
         rebuildBatch.removeAll { $0.id == id.uuidString }
         pendingItems[id.uuidString] = nil
         pendingDeletes.insert(id.uuidString)
@@ -249,25 +326,37 @@ final class SpotlightIndexer: DerivedIndex {
             pendingDeletes.removeAll()
             enqueue { try await $0.delete(ids) }
         }
-        guard !pendingItems.isEmpty else { return }
-        let items = pendingItems.values.sorted { $0.id < $1.id }
-        pendingItems.removeAll()
-        for start in stride(from: 0, to: items.count, by: Self.batchSize) {
-            let batch = Array(items[start..<min(items.count, start + Self.batchSize)])
-            enqueue { try await $0.index(batch) }
+        if !pendingItems.isEmpty {
+            let items = pendingItems.values.sorted { $0.id < $1.id }
+            pendingItems.removeAll()
+            for start in stride(from: 0, to: items.count, by: Self.batchSize) {
+                let batch = Array(items[start..<min(items.count, start + Self.batchSize)])
+                enqueue { try await $0.index(batch) }
+            }
         }
+        // A running rebuild clears the flag itself when it finishes.
+        if !isRebuilding, defaults.bool(forKey: PrefKey.spotlightIndexDirty) { enqueueClean() }
     }
 
-    /// Runs Core Spotlight calls one after another, off the main actor.
+    /// Clears the dirty flag once everything queued so far has reached Core Spotlight without an error.
+    private func enqueueClean() {
+        let health = health
+        let change = health.changeCount
+        enqueue { _ in health.clean(asOf: change) }
+    }
+
+    /// Runs Core Spotlight calls one after another, off the main actor. A failure leaves the index dirty.
     private func enqueue(_ work: @escaping @Sendable (SpotlightIndexing) async throws -> Void) {
         let previous = queue
         let index = index
         let logger = logger
+        let health = health
         queue = Task.detached(priority: .utility) {
             await previous?.value
             do {
                 try await work(index)
             } catch {
+                health.recordFailure()
                 logger.error("Spotlight indexing failed: \(error.localizedDescription, privacy: .public)")
             }
         }
