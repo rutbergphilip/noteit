@@ -30,11 +30,12 @@ final class URLSchemeHandlerTests: XCTestCase {
         try? fm.removeItem(at: root)
     }
 
-    private func makeHandler(registry: URLRouteRegistry? = nil) -> (URLSchemeHandler, NoteStore) {
+    private func makeHandler(registry: URLRouteRegistry? = nil,
+                             now: @escaping () -> Date = Date.init) -> (URLSchemeHandler, NoteStore) {
         let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
         let staged = StagedUploads(directory: root.appendingPathComponent("staged"))
         let gate = dailyAvailable
-        let service = AutomationService(store: store, defaults: defaults, staged: staged, dailyNotesAvailable: { gate },
+        let service = AutomationService(store: store, defaults: defaults, staged: staged, now: now, dailyNotesAvailable: { gate },
                                         isLoading: { false })
         let environment = URLSchemeHandler.Environment(
             confirm: { [unowned self] in questions.append($0); return answer },
@@ -155,6 +156,25 @@ final class URLSchemeHandlerTests: XCTestCase {
         await open(handler, "noteit://daily")
         XCTAssertEqual(shown, [daily.id])
         XCTAssertTrue(notices.isEmpty)
+    }
+
+    /// The day the user approved is the day written to, even when midnight passes while the question is open.
+    func testDailyAppendUsesConfirmedDayAcrossMidnight() async throws {
+        dailyAvailable = true
+        let calendar = Calendar.current
+        let evening = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 10, day: 20, hour: 23, minute: 59)))
+        var clock = evening
+        let (handler, store) = makeHandler(now: { clock })
+        let confirmed = try XCTUnwrap(store.dailyNote(for: evening, createIfMissing: true))
+        let environment = handler.environment
+        handler.environment.confirm = { question in
+            clock = evening.addingTimeInterval(120)
+            return environment.confirm(question)
+        }
+        await open(handler, "noteit://append?daily=today&text=Late%20entry")
+        XCTAssertEqual(questions, ["A link wants to add text to “\(confirmed.title)”."])
+        XCTAssertEqual(store.notes.count, 1, "no note for the next day")
+        XCTAssertTrue(text(of: confirmed.id, in: store).hasSuffix("Late entry"))
     }
 
     func testHTTPSuccessCallbackHasNoIdOrTitle() async {

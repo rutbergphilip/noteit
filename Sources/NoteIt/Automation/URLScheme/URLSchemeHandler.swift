@@ -230,10 +230,12 @@ final class URLSchemeHandler: NSObject {
     /// Through `DailyLogAppender`, which creates the day's note if needed, so nothing is created before the question.
     private func appendToDaily(text: String, timestamp: Bool, callback: XCallback) throws {
         let question = "A link wants to add text to today's daily note."
+        // One reading of the clock, so the note the user approves is the one written to, even across midnight.
+        let day = service.now()
         let existing: NoteMeta?
         do {
             try requireDailyNotes()
-            existing = try service.daily(date: service.now(), create: false)
+            existing = try service.daily(date: day, create: false)
             if let existing {
                 if existing.isLocked { throw AutomationError.noteLocked }
                 if service.store.isBodyWriteBlocked(existing.id) { throw AutomationError.noteUnreadable }
@@ -242,7 +244,7 @@ final class URLSchemeHandler: NSObject {
             try concealFromWeb(error, callback: callback, question: question)
         }
         try askFirst(existing.map { "A link wants to add text to “\($0.displayTitle)”." } ?? question, callback: callback)
-        let meta = try service.appendToDaily(text: text, format: .plain, timestamp: timestamp, date: service.now())
+        let meta = try service.appendToDaily(text: text, format: .plain, timestamp: timestamp, date: day)
         succeed(callback, note: meta)
     }
 
