@@ -45,7 +45,7 @@ final class NoteStore: ObservableObject {
     nonisolated let bodyStorage: NoteBodyStorage
     nonisolated var notesURL: URL { bodyStorage.contentRootURL }
     var libraryURL: URL { rootURL.appendingPathComponent("library.json") }
-    var searchIndexURL: URL { rootURL.appendingPathComponent("search-index.json") }
+    var searchIndexURL: URL { rootURL.appendingPathComponent(OrganiseIndexer.fileName) }
     var trashURL: URL { rootURL.appendingPathComponent(".trash", isDirectory: true) }
     var tombstonesURL: URL { rootURL.appendingPathComponent("tombstones.json") }
     var recoveryURL: URL { rootURL.appendingPathComponent("recovery", isDirectory: true) }
@@ -65,10 +65,8 @@ final class NoteStore: ObservableObject {
     /// True while `load()` reads the library; automation answers `.notReady` meanwhile.
     private(set) var isLoading = false
 
-    /// Folded (case/diacritic/width-insensitive) plain text per note, persisted to `search-index.json`.
-    private var searchIndex: [UUID: String] = [:]
-    private var searchIndexDirty = false
-    private var indexRebuildInFlight = false
+    /// The search index (`search-index.json`), registered as the first derived index.
+    let searchIndexer: OrganiseIndexer
     private var indexSaveWorkItem: DispatchWorkItem?
 
     /// Position hints for `note(with:)`; rebuilt only after `notes` changed and a lookup misses.
@@ -160,6 +158,9 @@ final class NoteStore: ObservableObject {
         self.bodyStorage = bodyStorage ?? RTFDBodyStorage(rootURL: location.url)
         seedsFreshLibrary = location.seedsFreshLibrary
         history = VersionHistory(rootURL: location.url.appendingPathComponent("history", isDirectory: true))
+        searchIndexer = OrganiseIndexer(fileURL: location.url.appendingPathComponent(OrganiseIndexer.fileName))
+        searchIndexer.store = self
+        registerDerivedIndex(searchIndexer)
         load()
         NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: nil
@@ -216,7 +217,7 @@ final class NoteStore: ObservableObject {
 
     /// Pinned first, then most recently updated.
     func notes(for selection: SidebarSelection?, search: String) -> [NoteMeta] {
-        LibraryQuery.notes(notes, for: selection, search: search, now: Date(), indexedText: { searchIndex[$0] })
+        LibraryQuery.notes(notes, for: selection, search: search, now: Date(), indexedText: { searchIndexer.text(for: $0) })
     }
 
     func count(for selection: SidebarSelection) -> Int {
@@ -263,8 +264,8 @@ final class NoteStore: ObservableObject {
         }
         bodyCache[id] = loaded
         touchBody(id)
-        if loadErrors[id] == nil, searchIndex[id] == nil {
-            setIndexEntry(id, text: loaded.string)
+        if loadErrors[id] == nil, let meta = note(with: id) {
+            searchIndexer.indexIfMissing(meta, body: loaded)
         }
         trimBodyCache()
         return loaded
@@ -325,7 +326,6 @@ final class NoteStore: ObservableObject {
         meta.conflictSource = nil
         meta.conflictOriginalID = nil
         notes[index] = meta
-        setIndexEntry(id, text: snapshot.string)
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
@@ -363,7 +363,7 @@ final class NoteStore: ObservableObject {
 
     #if DEBUG
     var debugCachedBodyCount: Int { bodyCache.count }
-    func markSearchIndexDirtyForDebug() { searchIndexDirty = true }
+    func markSearchIndexDirtyForDebug() { searchIndexer.markDirty() }
     #endif
 
     private func touchBody(_ id: UUID) {
@@ -418,75 +418,28 @@ final class NoteStore: ObservableObject {
     func foldedSearchText(of ids: [UUID]) -> [UUID: String] {
         var result: [UUID: String] = [:]
         for id in ids {
-            guard let text = searchIndex[id], note(with: id)?.isLocked == false else { continue }
+            guard let text = searchIndexer.text(for: id), note(with: id)?.isLocked == false else { continue }
             result[id] = text
         }
         return result
     }
 
-    private func setIndexEntry(_ id: UUID, text: String) {
-        searchIndex[id] = Self.fold(text)
-        searchIndexDirty = true
-    }
-
-    /// Indexes notes lacking a (fresh) entry by parsing their RTFD off the main actor, and rebuilds every
-    /// registered derived index.
+    /// Indexes notes lacking a (fresh) search entry and rebuilds every other registered derived index.
     func scheduleIndexRebuild() {
         rebuildDerivedIndexes()
-        guard !indexRebuildInFlight else { return }
-        let missing = notes.filter { searchIndex[$0.id] == nil && loadErrors[$0.id] == nil }.map(\.id)
-        guard !missing.isEmpty else { return }
-        indexRebuildInFlight = true
-        let storage = bodyStorage
-        Task.detached(priority: .utility) { [weak self] in
-            var results: [UUID: String] = [:]
-            for id in missing {
-                guard let text = try? storage.read(id).text else { continue }
-                results[id] = NoteStore.fold(text.string)
-            }
-            let found = results
-            await self?.mergeIndex(found)
-        }
     }
 
-    private func mergeIndex(_ results: [UUID: String]) {
-        indexRebuildInFlight = false
-        var changed = false
-        for (id, text) in results where searchIndex[id] == nil {
-            guard note(with: id) != nil else { continue }
-            searchIndex[id] = text
-            changed = true
-        }
-        guard changed else { return }
-        searchIndexDirty = true
+    /// The search indexer merged rebuilt entries: refresh lists and save them.
+    func searchIndexDidRebuild() {
         objectWillChange.send()
         scheduleSave()
-    }
-
-    private struct SearchIndexFile: Codable {
-        struct Entry: Codable {
-            var text: String
-            var updatedAt: Date
-        }
-        var version: Int
-        var entries: [String: Entry]
-    }
-
-    private func loadSearchIndex() {
-        guard let data = try? Data(contentsOf: searchIndexURL),
-              let file = try? Self.decoder.decode(SearchIndexFile.self, from: data) else { return }
-        for meta in notes where searchIndex[meta.id] == nil {
-            guard let entry = file.entries[meta.id.uuidString],
-                  abs(entry.updatedAt.timeIntervalSince(meta.updatedAt)) < 1 else { continue }
-            searchIndex[meta.id] = entry.text
-        }
     }
 
     /// Saves the (rebuildable) search index if anything changed; sync calls this once per pass.
     func saveSearchIndexIfDirty() {
         indexSaveWorkItem?.cancel()
         indexSaveWorkItem = nil
-        if searchIndexDirty { saveSearchIndex() }
+        searchIndexer.flush()
     }
 
     /// Coalesces index saves during a burst of remote applies.
@@ -497,23 +450,6 @@ final class NoteStore: ObservableObject {
         }
         indexSaveWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-    }
-
-    private func saveSearchIndex() {
-        var entries: [String: SearchIndexFile.Entry] = [:]
-        // Entries are stamped with the note's updatedAt; unsaved bodies are left out so a crash or a
-        // failed write can't leave the index ahead of (or behind) what's on disk.
-        for meta in notes where !dirtyBodies.contains(meta.id) {
-            guard let text = searchIndex[meta.id] else { continue }
-            entries[meta.id.uuidString] = .init(text: text, updatedAt: meta.updatedAt)
-        }
-        do {
-            let data = try Self.encoder.encode(SearchIndexFile(version: 1, entries: entries))
-            try data.write(to: searchIndexURL, options: .atomic)
-            searchIndexDirty = false
-        } catch {
-            NSLog("NoteIt: failed to save search index: \(error)")
-        }
     }
 
     // MARK: - Notes
@@ -540,7 +476,6 @@ final class NoteStore: ObservableObject {
         touchBody(meta.id)
         dirtyBodies.insert(meta.id)
         notes.append(meta)
-        setIndexEntry(meta.id, text: body.string)
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
@@ -605,7 +540,6 @@ final class NoteStore: ObservableObject {
             stagedEditorBodies[id] = nil
             bodyCache[id] = nil
             dirtyBodies.remove(id)
-            searchIndex[id] = nil
             loadErrors[id] = nil
             loadErrorFiles[id] = nil
             failedBodies.remove(id)
@@ -617,7 +551,6 @@ final class NoteStore: ObservableObject {
             dispatchDerivedIndexes(.removed(id))
         }
         bodyAccessOrder.removeAll { removed.contains($0) }
-        searchIndexDirty = true
         saveTombstones()
         resolveConflictCopies(of: removed, remote: remote)
         libraryDirty = true
@@ -882,27 +815,17 @@ final class NoteStore: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// `#` must start the text or follow whitespace / opening brackets & quotes / `,` `;`
-    /// (so `?q=#swift` or `site.com/#anchor` aren't tags). Tag bodies allow combining marks.
-    nonisolated private static let tagRegex = try? NSRegularExpression(
-        pattern: "(?<![^\\s\\p{Ps}\\p{Pi},;\"'])#([\\p{L}_][\\p{L}\\p{M}\\p{N}_\\-]*)"
-    )
-
     nonisolated static func parseTags(_ string: String) -> [String] {
-        guard let regex = tagRegex else { return [] }
-        let normalized = string.precomposedStringWithCanonicalMapping
-        let ns = normalized as NSString
-        var seen = Set<String>()
-        var result: [String] = []
-        for match in regex.matches(in: normalized, range: NSRange(location: 0, length: ns.length)) {
-            let tag = ns.substring(with: match.range(at: 1)).lowercased().precomposedStringWithCanonicalMapping
-            if seen.insert(tag).inserted { result.append(tag) }
-        }
-        return result
+        TokenGrammar.tags(inMasked: string.precomposedStringWithCanonicalMapping)
     }
 
-    /// Blanks out code (monospaced font) and link ranges before parsing, keeping UTF-16 offsets intact.
     nonisolated static func parseTags(_ text: NSAttributedString) -> [String] {
+        parseTags(maskedForTokens(text))
+    }
+
+    /// The text with code (monospaced font) and link ranges blanked out, keeping UTF-16 offsets intact; tags, due
+    /// dates and reminders are read from it.
+    nonisolated static func maskedForTokens(_ text: NSAttributedString) -> String {
         let masked = NSMutableString(string: text.string)
         let full = NSRange(location: 0, length: text.length)
         func blank(_ range: NSRange) {
@@ -915,7 +838,7 @@ final class NoteStore: ObservableObject {
         text.enumerateAttribute(.link, in: full) { value, range, _ in
             if value != nil { blank(range) }
         }
-        return parseTags(masked as String)
+        return masked as String
     }
 
     // MARK: - Persistence
@@ -1002,7 +925,7 @@ final class NoteStore: ObservableObject {
     private func finishLoad() {
         for meta in notes { persistedMeta[meta.id] = meta }
         unversionedLocalBodies = Set(notes.map(\.id))
-        loadSearchIndex()
+        searchIndexer.load(notes: notes)
         selectedNoteID = notes(for: selection, search: "").first?.id
         scheduleIndexRebuild()
     }
@@ -1050,8 +973,7 @@ final class NoteStore: ObservableObject {
                                 createdAt: created, updatedAt: modified, tags: [])
             if let text = try? bodyStorage.read(id).text {
                 Self.applyDerivedFields(to: &meta, from: text)
-                searchIndex[id] = Self.fold(text.string)
-                searchIndexDirty = true
+                searchIndexer.noteChanged(meta, body: text)
             } else {
                 meta.title = "Recovered Note"
             }
@@ -1093,7 +1015,6 @@ final class NoteStore: ObservableObject {
         }
         // Bodies (and raw meta files) of deleted records go only once their removal is persisted.
         if !libraryDirty, hasPendingAuxDeletions { trashPendingBodies() }
-        if searchIndexDirty { saveSearchIndex() }
         indexSaveWorkItem?.cancel()
         indexSaveWorkItem = nil
         if isTerminating { writeRecoveryCopies() }
@@ -1131,7 +1052,7 @@ final class NoteStore: ObservableObject {
             if failedBodies.remove(id) != nil {
                 // The library and index held back this note's new metadata/text; persist them now.
                 libraryDirty = true
-                searchIndexDirty = true
+                searchIndexer.markDirty()
             }
             // A library save while the body was dirty wrote this note's old metadata.
             if persistedMeta[id] != meta { libraryDirty = true }
@@ -1419,7 +1340,7 @@ final class NoteStore: ObservableObject {
     struct PreparedRemoteNote: @unchecked Sendable {
         var meta: NoteMeta
         var body: NSAttributedString
-        var folded: String
+        var searchEntry: SearchIndexEntry
         var tempBody: URL
         /// The incoming body's extras (`.empty` for an RTFD body); written with it, and kept in `bodyExtras` once
         /// it is installed.
@@ -1456,7 +1377,7 @@ final class NoteStore: ObservableObject {
         if FileManager.default.fileExists(atPath: storage.fileURL(for: payload.id).path) {
             replaces = (try? storage.read(payload.id)).map { !$0.text.isEqual(to: body) } ?? true
         }
-        return PreparedRemoteNote(meta: meta, body: body, folded: fold(body.string), tempBody: temp, extras: extras,
+        return PreparedRemoteNote(meta: meta, body: body, searchEntry: OrganiseIndexer.makeEntry(body, updatedAt: meta.updatedAt), tempBody: temp, extras: extras,
                                   bodyIsRTFD: bodyIsRTFD, tempExtras: tempExtras,
                                   rawMeta: RawMeta(sourceRevision: payload.revision, meta: payload.meta),
                                   replacesDifferentBody: replaces)
@@ -1526,10 +1447,9 @@ final class NoteStore: ObservableObject {
         } else {
             notes.append(prepared.meta)
         }
+        if !prepared.meta.isLocked { searchIndexer.prime(id, body: prepared.body, entry: prepared.searchEntry) }
         dispatchDerivedIndexes(.changed(prepared.meta, prepared.body))
         appliedRemoteRevisions.notes[id.uuidString] = prepared.rawMeta.sourceRevision
-        searchIndex[id] = prepared.folded
-        searchIndexDirty = true
         clearSyncDeletion(id)
         libraryDirty = true
         persistRemoteApply()
@@ -1580,7 +1500,7 @@ final class NoteStore: ObservableObject {
     private func persistRemoteApply() {
         if libraryDirty || !FileManager.default.fileExists(atPath: libraryURL.path) { saveLibrary() }
         if !libraryDirty, hasPendingAuxDeletions { trashPendingBodies() }
-        if searchIndexDirty { scheduleIndexSave() }
+        if searchIndexer.isDirty { scheduleIndexSave() }
         trimBodyCache()
         if libraryDirty, saveWorkItem == nil { scheduleSave(after: 5) }
     }
