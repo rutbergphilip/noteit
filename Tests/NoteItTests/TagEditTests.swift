@@ -106,6 +106,26 @@ final class TagEditTests: XCTestCase {
         XCTAssertEqual(store.smartFolders.map(\.query), ["tag:work is:todo", "tag:job -x"])
     }
 
+    func testSelectionFollowsRenamedTagAndUndo() async {
+        let store = makeStore()
+        _ = add(store, "A\n#work/q3")
+        store.selection = .tag("work/q3")
+        let result = await store.renameTag("work", to: "job/y26")
+        XCTAssertEqual(store.selection, .tag("job/y26/q3"))
+        store.undoTagEdit(result)
+        XCTAssertEqual(store.selection, .tag("work/q3"))
+
+        store.selection = .tag("work")
+        let deleted = await store.deleteTag("work")
+        XCTAssertEqual(store.selection, .allNotes)
+        store.undoTagEdit(deleted)
+        XCTAssertEqual(store.selection, .tag("work"))
+
+        store.selection = .tag("home")
+        _ = await store.deleteTag("work")
+        XCTAssertEqual(store.selection, .tag("home"))
+    }
+
     func testCancelStopsBetweenBatches() async {
         let store = makeStore()
         for i in 0..<120 { _ = add(store, "N\(i)\n#bulk") }

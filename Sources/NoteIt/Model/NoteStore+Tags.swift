@@ -24,6 +24,8 @@ struct TagEditResult {
     var untouchedInTrash = 0
     /// Smart folders whose query the rename rewrote, put back by Undo.
     var smartFolderQueries: [UUID: SmartFolderQueryChange] = [:]
+    /// The sidebar selection before and after the edit moved it off the old tag; Undo goes back if it's still there.
+    var selectionMove: (before: SidebarSelection, after: SidebarSelection)?
 }
 
 extension NoteStore {
@@ -36,6 +38,9 @@ extension NoteStore {
         var result = await applyTagEdit(.rename(from: from, to: target), tag: from, actionName: "Rename Tag", progress: progress)
         if !result.cancelled {
             result.smartFolderQueries = rewriteSmartFolderQueries { QueryRewriter.renamingTag(TokenGrammar.normalizedTag(from), to: target, in: $0) }
+            result.selectionMove = moveTagSelection(from: from) { remainder in
+                .tag(TokenGrammar.normalizedTag(([target] + remainder).joined(separator: "/")))
+            }
         }
         result.untouchedInTrash = trashedNotes(tagged: from)
         return result
@@ -44,6 +49,7 @@ extension NoteStore {
     /// Removes `#tag` (and the tags nested in it) from every note's text.
     func deleteTag(_ tag: String, progress: ((Int, Int) -> Bool)? = nil) async -> TagEditResult {
         var result = await applyTagEdit(.delete(tag), tag: tag, actionName: "Delete Tag", progress: progress)
+        if !result.cancelled { result.selectionMove = moveTagSelection(from: tag) { _ in .allNotes } }
         result.untouchedInTrash = trashedNotes(tagged: tag)
         return result
     }
@@ -52,6 +58,7 @@ extension NoteStore {
     @discardableResult
     func undoTagEdit(_ result: TagEditResult) -> Int {
         restoreSmartFolderQueries(result.smartFolderQueries)
+        if let move = result.selectionMove, selection == move.after { selection = move.before }
         var leftAlone = 0
         for (id, after) in result.revisionsAfter {
             guard let before = result.bodiesBefore[id], note(with: id)?.revision == after else {
@@ -76,6 +83,18 @@ extension NoteStore {
     func notesTagged(_ tag: String) -> [NoteMeta] {
         let selected = TokenGrammar.normalizedTag(tag)
         return activeNotes.filter { $0.tags.contains { TagTree.matches($0, selected: selected) } }
+    }
+
+    /// Moves a selected tag (or one nested in `tag`) to `destination`, given the segments below `tag`.
+    private func moveTagSelection(from tag: String, to destination: ([String]) -> SidebarSelection)
+        -> (before: SidebarSelection, after: SidebarSelection)? {
+        guard case .tag(let selected)? = selection else { return nil }
+        let source = TokenGrammar.normalizedTag(tag), current = TokenGrammar.normalizedTag(selected)
+        guard TagTree.matches(current, selected: source) else { return nil }
+        let remainder = current.split(separator: "/").dropFirst(source.split(separator: "/").count).map(String.init)
+        let before = SidebarSelection.tag(selected), after = destination(remainder)
+        selection = after
+        return (before, after)
     }
 
     private func trashedNotes(tagged tag: String) -> Int {
