@@ -495,7 +495,8 @@ private struct Command {
     func today() async throws {
         try noExtraArguments(after: 1)
         let client = try await connect()
-        if let text = text(parsed.positionals.first) {
+        let argument = parsed.positionals.first
+        if let text = text(argument), !text.isEmpty || argument != nil {
             guard !text.isEmpty else { throw CLIUsageError(message: "Give the text to add, or pipe it in.") }
             let data = try await daily { try await fetch(client, .POST, "/daily/append", json: DailyAppendRequest(text: text)) }
             if json { io.passThrough(data) }

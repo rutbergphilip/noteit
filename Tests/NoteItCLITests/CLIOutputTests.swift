@@ -188,10 +188,12 @@ final class CLIOutputTests: XCTestCase {
         try harness.signIn()
         for arguments in [["append", "--today", "hello"], ["today"], ["today", "hello"]] {
             harness.terminal.err = ""
+            harness.terminal.stdin = arguments == ["today"] ? Data() : nil
             let exit = await harness.run(arguments)
             XCTAssertEqual(exit, .error, "\(arguments)")
             XCTAssertEqual(harness.terminal.err, "noteit: Daily notes aren't available in this version.\n")
         }
+        XCTAssertEqual(harness.responder.requests.value.map(\.method), ["POST", "GET", "POST"])
     }
 
     func testEditConflictSavesCopy() async throws {
