@@ -25,20 +25,12 @@ final class WikiLinkSyntaxTests: XCTestCase {
         XCTAssertEqual(serialize([linked("Plan", "noteit://note?title=Plan")], noteLinkName: { _ in nil }), "See [[Plan]]\n")
     }
 
-    func testLongTargetsAndHeadingsAreCutToTheLinkLimit() throws {
+    func testLongTargetsAndHeadingsAreWrittenBackInFull() throws {
         let long = String(repeating: "x", count: 130)
-        let parsed = try MarkdownCodec.parse("See [[\(long)]] and [[Plan#\(long)]]\n", resolveNoteLink: MarkdownFixture.resolveNoteLink)
-        guard case .doc(let blocks) = parsed.body.doc, case .paragraph(_, _, let content)? = blocks.first else {
-            return XCTFail("no paragraph")
-        }
-        let hrefs = content.compactMap { inline -> String? in
-            guard case .text(_, let marks) = inline else { return nil }
-            return marks.compactMap { if case .link(let href) = $0 { href } else { nil } }.first
-        }
-        let cut = String(repeating: "x", count: 120)
-        XCTAssertEqual(hrefs, ["noteit://note?title=" + cut, planHref + "?heading=" + cut])
-        XCTAssertEqual(WikiLink.noteHref(hrefs[0]), .unresolved(title: cut, heading: nil))
-        XCTAssertNil(WikiLink.noteHref("noteit://note?title=" + long))
+        let markdown = "See [[\(long)]] and [[Plan#\(long)]] and [[\(long)|short]]\n"
+        let parsed = try MarkdownCodec.parse(markdown, resolveNoteLink: MarkdownFixture.resolveNoteLink)
+        XCTAssertEqual(MarkdownCodec.serialize(parsed.body, frontMatter: .empty, profile: .library, attachmentPath: { $0 },
+                                               noteLinkName: MarkdownFixture.noteLinkName, previous: nil), markdown)
     }
 
     func testTableCellEscapesThePipe() throws {
