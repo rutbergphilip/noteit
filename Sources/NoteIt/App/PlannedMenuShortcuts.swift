@@ -19,7 +19,6 @@ enum PlannedMenuShortcuts {
         Row(command: "openToday", owner: "linking", shortcut: MenuShortcut("t", [.control, .command])),
         Row(command: "dailyNoteForDate", owner: "linking", shortcut: nil),
         Row(command: "newNoteFromTemplate", owner: "linking", shortcut: MenuShortcut("n", [.option, .command])),
-        Row(command: "toggleInspector", owner: "linking", shortcut: MenuShortcut("i", [.option, .command])),
         Row(command: "showTasks", owner: "organise", shortcut: MenuShortcut("t", [.shift, .command])),
         Row(command: "setDueDate", owner: "organise", shortcut: MenuShortcut("d", [.shift, .command])),
         Row(command: "addReminder", owner: "organise", shortcut: MenuShortcut("r", [.control, .command])),

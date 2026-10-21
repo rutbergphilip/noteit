@@ -57,6 +57,12 @@ enum PaletteCommandRegistry {
             command("copyNoteLink", "Copy Note Link", symbol: "link", shortcut: shortcuts.current(.copyNoteLink)?.display, keywords: ["url", "clipboard"], available: hasLiveNote) {
                 if let liveNote { CopyNoteLink.perform(noteID: liveNote.id, store: store) }
             },
+            command("showBacklinks", "Show Backlinks", symbol: "link", shortcut: nil, keywords: ["links", "inspector", "references"], available: hasLiveNote) {
+                showInspector(.links, defaults: defaults)
+            },
+            command("showOutline", "Show Outline", symbol: "list.bullet.indent", shortcut: nil, keywords: ["headings", "inspector", "toc"], available: hasLiveNote) {
+                showInspector(.outline, defaults: defaults)
+            },
             command("versionHistory", "Version History…", symbol: "clock.arrow.circlepath", shortcut: shortcuts.current(.versionHistory)?.display, keywords: ["revisions", "restore"], available: hasLiveNote) {
                 if let liveNote { NoteMenuActions.showVersionHistory(of: liveNote) }
             },
@@ -108,6 +114,12 @@ enum PaletteCommandRegistry {
             }
         }
         return list
+    }
+
+    static func showInspector(_ tab: InspectorTab, defaults: UserDefaults, showWindow: Bool = true) {
+        defaults.set(tab.rawValue, forKey: PrefKey.inspectorTab)
+        defaults.set(true, forKey: PrefKey.inspectorVisible)
+        if showWindow { WindowRouter.showMainWindow() }
     }
 
     private static var cliInstallable: Bool {

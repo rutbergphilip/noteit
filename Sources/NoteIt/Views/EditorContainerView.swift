@@ -6,8 +6,18 @@ struct EditorContainerView: View {
     @StateObject private var find = FindReplaceModel()
     @EnvironmentObject private var navigation: NavigationModel
     @ObservedObject private var linkState = LinkNavigationState.shared
+    @AppStorage(PrefKey.inspectorVisible) private var inspectorVisible = false
 
     var body: some View {
+        content
+            .inspector(isPresented: $inspectorVisible) {
+                LinksPanelView(noteID: store.selectedNoteID)
+                    .inspectorColumnWidth(min: 240, ideal: 280, max: 420)
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
             let writeBlocked = store.isBodyWriteBlocked(id)
             let readOnly = writeBlocked || note.deletedAt != nil
@@ -53,6 +63,12 @@ struct EditorContainerView: View {
                 }
                 ToolbarItem(placement: .primaryAction) {
                     ShareToolbarButton(note: note)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { inspectorVisible.toggle() } label: {
+                        Label("Links and Outline", systemImage: "sidebar.trailing")
+                    }
+                    .help(inspectorVisible ? "Hide Links and Outline" : "Show Links and Outline")
                 }
             }
         } else {

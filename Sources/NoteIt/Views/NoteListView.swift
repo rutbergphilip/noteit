@@ -168,6 +168,7 @@ struct NoteListView: View {
             Button("Mark Conflict Resolved") { store.markConflictResolved(note.id) }
         }
         Button("Version History…") { trash.historyNoteID = note.id }
+        Button("Copy Note Link") { CopyNoteLink.perform(noteID: note.id, store: store) }
         Divider()
         Button("Delete", role: .destructive) { delete(note) }
     }

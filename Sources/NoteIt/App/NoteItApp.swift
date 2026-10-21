@@ -96,6 +96,7 @@ struct NoteItCommands: Commands {
 
         CommandGroup(after: .toolbar) {
             Divider()
+            InspectorMenuButton()
             Button("Go Back") { NotificationCenter.default.post(name: .noteItGoBack, object: nil) }
                 .menuShortcut(.goBack)
             Button("Go Forward") { NotificationCenter.default.post(name: .noteItGoForward, object: nil) }
@@ -106,6 +107,16 @@ struct NoteItCommands: Commands {
             Button("NoteIt Notes") { WindowRouter.showMainWindow() }
                 .keyboardShortcut("0", modifiers: .command)
         }
+    }
+}
+
+/// View › Show / Hide Links and Outline.
+struct InspectorMenuButton: View {
+    @AppStorage(PrefKey.inspectorVisible) private var visible = false
+
+    var body: some View {
+        Button(visible ? "Hide Links and Outline" : "Show Links and Outline") { visible.toggle() }
+            .menuShortcut(.toggleInspector)
     }
 }
 

@@ -118,6 +118,7 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
     case goBack
     case goForward
     case linkToNote
+    case toggleInspector
 
     var id: String { rawValue }
 
@@ -140,6 +141,7 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
         case .goBack: "Go Back"
         case .goForward: "Go Forward"
         case .linkToNote: "Link to Note…"
+        case .toggleInspector: "Show Links and Outline"
         }
     }
 
@@ -161,6 +163,7 @@ enum MenuShortcutCommand: String, CaseIterable, Identifiable {
         case .goBack: MenuShortcut(.leftArrow, [.control, .command])
         case .goForward: MenuShortcut(.rightArrow, [.control, .command])
         case .linkToNote: MenuShortcut("k", [.shift, .command])
+        case .toggleInspector: MenuShortcut("i", [.option, .command])
         }
     }
 }
@@ -183,6 +186,7 @@ enum MenuShortcuts {
     static var goBack: MenuShortcut? { current(.goBack) }
     static var goForward: MenuShortcut? { current(.goForward) }
     static var linkToNote: MenuShortcut? { current(.linkToNote) }
+    static var toggleInspector: MenuShortcut? { current(.toggleInspector) }
     /// SwiftUI's own Settings… item; listed so the palette can show it. It can't be changed.
     static let settings = MenuShortcut(",", .command)
 

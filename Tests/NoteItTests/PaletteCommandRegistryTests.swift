@@ -10,6 +10,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
 
     private let noteCommandIDs: Set<String> = [
         "find", "findReplace", "export", "print", "copyMarkdown", "versionHistory", "togglePin", "deleteNote",
+        "showBacklinks", "showOutline",
     ]
 
     private var shortcutSuite = ""
@@ -66,6 +67,25 @@ final class PaletteCommandRegistryTests: XCTestCase {
         }
         let all = Set(PaletteCommandRegistry.commands(for: store).map(\.info.id))
         XCTAssertTrue(noteCommandIDs.isSubset(of: all))
+    }
+
+    func testInspectorCommandsOpenTheirTab() {
+        let store = makeStore()
+        store.selectedNoteID = addNote(store, "Alpha")
+        XCTAssertTrue(availableIDs(store).isSuperset(of: ["showBacklinks", "showOutline"]))
+
+        PaletteCommandRegistry.showInspector(.outline, defaults: prefs, showWindow: false)
+        XCTAssertTrue(prefs.bool(forKey: PrefKey.inspectorVisible))
+        XCTAssertEqual(prefs.string(forKey: PrefKey.inspectorTab), "outline")
+        PaletteCommandRegistry.showInspector(.links, defaults: prefs, showWindow: false)
+        XCTAssertEqual(prefs.string(forKey: PrefKey.inspectorTab), "links")
+    }
+
+    func testNoDuplicateCopyLinkCommand() {
+        let store = makeStore()
+        store.selectedNoteID = addNote(store, "Alpha")
+        let ids = PaletteCommandRegistry.commands(for: store, defaults: prefs).map(\.info.id)
+        XCTAssertEqual(ids.filter { $0.localizedCaseInsensitiveContains("copy") && $0.localizedCaseInsensitiveContains("link") }, ["copyNoteLink"])
     }
 
     func testPaletteHasCopyNoteLinkOnlyWithNote() throws {

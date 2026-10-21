@@ -8,6 +8,8 @@ struct EditorSettingsView: View {
     @AppStorage(PrefKey.inlineCodeFont) private var inlineCodeFont = InlineCodeFont.monospaced.rawValue
     @AppStorage(PrefKey.codeBlockTheme) private var codeBlockTheme = CodeTheme.xcode.id
     @AppStorage(PrefKey.syntaxHighlighting) private var syntaxHighlighting = true
+    @AppStorage(PrefKey.linkRenameUpdates) private var linkRenameUpdates = PrefDefault.linkRenameUpdates
+    @AppStorage(PrefKey.linkNewNoteNotebook) private var linkNewNoteNotebook = PrefDefault.linkNewNoteNotebook
 
     var body: some View {
         Form {
@@ -74,6 +76,20 @@ struct EditorSettingsView: View {
                 SettingsFootnote(text: "Used by Quick Capture and notes created from the menu bar.")
             } header: {
                 Text("New Notes")
+            }
+
+            Section {
+                Picker("When a note is renamed", selection: $linkRenameUpdates) {
+                    Text("Ask").tag("ask")
+                    Text("Always update links").tag("always")
+                    Text("Never update links").tag("never")
+                }
+                Picker("New notes from links go to", selection: $linkNewNoteNotebook) {
+                    Text("Same notebook as the linking note").tag("source")
+                    Text("Notebook for new notes").tag("default")
+                }
+            } header: {
+                Text("Links")
             }
         }
         .formStyle(.grouped)
