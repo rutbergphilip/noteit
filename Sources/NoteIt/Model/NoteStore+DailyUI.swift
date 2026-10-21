@@ -8,6 +8,13 @@ struct DailyNoteIndex {
     var localeID: String
     var byDay: [DayKey: UUID]
     var dayByNote: [UUID: DayKey]
+    /// Parsed titles, reused by the next build so only new and renamed notes are parsed again.
+    var parsedTitles: [UUID: ParsedTitle]
+
+    struct ParsedTitle {
+        var title: String
+        var day: DayKey?
+    }
 }
 
 /// The daily-note UI (spec §10): Today, the calendar and ‹ › in the header.
@@ -19,15 +26,25 @@ extension NoteStore {
            cache.localeID == locale.identifier {
             return cache
         }
+        let previous = dailyNoteIndexCache?.localeID == locale.identifier ? dailyNoteIndexCache?.parsedTitles ?? [:] : [:]
+        var parsed: [UUID: DailyNoteIndex.ParsedTitle] = [:]
         var oldest: [DayKey: NoteMeta] = [:]
         for meta in notes where meta.notebookID == notebookID && meta.deletedAt == nil {
-            guard let day = DailyNoteTitle.parse(meta.title, locale: locale) else { continue }
+            let day: DayKey?
+            if let known = previous[meta.id], known.title == meta.title {
+                day = known.day
+            } else {
+                day = DailyNoteTitle.parse(meta.title, locale: locale)
+            }
+            parsed[meta.id] = DailyNoteIndex.ParsedTitle(title: meta.title, day: day)
+            guard let day else { continue }
             if let current = oldest[day], (current.createdAt, current.id.uuidString) <= (meta.createdAt, meta.id.uuidString) { continue }
             oldest[day] = meta
         }
         let index = DailyNoteIndex(version: notesVersion, notebookID: notebookID, localeID: locale.identifier,
                                    byDay: oldest.mapValues(\.id),
-                                   dayByNote: Dictionary(uniqueKeysWithValues: oldest.map { ($0.value.id, $0.key) }))
+                                   dayByNote: Dictionary(uniqueKeysWithValues: oldest.map { ($0.value.id, $0.key) }),
+                                   parsedTitles: parsed)
         dailyNoteIndexCache = index
         return index
     }

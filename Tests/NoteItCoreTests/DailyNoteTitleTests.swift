@@ -37,7 +37,7 @@ final class DailyNoteTitleTests: XCTestCase {
 
     func testParseRejectsOtherTitles() {
         for title in ["", "Meeting notes", "2026-10-19 standup", "2026-13-01", "2026-02-30", "Tuesday, 19 October 2026",
-                      "19 October", "2026-1-5"] {
+                      "19 October", "2026-1-5", "2023-02-29", "Budget 2026", "0000-01-01"] {
             XCTAssertNil(DailyNoteTitle.parse(title, locale: en), title)
         }
     }
