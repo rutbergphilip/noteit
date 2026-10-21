@@ -89,9 +89,20 @@ struct CLIContext {
     var runEditor: (String, URL) throws -> Int32
 
     static func live() -> CLIContext {
-        CLIContext(io: .live(), environment: ProcessInfo.processInfo.environment, locator: .live(), keychain: CLIKeychain(),
+        CLIContext(io: .live(), environment: ProcessInfo.processInfo.environment, locator: .live(launchApp: launchNoteItInBackground), keychain: CLIKeychain(),
                    session: .shared, hostName: { Host.current().localizedName }, openURL: openWithLaunchServices,
                    executableURL: Bundle.main.executableURL, timeZone: .current, runEditor: CLIEditor.runEditor)
+    }
+
+    @Sendable static func launchNoteItInBackground() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-g", "-b", AppIdentity.bundleID]
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else { throw CocoaError(.executableLoad) }
     }
 
     static func openWithLaunchServices(_ url: URL) throws {
