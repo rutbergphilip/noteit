@@ -65,6 +65,7 @@ struct MainView: View {
             navigation.goForward(in: store)
         }
         .recentlyDeletedSupport()
+        .tagEditSupport()
         .capturesOpenWindow()
     }
 }

@@ -213,5 +213,9 @@ struct TagTreeRow: View {
         .badge(node.totalCount)
         .tag(SidebarSelection.tag(node.path))
         .help("#\(node.path)")
+        .contextMenu {
+            Button("Rename Tag…") { TagEditCoordinator.shared.renaming = .init(tag: node.path) }
+            Button("Delete Tag…", role: .destructive) { TagEditCoordinator.shared.pendingDelete = node.path }
+        }
     }
 }
