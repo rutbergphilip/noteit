@@ -57,18 +57,26 @@ enum NotionImporter {
 
     static func importExport(_ url: URL, into store: NoteStore,
                              progress: (ImportProgress) -> Void = { _ in }) async throws -> ImportReport {
-        let (roots, temporary) = try await Task.detached { try Self.contentRoots(for: url) }.value
+        let (roots, temporary, failed) = try await Task.detached { try Self.contentRoots(for: url) }.value
         defer { for folder in temporary { try? FileManager.default.removeItem(at: folder) } }
-        let pages = try await Task.detached { try Self.pages(in: roots) }.value
-        return await importPages(pages, roots: roots, into: store, progress: progress)
+        let pages: [Page]
+        do {
+            pages = try await Task.detached { try Self.pages(in: roots) }.value
+        } catch ImportError.nothingToImport where !failed.isEmpty {
+            throw ImportError.unreadableArchive(failed[0])
+        }
+        var report = await importPages(pages, roots: roots, into: store, progress: progress)
+        report.archivesSkipped = failed
+        return report
     }
 
     // MARK: Finding pages
 
     /// The folders holding the export: the chosen folder or the unzipped archive, plus each ZIP at its top level
     /// unzipped (one level only).
-    /// `temporary` lists the unzipped folders, for the caller to remove.
-    nonisolated static func contentRoots(for url: URL) throws -> (roots: [URL], temporary: [URL]) {
+    /// `temporary` lists the unzipped folders, for the caller to remove; `failed` names the part ZIPs that
+    /// couldn't be opened.
+    nonisolated static func contentRoots(for url: URL) throws -> (roots: [URL], temporary: [URL], failed: [String]) {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { throw ImportError.unreadableArchive(url.lastPathComponent) }
@@ -82,14 +90,18 @@ enum NotionImporter {
             root = unpacked
         }
         var roots = [root]
+        var failed: [String] = []
         let top = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         for zip in top.filter({ $0.pathExtension.lowercased() == "zip" })
             .sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
-            guard let unpacked = MarkdownImporter.unzip(zip) else { continue }
+            guard let unpacked = MarkdownImporter.unzip(zip) else {
+                failed.append(zip.lastPathComponent)
+                continue
+            }
             temporary.append(unpacked)
             roots.append(unpacked)
         }
-        return (roots, temporary)
+        return (roots, temporary, failed)
     }
 
     /// Every page and database in `roots`, merged by their path inside the export, parents first.

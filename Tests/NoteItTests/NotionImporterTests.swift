@@ -152,6 +152,30 @@ final class NotionImporterTests: XCTestCase {
         XCTAssertNotNil(store.notes.first { $0.title == "Roadmap" })
     }
 
+    func testPartZipThatWontOpenIsReported() async throws {
+        let export = try makeExport()
+        let staging = base.appendingPathComponent("Outer", isDirectory: true)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        try zip(export, to: staging.appendingPathComponent("Export-Part-1.zip"))
+        try Data("not a zip".utf8).write(to: staging.appendingPathComponent("Export-Part-2.zip"))
+
+        let store = makeStore()
+        let report = try await NotionImporter.importExport(staging, into: store)
+        XCTAssertEqual(report.notesImported, 4)
+        XCTAssertEqual(report.archivesSkipped, ["Export-Part-2.zip"])
+        XCTAssertTrue(report.summary.contains("Export-Part-2.zip"), report.summary)
+
+        let broken = base.appendingPathComponent("Broken", isDirectory: true)
+        try fm.createDirectory(at: broken, withIntermediateDirectories: true)
+        try Data("junk".utf8).write(to: broken.appendingPathComponent("Export-Part-1.zip"))
+        do {
+            _ = try await NotionImporter.importExport(broken, into: makeStore())
+            XCTFail("No error thrown")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .unreadableArchive("Export-Part-1.zip"))
+        }
+    }
+
     func testHTMLExportAndEmptyFoldersAreRefused() async throws {
         let html = base.appendingPathComponent("HTML", isDirectory: true)
         try write("<html></html>", to: "Page \(projectsID).html", in: html)

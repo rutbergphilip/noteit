@@ -13,6 +13,8 @@ struct ImportReport: Equatable {
     var encryptedSectionsSkipped = 0
     /// Distinct tag names left out because no letters or numbers were left after making them valid.
     var tagsSkipped = 0
+    /// ZIP files inside an export that couldn't be opened, by name; their contents weren't imported.
+    var archivesSkipped: [String] = []
     /// Tables cut to their first `NotionImporter.maxTableRows` rows, by name.
     var truncatedTables: [String] = []
     var cancelled = false
@@ -40,6 +42,10 @@ struct ImportReport: Equatable {
             skipped.append(Self.count(tagsSkipped, "tag with no letters or numbers", "tags with no letters or numbers"))
         }
         if !skipped.isEmpty { parts.append("Skipped \(Self.list(skipped)).") }
+        if let archive = archivesSkipped.first {
+            parts.append(archivesSkipped.count == 1 ? "Couldn't open “\(archive)”, so its pages weren't imported."
+                         : "Couldn't open \(archivesSkipped.count.formatted()) ZIP files (“\(archive)” and others), so their pages weren't imported.")
+        }
         if encryptedSectionsSkipped > 0 {
             parts.append(encryptedSectionsSkipped == 1 ? "1 note had encrypted sections that were skipped."
                          : "\(encryptedSectionsSkipped.formatted()) notes had encrypted sections that were skipped.")
