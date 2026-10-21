@@ -286,7 +286,7 @@ final class MarkdownReaderTests: XCTestCase {
     }
 
     private func linkRead(_ md: String, ids: [String: UUID]) -> NSAttributedString {
-        MarkdownReader.attributedString(from: md, resolveWikiLink: { target, heading in
+        MarkdownReader.attributedString(from: md, resolveWikiLink: { target, heading, _ in
             ids[target].map { .note(id: $0, heading: heading) } ?? .unresolved(title: target, heading: heading)
         })
     }

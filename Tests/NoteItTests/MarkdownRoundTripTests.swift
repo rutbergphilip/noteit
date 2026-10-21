@@ -465,5 +465,46 @@ final class MarkdownRoundTripTests: XCTestCase {
         XCTAssertEqual(links(ids["Plan"]), [.note(id: ids["Atlas"]!, heading: nil)])
         XCTAssertTrue(store.body(for: ids["Atlas"]!).string.contains("the plan"))
     }
-}
 
+    func testSameNamedNotesInTwoNotebooksKeepTheirLinks() async throws {
+        let work = Notebook(id: UUID(), name: "Work", symbol: "book", colorHex: "#0A84FF", sortIndex: 0)
+        let home = Notebook(id: UUID(), name: "Home", symbol: "book", colorHex: "#0A84FF", sortIndex: 1)
+        func meta(_ title: String, _ notebook: Notebook) -> NoteMeta {
+            NoteMeta(id: UUID(), notebookID: notebook.id, title: title, preview: "", isPinned: false,
+                     createdAt: Date(), updatedAt: Date(), tags: [])
+        }
+        let workPlan = meta("Plan", work), homePlan = meta("Plan", home), index = meta("Index", home)
+        func body(_ title: String, _ links: [(String, NoteLink)]) -> NSAttributedString {
+            let out = NSMutableAttributedString(attributedString: EditorStyle.paragraph(title, kind: .title))
+            for (text, link) in links {
+                var attrs = EditorStyle.bodyAttributes
+                attrs[.link] = link.url
+                out.append(NSAttributedString(string: text, attributes: attrs))
+                out.append(NSAttributedString(string: " ", attributes: EditorStyle.bodyAttributes))
+            }
+            out.append(NSAttributedString(string: "\n", attributes: EditorStyle.bodyAttributes))
+            return out
+        }
+        let bodies = [workPlan.id: body("Plan", []), homePlan.id: body("Plan", []),
+                      index.id: body("Index", [("Plan", .note(id: workPlan.id, heading: nil)),
+                                               ("home", .note(id: homePlan.id, heading: nil))])]
+        let result = try NoteExporter.exportAll(notebooks: [work, home], notes: [workPlan, homePlan, index],
+                                                format: .markdown, to: folder) { bodies[$0]! }
+        let markdown = try String(contentsOf: result.folder.appendingPathComponent("Home/Index.md"), encoding: .utf8)
+        XCTAssertTrue(markdown.contains("[[Work/Plan]] [[Home/Plan|home]]"), markdown)
+
+        let store = NoteStore(location: LibraryLocation(url: folder.appendingPathComponent("Library", isDirectory: true), seedsFreshLibrary: false))
+        _ = await MarkdownImporter(store: store).run(MarkdownImporter.items(for: [result.folder])) { _ in }
+        let notebookNames = Dictionary(uniqueKeysWithValues: store.notebooks.map { ($0.id, $0.name) })
+        func id(_ title: String, in notebook: String) throws -> UUID {
+            try XCTUnwrap(store.notes.first { $0.title == title && $0.notebookID.flatMap { notebookNames[$0] }?.hasSuffix(notebook) == true }).id
+        }
+        let imported = try id("Index", in: "Home")
+        var links: [NoteLink] = []
+        let text = store.body(for: imported)
+        text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+            if let url = value as? URL, let link = NoteLink(url: url) { links.append(link) }
+        }
+        XCTAssertEqual(links, [.note(id: try id("Plan", in: "Work"), heading: nil), .note(id: try id("Plan", in: "Home"), heading: nil)])
+    }
+}

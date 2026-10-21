@@ -10,6 +10,8 @@ struct ExportLinkContext {
     var exportedName: (UUID) -> String?
     /// The folder, within the export, that holds the note's file.
     var folder: (UUID) -> String? = { _ in nil }
+    /// `Folder/Name` for exported notes whose name is used in more than one folder.
+    var qualifiedName: (UUID) -> String? = { _ in nil }
     /// The note being written, for relative links between folders.
     var source: UUID?
 
@@ -22,11 +24,19 @@ struct ExportLinkContext {
     static func files(_ files: [NotesExport.File], titles: [UUID: String]) -> ExportLinkContext {
         var names: [UUID: String] = [:]
         var folders: [UUID: String] = [:]
+        var uses: [String: Int] = [:]
         for file in files {
-            names[file.note.id] = file.url.deletingPathExtension().lastPathComponent
+            let name = file.url.deletingPathExtension().lastPathComponent
+            names[file.note.id] = name
             folders[file.note.id] = file.url.deletingLastPathComponent().lastPathComponent
+            uses[TextFold.fold(name), default: 0] += 1
         }
-        return ExportLinkContext(title: { titles[$0] }, exportedName: { names[$0] }, folder: { folders[$0] })
+        var qualified: [UUID: String] = [:]
+        for (id, name) in names where uses[TextFold.fold(name), default: 0] > 1 {
+            if let folder = folders[id] { qualified[id] = folder + "/" + name }
+        }
+        return ExportLinkContext(title: { titles[$0] }, exportedName: { names[$0] }, folder: { folders[$0] },
+                                 qualifiedName: { qualified[$0] })
     }
 
     func from(_ source: UUID) -> ExportLinkContext {
@@ -39,7 +49,7 @@ struct ExportLinkContext {
     func wikiName(for link: NoteLink) -> String? {
         switch link {
         case let .note(id, _):
-            if let name = exportedName(id) { return name }
+            if let name = qualifiedName(id) ?? exportedName(id) { return name }
             return title(id).map { Self.cleaned($0, removing: "[]|#^") }.flatMap { $0.isEmpty ? nil : $0 }
         case let .unresolved(title, _):
             let name = Self.cleaned(title, removing: "[]|#^")
@@ -53,7 +63,8 @@ struct ExportLinkContext {
         var out = "[[" + name
         if let heading = link.heading.map({ Self.cleaned($0, removing: "[]|#^") }), !heading.isEmpty { out += "#" + heading }
         let shown = Self.cleaned(text, removing: "[]|").trimmingCharacters(in: .whitespaces)
-        if !shown.isEmpty, shown != name { out += "|" + shown }
+        let shortName = name.split(separator: "/").last.map(String.init) ?? name
+        if !shown.isEmpty, shown != shortName { out += "|" + shown }
         return out + "]]"
     }
 

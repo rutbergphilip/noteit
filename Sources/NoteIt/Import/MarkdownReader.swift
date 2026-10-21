@@ -16,7 +16,8 @@ struct MarkdownNote {
 }
 
 /// Turns an Obsidian link target (file name without folders) and heading into a note link; nil keeps plain text.
-typealias WikiLinkResolver = (_ target: String, _ heading: String?) -> NoteLink?
+/// `folders` holds the path written before the name, as in `[[Trips/Atlas]]`.
+typealias WikiLinkResolver = (_ target: String, _ heading: String?, _ folders: [String]) -> NoteLink?
 
 /// Markdown → NoteIt rich text, built with the editor's own block styles so imported notes behave
 /// exactly like typed ones. The inverse of the export mapping:
@@ -907,9 +908,10 @@ private struct InlineParser {
     private func wikiLink(_ inner: String) -> (String, NoteLink)? {
         guard let resolveWikiLink else { return nil }
         let query = LinkQuery(inner.replacingOccurrences(of: "\\|", with: "|"))
-        var name = query.title.split(separator: "/").last.map(String.init) ?? query.title
+        var parts = query.title.split(separator: "/").map(String.init)
+        var name = parts.popLast() ?? query.title
         if (name as NSString).pathExtension.lowercased() == "md" { name = (name as NSString).deletingPathExtension }
-        guard !name.isEmpty, let link = resolveWikiLink(name, query.heading) else { return nil }
+        guard !name.isEmpty, let link = resolveWikiLink(name, query.heading, parts) else { return nil }
         return (query.alias ?? query.heading.map { "\(name) › \($0)" } ?? name, link)
     }
 

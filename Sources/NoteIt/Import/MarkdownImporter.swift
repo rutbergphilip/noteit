@@ -85,10 +85,10 @@ final class MarkdownImporter {
         var report = ImportReport()
         var nameIndexes: [URL: [String: URL]] = [:]
         let ids = items.map { _ in UUID() }
-        var names: [String: UUID] = [:]
+        var names: [String: [WikiTarget]] = [:]
         for (item, id) in zip(items, ids) {
             let key = TextFold.fold(item.url.deletingPathExtension().lastPathComponent)
-            if names[key] == nil { names[key] = id }
+            names[key, default: []].append(WikiTarget(id: id, folders: Self.folders(of: item)))
         }
         let store = store
         let resolveWikiLink = Self.wikiLinkResolver(names: names) { store.noteID(forTitle: $0, preferring: nil) }
@@ -186,11 +186,30 @@ final class MarkdownImporter {
         report.notebookIDs.insert(nb.id)
     }
 
-    /// Resolves a wiki-link target to a note in the same import by file name (folded), then to an existing
-    /// note with that title, else to an unresolved title link.
-    static func wikiLinkResolver(names: [String: UUID], existing: @escaping (String) -> UUID?) -> WikiLinkResolver {
-        { target, heading in
-            if let id = names[TextFold.fold(target)] ?? existing(target) { return .note(id: id, heading: heading) }
+    /// A note in the import that wiki links can name: its id and the folded folders above it, starting with
+    /// the chosen folder.
+    struct WikiTarget {
+        var id: UUID
+        var folders: [String]
+    }
+
+    nonisolated static func folders(of item: Item) -> [String] {
+        let base = item.root.deletingLastPathComponent().standardizedFileURL.pathComponents
+        let dir = item.url.deletingLastPathComponent().standardizedFileURL.pathComponents
+        guard dir.starts(with: base) else { return [] }
+        return dir.dropFirst(base.count).map(TextFold.fold)
+    }
+
+    /// Resolves a wiki-link target to a note in the same import by file name (folded), preferring the one whose
+    /// folders end with the link's path (`[[Work/Plan]]`), then to an existing note with that title, else to an
+    /// unresolved title link.
+    static func wikiLinkResolver(names: [String: [WikiTarget]], existing: @escaping (String) -> UUID?) -> WikiLinkResolver {
+        { target, heading, folders in
+            let candidates = names[TextFold.fold(target)] ?? []
+            let wanted = folders.map(TextFold.fold)
+            let match = candidates.first { $0.folders.count >= wanted.count && Array($0.folders.suffix(wanted.count)) == wanted }
+                ?? candidates.first
+            if let id = match?.id ?? existing(target) { return .note(id: id, heading: heading) }
             return .unresolved(title: target, heading: heading)
         }
     }
