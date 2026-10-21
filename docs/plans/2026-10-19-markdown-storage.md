@@ -646,6 +646,20 @@ Milestone 4 needs Milestone 3. Task 4.1 and the watcher part of 4.2 can run in p
 
 5.1 needs Milestone 3; 5.2 needs 5.1 and Task 6.1's tab (it is opened from Your Data). Milestone 4 and Task 5.1 can run in parallel.
 
+## As built: Milestones 3–5
+
+Plan-vs-code check, done before Milestone 3 against `feature/wave-1` (after automation, linking and organise landed):
+
+- **Nested notebooks exist.** Organise's `Notebook.parent` and `NotebookTree.maxDepth` (4) are in, so nested folders map to nested notebooks from the start; the "top-level notebook" fallback of spec §3.4 is not built. Folder names come from `ExportNaming.sanitized`, made unique among siblings case-insensitively. Notebook folders are tracked by id in `markdown-files.json` (`notebooks`: id → folder path), so a rename or move in NoteIt moves the recorded folder rather than guessing it from the name.
+- **`prepareTemp` has no notebook.** The protocol is unchanged. `MarkdownBodyStorage` keeps the notebook tree (`setNotebooks`, called by `NoteStore` before every write pass and by sync before preparing) and derives the note's folder from `meta.notebookID`; temp files go to `<content>/.noteit/staging/`. When the folder changed between prepare and install, `installTemp` re-renders the file for its new depth so attachment paths stay right.
+- **Metadata moves on flush are one reconcile pass** (`NoteStore.syncMarkdownLayout()`, called from `flush()` on a Markdown store only) instead of a hook in each mutator: it compares notes and notebooks with what the storage last wrote and calls `writeMetadataOnly`, `renameNotebook` (also for moves) and `removeNotebook`. This also covers sync applies, undo and every organise mutator without touching them.
+- **Recently Deleted in a Markdown library** is the note's file in `<content>/.trash/` with `deleted:`; the reconcile pass moves it there and back. A purge (`moveToTrash` from `trashPendingBodies`) leaves the file in `.trash/` and drops it from the index, as RTFD keeps purged packages in `<data>/.trash/`. `removePermanently` calls the injected trash function (macOS Trash).
+- **Name clash.** `WikiLinkResolver` is already a typealias in `Import/MarkdownReader.swift` (linking's import resolver), so the on-disk resolver is `MarkdownLinkResolver`. It follows linking's rules: exact content path, then a unique file name (folded with `TextFold.fold`, as linking matches names), then a path suffix (`[[Folder/Name]]`), then `formerPaths`.
+- **`MarkdownBodyStorage.init`** doesn't throw and takes no styles (`AppDocStyleProvider.shared`, as `BodyCodec` uses); it owns its `WriteLedger`, which the watcher reads.
+- **Organise, linking and automation** need nothing Markdown-specific: the search index v2, link index, tasks and reminders read bodies through `NoteStore` and are fed through the `DerivedIndex` registry, also for external edits (`editBody`).
+- **Task 5.2** is opened from Task 6.1's Your Data tab, which isn't built (`SettingsView.Tab.data` has `isBuilt == false`).
+- **Task 3.6** moved to Milestone 10 (wave 3), as the plan already says; no lock handling here.
+
 ## Milestone 6: Your Data and backups
 
 ### Task 6.1: Your Data tab, menus, palette
