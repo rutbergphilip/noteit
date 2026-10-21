@@ -29,9 +29,11 @@ struct CLIInstaller: Sendable {
     /// File names in `Contents/Resources/completions` (written by scripts/build_app.sh) and their link paths.
     static let completionLinks = [
         ("_noteit", "/usr/local/share/zsh/site-functions/_noteit"),
-        ("noteit.bash", "/usr/local/etc/bash_completion.d/noteit"),
+        ("noteit.bash", "/usr/local/share/bash-completion/completions/noteit"),
         ("noteit.fish", "/usr/local/share/fish/vendor_completions.d/noteit.fish"),
     ]
+    /// Where earlier builds linked completion files. Install and Uninstall remove these links if they point into NoteIt.
+    static let retiredCompletionLinks = ["/usr/local/etc/bash_completion.d/noteit"]
 
     var linkURL: URL
     var toolURL: URL?
@@ -39,12 +41,14 @@ struct CLIInstaller: Sendable {
     /// True when the app runs from somewhere a link shouldn't point to, like a translocated or disk image copy.
     var appNeedsMoving: @Sendable () -> Bool = { false }
     var completions: [Completion] = []
+    var retiredCompletionLinks: [URL] = []
 
     static func live() -> CLIInstaller {
         CLIInstaller(linkURL: URL(fileURLWithPath: defaultLinkPath), toolURL: bundledTool(in: Bundle.main),
                      runPrivileged: { try runWithAdministratorPrivileges($0) },
                      appNeedsMoving: { needsMoving(Bundle.main.bundleURL) },
-                     completions: completions(in: Bundle.main.bundleURL))
+                     completions: completions(in: Bundle.main.bundleURL),
+                     retiredCompletionLinks: retiredCompletionLinks.map { URL(fileURLWithPath: $0) })
     }
 
     static func completions(in bundleURL: URL) -> [Completion] {
@@ -69,7 +73,7 @@ struct CLIInstaller: Sendable {
         }
         let target = resolve(destination)
         if let toolURL, target.standardizedFileURL.path == toolURL.standardizedFileURL.path {
-            return completionsToLink().isEmpty ? .installed : .completionsMissing
+            return completionsToLink().isEmpty && linkedRetiredCompletions().isEmpty ? .installed : .completionsMissing
         }
         return isNoteItTool(target) ? .otherCopy(target.path) : .pointsElsewhere(target.path)
     }
@@ -97,6 +101,14 @@ struct CLIInstaller: Sendable {
         }
     }
 
+    /// Retired completion links that point into a copy of NoteIt.
+    func linkedRetiredCompletions() -> [URL] {
+        retiredCompletionLinks.filter { link in
+            guard let destination = try? FileManager.default.destinationOfSymbolicLink(atPath: link.path) else { return false }
+            return Self.isNoteItCompletion(Self.resolve(destination, link: link))
+        }
+    }
+
     static func isNoteItCompletion(_ url: URL) -> Bool {
         let components = url.standardizedFileURL.pathComponents
         guard let name = components.last, completionLinks.contains(where: { $0.0 == name }) else { return false }
@@ -113,6 +125,16 @@ struct CLIInstaller: Sendable {
         if let destination, !isNoteItTool(resolve(destination)) { throw CLIInstallerError.foreignLink(linkURL.path) }
         let links = [(target: toolURL.path, link: linkURL.path)]
             + completionsToLink().map { (target: $0.fileURL.path, link: $0.linkURL.path) }
+        var privileged: [String] = []
+        let retired = linkedRetiredCompletions()
+        for (index, link) in retired.enumerated() {
+            do {
+                try fileManager.removeItem(at: link)
+            } catch where Self.isPermissionError(error) {
+                privileged.append(Self.removeCommand(Array(retired[index...])))
+                break
+            }
+        }
         for (index, entry) in links.enumerated() {
             do {
                 let link = URL(fileURLWithPath: entry.link)
@@ -120,10 +142,11 @@ struct CLIInstaller: Sendable {
                 if (try? fileManager.destinationOfSymbolicLink(atPath: link.path)) != nil { try fileManager.removeItem(at: link) }
                 try fileManager.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: entry.target))
             } catch where Self.isPermissionError(error) {
-                try runPrivileged(Self.installCommand(links: Array(links[index...])))
-                return
+                privileged.append(Self.installCommand(links: Array(links[index...])))
+                break
             }
         }
+        if !privileged.isEmpty { try runPrivileged(privileged.joined(separator: " && ")) }
     }
 
     /// Removes the tool's link and the completion links into any copy of NoteIt.
@@ -133,15 +156,19 @@ struct CLIInstaller: Sendable {
             guard isNoteItTool(resolve(destination)) else { throw CLIInstallerError.foreignLink(linkURL.path) }
             links.append(linkURL)
         }
-        links += linkedCompletions().map(\.linkURL)
+        links += linkedCompletions().map(\.linkURL) + linkedRetiredCompletions()
         for (index, link) in links.enumerated() {
             do {
                 try FileManager.default.removeItem(at: link)
             } catch where Self.isPermissionError(error) {
-                try runPrivileged("rm -f " + links[index...].map { Self.quoted($0.path) }.joined(separator: " "))
+                try runPrivileged(Self.removeCommand(Array(links[index...])))
                 return
             }
         }
+    }
+
+    static func removeCommand(_ links: [URL]) -> String {
+        "rm -f " + links.map { quoted($0.path) }.joined(separator: " ")
     }
 
     static func installCommand(tool: String, link: String) -> String {

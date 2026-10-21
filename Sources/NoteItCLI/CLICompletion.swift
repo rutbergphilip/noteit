@@ -54,6 +54,8 @@ enum CompletionScript {
         Installing the tool from NoteIt › Settings › Integrations also installs completion for zsh, bash and fish.
         zsh only loads completion when ~/.zshrc has this line:
           autoload -Uz compinit && compinit
+        bash loads it through bash-completion 2, such as Homebrew's bash with bash-completion@2. macOS's /bin/bash
+        doesn't have that, so add the eval line below to ~/.bash_profile.
         To set it up yourself instead:
           zsh   Add to ~/.zshrc, after compinit: source <(noteit completion zsh)
           bash  Add to ~/.bash_profile: eval "$(noteit completion bash)"

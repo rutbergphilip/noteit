@@ -27,13 +27,16 @@ final class CLIInstallerTests: XCTestCase {
     private func installer(tool: URL? = nil, needsMoving: Bool = false, completions: [CLIInstaller.Completion] = []) -> CLIInstaller {
         let commands = commands
         return CLIInstaller(linkURL: bin.appendingPathComponent("noteit"), toolURL: tool ?? self.tool,
-                            runPrivileged: { commands.append($0) }, appNeedsMoving: { needsMoving }, completions: completions)
+                            runPrivileged: { commands.append($0) }, appNeedsMoving: { needsMoving }, completions: completions,
+                            retiredCompletionLinks: [retiredBashLink])
     }
+
+    private var retiredBashLink: URL { root.appendingPathComponent("etc/bash_completion.d/noteit") }
 
     /// The three completion files in the test app, linked from folders under `root`.
     private func completions(shipped: Bool = true) throws -> [CLIInstaller.Completion] {
         let app = root.appendingPathComponent("Apps/NoteIt.app")
-        let links = ["share/zsh/site-functions/_noteit", "etc/bash_completion.d/noteit", "share/fish/vendor_completions.d/noteit.fish"]
+        let links = ["share/zsh/site-functions/_noteit", "share/bash-completion/completions/noteit", "share/fish/vendor_completions.d/noteit.fish"]
         return try zip(CLIInstaller.completions(in: app), links).map { completion, link in
             if shipped {
                 try FileManager.default.createDirectory(at: completion.fileURL.deletingLastPathComponent(),
@@ -171,7 +174,7 @@ final class CLIInstallerTests: XCTestCase {
         let completions = try completions()
         XCTAssertEqual(completions.map(\.fileURL.lastPathComponent), ["_noteit", "noteit.bash", "noteit.fish"])
         XCTAssertEqual(CLIInstaller.completionLinks.map(\.1), ["/usr/local/share/zsh/site-functions/_noteit",
-                                                              "/usr/local/etc/bash_completion.d/noteit",
+                                                              "/usr/local/share/bash-completion/completions/noteit",
                                                               "/usr/local/share/fish/vendor_completions.d/noteit.fish"])
         try installer(completions: completions).install()
         for completion in completions {
@@ -233,6 +236,36 @@ final class CLIInstallerTests: XCTestCase {
         XCTAssertEqual(destination(completions[1]), foreign.path)
         XCTAssertEqual(destination(completions[2]), otherApp.path)
         XCTAssertEqual(commands.all, [])
+    }
+
+    func testRetiredBashLinkIsRemoved() throws {
+        let completions = try completions()
+        let fileManager = FileManager.default
+        try installer(completions: completions).install()
+        try fileManager.createDirectory(at: retiredBashLink.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.createSymbolicLink(at: retiredBashLink, withDestinationURL: completions[1].fileURL)
+        XCTAssertEqual(installer(completions: completions).state(), .completionsMissing)
+
+        try installer(completions: completions).install()
+        XCTAssertNil(try? fileManager.destinationOfSymbolicLink(atPath: retiredBashLink.path))
+        XCTAssertEqual(installer(completions: completions).state(), .installed)
+
+        try fileManager.createSymbolicLink(at: retiredBashLink, withDestinationURL: completions[1].fileURL)
+        try fileManager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: retiredBashLink.deletingLastPathComponent().path)
+        defer { try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: retiredBashLink.deletingLastPathComponent().path) }
+        try installer(completions: completions).install()
+        XCTAssertEqual(commands.all, ["rm -f '\(retiredBashLink.path)'"])
+
+        try installer(completions: completions).uninstall()
+        XCTAssertEqual(commands.all.last, "rm -f '\(retiredBashLink.path)'")
+        try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: retiredBashLink.deletingLastPathComponent().path)
+
+        try fileManager.removeItem(at: retiredBashLink)
+        fileManager.createFile(atPath: retiredBashLink.path, contents: Data("# mine".utf8))
+        try installer(completions: completions).install()
+        XCTAssertEqual(installer(completions: completions).state(), .installed)
+        try installer(completions: completions).uninstall()
+        XCTAssertEqual(try String(contentsOf: retiredBashLink, encoding: .utf8), "# mine")
     }
 
     func testPrivilegedInstallAndUninstallUseOneCommand() throws {
