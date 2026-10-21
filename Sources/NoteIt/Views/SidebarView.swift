@@ -8,6 +8,7 @@ struct SidebarView: View {
     @State private var renamingID: UUID?
     @State private var renameText = ""
     @State private var notebookPendingDelete: Notebook?
+    @State private var smartFolderPendingDelete: SmartFolder?
     @FocusState private var renameFocused: Bool
     @AppStorage(PrefKey.showTodayInSidebar) private var showToday = PrefDefault.showTodayInSidebar
     @State private var todayNumber = Self.currentDayNumber()
@@ -15,46 +16,59 @@ struct SidebarView: View {
 
     var body: some View {
         List(selection: $store.selection) {
-            Section("Library") {
-                libraryRow("All Notes", symbol: "note.text", tint: Tokens.Color.accent, selection: .allNotes)
-                if showToday && DailyNotes.isAvailable {
-                    todayRow
-                }
-                libraryRow("Pinned", symbol: "pin.fill", tint: Tokens.Color.pinned, selection: .pinned)
-                libraryRow("Recent", symbol: "clock", tint: Tokens.Color.recent, selection: .recent)
-                if store.count(for: .conflicts) > 0 || store.selection == .conflicts {
-                    libraryRow("Conflicts", symbol: "exclamationmark.triangle.fill", tint: .orange, selection: .conflicts)
-                }
-            }
-
-            Section("Notebooks") {
-                ForEach(store.sortedNotebooks) { notebook in
-                    notebookRow(notebook)
-                }
-                .onMove { store.moveNotebooks(from: $0, to: $1) }
-            }
-
-            if !store.allTags.isEmpty {
-                Section("Tags") {
-                    ForEach(store.allTags, id: \.self) { tag in
+            let tags = store.tagTree
+            let smartFolders = store.sortedSmartFolders
+            let sections = SidebarSection.visible(hasSmartFolders: !smartFolders.isEmpty, hasTags: !tags.isEmpty,
+                                                  showsRecentlyDeleted: store.hasRecentlyDeleted || store.selection == .recentlyDeleted)
+            ForEach(sections, id: \.self) { section in
+                switch section {
+                case .library:
+                    Section("Library") {
+                        libraryRow("All Notes", symbol: "note.text", tint: Tokens.Color.accent, selection: .allNotes)
+                        if showToday && DailyNotes.isAvailable {
+                            todayRow
+                        }
                         Label {
-                            Text(tag)
+                            Text("Tasks")
                         } icon: {
-                            Image(systemName: "number").foregroundStyle(.secondary)
+                            Image(systemName: "checklist").foregroundStyle(Tokens.Color.tasks)
                         }
-                        .badge(store.count(for: .tag(tag)))
-                        .tag(SidebarSelection.tag(tag))
+                        .badge(store.openDueTodayOrOverdueCount)
+                        .tag(SidebarSelection.tasks)
+                        libraryRow("Pinned", symbol: "pin.fill", tint: Tokens.Color.pinned, selection: .pinned)
+                        libraryRow("Recent", symbol: "clock", tint: Tokens.Color.recent, selection: .recent)
+                        if store.count(for: .conflicts) > 0 || store.selection == .conflicts {
+                            libraryRow("Conflicts", symbol: "exclamationmark.triangle.fill", tint: .orange, selection: .conflicts)
+                        }
                     }
-                }
-            }
-
-            if store.hasRecentlyDeleted || store.selection == .recentlyDeleted {
-                Section {
-                    libraryRow("Recently Deleted", symbol: "trash", tint: .secondary, selection: .recentlyDeleted)
-                        .contextMenu {
-                            Button("Empty Recently Deleted…") { RecentlyDeletedCoordinator.shared.confirmingEmpty = true }
-                                .disabled(!store.hasRecentlyDeleted)
+                case .smartFolders:
+                    Section("Smart Folders") {
+                        ForEach(smartFolders) { smartFolderRow($0) }
+                            .onMove { store.moveSmartFolders(fromOffsets: $0, toOffset: $1) }
+                    }
+                case .notebooks:
+                    Section {
+                        NotebookOutlineRows(parent: nil) { notebookRow($0) }
+                    } header: {
+                        Text("Notebooks")
+                            .dropDestination(for: String.self) { items, _ in
+                                SidebarDragPayload.drop(items, on: nil, store: store)
+                            }
+                    }
+                case .tags:
+                    Section("Tags") {
+                        ForEach(tags) { node in
+                            TagTreeRow(node: node)
                         }
+                    }
+                case .recentlyDeleted:
+                    Section {
+                        libraryRow("Recently Deleted", symbol: "trash", tint: .secondary, selection: .recentlyDeleted)
+                            .contextMenu {
+                                Button("Empty Recently Deleted…") { RecentlyDeletedCoordinator.shared.confirmingEmpty = true }
+                                    .disabled(!store.hasRecentlyDeleted)
+                            }
+                    }
                 }
             }
         }
@@ -80,6 +94,19 @@ struct SidebarView: View {
             .padding(.vertical, 10)
         }
         .confirmationDialog(
+            "Delete the smart folder “\(smartFolderPendingDelete?.name ?? "")”?",
+            isPresented: Binding(
+                get: { smartFolderPendingDelete != nil },
+                set: { if !$0 { smartFolderPendingDelete = nil } }
+            ),
+            presenting: smartFolderPendingDelete
+        ) { folder in
+            Button("Delete Smart Folder", role: .destructive) { store.deleteSmartFolder(folder.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("The notes in it aren’t touched.")
+        }
+        .confirmationDialog(
             "Delete “\(notebookPendingDelete?.name ?? "")”?",
             isPresented: Binding(
                 get: { notebookPendingDelete != nil },
@@ -89,8 +116,25 @@ struct SidebarView: View {
         ) { notebook in
             Button("Delete Notebook", role: .destructive) { store.deleteNotebook(notebook.id) }
             Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("Its notes will be moved to Recently Deleted.")
+        } message: { notebook in
+            Text(deleteMessage(notebook))
+        }
+    }
+
+    private func smartFolderRow(_ folder: SmartFolder) -> some View {
+        Label {
+            Text(folder.name)
+        } icon: {
+            Image(systemName: folder.symbol).foregroundStyle(Tokens.Color.accent)
+        }
+        .badge(store.count(for: .smartFolder(folder.id)))
+        .tag(SidebarSelection.smartFolder(folder.id))
+        .help(folder.query)
+        .contextMenu {
+            Button("Edit Smart Folder…") { SmartFolderActions.edit(folder) }
+            Button("Duplicate") { SmartFolderActions.duplicate(folder, store: store) }
+            Divider()
+            Button("Delete Smart Folder…", role: .destructive) { smartFolderPendingDelete = folder }
         }
     }
 
@@ -159,16 +203,25 @@ struct SidebarView: View {
         }
         .badge(store.count(for: .notebook(notebook.id)))
         .tag(SidebarSelection.notebook(notebook.id))
-        .dropDestination(for: String.self) { items, _ in
-            let ids = noteIDs(from: items)
-            for id in ids { store.moveNote(id, to: notebook.id) }
-            return !ids.isEmpty
-        }
         .contextMenu {
             Button("Rename") { beginRename(notebook) }
             Button("Edit Notebook…") { notebookDraft = NotebookDraft(notebook) }
+            Button("New Notebook Inside…") { notebookDraft = NotebookDraft(parentID: notebook.id) }
+                .disabled(store.notebookTree.depth(of: notebook.id) >= NotebookTree.maxDepth)
+            NotebookMoveMenu(notebook: notebook)
             Divider()
             Button("Delete Notebook…", role: .destructive) { notebookPendingDelete = notebook }
+        }
+    }
+
+    private func deleteMessage(_ notebook: Notebook) -> String {
+        let inner = store.notebookTree.descendants(of: notebook.id).count
+        let notes = store.count(for: .notebook(notebook.id))
+        let noteText = notes == 1 ? "1 note" : "\(notes) notes"
+        switch inner {
+        case 0: return "Its \(noteText) will be moved to Recently Deleted."
+        case 1: return "Its notebook inside and \(noteText) go too. The notes will be moved to Recently Deleted."
+        default: return "Its \(inner) notebooks inside and \(noteText) go too. The notes will be moved to Recently Deleted."
         }
     }
 
@@ -190,5 +243,55 @@ struct SidebarView: View {
             store.updateNotebook(current)
         }
         renamingID = nil
+    }
+}
+
+/// Sidebar sections in program §9 order: library rows, smart folders, notebooks, tags, then Recently Deleted on its own.
+enum SidebarSection: Hashable, CaseIterable {
+    case library, smartFolders, notebooks, tags, recentlyDeleted
+
+    static func visible(hasSmartFolders: Bool, hasTags: Bool, showsRecentlyDeleted: Bool) -> [SidebarSection] {
+        allCases.filter { section in
+            switch section {
+            case .library, .notebooks: true
+            case .smartFolders: hasSmartFolders
+            case .tags: hasTags
+            case .recentlyDeleted: showsRecentlyDeleted
+            }
+        }
+    }
+}
+
+/// A tag and, under a disclosure triangle, the tags nested in it.
+struct TagTreeRow: View {
+    @EnvironmentObject private var store: NoteStore
+    let node: TagNode
+
+    var body: some View {
+        if node.children.isEmpty {
+            label
+        } else {
+            DisclosureGroup {
+                ForEach(node.children) { TagTreeRow(node: $0) }
+            } label: {
+                label
+            }
+        }
+    }
+
+    private var label: some View {
+        Label {
+            Text(node.name)
+        } icon: {
+            Image(systemName: "number").foregroundStyle(.secondary)
+        }
+        .badge(node.totalCount)
+        .tag(SidebarSelection.tag(node.path))
+        .help("#\(node.path)")
+        .contextMenu {
+            Button("Rename Tag…") { TagEditCoordinator.shared.renaming = .init(tag: node.path) }
+            Button("New Smart Folder from Tag") { SmartFolderActions.create(fromTag: node.path, store: store) }
+            Button("Delete Tag…", role: .destructive) { TagEditCoordinator.shared.pendingDelete = node.path }
+        }
     }
 }

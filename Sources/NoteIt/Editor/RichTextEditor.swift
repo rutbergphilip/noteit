@@ -130,6 +130,7 @@ struct RichTextEditor: NSViewRepresentable {
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
             styleLinks()
+            textView.tokenStyler.restyleAll()
             let caret = RichTextEditor.pendingCaret.removeValue(forKey: noteID).map { min(max($0, 0), textView.storage.length) }
             textView.setSelectedRange(NSRange(location: caret ?? 0, length: 0))
             if let caret, caret > 0 {
@@ -180,6 +181,7 @@ struct RichTextEditor: NSViewRepresentable {
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
             undo.removeAllActions()
             styleLinks()
+            textView.tokenStyler.restyleAll()
             let length = textView.storage.length
             let location = min(selection.location, length)
             textView.setSelectedRange(NSRange(location: location, length: min(selection.length, length - location)))
@@ -335,7 +337,13 @@ struct RichTextEditor: NSViewRepresentable {
         /// Arrow keys, Return, Tab and Esc go to an open suggestion list; ⌃P/⌃N arrive as moveUp:/moveDown:.
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             guard let textView = textView as? NoteItTextView else { return false }
-            return textView.inlineCompletion.handle(commandSelector)
+            if textView.inlineCompletion.handle(commandSelector) { return true }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)),
+               let highlights = SearchHighlightController.controller(for: textView) {
+                highlights.clear()
+                return true
+            }
+            return false
         }
 
         func textViewDidChangeTypingAttributes(_ notification: Notification) {

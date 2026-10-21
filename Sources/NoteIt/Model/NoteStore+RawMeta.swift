@@ -11,6 +11,11 @@ import NoteItCore
 /// case doesn't compile until it supplies both arms.
 enum RawMetaKind: String, CaseIterable, Sendable, Codable {
     case notes, notebooks
+    case smartFolders = "smart-folders"
+
+    /// Kinds NoteIt 0.2 knows. Their queued deletions stay in `pending-deletions.json`, which it decodes as a whole;
+    /// other kinds queue in `pending-deletions-2.json`.
+    var isLegacy: Bool { self == .notes || self == .notebooks }
 }
 
 /// A raw meta file's content. `sourceRevision` is the `RecordPayload.revision` of the remote meta in `meta` (the
@@ -24,6 +29,7 @@ struct RawMeta: Codable, Equatable, Sendable {
 extension NoteStore {
     var rawMetaURL: URL { rootURL.appendingPathComponent("sync-meta-raw", isDirectory: true) }
     private var rawMetaDeletionQueueURL: URL { rawMetaURL.appendingPathComponent("pending-deletions.json") }
+    private var newerRawMetaDeletionQueueURL: URL { rawMetaURL.appendingPathComponent("pending-deletions-2.json") }
 
     func rawMetaFileURL(_ id: UUID, kind: RawMetaKind) -> URL {
         rawMetaURL.appendingPathComponent(kind.rawValue, isDirectory: true)
@@ -36,6 +42,7 @@ extension NoteStore {
         switch kind {
         case .notes: appliedRemoteRevisions.notes[id.uuidString]
         case .notebooks: appliedRemoteRevisions.notebooks[id.uuidString]
+        case .smartFolders: smartFolderState.applied[id.uuidString]
         }
     }
 
@@ -83,6 +90,7 @@ extension NoteStore {
         switch kind {
         case .notes: libraryNoteIDsOnDisk?.contains(id) ?? true
         case .notebooks: libraryNotebookIDsOnDisk?.contains(id) ?? true
+        case .smartFolders: smartFolderState.idsOnDisk?.contains(id) ?? true
         }
     }
 
@@ -120,6 +128,7 @@ extension NoteStore {
         switch kind {
         case .notes: note(with: id) != nil
         case .notebooks: notebook(with: id) != nil
+        case .smartFolders: smartFolder(with: id) != nil
         }
     }
 
@@ -128,27 +137,44 @@ extension NoteStore {
         var id: UUID
     }
 
+    /// Entries of a kind this build doesn't know are skipped, not the whole file.
+    private struct StoredDeletion: Codable {
+        var kind: String
+        var id: UUID
+    }
+
     func loadRawMetaDeletionQueue() {
-        guard let data = try? Data(contentsOf: rawMetaDeletionQueueURL) else { return }
-        guard let entries = try? Self.decoder.decode([QueuedDeletion].self, from: data) else {
-            NSLog("NoteIt: \(rawMetaDeletionQueueURL.lastPathComponent) is unreadable; ignoring it")
-            return
+        for url in [rawMetaDeletionQueueURL, newerRawMetaDeletionQueueURL] {
+            guard let data = try? Data(contentsOf: url) else { continue }
+            guard let entries = try? Self.decoder.decode([StoredDeletion].self, from: data) else {
+                NSLog("NoteIt: \(url.lastPathComponent) is unreadable; ignoring it")
+                continue
+            }
+            for entry in entries {
+                guard let kind = RawMetaKind(rawValue: entry.kind) else { continue }
+                rawMetaDeletionQueue[kind, default: []].insert(entry.id)
+            }
         }
-        for entry in entries { rawMetaDeletionQueue[entry.kind, default: []].insert(entry.id) }
     }
 
     func saveRawMetaDeletionQueue() {
+        let all = rawMetaDeletionQueue
+        saveRawMetaDeletionQueue(all.filter { $0.key.isLegacy }, to: rawMetaDeletionQueueURL)
+        saveRawMetaDeletionQueue(all.filter { !$0.key.isLegacy }, to: newerRawMetaDeletionQueueURL)
+    }
+
+    private func saveRawMetaDeletionQueue(_ queue: [RawMetaKind: Set<UUID>], to url: URL) {
         let fm = FileManager.default
         do {
-            if rawMetaDeletionQueue.isEmpty {
-                if fm.fileExists(atPath: rawMetaDeletionQueueURL.path) { try fm.removeItem(at: rawMetaDeletionQueueURL) }
+            if queue.values.allSatisfy(\.isEmpty) {
+                if fm.fileExists(atPath: url.path) { try fm.removeItem(at: url) }
                 return
             }
-            let entries = rawMetaDeletionQueue
+            let entries = queue
                 .flatMap { kind, ids in ids.map { QueuedDeletion(kind: kind, id: $0) } }
                 .sorted { ($0.kind.rawValue, $0.id.uuidString) < ($1.kind.rawValue, $1.id.uuidString) }
             try fm.createDirectory(at: rawMetaURL, withIntermediateDirectories: true)
-            try Self.encoder.encode(entries).write(to: rawMetaDeletionQueueURL, options: .atomic)
+            try Self.encoder.encode(entries).write(to: url, options: .atomic)
         } catch {
             NSLog("NoteIt: failed to save the sync meta deletion queue: \(error)")
         }

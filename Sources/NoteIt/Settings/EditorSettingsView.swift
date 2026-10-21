@@ -75,8 +75,8 @@ struct EditorSettingsView: View {
                 Picker("Default notebook for new notes", selection: notebookBinding) {
                     Label("No Notebook", systemImage: "tray.full").tag(PrefDefault.noNotebook)
                     Divider()
-                    ForEach(store.sortedNotebooks) { notebook in
-                        Label(notebook.name, systemImage: notebook.symbol).tag(notebook.id.uuidString)
+                    ForEach(store.notebookPickerEntries) { entry in
+                        NotebookPickerLabel(entry).tag(entry.id.uuidString)
                     }
                 }
                 SettingsFootnote(text: "Used by Quick Capture and notes created from the menu bar.")
@@ -102,8 +102,8 @@ struct EditorSettingsView: View {
                 Picker("Templates notebook", selection: templatesNotebookBinding) {
                     Text("Templates (created on first use)").tag("")
                     Divider()
-                    ForEach(store.sortedNotebooks) { notebook in
-                        Label(notebook.name, systemImage: notebook.symbol).tag(notebook.id.uuidString)
+                    ForEach(store.notebookPickerEntries) { entry in
+                        NotebookPickerLabel(entry).tag(entry.id.uuidString)
                     }
                 }
                 SettingsFootnote(text: "Notes in this notebook are templates. Use New Template in the command palette to add one.")
@@ -116,8 +116,8 @@ struct EditorSettingsView: View {
                     Picker("Notebook", selection: dailyNotebookBinding) {
                         Text("Daily Notes (created on first use)").tag("")
                         Divider()
-                        ForEach(store.sortedNotebooks) { notebook in
-                            Label(notebook.name, systemImage: notebook.symbol).tag(notebook.id.uuidString)
+                        ForEach(store.notebookPickerEntries) { entry in
+                            NotebookPickerLabel(entry).tag(entry.id.uuidString)
                         }
                     }
                     Picker("Title", selection: $dailyTitleFormat) {

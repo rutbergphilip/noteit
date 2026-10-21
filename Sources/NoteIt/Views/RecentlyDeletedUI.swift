@@ -126,16 +126,22 @@ private struct RecentlyDeletedSupport: ViewModifier {
 
 struct UndoToast: View {
     let message: String
+    var symbol = "trash"
+    var secondary: (title: String, action: () -> Void)?
     let undo: () -> Void
 
     var body: some View {
         HStack(spacing: Tokens.Space.s12) {
-            Image(systemName: "trash")
+            Image(systemName: symbol)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(message)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Tokens.Color.ink)
+            if let secondary {
+                Button(secondary.title, action: secondary.action)
+                    .controlSize(.small)
+            }
             Button("Undo", action: undo)
                 .controlSize(.small)
                 .help("Undo (⌘Z)")

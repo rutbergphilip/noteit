@@ -68,6 +68,42 @@ enum PaletteCommandRegistry {
                     NotificationCenter.default.post(name: .noteItNewNotebook, object: nil)
                 }
             },
+            command("newSmartFolder", "New Smart Folder…", symbol: SmartFolder.defaultSymbol, shortcut: shortcuts.current(.newSmartFolder)?.display,
+                    keywords: ["create", "add", "saved search", "filter"]) {
+                SmartFolderActions.newSmartFolder()
+            },
+            command("saveSearchAsSmartFolder", "Save Search as Smart Folder…", symbol: SmartFolder.defaultSymbol,
+                    shortcut: shortcuts.current(.saveSearchAsSmartFolder)?.display, keywords: ["saved search", "filter"],
+                    available: !store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                SmartFolderActions.newSmartFolder(query: store.searchText)
+            },
+            command("showTasks", "Show Tasks", symbol: "checklist", shortcut: shortcuts.current(.showTasks)?.display,
+                    keywords: ["todo", "checkbox", "due"]) {
+                WindowRouter.showMainWindow()
+                store.showTasks()
+            },
+            command("showCompletedTasks", defaults.bool(forKey: PrefKey.tasksShowCompleted) ? "Hide Completed Tasks" : "Show Completed Tasks",
+                    symbol: "checkmark.circle", shortcut: nil, keywords: ["todo", "done", "tasks"]) {
+                defaults.set(!defaults.bool(forKey: PrefKey.tasksShowCompleted), forKey: PrefKey.tasksShowCompleted)
+                WindowRouter.showMainWindow()
+                store.showTasks()
+            },
+            command("setDueDate", "Set Due Date…", symbol: "calendar.badge.clock", shortcut: shortcuts.current(.setDueDate)?.display,
+                    keywords: ["task", "todo", "deadline"], available: hasLiveNote && liveNote?.isLocked != true) {
+                WindowRouter.showMainWindow()
+                WindowRouter.focusEditor()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NSApp.sendAction(#selector(NoteItTextView.setDueDate(_:)), to: nil, from: nil)
+                }
+            },
+            command("addReminder", "Add Reminder…", symbol: "bell", shortcut: shortcuts.current(.addReminder)?.display,
+                    keywords: ["remind", "notification", "alarm", "task"], available: hasLiveNote && liveNote?.isLocked != true) {
+                WindowRouter.showMainWindow()
+                WindowRouter.focusEditor()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NSApp.sendAction(#selector(NoteItTextView.addReminder(_:)), to: nil, from: nil)
+                }
+            },
             command("searchNotes", "Search Notes", symbol: "magnifyingglass", shortcut: shortcuts.current(.searchNotes)?.display, keywords: ["find", "filter"]) {
                 NotificationCenter.default.post(name: .noteItFocusSearch, object: nil)
             },
@@ -144,8 +180,9 @@ enum PaletteCommandRegistry {
 
         if let liveNote {
             for notebook in store.sortedNotebooks where notebook.id != liveNote.notebookID {
+                let path = store.notebookTree.path(of: notebook.id)
                 list.append(command("move.\(notebook.id.uuidString)", "Move to \(notebook.name)", symbol: notebook.symbol,
-                                    shortcut: nil, keywords: ["notebook", "folder"]) {
+                                    shortcut: nil, keywords: ["notebook", "folder"] + path.dropLast()) {
                     store.moveNote(liveNote.id, to: notebook.id)
                 })
             }

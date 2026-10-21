@@ -55,11 +55,11 @@ struct NotebookMenuPicker: View {
                 Label("No Notebook", systemImage: "tray.full")
             }
             if !store.notebooks.isEmpty { Divider() }
-            ForEach(store.sortedNotebooks) { notebook in
+            ForEach(store.notebookPickerEntries) { entry in
                 Button {
-                    selection = notebook.id
+                    selection = entry.id
                 } label: {
-                    Label(notebook.name, systemImage: notebook.symbol)
+                    NotebookPickerLabel(entry)
                 }
             }
         } label: {

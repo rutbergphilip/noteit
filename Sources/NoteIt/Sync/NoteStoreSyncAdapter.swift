@@ -77,7 +77,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
                 try requireActive()
                 try store.applyRemote(payload)
                 seenRevisions[payload.id] = payload.revision
-                try requireSaved()
+                try requireSaved(payload.kind)
             }
             return
         }
@@ -102,7 +102,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
             try settleLocalEdits(id, kind: kind)
             store.applyRemoteDeletion(id, kind: kind)
             seenRevisions[id] = nil
-            try requireSaved()
+            try requireSaved(kind)
         }
     }
 
@@ -126,8 +126,9 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
     }
 
     /// The engine records a base right after an apply returns, so the change must be on disk by then.
-    @MainActor private func requireSaved() throws {
-        if store.hasUnsavedLibrary { throw AdapterError.librarySaveFailed }
+    @MainActor private func requireSaved(_ kind: RecordKind = .note) throws {
+        let unsaved = kind == .smartFolder ? store.hasUnsavedSmartFolders : store.hasUnsavedLibrary
+        if unsaved { throw AdapterError.librarySaveFailed }
     }
 
     @MainActor private func settleLocalEdits(_ id: UUID, kind: RecordKind) throws {

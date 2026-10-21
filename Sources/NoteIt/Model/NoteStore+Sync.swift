@@ -18,7 +18,10 @@ extension NoteStore {
         let metas = notes.compactMap { meta in
             meta.revision.map { LocalRecord(id: meta.id, kind: .note, revision: $0, modifiedAt: meta.updatedAt) }
         }
-        return books + metas
+        let folders = smartFolders.compactMap { folder in
+            folder.revision.map { LocalRecord(id: folder.id, kind: .smartFolder, revision: $0, modifiedAt: folder.modifiedAt ?? .distantPast) }
+        }
+        return books + folders + metas
     }
 
     /// Journaled deletions of records that are really gone (stale entries are dropped).
@@ -26,7 +29,7 @@ extension NoteStore {
         for id in syncDeletionJournal.keys where note(with: id) != nil || notebook(with: id) != nil {
             clearSyncDeletion(id)
         }
-        return syncDeletionJournal
+        return syncDeletionJournal.merging(smartFolderSyncDeletions) { journal, _ in journal }
     }
 
     /// O(1): the engine checks this right before every apply.
@@ -34,6 +37,7 @@ extension NoteStore {
         switch kind {
         case .note: note(with: id)?.revision
         case .notebook: notebook(with: id)?.revision
+        case .smartFolder: smartFolder(with: id)?.revision
         }
     }
 
@@ -52,6 +56,12 @@ extension NoteStore {
             let meta = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .notebooks))
                 .merged(with: try Self.encoder.encode(nb), ownedKeys: Notebook.ownedCodingKeys)
             return (RecordPayload(id: id, kind: .notebook, revision: revision, modifiedAt: nb.modifiedAt ?? .distantPast,
+                                  deviceID: deviceID, meta: meta), nil)
+        case .smartFolder:
+            guard let folder = smartFolder(with: id), let revision = folder.revision else { throw NoteStoreSyncError.notFound(id) }
+            let meta = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .smartFolders))
+                .merged(with: try Self.encoder.encode(folder), ownedKeys: SmartFolder.ownedCodingKeys)
+            return (RecordPayload(id: id, kind: .smartFolder, revision: revision, modifiedAt: folder.modifiedAt ?? .distantPast,
                                   deviceID: deviceID, meta: meta), nil)
         case .note:
             guard let meta = note(with: id), let revision = meta.revision else { throw NoteStoreSyncError.notFound(id) }
@@ -92,7 +102,13 @@ extension NoteStore {
             nb.modifiedAt = payload.modifiedAt
             // The raw copy goes first; if it can't be written the record isn't applied, and the next pass retries.
             try setLastRemoteMeta(RawMeta(sourceRevision: payload.revision, meta: payload.meta), for: nb.id, kind: .notebooks)
-            applyRemoteNotebook(nb)
+            applyRemoteNotebook(nb, hasParentKey: Notebook.recordHasParentKey(payload.meta))
+        case .smartFolder:
+            var folder = try Self.decodeMeta(SmartFolder.self, payload)
+            folder.revision = payload.revision
+            folder.modifiedAt = payload.modifiedAt
+            try setLastRemoteMeta(RawMeta(sourceRevision: payload.revision, meta: payload.meta), for: folder.id, kind: .smartFolders)
+            applyRemoteSmartFolder(folder)
         case .note:
             try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, storage: bodyStorage))
         }
@@ -102,6 +118,8 @@ extension NoteStore {
         switch kind {
         case .notebook:
             removeNotebookForRemote(id)
+        case .smartFolder:
+            removeSmartFolderForRemote(id)
         case .note:
             clearSyncDeletion(id)
             removeNote(id, remote: true)
@@ -109,10 +127,10 @@ extension NoteStore {
     }
 
     /// Imports a remote note as a new note (new id and revision) whose title carries a conflict suffix.
-    /// Notebook conflicts are resolved last-writer-wins by the engine and never reach here.
+    /// Notebook and smart folder conflicts are resolved last-writer-wins by the engine and never reach here.
     @discardableResult
     func importConflictCopy(_ payload: RecordPayload, fromDevice name: String) throws -> NoteMeta {
-        guard payload.kind == .note else { throw NoteStoreSyncError.invalidPayload("conflict copy of a notebook") }
+        guard payload.kind == .note else { throw NoteStoreSyncError.invalidPayload("conflict copy of a \(payload.kind.rawValue)") }
         let remote = try Self.decodeMeta(NoteMeta.self, payload)
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
         let suffix = " (conflict — \(name), \(Self.conflictDateFormatter.string(from: payload.modifiedAt)))"

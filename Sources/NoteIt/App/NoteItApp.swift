@@ -62,6 +62,9 @@ struct NoteItCommands: Commands {
             }
             .menuShortcut(.newNotebook)
 
+            Button("New Smart Folder…") { SmartFolderActions.newSmartFolder() }
+                .menuShortcut(.newSmartFolder)
+
             Divider()
 
             Button("Open Quickly…") { PaletteController.shared.toggle(mode: .everything) }
@@ -93,6 +96,8 @@ struct NoteItCommands: Commands {
             }
             .menuShortcut(.searchNotes)
 
+            SaveSearchMenuButton()
+
             Divider()
 
             Menu("Find") {
@@ -118,11 +123,28 @@ struct NoteItCommands: Commands {
             Button("Insert Template…") {
                 NSApp.sendAction(#selector(NoteItTextView.showInsertTemplatePicker(_:)), to: nil, from: nil)
             }
+
+            Menu("Task") {
+                Button("Set Due Date…") {
+                    NSApp.sendAction(#selector(NoteItTextView.setDueDate(_:)), to: nil, from: nil)
+                }
+                .menuShortcut(.setDueDate)
+
+                Button("Add Reminder…") {
+                    NSApp.sendAction(#selector(NoteItTextView.addReminder(_:)), to: nil, from: nil)
+                }
+                .menuShortcut(.addReminder)
+            }
         }
 
         CommandGroup(after: .toolbar) {
             Divider()
             InspectorMenuButton()
+            Button("Tasks") {
+                WindowRouter.showMainWindow()
+                NoteStore.shared.showTasks()
+            }
+            .menuShortcut(.showTasks)
             Button("Go Back") { NotificationCenter.default.post(name: .noteItGoBack, object: nil) }
                 .menuShortcut(.goBack)
             Button("Go Forward") { NotificationCenter.default.post(name: .noteItGoForward, object: nil) }
@@ -143,6 +165,17 @@ struct InspectorMenuButton: View {
     var body: some View {
         Button(visible ? "Hide Links and Outline" : "Show Links and Outline") { visible.toggle() }
             .menuShortcut(.toggleInspector)
+    }
+}
+
+/// Enabled while the main window's search field has text.
+private struct SaveSearchMenuButton: View {
+    @ObservedObject private var store = NoteStore.shared
+
+    var body: some View {
+        Button("Save Search as Smart Folder…") { SmartFolderActions.newSmartFolder(query: store.searchText) }
+            .menuShortcut(.saveSearchAsSmartFolder)
+            .disabled(store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }
 

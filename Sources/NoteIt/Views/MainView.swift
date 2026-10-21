@@ -5,6 +5,7 @@ struct MainView: View {
     @Environment(\.controlActiveState) private var controlActiveState
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var notebookDraft: NotebookDraft?
+    @State private var smartFolderDraft: SmartFolderDraft?
     @State private var templateRequest: TemplatePickerRequest?
     @State private var showsDailyCalendar = false
     @StateObject private var navigation = NavigationModel()
@@ -14,7 +15,13 @@ struct MainView: View {
             SidebarView(notebookDraft: $notebookDraft)
                 .navigationSplitViewColumnWidth(min: Tokens.Size.sidebarMin, ideal: Tokens.Size.sidebarWidth, max: Tokens.Size.sidebarMax)
         } content: {
-            NoteListView()
+            Group {
+                if store.selection == .tasks {
+                    TaskListView()
+                } else {
+                    NoteListView()
+                }
+            }
                 .navigationSplitViewColumnWidth(min: Tokens.Size.noteListMin, ideal: Tokens.Size.noteListWidth, max: Tokens.Size.noteListMax)
         } detail: {
             EditorContainerView()
@@ -24,6 +31,14 @@ struct MainView: View {
         .sheet(item: $notebookDraft) { draft in
             NotebookEditSheet(draft: draft)
                 .environmentObject(store)
+        }
+        .sheet(item: $smartFolderDraft) { draft in
+            SmartFolderEditSheet(draft: draft)
+                .environmentObject(store)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .noteItEditSmartFolder)) { note in
+            guard controlActiveState == .key || NSApp.keyWindow == nil else { return }
+            smartFolderDraft = note.object as? SmartFolderDraft ?? SmartFolderDraft()
         }
         .sheet(item: $templateRequest) { request in
             TemplatePickerSheet(request: request)
@@ -65,6 +80,7 @@ struct MainView: View {
             navigation.goForward(in: store)
         }
         .recentlyDeletedSupport()
+        .tagEditSupport()
         .capturesOpenWindow()
     }
 }

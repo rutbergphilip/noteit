@@ -28,21 +28,13 @@ public struct AppLocator: Sendable {
         self.sleep = sleep
     }
 
-    public static func live() -> AppLocator {
+    /// `launchApp` starts NoteIt in the background; the caller supplies it so this target stays portable.
+    public static func live(launchApp: @escaping @Sendable () throws -> Void) -> AppLocator {
         let environment = ProcessInfo.processInfo.environment
         return AppLocator(
             environment: environment,
             readDiscovery: { DiscoveryFile.read(from: DiscoveryFile.directory(environment: environment)) },
-            launchApp: {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-                process.arguments = ["-g", "-b", AppIdentity.bundleID]
-                process.standardOutput = FileHandle.nullDevice
-                process.standardError = FileHandle.nullDevice
-                try process.run()
-                process.waitUntilExit()
-                guard process.terminationStatus == 0 else { throw CocoaError(.executableLoad) }
-            },
+            launchApp: launchApp,
             ping: { baseURL in
                 let configuration = URLSessionConfiguration.ephemeral
                 configuration.timeoutIntervalForRequest = 2

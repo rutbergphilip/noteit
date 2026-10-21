@@ -1,3 +1,4 @@
+import NoteItCore
 import SwiftUI
 
 struct NoteListView: View {
@@ -6,7 +7,8 @@ struct NoteListView: View {
     @ObservedObject private var trash = RecentlyDeletedCoordinator.shared
 
     private var selection: SidebarSelection { store.selection ?? .allNotes }
-    private var visibleNotes: [NoteMeta] { store.notes(for: selection, search: store.searchText) }
+    @AppStorage(PrefKey.searchSortOrder) private var sortOrder = PrefDefault.searchSortOrder
+    private var order: SearchSortOrder { SearchSortOrder(rawValue: sortOrder) ?? .bestMatch }
     private var isSearching: Bool { !store.searchText.trimmingCharacters(in: .whitespaces).isEmpty }
 
     private var showsNotebookDot: Bool {
@@ -25,21 +27,24 @@ struct NoteListView: View {
         case .tag(let tag): return "#\(tag)"
         case .today: return "Today"
         case .tasks: return "Tasks"
-        case .smartFolder: return "Smart Folder"
+        case .smartFolder(let id): return store.smartFolder(with: id)?.name ?? "Smart Folder"
         }
     }
 
     var body: some View {
-        let notes = visibleNotes
+        let query = SearchQuery.parse(store.searchText)
+        let results = store.searchResults(for: selection, search: store.searchText, order: order)
         Group {
-            if notes.isEmpty {
+            if results.isEmpty {
                 emptyState
             } else {
                 List(selection: $store.selectedNoteID) {
-                    ForEach(notes) { note in
+                    ForEach(results) { result in
+                        let note = result.note
                         NoteRow(
                             note: note,
-                            notebook: showsNotebookDot ? store.notebook(with: note.notebookID) : nil
+                            notebook: showsNotebookDot ? store.notebook(with: note.notebookID) : nil,
+                            search: result
                         )
                         .tag(note.id)
                         .listRowSeparator(.hidden)
@@ -56,10 +61,42 @@ struct NoteListView: View {
                 }
             }
         }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if isSearching, selection != .recentlyDeleted, query.issues.isEmpty {
+                HStack {
+                    Spacer()
+                    Button("Save as Smart Folder…") { SmartFolderActions.newSmartFolder(query: store.searchText) }
+                        .buttonStyle(.borderless)
+                        .font(.callout)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 4)
+            }
+        }
         .navigationTitle(title)
-        .navigationSubtitle(notes.count == 1 ? "1 note" : "\(notes.count) notes")
+        .navigationSubtitle(results.count == 1 ? "1 note" : "\(results.count) notes")
         .searchable(text: $store.searchText, placement: .toolbar, prompt: "Search")
         .toolbar {
+            if let issue = query.issues.first {
+                ToolbarItem(placement: .primaryAction) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                        .help(issue.message)
+                        .accessibilityLabel(issue.message)
+                }
+            }
+            if query.hasTextTerms, selection != .recentlyDeleted {
+                ToolbarItem(placement: .primaryAction) {
+                    Picker(selection: $sortOrder) {
+                        Text("Best Match").tag(SearchSortOrder.bestMatch.rawValue)
+                        Text("Date Edited").tag(SearchSortOrder.dateEdited.rawValue)
+                    } label: {
+                        Label("Sort Results", systemImage: "arrow.up.arrow.down")
+                    }
+                    .pickerStyle(.menu)
+                    .help("Sort Results")
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     store.createNoteInCurrentContext()
@@ -75,7 +112,7 @@ struct NoteListView: View {
                     } label: {
                         Label("Empty Recently Deleted", systemImage: "trash.slash")
                     }
-                    .disabled(notes.isEmpty)
+                    .disabled(results.isEmpty)
                     .help("Empty Recently Deleted…")
                 }
             }
@@ -152,13 +189,13 @@ struct NoteListView: View {
     private func activeContextMenu(for note: NoteMeta) -> some View {
         Button(note.isPinned ? "Unpin" : "Pin") { store.togglePin(note.id) }
         Menu("Move to") {
-            ForEach(store.sortedNotebooks) { notebook in
+            ForEach(store.notebookPickerEntries) { entry in
                 Button {
-                    store.moveNote(note.id, to: notebook.id)
+                    store.moveNote(note.id, to: entry.id)
                 } label: {
-                    Label(notebook.name, systemImage: notebook.symbol)
+                    NotebookPickerLabel(entry)
                 }
-                .disabled(note.notebookID == notebook.id)
+                .disabled(note.notebookID == entry.id)
             }
             Divider()
             Button("No Notebook") { store.moveNote(note.id, to: nil) }
@@ -177,6 +214,7 @@ struct NoteListView: View {
 struct NoteRow: View {
     let note: NoteMeta
     let notebook: Notebook?
+    var search: SearchResult?
 
     private static let verticalPadding: CGFloat = 8
     private static let spacing: CGFloat = 4
@@ -194,7 +232,7 @@ struct NoteRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: Self.spacing) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
-                Text(note.displayTitle)
+                Text(Self.highlighted(note.displayTitle, search?.titleHighlights ?? []))
                     .font(Tokens.Font.cardTitle)
                     .lineLimit(1)
                     .foregroundStyle(note.title.isEmpty ? .secondary : .primary)
@@ -214,7 +252,7 @@ struct NoteRow: View {
                 }
             }
 
-            Text(note.preview.isEmpty ? "No additional text" : note.preview)
+            previewText
                 .font(Tokens.Font.cardPreview)
                 .foregroundStyle(.secondary)
                 .lineLimit(2, reservesSpace: true)
@@ -224,6 +262,10 @@ struct NoteRow: View {
                 Text(note.deletedAt ?? note.updatedAt, format: .relative(presentation: .named))
                     .font(Tokens.Font.cardMeta)
                     .foregroundStyle(Tokens.Color.inkSecondary)
+                    .layoutPriority(1)
+                if !note.tags.isEmpty {
+                    TagChipRow(tags: note.tags)
+                }
                 if let notebook {
                     Spacer(minLength: 4)
                     HStack(spacing: 4) {
@@ -239,5 +281,29 @@ struct NoteRow: View {
         .padding(.vertical, Self.verticalPadding)
         .padding(.horizontal, 6)
         .contentShape(Rectangle())
+    }
+
+    private var previewText: Text {
+        if search?.foundInImage == true {
+            return Text(Image(systemName: "photo")) + Text(" Found in an image")
+        }
+        if let snippet = search?.snippet {
+            return Text(Self.highlighted(snippet.text, snippet.highlights))
+        }
+        return Text(note.preview.isEmpty ? "No additional text" : note.preview)
+    }
+
+    /// `ranges` are UTF-16 ranges into `string`.
+    static func highlighted(_ string: String, _ ranges: [NSRange]) -> AttributedString {
+        var result = AttributedString(string)
+        let ns = string as NSString
+        for range in ranges where NSMaxRange(range) <= ns.length {
+            guard let swiftRange = Range(range, in: string),
+                  let lower = AttributedString.Index(swiftRange.lowerBound, within: result),
+                  let upper = AttributedString.Index(swiftRange.upperBound, within: result) else { continue }
+            result[lower..<upper].inlinePresentationIntent = .stronglyEmphasized
+            result[lower..<upper].backgroundColor = Tokens.Color.searchHighlight
+        }
+        return result
     }
 }

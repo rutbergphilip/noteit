@@ -1,3 +1,4 @@
+import NoteItCore
 import Foundation
 
 struct PaletteCommandInfo: Equatable {
@@ -13,6 +14,8 @@ enum PaletteMode: Equatable { case everything, commands }
 enum PaletteItemKind: Equatable {
     case note(UUID)
     case notebook(UUID)
+    case smartFolder(UUID)
+    case tag(String)          // tag path
     case command(String)      // PaletteCommandInfo.id
     case createNote(String)   // trimmed title to create
 }
@@ -46,7 +49,9 @@ enum PaletteRanker {
         notes: [NoteMeta],
         notebooks: [Notebook],
         commands: [PaletteCommandInfo],
-        bodyMatches: Set<UUID>,
+        bodyMatches: [UUID: Double],
+        smartFolders: [SmartFolder] = [],
+        tags: [(path: String, count: Int)] = [],
         limit: Int = 50
     ) -> [PaletteItem] {
         let (mode, text) = parse(raw)
@@ -81,9 +86,10 @@ enum PaletteRanker {
                     }
                     let item = noteItem(note, names: names, indices: match.matchedIndices)
                     ranked.append(Ranked(item: item, score: match.score, kindRank: 0, updatedAt: note.updatedAt))
-                } else if bodyMatches.contains(note.id) {
+                } else if let bodyScore = bodyMatches[note.id] {
                     let item = noteItem(note, names: names, indices: [])
-                    ranked.append(Ranked(item: item, score: bodyMatchScore, kindRank: 0, updatedAt: note.updatedAt))
+                    ranked.append(Ranked(item: item, score: bodyMatchScore, kindRank: 0, updatedAt: note.updatedAt,
+                                         bodyScore: bodyScore))
                 }
             }
 
@@ -95,11 +101,28 @@ enum PaletteRanker {
                     id: "notebook:\(notebook.id.uuidString)",
                     kind: .notebook(notebook.id),
                     title: notebook.name,
-                    subtitle: count == 1 ? "1 note" : "\(count) notes",
+                    subtitle: notebookSubtitle(notebook, paths: names, count: count),
                     symbol: notebook.symbol,
                     shortcut: nil,
                     matchedIndices: match.matchedIndices
                 )
+                ranked.append(Ranked(item: item, score: match.score, kindRank: 1, updatedAt: nil))
+            }
+
+            for folder in smartFolders {
+                guard let match = FuzzyMatcher.match(query, in: folder.name) else { continue }
+                let item = PaletteItem(id: "smartFolder:\(folder.id.uuidString)", kind: .smartFolder(folder.id), title: folder.name,
+                                       subtitle: "Smart Folder · \(folder.query)", symbol: folder.symbol, shortcut: nil,
+                                       matchedIndices: match.matchedIndices)
+                ranked.append(Ranked(item: item, score: match.score, kindRank: 1, updatedAt: nil))
+            }
+
+            for tag in tags {
+                let title = "#" + tag.path
+                guard let match = FuzzyMatcher.match(query, in: title) else { continue }
+                let item = PaletteItem(id: "tag:\(tag.path)", kind: .tag(tag.path), title: title,
+                                       subtitle: tag.count == 1 ? "1 note" : "\(tag.count) notes", symbol: "number", shortcut: nil,
+                                       matchedIndices: match.matchedIndices)
                 ranked.append(Ranked(item: item, score: match.score, kindRank: 1, updatedAt: nil))
             }
 
@@ -128,14 +151,17 @@ enum PaletteRanker {
     private struct Ranked {
         let item: PaletteItem
         let score: Int
-        let kindRank: Int        // notes, notebooks, commands
+        let kindRank: Int        // notes, then notebooks, smart folders and tags, then commands
         let updatedAt: Date?
+        /// Search score of a body-only note match.
+        var bodyScore: Double = 0
     }
 
     /// Score desc, then notes before notebooks before commands, then most recent, then title.
     private static func precedes(_ a: Ranked, _ b: Ranked) -> Bool {
         if a.score != b.score { return a.score > b.score }
         if a.kindRank != b.kindRank { return a.kindRank < b.kindRank }
+        if a.bodyScore != b.bodyScore { return a.bodyScore > b.bodyScore }
         let aDate = a.updatedAt ?? .distantPast
         let bDate = b.updatedAt ?? .distantPast
         if aDate != bDate { return aDate > bDate }
@@ -179,6 +205,13 @@ enum PaletteRanker {
         (title.first?.isWhitespace ?? false) || (title.last?.isWhitespace ?? false)
     }
 
+    /// A nested notebook names its parents, e.g. `Work › Clients · 3 notes`.
+    private static func notebookSubtitle(_ notebook: Notebook, paths: [UUID: String], count: Int) -> String {
+        let notes = count == 1 ? "1 note" : "\(count) notes"
+        guard let parent = notebook.parent, let path = paths[parent], paths[notebook.id] != notebook.name else { return notes }
+        return "\(path) · \(notes)"
+    }
+
     private static func noteItem(_ note: NoteMeta, names: [UUID: String], indices: [Int]) -> PaletteItem {
         PaletteItem(
             id: "note:\(note.id.uuidString)",
@@ -192,9 +225,12 @@ enum PaletteRanker {
     }
 
     private static func notebookNames(_ notebooks: [Notebook]) -> [UUID: String] {
+        let tree = NotebookTree(notebooks.map {
+            NotebookNodeInput(id: $0.id, parentID: $0.parent, sortIndex: $0.sortIndex, name: $0.name)
+        })
         var names: [UUID: String] = [:]
         for notebook in notebooks where names[notebook.id] == nil {
-            names[notebook.id] = notebook.name
+            names[notebook.id] = tree.path(of: notebook.id).joined(separator: " › ")
         }
         return names
     }

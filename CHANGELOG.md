@@ -23,10 +23,23 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Templates. Notes in the Templates notebook can start new notes with New Note from Template… (⌥⌘N) or be added to the open note with Edit › Insert Template…. Templates can fill in the date, time, title and clipboard and place the cursor, and each notebook can have a default template for its new notes.
 - Markdown export keeps links between notes as `[[wiki links]]`, and importing a folder of Markdown files or an Obsidian vault turns `[[wiki links]]` back into links.
 - The Local API can list a note's backlinks, links and outline, list templates and create a note from a template.
+- Nested notebooks. Put notebooks inside other notebooks by dragging them in the sidebar, with Move To, or by choosing where it goes in the notebook's settings. A notebook shows the notes of the notebooks inside it. Exporting a nested notebook as Markdown makes matching folders, and importing a folder of Markdown files keeps its subfolders as nested notebooks.
+- Nested tags. Write `#work/clients` and the sidebar shows clients under work; choosing a tag shows the notes of the tags under it too. Tags show as chips in the note list, and typing `#` suggests the tags you already use.
+- Rename, merge and delete tags from the sidebar. NoteIt changes the tag in every note that has it and you can undo it.
+- Smart folders. Save a search as a smart folder (New Smart Folder… or Save Search as Smart Folder…) and it stays in the sidebar, up to date, on every Mac you sync with.
+- Search filters. Narrow a search with `tag:`, `notebook:`, `is:todo`, `is:done`, `is:pinned`, `has:attachment`, `due:today`, dates and more, combine them with `OR`, leave words out with `-` and search exact phrases with quotes.
+- Tasks (⇧⌘T). See the checklist items from all your notes in one place, grouped into Overdue, Today, Upcoming, Later and No Date. Check them off there or jump to the note. Give an item a due date with Set Due Date… (⇧⌘D) or by writing `@due(2026-10-24)`.
+- Reminders. Add Reminder… (⌃⌘R) or `@remind(2026-10-24 09:00)` in a note gives you a notification at that time. When you sync several Macs, only one of them shows it.
+- Quick Capture offers to remind you when the first line has a date, such as "Call the bank tomorrow".
+- Clicking a reminder in a note lets you mark it done. The first reminder you add offers to open NoteIt at login, since reminders only ring while NoteIt is running.
+- The Tasks view tells you when notifications are off for NoteIt, with a button to open System Settings.
+- The Local API can rename, merge and delete tags, move notebooks, list and change smart folders, and list, check off and set due dates for tasks.
 
 ### Changed
 
 - New libraries start with a refreshed welcome note, and no longer include a sample shortcuts note or Shortcuts notebook.
+- Search puts the best matches first, shows a line of matching text under each note and highlights the words you searched for in the list and in the open note. While searching, the sort menu switches between Best Match and Date Edited.
+- Local API search ranks its results like the app does and reports where each one matched, and a notebook filter includes the notebooks inside it.
 
 ### Fixed
 

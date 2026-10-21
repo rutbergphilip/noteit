@@ -1,7 +1,10 @@
 import Foundation
 
 public enum RecordKind: String, Codable, Sendable {
-    case notebook, note
+    case notebook, note, smartFolder
+
+    /// Conflicts keep the newer edit instead of making a conflict copy (records without a body).
+    public var usesLastWriterWins: Bool { self != .note }
 }
 
 public struct LocalRecord: Sendable, Hashable {

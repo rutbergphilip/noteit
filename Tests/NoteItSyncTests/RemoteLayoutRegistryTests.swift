@@ -42,7 +42,8 @@ final class RemoteLayoutRegistryTests: XCTestCase {
     func testEveryListedPrefixIsRegistered() {
         let id = UUID()
         let keys = [RemoteLayout.meta(.notebook, id), RemoteLayout.meta(.note, id), RemoteLayout.body(id),
-                    RemoteLayout.tombstone(id), RemoteLayout.device(UUID().uuidString)]
+                    RemoteLayout.tombstone(id), RemoteLayout.device(UUID().uuidString), RemoteLayout.meta(.smartFolder, id),
+                    RemoteLayout.reminderClaim(id)]
         for key in keys {
             XCTAssertNotNil(RemoteLayout.prefix(for: key), key)
             XCTAssertTrue(RemoteLayout.isValidKey(key), key)
@@ -55,7 +56,7 @@ final class RemoteLayoutRegistryTests: XCTestCase {
         for row in RemoteLayout.prefixes {
             XCTAssertEqual(row.depth, 1)
             XCTAssertEqual(row.sealing, .storeKey)
-            XCTAssertEqual(row.owner, "core")
+            XCTAssertTrue(["core", "organise"].contains(row.owner), row.path)
             XCTAssertTrue(RemoteLayout.isListablePrefix(row.path))
         }
     }

@@ -14,9 +14,10 @@ public enum LibraryQuery {
         for selection: SidebarSelection?,
         search: String,
         now: Date,
-        indexedText: (UUID) -> String?
+        indexedText: (UUID) -> String?,
+        notebookScope: (UUID) -> Set<UUID> = { [$0] }
     ) -> [NoteMeta] {
-        let filtered = filter(all, for: selection ?? .allNotes, now: now)
+        let filtered = filter(all, for: selection ?? .allNotes, now: now, notebookScope: notebookScope)
 
         let terms = TextFold.fold(search).split(whereSeparator: \.isWhitespace)
         let searched: [NoteMeta]
@@ -38,11 +39,14 @@ public enum LibraryQuery {
         }
     }
 
-    public static func count(_ all: [NoteMeta], for selection: SidebarSelection, now: Date) -> Int {
-        filter(all, for: selection, now: now).count
+    /// `notebookScope` gives the notebooks a notebook selection covers (itself and its sub-notebooks).
+    public static func count(_ all: [NoteMeta], for selection: SidebarSelection, now: Date,
+                             notebookScope: (UUID) -> Set<UUID> = { [$0] }) -> Int {
+        filter(all, for: selection, now: now, notebookScope: notebookScope).count
     }
 
-    private static func filter(_ all: [NoteMeta], for selection: SidebarSelection, now: Date) -> [NoteMeta] {
+    private static func filter(_ all: [NoteMeta], for selection: SidebarSelection, now: Date,
+                               notebookScope: (UUID) -> Set<UUID>) -> [NoteMeta] {
         let active = all.filter { $0.deletedAt == nil }
         switch selection {
         case .allNotes:
@@ -57,9 +61,10 @@ public enum LibraryQuery {
         case .recentlyDeleted:
             return all.filter { $0.deletedAt != nil }
         case .notebook(let id):
-            return active.filter { $0.notebookID == id }
+            let scope = notebookScope(id)
+            return active.filter { $0.notebookID.map(scope.contains) == true }
         case .tag(let tag):
-            return active.filter { $0.tags.contains(tag) }
+            return active.filter { $0.tags.contains { TagTree.matches($0, selected: tag) } }
         case .today, .tasks, .smartFolder:
             return []
         }

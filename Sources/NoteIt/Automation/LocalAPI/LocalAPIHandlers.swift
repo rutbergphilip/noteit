@@ -192,8 +192,8 @@ final class LocalAPIHandlers: LocalAPIResponder, @unchecked Sendable {
         let limit = try Self.limit(query["limit"])
         let mode = query["mode"] ?? "keyword"
         if mode == "keyword" {
-            let results = try service.search(q, notebook: query["notebook"].map(Self.notebookRef), tag: query["tag"], limit: limit)
-            return .json(SearchResponseDTO(mode: mode, results: results.map { SearchResultDTO(note: summary($0.0), snippet: $0.snippet) }))
+            let hits = try service.rankedSearch(q, notebook: query["notebook"].map(Self.notebookRef), tag: query["tag"], limit: limit)
+            return .json(SearchResponseDTO(mode: mode, results: hits.map(searchResult)))
         }
         guard let handler = registry.searchMode(mode) else {
             throw Failure(.badRequest, "There's no search mode called \(mode).")
@@ -205,6 +205,19 @@ final class LocalAPIHandlers: LocalAPIResponder, @unchecked Sendable {
         case .failure(let code):
             return .error(code, code == .notAvailable ? "The \(mode) search mode is turned off." : "The \(mode) search failed.")
         }
+    }
+
+    @MainActor
+    private func searchResult(_ hit: AutomationService.RankedHit) -> SearchResultDTO {
+        var highlights: [HighlightDTO] = []
+        if !hit.titleRanges.isEmpty {
+            highlights.append(HighlightDTO(field: .title, ranges: hit.titleRanges.map { [$0.location, $0.length] }))
+        }
+        if !hit.snippetRanges.isEmpty {
+            highlights.append(HighlightDTO(field: .body, ranges: hit.snippetRanges.map { [$0.location, $0.length] }))
+        }
+        return SearchResultDTO(note: summary(hit.meta), snippet: hit.snippet, score: hit.score,
+                               highlights: highlights.isEmpty ? nil : highlights, matchedIn: hit.onlyInImage ? "image" : nil)
     }
 
     // MARK: - DTOs

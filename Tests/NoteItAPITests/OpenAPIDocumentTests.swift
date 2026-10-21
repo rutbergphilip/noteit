@@ -61,6 +61,14 @@ final class OpenAPIDocumentTests: XCTestCase {
         XCTAssertEqual((plainMode?["schema"] as? [String: Any])?["enum"] as? [String], ["keyword"])
     }
 
+    func testSearchResultDocumentsWhereTheNoteMatched() throws {
+        let schemas = (try document()["components"] as? [String: Any])?["schemas"] as? [String: Any]
+        let result = try XCTUnwrap(schemas?["SearchResult"] as? [String: Any])
+        let matchedIn = try XCTUnwrap((result["properties"] as? [String: Any])?["matchedIn"] as? [String: Any])
+        XCTAssertEqual(matchedIn["enum"] as? [String], ["image"])
+        XCTAssertFalse((result["required"] as? [String] ?? []).contains("matchedIn"))
+    }
+
     func testDocumentIsValidJSONWithVersion() throws {
         let document = try document()
         XCTAssertEqual(document["openapi"] as? String, "3.1.0")

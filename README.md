@@ -28,10 +28,13 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
   - A Spotlight-style **Quick Capture** panel that floats over any app, including full-screen ones, and keeps your draft when dismissed.
   - A **menu bar panel** with search, a quick-note composer, and Pinned and Recent notes. It's fully keyboard-driven.
   - A *Menu bar only* mode and *Launch at login*.
-- **Organize lightly**
-  - Notebooks with a color and an SF Symbol icon. Drag to reorder, and drop notes onto them to move them.
-  - Automatic `#hashtag` tags, plus Pinned and Recent (last 7 days) smart views.
-  - Search across titles and full text that ignores case and accents.
+- **Organize your way**
+  - Notebooks with a color and an SF Symbol icon, nested up to four levels. Drag to reorder or nest them, and drop notes onto them to move them.
+  - Automatic `#hashtag` tags that nest with `/` (`#work/clients`), shown as chips and completed as you type. Rename, merge or delete a tag across every note.
+  - **Smart folders** save a search, such as `tag:work is:todo edited:<7d`, and stay up to date. Pinned and Recent (last 7 days) are there too.
+  - Search ranked by best match, with the matches highlighted in the list and the note. It ignores case and accents and understands filters such as `tag:`, `notebook:`, `is:todo` and `due:`.
+  - **Tasks** (⇧⌘T) lists every checkbox across your notes, grouped by due date. Type `@due(tomorrow)` or press ⇧⌘D to set one.
+  - **Reminders** (⌃⌘R) ring at the time written in the line, with Done, Snooze and Tomorrow, and show on one Mac only.
   - A **command palette** (⌘O) to open notes and notebooks or run commands by typing a few letters.
 - **Link your notes**
   - Type `[[` to link to another note or one of its headings. Clicking a link to a note that doesn't exist yet creates it.
@@ -147,6 +150,8 @@ Sources/NoteIt/               the macOS app (SwiftUI + AppKit)
 ├── Hotkeys/                  Carbon global hotkeys, shortcut recorder
 ├── Settings/                 Settings tabs and preferences
 ├── Linking/                  link index, backlinks, link suggestions, outline, templates
+├── Reminders/                reminder scheduling, notifications, one-Mac claims
+├── Automation/               Local API, URL scheme, Shortcuts, Spotlight
 └── Sync/                     SyncController, NoteStore adapter, provider config, Keychain
 Sources/NoteItSync/           sync engine with no AppKit dependency
 ├── Storage/                  folder and S3 backends, SigV4

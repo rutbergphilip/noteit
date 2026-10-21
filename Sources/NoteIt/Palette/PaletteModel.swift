@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import NoteItCore
 
 /// What the palette needs from the app around it; tests substitute a recording host.
 struct PaletteHost {
@@ -124,13 +125,20 @@ final class PaletteModel: ObservableObject {
     func recompute() {
         let parsed = PaletteRanker.parse(query)
         let text = parsed.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        var bodyMatches = Set<UUID>()
+        var bodyMatches: [UUID: Double] = [:]
         if parsed.mode == .everything, !text.isEmpty {
-            bodyMatches = Set(store.notes(for: .allNotes, search: text).map(\.id))
+            for result in store.searchResults(for: .allNotes, search: text, order: .bestMatch, decorated: false) {
+                bodyMatches[result.id] = result.score ?? 0
+            }
         }
         items = PaletteRanker.items(query: query, notes: store.activeNotes, notebooks: store.sortedNotebooks,
-                                    commands: commands.map(\.info), bodyMatches: bodyMatches)
+                                    commands: commands.map(\.info), bodyMatches: bodyMatches,
+                                    smartFolders: store.sortedSmartFolders, tags: Self.tagPaths(store.tagTree))
         select(selectedIndex)
+    }
+
+    private static func tagPaths(_ nodes: [TagNode]) -> [(path: String, count: Int)] {
+        nodes.flatMap { [($0.path, $0.totalCount)] + tagPaths($0.children) }
     }
 
     func select(_ index: Int) {
@@ -168,6 +176,17 @@ final class PaletteModel: ObservableObject {
             guard store.notebook(with: id) != nil else { return refresh() }
             host.dismiss()
             store.selection = .notebook(id)
+            host.showMainWindow()
+        case .smartFolder(let id):
+            guard store.smartFolder(with: id) != nil else { return refresh() }
+            host.dismiss()
+            store.searchText = ""
+            store.selection = .smartFolder(id)
+            host.showMainWindow()
+        case .tag(let path):
+            host.dismiss()
+            store.searchText = ""
+            store.selection = .tag(path)
             host.showMainWindow()
         case .command(let id):
             guard let command = commands.first(where: { $0.info.id == id }) else { return refresh() }

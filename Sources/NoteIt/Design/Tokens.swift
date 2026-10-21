@@ -26,8 +26,12 @@ enum Tokens {
         static let pinned = SwiftUI.Color.orange
         static let recent = SwiftUI.Color.teal
         static let today = SwiftUI.Color.red
+        static let tasks = SwiftUI.Color.blue
         static let success = SwiftUI.Color.green
         static let destructive = SwiftUI.Color.red
+        /// Search matches in the note list and the editor.
+        static let searchHighlight = SwiftUI.Color(nsColor: searchHighlightNS)
+        static let searchHighlightNS = NSColor.systemYellow.withAlphaComponent(0.35)
 
         // Notebook palette (fixed in both appearances).
         static let notebookBlue = SwiftUI.Color(hex: Hex.notebookBlue)
@@ -49,6 +53,7 @@ enum Tokens {
         static let tileCommandPalette = notebookPurple
         static let tileCaptureSelection = notebookGreen
         static let tileOpenToday = notebookRed
+        static let tileShowTasks = notebookPink
 
         // Brand (fixed): app icon, Quick Capture tile, marketing. Never note content or app chrome.
         static let brandViolet = SwiftUI.Color(hex: Hex.brandViolet)

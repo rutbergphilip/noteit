@@ -14,8 +14,11 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     private var lineBreakEditLocation: Int?
     private(set) lazy var codeStyler = CodeStyler(textView: self)
     private(set) lazy var linkStyler = LinkStyler(textView: self)
+    private(set) lazy var tokenStyler = TokenStyler(textView: self)
     private(set) lazy var inlineCompletion = InlineCompletionController(textView: self)
     weak var linkHost: (any NoteLinkHost)?
+    /// A click on a `@due` or `@remind` token, with the token's range.
+    var onDateToken: ((NSRange) -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
 
     // MARK: Setup
@@ -259,7 +262,10 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             guard !isNormalizing, !codeStyler.isApplying else { return }
             let r = NSRange(location: editedRange.location, length: max(editedRange.length, 0))
             codeStyler.noteEdit(r)
-            if editedMask.contains(.editedAttributes) || editedMask.contains(.editedCharacters) { linkStyler.noteEdit(r) }
+            if editedMask.contains(.editedAttributes) || editedMask.contains(.editedCharacters) {
+                linkStyler.noteEdit(r)
+                tokenStyler.noteEdit(r)
+            }
             pendingNormalizeRange = pendingNormalizeRange.map { NSUnionRange($0, r) } ?? r
             if let p = pendingNormalizeRange, NSMaxRange(p) > textStorage.length {
                 pendingNormalizeRange = NSRange(location: min(p.location, textStorage.length), length: textStorage.length - min(p.location, textStorage.length))
@@ -553,7 +559,11 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         guard let text, !hasMarkedText(), replacementRange.location == NSNotFound,
               selectedRange().length == 0, handleMarkdownTrigger(text, dryRun: true) else {
             super.insertText(string, replacementRange: replacementRange)
-            if let text { beginLinkCompletionIfNeeded(afterTyping: text) }
+            if let text {
+                beginLinkCompletionIfNeeded(afterTyping: text)
+                beginTagCompletionIfNeeded(afterTyping: text)
+                if text == ")" { scheduleDateTokenFormat() }
+            }
             return
         }
         // Type the character first, then convert on the next run-loop turn: the conversion becomes
@@ -565,6 +575,17 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             guard let self, self.selectedRange() == caret, self.storage.length == length, caret.location > 0,
                   self.nsString.substring(with: NSRange(location: caret.location - 1, length: 1)) == text,
                   self.handleMarkdownTriggerAfterTyping(text, at: caret.location - 1) else { return }
+        }
+    }
+
+    /// Like the Markdown shortcuts, the rewrite runs on the next turn so ⌘Z restores what was typed.
+    private func scheduleDateTokenFormat() {
+        let caret = selectedRange()
+        let length = storage.length
+        guard caret.length == 0 else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.selectedRange() == caret, self.storage.length == length else { return }
+            self.formatDateTokenAfterTyping(at: caret.location)
         }
     }
 
@@ -678,6 +699,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             toggleCheckbox(atParagraphStart: index)
             return
         }
+        if handleTokenClick(at: point, event: event) { return }
         super.mouseDown(with: event)
     }
 
@@ -794,6 +816,23 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
                     format.addItem(item)
                 }
             }
+        }
+        if isEditable, lineRange(at: selectedRange().location).length > 0 {
+            let task = NSMenu(title: "Task")
+            if taskLineRange(at: selectedRange().location) != nil {
+                let due = NSMenuItem(title: "Set Due Date…", action: #selector(setDueDate(_:)), keyEquivalent: "")
+                due.target = self
+                due.image = NSImage(systemSymbolName: "calendar.badge.clock", accessibilityDescription: nil)
+                task.addItem(due)
+            }
+            let remind = NSMenuItem(title: "Add Reminder…", action: #selector(addReminder(_:)), keyEquivalent: "")
+            remind.target = self
+            remind.image = NSImage(systemSymbolName: "bell", accessibilityDescription: nil)
+            task.addItem(remind)
+            let taskItem = NSMenuItem(title: "Task", action: nil, keyEquivalent: "")
+            taskItem.submenu = task
+            format.addItem(.separator())
+            format.addItem(taskItem)
         }
         let formatItem = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
         formatItem.submenu = format
@@ -930,6 +969,7 @@ final class NoteItLayoutManager: NSLayoutManager {
                 }
             } else if para.location < NSMaxRange(chars) && NSMaxRange(para) > chars.location {
                 drawInlineCodePills(in: para, storage: ts, origin: origin)
+                drawTokenChips(in: para, origin: origin)
             }
             if NSMaxRange(para) <= loc { break }
             loc = NSMaxRange(para)
@@ -1024,6 +1064,33 @@ final class NoteItLayoutManager: NSLayoutManager {
                 let p = Self.pillPadding
                 let rect = NSRect(x: box.minX - p + origin.x, y: top + origin.y, width: box.width + p * 2, height: bottom - top)
                 let radius = min(rect.height / 2, 5.5)
+                fill.setFill()
+                NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            }
+        }
+    }
+
+    // MARK: Token chips
+
+    private func drawTokenChips(in para: NSRange, origin: NSPoint) {
+        guard let tc = textContainers.first, let ts = textStorage else { return }
+        var cursor = para.location
+        while cursor < NSMaxRange(para) {
+            var run = NSRange()
+            let value = temporaryAttribute(.tokenChip, atCharacterIndex: cursor, longestEffectiveRange: &run, in: para)
+            cursor = max(NSMaxRange(run), cursor + 1)
+            guard let fill = value as? NSColor, run.length > 0, NSMaxRange(run) <= ts.length else { continue }
+            let font = (ts.attribute(.font, at: run.location, effectiveRange: nil) as? NSFont) ?? .systemFont(ofSize: NSFont.systemFontSize)
+            let glyphs = glyphRange(forCharacterRange: run, actualCharacterRange: nil)
+            enumerateLineFragments(forGlyphRange: glyphs) { lineRect, _, _, lineGlyphs, _ in
+                let sub = NSIntersectionRange(lineGlyphs, glyphs)
+                guard sub.length > 0 else { return }
+                let box = self.boundingRect(forGlyphRange: sub, in: tc)
+                let baseline = lineRect.minY + self.location(forGlyphAt: sub.location).y
+                let top = baseline - font.ascender - 1
+                let bottom = baseline - font.descender + 1
+                let rect = NSRect(x: box.minX - 2 + origin.x, y: top + origin.y, width: box.width + 4, height: bottom - top)
+                let radius = min(rect.height / 2, 5)
                 fill.setFill()
                 NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
             }

@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 
 /// Additive helpers used by the menu bar panel and quick capture.
 extension NoteStore {
@@ -24,6 +25,31 @@ extension NoteStore {
             }
         }
         return createNote(in: notebookID, initial: Self.capturedText(title: title, body: body))
+    }
+
+    /// The reminder Quick Capture offers: the future date written in the note's first line, unless it already has one.
+    nonisolated static func captureReminder(title: String, body: String, now: Date, calendar: Calendar,
+                                            defaultMinutes: Int) -> LocalDateTime? {
+        let line = captureFirstLine(title: title, body: body)
+        guard !line.contains("@remind(") else { return nil }
+        return reminderDate(inLine: line, now: now, calendar: calendar, defaultMinutes: defaultMinutes)
+    }
+
+    /// Title and body with `@remind(…)` added to the end of the first line.
+    nonisolated static func addingCaptureReminder(_ at: LocalDateTime, title: String, body: String) -> (title: String, body: String) {
+        let token = "@remind(\(at.token))"
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty { return (trimmedTitle + " " + token, body) }
+        let trimmedBody = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        var lines = trimmedBody.components(separatedBy: "\n")
+        lines[0] += " " + token
+        return (title, lines.joined(separator: "\n"))
+    }
+
+    private nonisolated static func captureFirstLine(title: String, body: String) -> String {
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = trimmedTitle.isEmpty ? body.trimmingCharacters(in: .whitespacesAndNewlines) : trimmedTitle
+        return text.components(separatedBy: "\n").first ?? ""
     }
 
     /// A bold first-line title followed by the body, in the editor's font size.
