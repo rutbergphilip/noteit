@@ -5,6 +5,7 @@ struct EditorContainerView: View {
     @EnvironmentObject private var store: NoteStore
     @StateObject private var editor = EditorController()
     @StateObject private var find = FindReplaceModel()
+    @StateObject private var searchHighlights = SearchHighlightController()
     @StateObject private var renames = RenameTracker()
     @EnvironmentObject private var navigation: NavigationModel
     @ObservedObject private var linkState = LinkNavigationState.shared
@@ -55,7 +56,12 @@ struct EditorContainerView: View {
                     }
                     .animation(.easeOut(duration: 0.15), value: find.isVisible)
             }
-            .onAppear { find.editor = editor }
+            .onAppear {
+                find.editor = editor
+                searchHighlights.editor = editor
+            }
+            .onChange(of: id, initial: true) { searchHighlights.update(search: store.searchText) }
+            .onChange(of: store.searchText) { _, search in searchHighlights.update(search: search) }
             .onDisappear { find.close(refocusText: false) }
             .onChange(of: readOnly, initial: true) { find.allowsReplace = !readOnly }
             .onChange(of: id) { find.close(refocusText: false) }

@@ -335,7 +335,13 @@ struct RichTextEditor: NSViewRepresentable {
         /// Arrow keys, Return, Tab and Esc go to an open suggestion list; ⌃P/⌃N arrive as moveUp:/moveDown:.
         func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
             guard let textView = textView as? NoteItTextView else { return false }
-            return textView.inlineCompletion.handle(commandSelector)
+            if textView.inlineCompletion.handle(commandSelector) { return true }
+            if commandSelector == #selector(NSResponder.cancelOperation(_:)),
+               let highlights = SearchHighlightController.controller(for: textView) {
+                highlights.clear()
+                return true
+            }
+            return false
         }
 
         func textViewDidChangeTypingAttributes(_ notification: Notification) {

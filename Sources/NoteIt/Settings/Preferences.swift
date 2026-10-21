@@ -48,6 +48,17 @@ enum PrefKey {
     /// Set before a change is handed to Spotlight and cleared once Spotlight has taken every change; still set at
     /// launch, it rebuilds the items (a change may have been lost to a crash or a failed Core Spotlight call).
     static let spotlightIndexDirty = "spotlightIndexDirty"
+    /// Settings › General › Reminders. On by default.
+    static let remindersEnabled = "remindersEnabled"
+    /// Minutes after midnight for a reminder given only a date.
+    static let reminderDefaultTime = "reminderDefaultTime"
+    /// When reminders were last checked; reminders due between then and launch are delivered once.
+    static let remindersLastCheck = "remindersLastCheck"
+    /// A `SearchSortOrder` raw value.
+    static let searchSortOrder = "searchSortOrder"
+    static let tasksShowCompleted = "tasksShowCompleted"
+    /// UUID strings of the notebooks expanded in the sidebar.
+    static let expandedNotebookIDs = "expandedNotebookIDs"
 }
 
 enum PrefDefault {
@@ -58,6 +69,9 @@ enum PrefDefault {
     static let linkNewNoteNotebook = "source"
     static let showTodayInSidebar = true
     static let inspectorTab = "links"
+    static let remindersEnabled = true
+    static let reminderDefaultTime = 540
+    static let searchSortOrder = SearchSortOrder.bestMatch.rawValue
 }
 
 /// Opens the Settings scene and brings it to the front, also in menu-bar-only (`.accessory`) mode.

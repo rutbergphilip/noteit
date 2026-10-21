@@ -28,6 +28,9 @@ enum Tokens {
         static let today = SwiftUI.Color.red
         static let success = SwiftUI.Color.green
         static let destructive = SwiftUI.Color.red
+        /// Search matches in the note list and the editor.
+        static let searchHighlight = SwiftUI.Color(nsColor: searchHighlightNS)
+        static let searchHighlightNS = NSColor.systemYellow.withAlphaComponent(0.35)
 
         // Notebook palette (fixed in both appearances).
         static let notebookBlue = SwiftUI.Color(hex: Hex.notebookBlue)

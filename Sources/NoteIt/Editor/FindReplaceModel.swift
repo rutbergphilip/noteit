@@ -78,6 +78,8 @@ final class FindReplaceModel: ObservableObject {
         let selection = textView.selectedRange()
         if let selected = query(fromSelection: selection, in: textView) {
             query = selected
+        } else if let term = SearchHighlightController.firstTerm(in: textView) {
+            query = options.regex ? NSRegularExpression.escapedPattern(for: term) : term
         }
         if replace, allowsReplace { showsReplace = true }
         anchor = selection.location
