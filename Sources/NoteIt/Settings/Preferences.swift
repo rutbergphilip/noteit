@@ -26,6 +26,12 @@ enum PrefKey {
     static let localAPIPort = "localAPIPort"
     /// `[client id: Date]`, written at most once a minute per client.
     static let localAPIClientLastUsed = "localAPIClientLastUsed"
+    /// Settings › Integrations › Spotlight. On by default.
+    static let spotlightEnabled = "spotlightEnabled"
+    /// Adds the note text to Spotlight items. On by default.
+    static let spotlightIncludesText = "spotlightIncludesText"
+    /// The index version the Spotlight items were last built with; a different version rebuilds them.
+    static let spotlightIndexVersion = "spotlightIndexVersion"
 }
 
 enum PrefDefault {
