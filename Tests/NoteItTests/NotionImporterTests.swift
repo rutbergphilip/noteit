@@ -138,6 +138,38 @@ final class NotionImporterTests: XCTestCase {
         XCTAssertFalse(store.notes.contains { $0.title.contains(projectsID) || $0.title.contains(tasksID) })
     }
 
+    func testExistingNotebooksAreNotMergedInto() async throws {
+        let store = makeStore()
+        let existing = store.createNotebook(name: "Projects", symbol: "folder", colorHex: Tokens.Hex.notebookRed)
+        let export = try makeExport()
+        _ = try await NotionImporter.importExport(export, into: store)
+        func notebook(_ title: String) throws -> String? {
+            try meta(title, in: store).notebookID.flatMap { id in store.notebooks.first { $0.id == id }?.name }
+        }
+        XCTAssertEqual(try notebook("Projects"), "Projects 2")
+        XCTAssertEqual(try notebook("Roadmap"), "Projects 2")
+        XCTAssertEqual(try notebook("Tasks"), "Projects 2")
+        XCTAssertEqual(store.notebooks.filter { $0.name == "Projects 2" }.count, 1)
+        XCTAssertTrue(store.notes.allSatisfy { $0.notebookID != existing.id })
+
+        _ = try await NotionImporter.importExport(export, into: store)
+        XCTAssertEqual(Set(store.notebooks.map(\.name)), ["Projects", "Projects 2", "Projects 3", "Notion", "Notion 2"])
+    }
+
+    func testSameTitledTopPagesGetTheirOwnNotebooks() async throws {
+        let export = base.appendingPathComponent("Twins", isDirectory: true)
+        try write("# Plan\nA", to: "Plan \(projectsID).md", in: export)
+        try write("Child A", to: "Plan \(projectsID)/One \(roadmapID).md", in: export)
+        try write("# Plan\nB", to: "Plan \(tasksID).md", in: export)
+        try write("Child B", to: "Plan \(tasksID)/Two \(looseID).md", in: export)
+        let store = makeStore()
+        _ = try await NotionImporter.importExport(export, into: store)
+        let one = try XCTUnwrap(try meta("One", in: store).notebookID)
+        let two = try XCTUnwrap(try meta("Two", in: store).notebookID)
+        XCTAssertNotEqual(one, two)
+        XCTAssertEqual(Set(store.notebooks.map(\.name)), ["Plan", "Plan 2"])
+    }
+
     func testZipWithNestedPartsIsOpened() async throws {
         let export = try makeExport()
         let staging = base.appendingPathComponent("Outer", isDirectory: true)

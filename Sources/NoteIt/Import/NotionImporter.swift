@@ -51,6 +51,8 @@ enum NotionImporter {
         /// Path inside the export without the extension (and without `_all` for a database), "/"-separated.
         var key: String
         var notebook: String
+        /// The top-level folder the notebook comes from ("" for loose pages); pages with the same one share it.
+        var notebookKey: String
         var title: String
         var isTable: Bool
     }
@@ -166,10 +168,10 @@ enum NotionImporter {
             .map { file -> Page in
                 let k = key(file.path)
                 let first = k.split(separator: "/").first.map(String.init) ?? k
-                let notebook = file.path.count == 1 && !topWithChildren.contains(first)
-                    ? looseNotebookName
-                    : NotionNames.title(ofStem: first)
-                return Page(file: file.url, key: k, notebook: notebook,
+                let loose = file.path.count == 1 && !topWithChildren.contains(first)
+                return Page(file: file.url, key: k,
+                            notebook: loose ? looseNotebookName : NotionNames.title(ofStem: first),
+                            notebookKey: loose ? "" : first,
                             title: NotionNames.title(ofFile: file.path.last ?? ""),
                             isTable: (file.path.last as NSString?)?.pathExtension.lowercased() == "csv")
             }
@@ -183,6 +185,7 @@ enum NotionImporter {
         var report = ImportReport()
         let ids = Dictionary(pages.map { ($0.key, UUID()) }, uniquingKeysWith: { a, _ in a })
         var created: [UUID] = []
+        var notebooks: [String: UUID] = [:]
         progress(ImportProgress(completed: 0, total: pages.count))
         for (index, page) in pages.enumerated() {
             progress(ImportProgress(completed: index, total: pages.count, currentName: page.title))
@@ -198,7 +201,9 @@ enum NotionImporter {
                 report.filesSkipped += 1
                 continue
             }
-            let notebook = store.notebookForImport(named: page.notebook)
+            let notebook = notebooks[page.notebookKey].flatMap { id in store.notebooks.first { $0.id == id } }
+                ?? store.newNotebookForImport(named: page.notebook, parentID: nil)
+            notebooks[page.notebookKey] = notebook.id
             created.append(store.createImportedNote(body: body, title: page.title, notebookID: notebook.id,
                                                     createdAt: nil, updatedAt: nil, id: id).id)
             report.notesImported += 1
