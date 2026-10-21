@@ -57,10 +57,28 @@ final class NoteStoreDailyUITests: XCTestCase {
         let template = store.createTemplate()
         store.updateBody(template.id, NSAttributedString(string: "{{title}}\nPlan: {{cursor}}\n", attributes: EditorStyle.bodyAttributes))
         defaults.set(template.id.uuidString, forKey: PrefKey.dailyNoteTemplateID)
-        let meta = try XCTUnwrap(store.dailyNote(for: date(2026, 10, 19), createIfMissing: true))
+        let meta = try XCTUnwrap(store.dailyNote(for: date(2026, 10, 19), createIfMissing: true, interactive: true))
         XCTAssertEqual(store.body(for: meta.id).string, "2026-10-19\nPlan: \n")
         XCTAssertEqual(RichTextEditor.pendingCaret[meta.id], "2026-10-19\nPlan: ".utf16.count)
         XCTAssertEqual(try store.dailyNote(for: date(2026, 10, 19), createIfMissing: true)?.id, meta.id)
+    }
+
+    func testHeadlessDailyNoteSkipsClipboardAndCaret() throws {
+        let store = makeStore()
+        let saved = NoteStore.clipboardString
+        NoteStore.clipboardString = { "secret" }
+        defer { NoteStore.clipboardString = saved }
+        let template = store.createTemplate()
+        store.updateBody(template.id, NSAttributedString(string: "{{title}}\n{{clipboard}}{{cursor}}\n", attributes: EditorStyle.bodyAttributes))
+        defaults.set(template.id.uuidString, forKey: PrefKey.dailyNoteTemplateID)
+        _ = try DailyLogAppender.append(.plain("Ran"), to: date(2026, 10, 20), in: store)
+        let headless = try XCTUnwrap(store.dailyNote(for: date(2026, 10, 20), createIfMissing: false))
+        XCTAssertFalse(store.body(for: headless.id).string.contains("secret"))
+        XCTAssertNil(RichTextEditor.pendingCaret[headless.id])
+
+        store.openDailyNote(for: date(2026, 10, 21))
+        let opened = try XCTUnwrap(store.selectedNoteID)
+        XCTAssertTrue(store.body(for: opened).string.contains("secret"))
     }
 
     func testTemplateWithoutTitleLineKeepsDate() throws {

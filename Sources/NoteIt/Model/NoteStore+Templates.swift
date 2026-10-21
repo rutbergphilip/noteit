@@ -4,6 +4,7 @@ import NoteItCore
 /// Templates are ordinary notes in the templates notebook (spec §11).
 extension NoteStore {
     static let templatesNotebookName = "Templates"
+    nonisolated(unsafe) static var clipboardString: () -> String? = { NSPasteboard.general.string(forType: .string) }
 
     /// The notebook from the preference, else one named "Templates". Never creates one.
     var templatesNotebookIDIfSet: UUID? {
@@ -60,7 +61,7 @@ extension NoteStore {
     func expandedTemplate(_ id: UUID, title: String, date: Date, readsClipboard: Bool = true) -> TemplateExpansion? {
         guard usableTemplate(id) != nil else { return nil }
         let context = TemplateContext(title: title, date: date, clipboard: {
-            readsClipboard ? NSPasteboard.general.string(forType: .string) : nil
+            readsClipboard ? NoteStore.clipboardString() : nil
         })
         return TemplateExpander.expand(body(for: id), context: context)
     }

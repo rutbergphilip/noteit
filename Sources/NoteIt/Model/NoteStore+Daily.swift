@@ -34,8 +34,10 @@ extension NoteStore {
 
     /// The live note in the Daily Notes notebook whose title is `date`'s day in any `DailyTitleFormat` (the oldest
     /// one when several match). With `createIfMissing`, a new note titled in the chosen format otherwise. Days are
-    /// Gregorian whatever the system calendar is; only `systemCalendar`'s time zone is used.
-    func dailyNote(for date: Date, createIfMissing: Bool, systemCalendar: Calendar = .current) throws -> NoteMeta? {
+    /// Gregorian whatever the system calendar is; only `systemCalendar`'s time zone is used. Only `interactive`
+    /// callers (the user opening the note) let the template read the clipboard and place the caret.
+    func dailyNote(for date: Date, createIfMissing: Bool, interactive: Bool = false,
+                   systemCalendar: Calendar = .current) throws -> NoteMeta? {
         guard let notebookID = dailyNotesNotebookID(createIfMissing: createIfMissing) else { return nil }
         let locale = Locale.current
         let day = DayKey(date, calendar: DayKey.dailyCalendar(timeZone: systemCalendar.timeZone))
@@ -49,7 +51,7 @@ extension NoteStore {
         let title = DailyNoteTitle.title(for: day, format: format, locale: locale)
         if let template = dailyNoteTemplateID,
            let date = day.date(calendar: DayKey.dailyCalendar(timeZone: systemCalendar.timeZone), hour: 9),
-           let expansion = expandedTemplate(template, title: title, date: date) {
+           let expansion = expandedTemplate(template, title: title, date: date, readsClipboard: interactive) {
             // The title line must stay the date, or the note would never be found again.
             let text = NSMutableAttributedString(attributedString: expansion.text)
             var caret = expansion.caret
@@ -60,7 +62,7 @@ extension NoteStore {
                 caret = caret.map { $0 + heading.length }
             }
             let meta = createNote(in: notebookID, initial: text)
-            if let caret { RichTextEditor.pendingCaret[meta.id] = caret }
+            if interactive, let caret { RichTextEditor.pendingCaret[meta.id] = caret }
             return meta
         }
         return createNote(in: notebookID, initial: NSAttributedString(string: title, attributes: EditorStyle.bodyAttributes))
