@@ -88,6 +88,13 @@ extension NoteStore {
         return meta
     }
 
+    /// Replaces the body of a note made by an import, keeping its imported dates.
+    func replaceImportedBody(_ id: UUID, _ body: NSAttributedString) {
+        guard let updated = note(with: id)?.updatedAt else { return }
+        updateBody(id, body)
+        if let index = noteIndex(id) { notes[index].updatedAt = updated }
+    }
+
     /// An existing notebook with this name (ignoring case), or a new one.
     func notebookForImport(named name: String) -> Notebook {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)

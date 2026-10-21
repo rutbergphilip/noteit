@@ -378,6 +378,33 @@ final class MarkdownImporterTests: XCTestCase {
         XCTAssertEqual(links(in: store, try note(titled: "Plan", in: store).id), [.unresolved(title: "Nowhere", heading: "Top")])
     }
 
+    func testLinksToNotesLeftOutBecomeTitleLinks() async throws {
+        let vault = base.appendingPathComponent("Vault", isDirectory: true)
+        try write("# Alpha\nSee [[Beta]] and [[Gamma#Top]].", to: "Alpha.md", in: vault)
+        try write("# Beta\nText", to: "Beta.md", in: vault)
+        let gamma = try write("# Gamma\nText", to: "Gamma.md", in: vault)
+        try fm.setAttributes([.posixPermissions: 0], ofItemAtPath: gamma.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: gamma.path) }
+        let store = makeStore()
+        let items = MarkdownImporter.items(for: [vault])
+        XCTAssertEqual(items.map { $0.url.lastPathComponent }, ["Alpha.md", "Beta.md", "Gamma.md"])
+        let task = Task { @MainActor in
+            await MarkdownImporter(store: store).run(items) { progress in
+                if progress.completed == 0, !progress.currentName.isEmpty { withUnsafeCurrentTask { $0?.cancel() } }
+            }
+        }
+        let report = await task.value
+        XCTAssertTrue(report.cancelled)
+        XCTAssertEqual(links(in: store, try note(titled: "Alpha", in: store).id),
+                       [.unresolved(title: "Beta", heading: nil), .unresolved(title: "Gamma", heading: "Top")])
+
+        let full = NoteStore(location: LibraryLocation(url: base.appendingPathComponent("Library2", isDirectory: true), seedsFreshLibrary: false))
+        _ = await importAll([vault], into: full)
+        let beta = try note(titled: "Beta", in: full)
+        XCTAssertEqual(links(in: full, try note(titled: "Alpha", in: full).id),
+                       [.note(id: beta.id, heading: nil), .unresolved(title: "Gamma", heading: "Top")])
+    }
+
     func testIDCollisionGetsNewID() {
         let store = makeStore()
         let first = store.createNote(in: nil, initial: EditorStyle.paragraph("One", kind: .title)).id

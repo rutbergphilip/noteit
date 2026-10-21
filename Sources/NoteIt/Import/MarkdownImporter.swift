@@ -22,6 +22,7 @@ final class MarkdownImporter {
 
     private let store: NoteStore
     private let fileManager = FileManager.default
+    private var createdIDs: [UUID] = []
 
     init(store: NoteStore) {
         self.store = store
@@ -103,8 +104,28 @@ final class MarkdownImporter {
             await Task.yield()
         }
         progress(ImportProgress(completed: report.cancelled ? report.notesImported : items.count, total: items.count))
+        unresolveLinksToSkipped(planned: Dictionary(zip(ids, items.map { $0.url.deletingPathExtension().lastPathComponent }),
+                                                    uniquingKeysWith: { a, _ in a }))
         store.flush()
         return report
+    }
+
+    /// Links to notes that a cancel or an unreadable file kept out of the import become title links.
+    private func unresolveLinksToSkipped(planned: [UUID: String]) {
+        let missing = planned.filter { store.note(with: $0.key) == nil }
+        guard !missing.isEmpty else { return }
+        for id in createdIDs {
+            let body = NSMutableAttributedString(attributedString: store.body(for: id))
+            var changed = false
+            body.enumerateAttribute(.link, in: NSRange(location: 0, length: body.length)) { value, range, _ in
+                guard let url = value as? URL, case let .note(target, heading)? = NoteLink(url: url),
+                      let title = missing[target] else { return }
+                body.addAttribute(.link, value: NoteLink.unresolved(title: String(title.prefix(NoteLink.maxTextLength)),
+                                                                    heading: heading).url, range: range)
+                changed = true
+            }
+            if changed { store.replaceImportedBody(id, body) }
+        }
     }
 
     /// Imports one file or bundle. Returns false when it couldn't be read.
@@ -159,7 +180,8 @@ final class MarkdownImporter {
 
     private func save(_ note: MarkdownNote, notebook: String, created: Date?, updated: Date?, id: UUID?, report: inout ImportReport) {
         let nb = store.notebookForImport(named: notebook)
-        store.createImportedNote(body: note.body, title: note.title, notebookID: nb.id, createdAt: created, updatedAt: updated, id: id)
+        createdIDs.append(store.createImportedNote(body: note.body, title: note.title, notebookID: nb.id,
+                                                   createdAt: created, updatedAt: updated, id: id).id)
         report.notesImported += 1
         report.notebookIDs.insert(nb.id)
     }
