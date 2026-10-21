@@ -405,6 +405,21 @@ final class MarkdownImporterTests: XCTestCase {
                        [.note(id: beta.id, heading: nil), .unresolved(title: "Gamma", heading: "Top")])
     }
 
+    func testLongWikiLinkTargetsStayInTheIndex() async throws {
+        let long = String(repeating: "Long name ", count: 14)
+        let vault = base.appendingPathComponent("Vault", isDirectory: true)
+        try write("# Plan\nSee [[\(long)]] and [[Atlas#\(long)]].", to: "Plan.md", in: vault)
+        try write("# Atlas\nText", to: "Atlas.md", in: vault)
+        let store = makeStore()
+        store.installLinkIndex()
+        _ = await importAll([vault], into: store)
+        let plan = try note(titled: "Plan", in: store), atlas = try note(titled: "Atlas", in: store)
+        let cut = String(long.prefix(NoteLink.maxTextLength))
+        XCTAssertEqual(links(in: store, plan.id), [.unresolved(title: cut, heading: nil), .note(id: atlas.id, heading: cut)])
+        for _ in 0..<500 where store.outgoingLinks(from: plan.id).count < 2 { try await Task.sleep(nanoseconds: 10_000_000) }
+        XCTAssertEqual(store.outgoingLinks(from: plan.id).compactMap(\.link), [.unresolved(title: cut, heading: nil), .note(id: atlas.id, heading: cut)])
+    }
+
     func testIDCollisionGetsNewID() {
         let store = makeStore()
         let first = store.createNote(in: nil, initial: EditorStyle.paragraph("One", kind: .title)).id

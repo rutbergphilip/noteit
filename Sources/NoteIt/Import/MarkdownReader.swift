@@ -911,7 +911,7 @@ private struct InlineParser {
         var parts = query.title.split(separator: "/").map(String.init)
         var name = parts.popLast() ?? query.title
         if (name as NSString).pathExtension.lowercased() == "md" { name = (name as NSString).deletingPathExtension }
-        guard !name.isEmpty, let link = resolveWikiLink(name, query.heading, parts) else { return nil }
+        guard !name.isEmpty, let link = resolveWikiLink(name, query.heading, parts)?.clamped else { return nil }
         return (query.alias ?? query.heading.map { "\(name) › \($0)" } ?? name, link)
     }
 

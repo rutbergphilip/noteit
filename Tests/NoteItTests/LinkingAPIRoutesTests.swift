@@ -112,6 +112,18 @@ final class LinkingAPIRoutesTests: XCTestCase {
         XCTAssertEqual(items.last?.url, NoteLink.note(id: id, heading: "Packing").url.absoluteString)
     }
 
+    func testOutlineURLsForLongHeadingsCanBeFollowed() throws {
+        let store = makeStore()
+        let long = String(repeating: "Heading words ", count: 12)
+        let text = NSMutableAttributedString(string: "Trip\n", attributes: EditorStyle.attributes(for: .title))
+        text.append(NSAttributedString(string: long + "\n", attributes: EditorStyle.attributes(for: .heading)))
+        let id = store.createNote(in: nil, initial: text).id
+        let response = call("linking.outline", store, params: ["id": id.uuidString])
+        let items = try APIJSON.decoder().decode(LinkingAPIRoutes.Items<LinkingAPIRoutes.OutlineItemDTO>.self, from: response.body).items
+        let url = try XCTUnwrap(URL(string: try XCTUnwrap(items.last?.url)))
+        XCTAssertEqual(NoteLink(url: url)?.heading?.count, NoteLink.maxTextLength)
+    }
+
     func testLockedNoteReturns423() {
         let store = makeStore()
         let id = store.createNote(in: nil, initial: body("Secret", rest: "hidden words")).id

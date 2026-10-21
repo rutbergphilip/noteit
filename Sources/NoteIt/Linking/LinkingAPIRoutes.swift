@@ -101,7 +101,7 @@ enum LinkingAPIRoutes {
                 let meta = try readableNote(context, store: store)
                 let items = OutlineExtractor.items(in: store.body(for: meta.id)).map { item in
                     OutlineItemDTO(level: item.level, text: item.text,
-                                   url: NoteLink.note(id: meta.id, heading: item.level == 0 ? nil : item.text).url.absoluteString)
+                                   url: NoteLink.note(id: meta.id, heading: item.level == 0 ? nil : item.text).clamped.url.absoluteString)
                 }
                 return .json(Items(items: items))
             case "linking.templates":

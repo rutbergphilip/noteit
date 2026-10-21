@@ -120,8 +120,7 @@ final class MarkdownImporter {
             body.enumerateAttribute(.link, in: NSRange(location: 0, length: body.length)) { value, range, _ in
                 guard let url = value as? URL, case let .note(target, heading)? = NoteLink(url: url),
                       let title = missing[target] else { return }
-                body.addAttribute(.link, value: NoteLink.unresolved(title: String(title.prefix(NoteLink.maxTextLength)),
-                                                                    heading: heading).url, range: range)
+                body.addAttribute(.link, value: NoteLink.unresolved(title: title, heading: heading).clamped.url, range: range)
                 changed = true
             }
             if changed { store.replaceImportedBody(id, body) }
