@@ -16,7 +16,6 @@ enum PlannedMenuShortcuts {
         Row(command: "removeLock", owner: "sync-security", shortcut: nil),
         Row(command: "lockAllNotes", owner: "sync-security", shortcut: MenuShortcut("l", [.option, .control, .command])),
         Row(command: "togglePin", owner: "surfaces-polish", shortcut: MenuShortcut("p", [.option, .command])),
-        Row(command: "addReminder", owner: "organise", shortcut: MenuShortcut("r", [.control, .command])),
         Row(command: "askNotes", owner: "private-ai", shortcut: MenuShortcut("a", [.option, .command])),
         Row(command: "createShareLink", owner: "sharing", shortcut: MenuShortcut("l", [.option, .command])),
         Row(command: "zoomIn", owner: "surfaces-polish", shortcut: MenuShortcut("=", [.control, .command])),

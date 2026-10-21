@@ -54,6 +54,13 @@ final class MenuShortcutStoreTests: XCTestCase {
         XCTAssertEqual(store.commands(using: MenuShortcut("t", [.shift, .command])), [.print])
     }
 
+    func testAddReminderShortcutTakenByAUserShortcutStartsEmpty() {
+        storeJSON(#"{"find":{"key":"r","modifiers":["control","command"]}}"#)
+        let store = makeStore()
+        XCTAssertNil(store.current(.addReminder))
+        XCTAssertEqual(store.commands(using: MenuShortcut("r", [.control, .command])), [.find])
+    }
+
     func testConflictNamesEveryCommandUsingTheShortcut() {
         storeJSON(#"{"find":{"key":"j","modifiers":["command"]},"print":{"key":"j","modifiers":["command"]}}"#)
         let store = makeStore()

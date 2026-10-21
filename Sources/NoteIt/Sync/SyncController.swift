@@ -478,6 +478,11 @@ final class SyncController: ObservableObject {
 
     // MARK: - Scheduling
 
+    /// A pass right away, after a change other Macs should see soon (a handled reminder).
+    func requestSoonPass() {
+        requestSync(after: 0)
+    }
+
     private func requestSync(after delay: TimeInterval) {
         guard loop != nil else { return }
         let due = Date().addingTimeInterval(delay)

@@ -6,8 +6,11 @@ struct GeneralSettingsView: View {
     @AppStorage(PrefKey.hideDockIcon) private var hideDockIcon = false
     @AppStorage(PrefKey.showMenuBarIcon) private var showMenuBarIcon = true
     @AppStorage(PrefKey.captureIncludesBrowserLinks) private var captureIncludesBrowserLinks = true
+    @AppStorage(PrefKey.remindersEnabled) private var remindersEnabled = PrefDefault.remindersEnabled
+    @AppStorage(PrefKey.reminderDefaultTime) private var reminderDefaultTime = PrefDefault.reminderDefaultTime
 
     @ObservedObject private var updater = AppUpdater.shared
+    @ObservedObject private var notifications = ReminderNotifications.shared
 
     @State private var launchAtLogin = false
     @State private var loginStatus: SMAppService.Status = .notRegistered
@@ -41,7 +44,8 @@ struct GeneralSettingsView: View {
         case .appearance: appearanceSection
         case .startup: startupSection
         case .capture: captureSection
-        case .emailIn, .reminders, .cheatSheet: EmptyView()
+        case .reminders: remindersSection
+        case .emailIn, .cheatSheet: EmptyView()
         case .updates:
             if updater.isEnabled { updatesSection }
         }
@@ -98,6 +102,40 @@ struct GeneralSettingsView: View {
                              symbol: "text.quote")
                 .padding(.top, 4)
         }
+    }
+
+    private var reminderTimeBinding: Binding<Date> {
+        Binding {
+            Calendar.current.date(bySettingHour: reminderDefaultTime / 60 % 24, minute: reminderDefaultTime % 60, second: 0,
+                                  of: Date()) ?? Date()
+        } set: { date in
+            let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
+            reminderDefaultTime = (parts.hour ?? 9) * 60 + (parts.minute ?? 0)
+        }
+    }
+
+    private var remindersSection: some View {
+        Section {
+            Toggle(GeneralSettingsLabel.showReminders, isOn: $remindersEnabled)
+            DatePicker(GeneralSettingsLabel.reminderDefaultTime, selection: reminderTimeBinding, displayedComponents: .hourAndMinute)
+            if !notifications.isAvailable {
+                SettingsFootnote(text: "Notifications work when NoteIt runs from its app bundle.", symbol: "info.circle")
+            } else if notifications.isAuthorized == false {
+                HStack {
+                    SettingsFootnote(text: "Notifications are off for NoteIt.", symbol: "bell.slash")
+                    Spacer()
+                    Button("Open System Settings…") { ReminderNotifications.openSystemSettings() }
+                        .controlSize(.small)
+                }
+            }
+        } header: {
+            Text("Reminders")
+        } footer: {
+            SettingsFootnote(text: "Write a date in a line and choose Edit › Task › Add Reminder…, or type @remind(tomorrow 9am). Reminders ring while NoteIt is running; with sync on, only one Mac shows each one.",
+                             symbol: "bell")
+                .padding(.top, 4)
+        }
+        .task { await notifications.refreshAuthorization() }
     }
 
     private var updatesSection: some View {
@@ -193,11 +231,11 @@ enum GeneralSettingsSection: String, CaseIterable {
     case cheatSheet
     case updates
 
-    /// False for emailIn, reminders and cheatSheet until their owners ship them. Updates also needs the updater.
+    /// False for emailIn and cheatSheet until their owners ship them. Updates also needs the updater.
     var isAvailable: Bool {
         switch self {
-        case .appearance, .startup, .capture, .updates: true
-        case .emailIn, .reminders, .cheatSheet: false
+        case .appearance, .startup, .capture, .reminders, .updates: true
+        case .emailIn, .cheatSheet: false
         }
     }
 
@@ -207,7 +245,8 @@ enum GeneralSettingsSection: String, CaseIterable {
         case .appearance: [GeneralSettingsLabel.showNoteItIn, GeneralSettingsLabel.showMenuBarIcon]
         case .startup: [GeneralSettingsLabel.launchAtLogin]
         case .capture: [GeneralSettingsLabel.readSelectedText, GeneralSettingsLabel.includePageLinks]
-        case .emailIn, .reminders, .cheatSheet: []
+        case .reminders: [GeneralSettingsLabel.showReminders, GeneralSettingsLabel.reminderDefaultTime]
+        case .emailIn, .cheatSheet: []
         case .updates: [GeneralSettingsLabel.checkForUpdates]
         }
     }
@@ -220,6 +259,8 @@ enum GeneralSettingsLabel {
     static let readSelectedText = "Read selected text"
     static let includePageLinks = "Include page links from browsers"
     static let checkForUpdates = "Check for Updates Automatically"
+    static let showReminders = "Show reminders on this Mac"
+    static let reminderDefaultTime = "Default time"
 }
 
 /// The General tab's window sizes. It opens at its previous fixed height and can be made shorter, which scrolls the
@@ -228,6 +269,6 @@ enum GeneralSettingsLayout {
     static let minHeight: CGFloat = 320
 
     static func idealHeight(updatesEnabled: Bool) -> CGFloat {
-        updatesEnabled ? 620 : 540
+        updatesEnabled ? 760 : 680
     }
 }

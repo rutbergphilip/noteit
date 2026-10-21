@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let hideDockIconKey = PrefKey.hideDockIcon
 
     private var observers: [NSObjectProtocol] = []
+    private var reminderScheduler: ReminderScheduler?
     private var lastHideDockIcon: Bool?
     /// Last (hideDockIcon, showMenuBarIcon) pair seen by the defaults observer.
     private var lastVisibilityPrefs: (hide: Bool, showMenuBar: Bool)?
@@ -53,6 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LinkingAPIRoutes.register(in: .shared, store: NoteStore.shared)
         _ = LocalAPIController.shared
         PasteAndMatchStyleShortcut.install()
+        ReminderNotifications.shared.configure()
+        let scheduler = ReminderScheduler(store: .shared, notifications: ReminderNotifications.shared, claims: nil,
+                                          defaults: .standard, clock: Date.init)
+        reminderScheduler = scheduler
+        scheduler.start()
         let center = NotificationCenter.default
 
         // Notification callbacks never assume main-actor isolation: they hop with a Task instead, because

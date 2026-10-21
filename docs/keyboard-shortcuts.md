@@ -30,7 +30,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 
 ### Changing menu shortcuts
 
-The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back, Go Forward, Link to Note…, Show Links and Outline, New Note from Template…, Open Today's Note, Daily Note for Date…, New Smart Folder…, Save Search as Smart Folder… (these last three have no shortcut until you set one), Tasks and Set Due Date… can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
+The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back, Go Forward, Link to Note…, Show Links and Outline, New Note from Template…, Open Today's Note, Daily Note for Date…, New Smart Folder…, Save Search as Smart Folder… (these last three have no shortcut until you set one), Tasks, Set Due Date… and Add Reminder… can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
 
 When recording one:
 
@@ -79,6 +79,7 @@ If you've bound ⇧⌘V yourself, as a menu shortcut or a global hotkey, it keep
 | ⇧⌘L | Checklist |
 | ⇧⌘U | Check or uncheck a checklist item |
 | ⇧⌘D | Set Due Date… for the checklist item under the cursor (Edit › Task) |
+| ⌃⌘R | Add Reminder… for the line under the cursor, using the date written in it (Edit › Task) |
 | ⌘] / ⌘[ | Indent / outdent |
 | Tab / ⇧Tab | Indent or outdent a list item; move to the next or previous table cell |
 | ⇧⌘{ / ⇧⌘\| / ⇧⌘} | Align left / center / right |

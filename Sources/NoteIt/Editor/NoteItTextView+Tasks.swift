@@ -71,6 +71,32 @@ extension NoteItTextView {
         showDatePopover(.due, title: "Due Date", initial: existing, line: line, anchor: line, canRemove: existing != nil)
     }
 
+    /// Format › Task › Add Reminder…: reads the date written in the line under the caret and adds `@remind(…)`;
+    /// without a date in the line, opens the date picker.
+    @objc func addReminder(_ sender: Any?) {
+        let line = lineRange(at: selectedRange().location)
+        guard isEditable, line.length > 0 else {
+            NSSound.beep()
+            return
+        }
+        let minutes = NoteStore.reminderDefaultMinutes()
+        let existing = existingToken(.remind, in: line)
+        let masked = maskedLine(line)
+        guard existing == nil,
+              let found = NoteStore.reminderDate(inLine: masked, now: Date(), calendar: .current, defaultMinutes: minutes) else {
+            showDatePopover(.remind, title: "Reminder", initial: existing?.value, line: line, anchor: line, canRemove: existing != nil)
+            return
+        }
+        writeLineToken(.remind, value: "@remind(\(found.token))", line: line, actionName: "Set Reminder")
+        let updated = lineRange(at: min(line.location, storage.length))
+        let message = ReminderSetPopover.message(for: found, now: Date(), calendar: .current)
+        DatePopoverPresenter.showReminderSet(message, relativeTo: rect(for: updated), of: self) { [weak self] in
+            guard let self else { return }
+            let current = self.lineRange(at: min(updated.location, self.storage.length))
+            self.showDatePopover(.remind, title: "Reminder", initial: found, line: current, anchor: current, canRemove: true)
+        }
+    }
+
     /// A click on a `@due`/`@remind` chip.
     func editDateToken(_ range: NSRange) {
         guard isEditable, NSMaxRange(range) <= storage.length else { return }

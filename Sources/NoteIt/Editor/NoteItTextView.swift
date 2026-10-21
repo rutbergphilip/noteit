@@ -817,12 +817,18 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
                 }
             }
         }
-        if isEditable, taskLineRange(at: selectedRange().location) != nil {
+        if isEditable, lineRange(at: selectedRange().location).length > 0 {
             let task = NSMenu(title: "Task")
-            let due = NSMenuItem(title: "Set Due Date…", action: #selector(setDueDate(_:)), keyEquivalent: "")
-            due.target = self
-            due.image = NSImage(systemSymbolName: "calendar.badge.clock", accessibilityDescription: nil)
-            task.addItem(due)
+            if taskLineRange(at: selectedRange().location) != nil {
+                let due = NSMenuItem(title: "Set Due Date…", action: #selector(setDueDate(_:)), keyEquivalent: "")
+                due.target = self
+                due.image = NSImage(systemSymbolName: "calendar.badge.clock", accessibilityDescription: nil)
+                task.addItem(due)
+            }
+            let remind = NSMenuItem(title: "Add Reminder…", action: #selector(addReminder(_:)), keyEquivalent: "")
+            remind.target = self
+            remind.image = NSImage(systemSymbolName: "bell", accessibilityDescription: nil)
+            task.addItem(remind)
             let taskItem = NSMenuItem(title: "Task", action: nil, keyEquivalent: "")
             taskItem.submenu = task
             format.addItem(.separator())

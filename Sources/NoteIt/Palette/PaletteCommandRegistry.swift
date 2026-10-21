@@ -96,6 +96,14 @@ enum PaletteCommandRegistry {
                     NSApp.sendAction(#selector(NoteItTextView.setDueDate(_:)), to: nil, from: nil)
                 }
             },
+            command("addReminder", "Add Reminder…", symbol: "bell", shortcut: shortcuts.current(.addReminder)?.display,
+                    keywords: ["remind", "notification", "alarm", "task"], available: hasLiveNote && liveNote?.isLocked != true) {
+                WindowRouter.showMainWindow()
+                WindowRouter.focusEditor()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    NSApp.sendAction(#selector(NoteItTextView.addReminder(_:)), to: nil, from: nil)
+                }
+            },
             command("searchNotes", "Search Notes", symbol: "magnifyingglass", shortcut: shortcuts.current(.searchNotes)?.display, keywords: ["find", "filter"]) {
                 NotificationCenter.default.post(name: .noteItFocusSearch, object: nil)
             },

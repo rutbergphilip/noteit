@@ -129,6 +129,11 @@ struct NoteItCommands: Commands {
                     NSApp.sendAction(#selector(NoteItTextView.setDueDate(_:)), to: nil, from: nil)
                 }
                 .menuShortcut(.setDueDate)
+
+                Button("Add Reminder…") {
+                    NSApp.sendAction(#selector(NoteItTextView.addReminder(_:)), to: nil, from: nil)
+                }
+                .menuShortcut(.addReminder)
             }
         }
 

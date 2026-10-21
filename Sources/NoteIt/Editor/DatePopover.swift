@@ -80,3 +80,54 @@ enum DatePopoverPresenter {
         current = popover
     }
 }
+
+/// "Reminder set for tomorrow at 09:00" with Change…, after Add Reminder found a date in the line.
+struct ReminderSetPopover: View {
+    let message: String
+    let onChange: () -> Void
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "bell.fill").foregroundStyle(.purple)
+            Text(message)
+            Button("Change…", action: onChange)
+        }
+        .padding(12)
+        .fixedSize()
+    }
+
+    static func message(for value: LocalDateTime, now: Date, calendar: Calendar) -> String {
+        let time = String(format: "%02d:%02d", value.hour ?? 0, value.minute ?? 0)
+        let today = LocalDateTime(now, calendar: calendar, includeTime: false)
+        let day = value.dateOnly
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: now).map { LocalDateTime($0, calendar: calendar, includeTime: false) }
+        let dayText: String
+        if day == today {
+            dayText = "today"
+        } else if day == tomorrow {
+            dayText = "tomorrow"
+        } else if let date = day.date(in: calendar) {
+            let formatter = DateFormatter()
+            formatter.calendar = calendar
+            formatter.timeZone = calendar.timeZone
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.dateFormat = "EEE d MMM"
+            dayText = formatter.string(from: date)
+        } else {
+            dayText = day.token
+        }
+        return "Reminder set for \(dayText) at \(time)"
+    }
+}
+
+extension DatePopoverPresenter {
+    static func showReminderSet(_ message: String, relativeTo rect: NSRect, of view: NSView, onChange: @escaping () -> Void) {
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: ReminderSetPopover(message: message, onChange: { [weak popover] in
+            popover?.close()
+            onChange()
+        }))
+        popover.show(relativeTo: rect, of: view, preferredEdge: .maxY)
+    }
+}

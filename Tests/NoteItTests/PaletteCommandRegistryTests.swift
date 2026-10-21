@@ -195,6 +195,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
             "saveSearchAsSmartFolder": nil,
             "showTasks": MenuShortcutCommand.showTasks.defaultShortcut,
             "setDueDate": MenuShortcutCommand.setDueDate.defaultShortcut,
+            "addReminder": MenuShortcutCommand.addReminder.defaultShortcut,
             "showCompletedTasks": nil,
         ]
         for (id, shortcut) in expected {
@@ -237,7 +238,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
             .newNote: "newNote", .newNotebook: "newNotebook", .searchNotes: "searchNotes", .find: "find",
             .findAndReplace: "findReplace", .exportNote: "export", .print: "print", .copyAsMarkdown: "copyMarkdown",
             .copyNoteLink: "copyNoteLink", .versionHistory: "versionHistory", .deleteNote: "deleteNote",
-            .newNoteFromTemplate: "newNoteFromTemplate", .setDueDate: "setDueDate",
+            .newNoteFromTemplate: "newNoteFromTemplate", .setDueDate: "setDueDate", .addReminder: "addReminder",
         ]
         for (command, id) in paletteIDs {
             XCTAssertEqual(titles[id], command.title, id)
