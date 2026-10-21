@@ -87,6 +87,12 @@ final class SearchHighlighterTests: XCTestCase {
         XCTAssertEqual(highlighted, ["invoice"])
     }
 
+    func testSnippetKeepsHighlightsAfterWindowsLineBreaks() throws {
+        let snippet = try XCTUnwrap(SearchHighlighter.snippet(of: "the invoice\r\n\r\nanother invoice", terms: ["invoice"], maxLength: 60))
+        XCTAssertEqual(snippet.text, "the invoice    another invoice")
+        XCTAssertEqual(snippet.highlights.map { (snippet.text as NSString).substring(with: $0) }, ["invoice", "invoice"])
+    }
+
     func testSnippetWithoutMatchIsNil() {
         XCTAssertNil(SearchHighlighter.snippet(of: "nothing to see", terms: ["invoice"], maxLength: 60))
     }

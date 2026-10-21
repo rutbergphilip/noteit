@@ -76,7 +76,8 @@ public enum SearchHighlighter {
         end = adjusted(ns, end, forward: false)
 
         let window = ns.substring(with: NSRange(location: start, length: end - start))
-        let body = String(window.map { $0.isNewline ? " " : $0 })
+        let units = window.utf16.map { [0x0A, 0x0B, 0x0C, 0x0D, 0x85, 0x2028, 0x2029].contains($0) ? 0x20 : $0 }
+        let body = String(utf16CodeUnits: units, count: units.count)
         let prefix = start > 0 ? "…" : ""
         let suffix = end < length ? "…" : ""
         let shift = (prefix as NSString).length
