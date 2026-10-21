@@ -181,18 +181,13 @@ extension NoteStore {
     /// already in the visible list.
     func navigate(to id: UUID, heading: String?) {
         if let heading {
-            let wanted = TextFold.fold(heading.trimmingCharacters(in: .whitespaces))
-            let match = OutlineExtractor.items(in: body(for: id)).first { TextFold.fold($0.text) == wanted }
-            if let match {
-                if selectedNoteID == id, let textView = OpenEditorRegistry.shared.textView(for: id) {
-                    textView.setSelectedRange(NSRange(location: match.range.location, length: 0))
-                    textView.scrollRangeToVisible(NSRange(location: match.range.location, length: 0))
-                } else {
-                    RichTextEditor.pendingCaret[id] = match.range.location
-                }
+            let location = headingLocation(heading, in: id)
+            if location == nil { LinkNavigationState.shared.showMissingHeading(heading, in: id) }
+            if selectedNoteID == id, let textView = OpenEditorRegistry.shared.textView(for: id) {
+                textView.setSelectedRange(NSRange(location: location ?? 0, length: 0))
+                textView.scrollToTopThird(location ?? 0)
             } else {
-                RichTextEditor.pendingCaret[id] = 0
-                LinkNavigationState.shared.showMissingHeading(heading, in: id)
+                RichTextEditor.pendingCaret[id] = location ?? 0
             }
         }
         if notes(for: selection, search: searchText).contains(where: { $0.id == id }) {
@@ -200,6 +195,24 @@ extension NoteStore {
         } else {
             reveal(id)
         }
+    }
+
+    /// Where the first heading whose folded text equals `heading` starts; nil when the note has none.
+    func headingLocation(_ heading: String, in id: UUID) -> Int? {
+        let wanted = TextFold.fold(heading.trimmingCharacters(in: .whitespaces))
+        return headings(for: id).first { TextFold.fold($0.text) == wanted }?.range.location
+    }
+
+    private static var headingCache: [UUID: (updatedAt: Date, items: [OutlineItem])] = [:]
+
+    /// The note's outline from its stored body, cached per `updatedAt`. Empty for locked notes.
+    func headings(for id: UUID) -> [OutlineItem] {
+        guard let meta = note(with: id), !meta.isLocked else { return [] }
+        if let cached = Self.headingCache[id], cached.updatedAt == meta.updatedAt { return cached.items }
+        let items = OutlineExtractor.items(in: body(for: id))
+        if Self.headingCache.count > 500 { Self.headingCache.removeAll() }
+        Self.headingCache[id] = (meta.updatedAt, items)
+        return items
     }
 
     /// Creates the note an unresolved link names, in the notebook the Links setting picks. Not selected.

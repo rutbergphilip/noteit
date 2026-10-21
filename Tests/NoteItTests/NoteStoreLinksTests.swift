@@ -186,4 +186,37 @@ final class NoteStoreLinksTests: XCTestCase {
         XCTAssertEqual(store.outgoingLinks(from: source), [])
         XCTAssertTrue(store.body(for: source).string.contains("Gone"))
     }
+
+    private func headed(_ title: String, _ headings: [String]) -> NSAttributedString {
+        let text = NSMutableAttributedString(string: title + "\n", attributes: EditorStyle.attributes(for: .title))
+        for heading in headings {
+            text.append(NSAttributedString(string: heading + "\n", attributes: EditorStyle.attributes(for: .heading)))
+            text.append(NSAttributedString(string: "Body text.\n", attributes: EditorStyle.bodyAttributes))
+        }
+        return text
+    }
+
+    func testHeadingResolvesByFoldedText() {
+        let store = makeStore()
+        let id = store.createNote(in: nil, initial: headed("Atlas", ["Intro", "Café Plans"])).id
+        let expected = (store.body(for: id).string as NSString).range(of: "Café Plans").location
+        XCTAssertEqual(store.headingLocation("cafe plans", in: id), expected)
+        RichTextEditor.pendingCaret[id] = nil
+        LinkNavigationState.shared.missingHeading = nil
+        store.navigate(to: id, heading: "CAFÉ PLANS")
+        XCTAssertEqual(store.selectedNoteID, id)
+        XCTAssertEqual(RichTextEditor.pendingCaret.removeValue(forKey: id), expected)
+        XCTAssertNil(LinkNavigationState.shared.missingHeading)
+    }
+
+    func testMissingHeadingFallsBackToTop() {
+        let store = makeStore()
+        let id = store.createNote(in: nil, initial: headed("Atlas", ["Intro"])).id
+        XCTAssertNil(store.headingLocation("Outro", in: id))
+        store.navigate(to: id, heading: "Outro")
+        XCTAssertEqual(RichTextEditor.pendingCaret.removeValue(forKey: id), 0)
+        XCTAssertEqual(LinkNavigationState.shared.missingHeading?.note, id)
+        XCTAssertEqual(LinkNavigationState.shared.missingHeading?.heading, "Outro")
+        LinkNavigationState.shared.missingHeading = nil
+    }
 }

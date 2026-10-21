@@ -132,6 +132,7 @@ struct RichTextEditor: NSViewRepresentable {
             if let caret, caret > 0 {
                 textView.typingAttributes = EditorStyle.bodyAttributes
                 textView.scrollRangeToVisible(NSRange(location: caret, length: 0))
+                DispatchQueue.main.async { [weak textView] in textView?.scrollToTopThird(caret) }
             } else if body.length == 0 {
                 textView.typingAttributes = EditorStyle.attributes(for: .title)
                 DispatchQueue.main.async { [weak textView] in

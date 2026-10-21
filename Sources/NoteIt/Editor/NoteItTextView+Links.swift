@@ -99,3 +99,23 @@ extension NoteItTextView {
         return insertNoteLink(link, text: shown, replacing: range)
     }
 }
+
+extension NoteItTextView {
+    /// The line rect of the character at `location`, in view coordinates.
+    func lineRect(at location: Int) -> NSRect? {
+        guard let layoutManager, let textContainer, location <= storage.length else { return nil }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: NSRange(location: location, length: 0), actualCharacterRange: nil)
+        var rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphs.location, length: 1), in: textContainer)
+        rect.origin.y += textContainerOrigin.y
+        return rect
+    }
+
+    /// Scrolls so the line at `location` sits a third of the way down the visible area.
+    func scrollToTopThird(_ location: Int) {
+        guard let rect = lineRect(at: location), let scrollView = enclosingScrollView else { return }
+        let clip = scrollView.contentView
+        let y = max(0, min(rect.minY - clip.bounds.height / 3, frame.height - clip.bounds.height))
+        clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
+        scrollView.reflectScrolledClipView(clip)
+    }
+}

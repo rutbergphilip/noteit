@@ -38,7 +38,7 @@ final class LinkCompletionSource: InlineCompletionSource {
             candidates = store.linkCandidates(excluding: query.heading == nil ? noteID : nil)
         }
         let result = LinkSuggester.suggestions(for: query, candidates: candidates,
-                                               headings: { [store] in OutlineExtractor.items(in: store.body(for: $0)) })
+                                               headings: { [store] in store.headings(for: $0) })
         suggestions = [:]
         return result.map { suggestion in
             let row: InlineCompletionRow

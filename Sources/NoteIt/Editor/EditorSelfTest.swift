@@ -283,6 +283,17 @@ enum EditorSelfTest {
         let typed = linkRuns(tv).last
         log("completion: typing [[New thing]] makes an unresolved link \(ok(typed?.0 == "New thing" && typed?.1 == .unresolved(title: "New thing", heading: nil) && !tv.string.contains("]]")))")
 
+        let guide = NSMutableAttributedString(string: "Harbor Guide\n", attributes: EditorStyle.attributes(for: .title))
+        guide.append(NSAttributedString(string: "Docking\n", attributes: EditorStyle.attributes(for: .heading)))
+        let harbor = store.createNote(in: nil, initial: guide)
+        await type(" [[Harbor Guide#dock", into: tv)
+        await sleep(0.3)
+        let headingRow = tv.inlineCompletion.rows.first?.id == "heading:\(harbor.id.uuidString):Docking"
+        event(tv) { tv.doCommand(by: #selector(NSResponder.insertNewline(_:))) }
+        await sleep(0.3)
+        let headed = linkRuns(tv).last?.1 == .note(id: harbor.id, heading: "Docking")
+        log("completion: [[Note#Head lists the heading and links to it \(ok(headingRow && headed))")
+
         await type(" [[esc", into: tv)
         event(tv) { tv.doCommand(by: #selector(NSResponder.cancelOperation(_:))) }
         await sleep(0.2)

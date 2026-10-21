@@ -263,12 +263,7 @@ final class OutlineModel: ObservableObject {
     }
 
     private func rect(for item: OutlineItem) -> NSRect? {
-        guard let textView, let layout = textView.layoutManager, let container = textView.textContainer,
-              item.range.location <= (textView.textStorage?.length ?? 0) else { return nil }
-        let glyphs = layout.glyphRange(forCharacterRange: NSRange(location: item.range.location, length: 0), actualCharacterRange: nil)
-        var rect = layout.boundingRect(forGlyphRange: NSRange(location: glyphs.location, length: 1), in: container)
-        rect.origin.y += textView.textContainerOrigin.y
-        return rect
+        textView?.lineRect(at: item.range.location)
     }
 
     private func updateCurrent() {
@@ -295,11 +290,7 @@ final class OutlineModel: ObservableObject {
         }
         textView.window?.makeFirstResponder(textView)
         textView.setSelectedRange(selection)
-        if let rect = rect(for: item), let clip = textView.enclosingScrollView?.contentView {
-            let y = max(0, min(rect.minY - clip.bounds.height / 3, textView.frame.height - clip.bounds.height))
-            clip.scroll(to: NSPoint(x: clip.bounds.minX, y: y))
-            textView.enclosingScrollView?.reflectScrolledClipView(clip)
-        }
+        textView.scrollToTopThird(item.range.location)
         updateCurrent()
     }
 }
