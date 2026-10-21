@@ -98,6 +98,10 @@ final class ModelCodingTests: XCTestCase {
         XCTAssertNotNil(notebook.modifiedAt)
         let notebookKeys = try XCTUnwrap(JSONSerialization.jsonObject(with: try encoder.encode(notebook)) as? [String: Any]).keys
         XCTAssertEqual(Set(notebookKeys), Notebook.ownedCodingKeys)
+
+        let folder = SmartFolder(name: "Due", query: "due:today", sortIndex: 0, revision: UUID(), modifiedAt: Date())
+        let folderKeys = try XCTUnwrap(JSONSerialization.jsonObject(with: try encoder.encode(folder)) as? [String: Any]).keys
+        XCTAssertEqual(Set(folderKeys), SmartFolder.ownedCodingKeys)
     }
 
     private func assertSameKeys(_ json: String, _ encoded: Data, file: StaticString = #filePath, line: UInt = #line) throws {

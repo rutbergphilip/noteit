@@ -69,6 +69,7 @@ struct SearchResultKey: Hashable {
     var decorated: Bool
     var notesVersion: Int
     var notebooksVersion: Int
+    var smartFoldersVersion: Int
     var indexVersion: Int
     var minute: Int
 }
@@ -91,16 +92,23 @@ extension NoteStore {
     /// `decorated` false skips highlights and snippets (callers that only need the notes).
     func searchResults(for selection: SidebarSelection?, search: String, order: SearchSortOrder,
                        decorated: Bool, now: Date = Date()) -> [SearchResult] {
-        let base = LibraryQuery.notes(notes, for: selection, search: "", now: now, indexedText: { _ in nil },
+        var folderQuery: SearchQuery?
+        var scope = selection
+        if case .smartFolder(let id)? = selection {
+            guard let folder = smartFolder(with: id) else { return [] }
+            folderQuery = SearchQuery.parse(folder.query)
+            scope = .allNotes
+        }
+        let base = LibraryQuery.notes(notes, for: scope, search: "", now: now, indexedText: { _ in nil },
                                       notebookScope: notebookIDsIncludingDescendants)
         let query = SearchQuery.parse(search)
-        if query.isEmpty {
+        if query.isEmpty, folderQuery == nil {
             return base.map { SearchResult(note: $0, score: nil, titleHighlights: [], snippet: nil, foundInImage: false) }
         }
         let bypass = imageTextProvider != nil && query.hasTextTerms
         let key = SearchResultKey(selection: selection, search: search, order: order, decorated: decorated,
                                   notesVersion: notesVersion, notebooksVersion: notebooksVersion,
-                                  indexVersion: searchIndexer.version, minute: Int(now.timeIntervalSince1970 / 60))
+                                  smartFoldersVersion: smartFoldersVersion, indexVersion: searchIndexer.version, minute: Int(now.timeIntervalSince1970 / 60))
         if !bypass, let cached = searchResultCache[key] { return cached }
 
         let documents = searchDocuments()
@@ -115,7 +123,10 @@ extension NoteStore {
             docs.append(doc)
         }
         let context = QueryContext(now: now, calendar: .current, notebooks: notebookTree)
-        let matched = docs.filter { QueryEvaluator.matches(query, $0, context: context) }
+        let matched = docs.filter { doc in
+            folderQuery.map { QueryEvaluator.matches($0, doc, context: context) } ?? true
+                && QueryEvaluator.matches(query, doc, context: context)
+        }
 
         var ordered: [(doc: StoreSearchDocument, score: Double?, onlyInImage: Bool)]
         if query.hasTextTerms, order == .bestMatch, selection != .recentlyDeleted {

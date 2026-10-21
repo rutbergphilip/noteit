@@ -299,7 +299,11 @@ public actor SyncEngine {
 
     private func ordered(_ ids: Set<UUID>, _ pass: Pass) -> [UUID] {
         func rank(_ id: UUID) -> Int {
-            (pass.records[id]?.kind ?? pass.deletions[id]?.kind ?? pass.index.metas[id]?.kind) == .notebook ? 0 : 1
+            switch pass.records[id]?.kind ?? pass.deletions[id]?.kind ?? pass.index.metas[id]?.kind {
+            case .notebook: 0
+            case .smartFolder: 1
+            case .note, nil: 2
+            }
         }
         return ids.sorted { (rank($0), $0.uuidString) < (rank($1), $1.uuidString) }
     }
@@ -528,7 +532,7 @@ public actor SyncEngine {
             return
         }
 
-        if kind == .notebook {
+        if kind.usesLastWriterWins {
             let remoteWins = envelope.modifiedAt != localRecord.modifiedAt
                 ? envelope.modifiedAt > localRecord.modifiedAt
                 : envelope.deviceID > deviceID
@@ -648,7 +652,7 @@ public actor SyncEngine {
             id: id, kind: kind, revision: envelope.revision, modifiedAt: envelope.modifiedAt,
             deviceID: envelope.deviceID, meta: envelope.meta, body: body
         )
-        if kind == .notebook {
+        if kind.usesLastWriterWins {
             // Notebooks have no conflict copies; like resolveConflict, the newer edit wins.
             let localRecord = await local.records().first { $0.id == id && $0.kind == kind }
             guard let localRecord, localRecord.revision == localRevision else { return [] }
@@ -800,8 +804,10 @@ public actor SyncEngine {
     }
 
     private func currentRevision(_ id: UUID) async -> UUID? {
-        if let revision = await local.revision(of: id, kind: .note) { return revision }
-        return await local.revision(of: id, kind: .notebook)
+        for kind in [RecordKind.note, .notebook, .smartFolder] {
+            if let revision = await local.revision(of: id, kind: kind) { return revision }
+        }
+        return nil
     }
 
     private func seal(_ plain: Data, key: String) throws -> Data {
@@ -881,6 +887,9 @@ struct RemoteIndex {
                 if let id = id(".meta") { metas[id] = (.note, object.etag) }
                 else if let id = id(".body") { bodies[id] = object.etag }
                 else { sidecar(name.hasSuffix(".meta") ? .meta(.note) : name.contains(".body") ? .body : .other) }
+            case "smart-folders":
+                if let id = id(".json") { metas[id] = (.smartFolder, object.etag) }
+                else { sidecar(name.hasSuffix(".json") ? .meta(.smartFolder) : .other) }
             case "tombstones":
                 if let id = id(".json") { tombstones[id] = object.etag }
             case "keys":

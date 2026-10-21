@@ -20,6 +20,7 @@ public enum RemoteLayout {
         switch kind {
         case .notebook: return root + "notebooks/\(id.uuidString).json"
         case .note: return root + "notes/\(id.uuidString).meta"
+        case .smartFolder: return root + "smart-folders/\(id.uuidString).json"
         }
     }
 
@@ -69,6 +70,7 @@ extension RemoteLayout {
         RemotePrefix(path: root + "notes/", depth: 1, sealing: .storeKey, owner: "core"),
         RemotePrefix(path: root + "tombstones/", depth: 1, sealing: .storeKey, owner: "core"),
         RemotePrefix(path: root + "devices/", depth: 1, sealing: .storeKey, owner: "core"),
+        RemotePrefix(path: root + "smart-folders/", depth: 1, sealing: .storeKey, owner: "organise"),
     ]
 
     /// `manifest()`; never sealed and excluded from rekey.

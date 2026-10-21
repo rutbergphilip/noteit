@@ -14,3 +14,9 @@ extension Notebook {
         "id", "name", "symbol", "colorHex", "sortIndex", "revision", "modifiedAt", "defaultTemplateID", "parent",
     ]
 }
+
+extension SmartFolder {
+    public static let ownedCodingKeys: Set<String> = [
+        "id", "name", "query", "symbol", "sortIndex", "revision", "modifiedAt",
+    ]
+}

@@ -16,7 +16,7 @@ enum SyncSelfTest {
             return 2
         }
         let base = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
-        for sub in ["legacy", "a", "b", "perf-src", "perf-dst", "copy-1", "copy-2", "att", "nb-a", "nb-b"] { try? FileManager.default.removeItem(at: base.appendingPathComponent(sub)) }
+        for sub in ["legacy", "a", "b", "perf-src", "perf-dst", "copy-1", "copy-2", "att", "nb-a", "nb-b", "sf-a", "sf-b"] { try? FileManager.default.removeItem(at: base.appendingPathComponent(sub)) }
 
         legacyLibrary(base)
         let a = NoteStore(rootURL: base.appendingPathComponent("a", isDirectory: true))
@@ -34,6 +34,7 @@ enum SyncSelfTest {
         exportCache(a)
         bulkApply(base)
         nestedNotebooks(base)
+        smartFolders(base)
         NoteStore.syncJournalEnabled = false
 
         log(failures == 0 ? "PASS all checks" : "FAIL \(failures) check(s) failed")
@@ -491,6 +492,33 @@ enum SyncSelfTest {
             check(a.notebooks.count == countA && b.notebooks.count == countB, "nested: no duplicate notebooks")
         } catch {
             check(false, "nested: \(error)")
+        }
+        a.flush()
+        b.flush()
+    }
+
+    private static func smartFolders(_ base: URL) {
+        let a = NoteStore(rootURL: base.appendingPathComponent("sf-a", isDirectory: true))
+        let b = NoteStore(rootURL: base.appendingPathComponent("sf-b", isDirectory: true))
+        let notesB = b.notes.count
+        do {
+            let folder = try a.createSmartFolder(name: "Synced", query: "is:pinned")
+            var payload = try a.exportPayload(id: folder.id, kind: .smartFolder, deviceID: "sf-a")
+            guard var json = try JSONSerialization.jsonObject(with: payload.meta) as? [String: Any] else {
+                return check(false, "smart: read meta")
+            }
+            json["futureField"] = 7
+            payload.meta = try JSONSerialization.data(withJSONObject: json)
+            try b.applyRemote(payload)
+            check(b.smartFolder(with: folder.id)?.query == "is:pinned" && !b.hasUnsavedSmartFolders, "smart: folder reaches the other Mac")
+            try b.updateSmartFolder(folder.id, name: "Renamed", query: "is:pinned", symbol: "star")
+            let back = try JSONSerialization.jsonObject(with: b.exportPayload(id: folder.id, kind: .smartFolder, deviceID: "sf-b").meta)
+            check((back as? [String: Any])?["futureField"] as? Int == 7, "smart: unknown keys survive a local edit")
+            b.applyRemoteDeletion(folder.id, kind: .smartFolder)
+            check(b.smartFolder(with: folder.id) == nil && !b.hasUnsavedSmartFolders, "smart: tombstone removes it")
+            check(b.notes.count == notesB, "smart: notes untouched")
+        } catch {
+            check(false, "smart: \(error)")
         }
         a.flush()
         b.flush()

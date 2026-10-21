@@ -46,6 +46,7 @@ extension NoteStore {
         reindexNotebooks(siblings, now: now)
         if oldParent != parentID { reindexNotebooks(tree.siblings(under: oldParent).filter { $0 != id }, now: now) }
         commitNotebookChange()
+        if oldParent != parentID { rewriteSmartFoldersForNotebookRename(oldPath: tree.path(of: id), newPath: notebookTree.path(of: id)) }
         return true
     }
 }

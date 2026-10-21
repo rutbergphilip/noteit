@@ -110,9 +110,4 @@ extension NoteStore {
         _ = progress?(targets.count, targets.count)
         return result
     }
-
-    /// Runs `rewrite` over every smart folder's query and saves the ones that changed.
-    func rewriteSmartFolderQueries(_ rewrite: (String) -> String) {
-        // Smart folders arrive with their store; until then there is nothing to rewrite.
-    }
 }

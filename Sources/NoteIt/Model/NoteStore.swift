@@ -153,6 +153,12 @@ final class NoteStore: ObservableObject {
     private var editingNoteID: UUID?
     /// Local deletions not yet pushed by sync, mirrored to `sync-deletions.json`.
     private(set) var syncDeletionJournal: [UUID: LocalDeletion] = [:]
+    /// Sidebar saved searches, kept in `smart-folders.json` (see NoteStore+SmartFolders).
+    @Published private(set) var smartFolders: [SmartFolder] = [] {
+        didSet { smartFoldersVersion &+= 1 }
+    }
+    private(set) var smartFoldersVersion = 0
+    var smartFolderState = SmartFolderState()
     /// A user mutation happened since the last save; the save posts `noteItLocalChange`.
     private var hasUnannouncedLocalChange = false
 
@@ -231,7 +237,8 @@ final class NoteStore: ObservableObject {
     }
 
     func count(for selection: SidebarSelection) -> Int {
-        LibraryQuery.count(notes, for: selection, now: Date(), notebookScope: notebookIDsIncludingDescendants)
+        if case .smartFolder = selection { return notes(for: selection, search: "").count }
+        return LibraryQuery.count(notes, for: selection, now: Date(), notebookScope: notebookIDsIncludingDescendants)
     }
 
     /// Unique tags (lowercased, without `#`) across notes not in Recently Deleted, sorted.
@@ -586,6 +593,17 @@ final class NoteStore: ObservableObject {
         commitStagedEditorBody(id)
     }
 
+    /// The one way to change `smartFolders`. `local` marks a user edit that sync should push.
+    func changeSmartFolders(local: Bool, _ change: (inout [SmartFolder]) -> Void) {
+        change(&smartFolders)
+        smartFolderState.dirty = true
+        searchResultCache.removeAll()
+        if local {
+            hasUnannouncedLocalChange = true
+            scheduleSave()
+        }
+    }
+
     /// Saves a user change to note metadata; syncs like any edit.
     /// A local notebook change: saves and lets sync know, without touching the note selection.
     func commitNotebookChange() {
@@ -682,10 +700,12 @@ final class NoteStore: ObservableObject {
         guard updated != notebooks[index] else { return }
         updated.revision = UUID()
         updated.modifiedAt = Date()
+        let oldPath = notebookTree.path(of: nb.id)
         notebooks[index] = updated
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
+        rewriteSmartFoldersForNotebookRename(oldPath: oldPath, newPath: notebookTree.path(of: nb.id))
     }
 
     /// Deletes the notebook and its sub-notebooks and moves their notes to Recently Deleted. They keep the
@@ -891,6 +911,7 @@ final class NoteStore: ObservableObject {
         loadTombstones()
         loadRawMetaDeletionQueue()
         loadSyncDeletionJournal()
+        loadSmartFolders()
 
         if fm.fileExists(atPath: libraryURL.path) {
             var data: Data?
@@ -1031,6 +1052,7 @@ final class NoteStore: ObservableObject {
         if libraryDirty || !fm.fileExists(atPath: libraryURL.path) {
             saveLibrary()
         }
+        if smartFolderState.dirty { saveSmartFolders() }
         // Bodies (and raw meta files) of deleted records go only once their removal is persisted.
         if !libraryDirty, hasPendingAuxDeletions { trashPendingBodies() }
         indexSaveWorkItem?.cancel()
@@ -1038,13 +1060,13 @@ final class NoteStore: ObservableObject {
         if isTerminating { writeRecoveryCopies() }
         dispatchDerivedIndexes(.flush)
         trimBodyCache()
-        if hasUnannouncedLocalChange, !libraryDirty {
+        if hasUnannouncedLocalChange, !libraryDirty, !smartFolderState.dirty {
             hasUnannouncedLocalChange = false
             NotificationCenter.default.post(name: .noteItLocalChange, object: self)
         }
 
         let retryable = dirtyBodies.subtracting(bodyWriteBlocked)
-        if !retryable.isEmpty || libraryDirty || hasPendingAuxDeletions {
+        if !retryable.isEmpty || libraryDirty || smartFolderState.dirty || hasPendingAuxDeletions {
             scheduleSave(after: 5)
         }
     }
@@ -1578,11 +1600,13 @@ final class NoteStore: ObservableObject {
     }
 
     func clearSyncDeletion(_ id: UUID) {
+        clearSmartFolderDeletion(id)
         guard syncDeletionJournal.removeValue(forKey: id) != nil else { return }
         saveSyncDeletionJournal()
     }
 
     func clearAllSyncDeletions() {
+        clearAllSmartFolderDeletions()
         syncDeletionJournal = [:]
         saveSyncDeletionJournal()
     }
