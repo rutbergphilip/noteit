@@ -266,4 +266,25 @@ final class PaletteRankerTests: XCTestCase {
         XCTAssertEqual(items.count, 51)
         XCTAssertLessThan(elapsed, 0.5)
     }
+
+    // MARK: - Smart folders and tags
+
+    func testSmartFolderRanksByName() {
+        let folder = SmartFolder(name: "Open tasks", query: "is:todo", sortIndex: 0)
+        let items = PaletteRanker.items(query: "open tas", notes: [note("Groceries")], notebooks: [], commands: [command("x", "Open Quickly…")],
+                                        bodyMatches: [:], smartFolders: [folder])
+        XCTAssertEqual(items.first?.kind, .smartFolder(folder.id))
+        XCTAssertEqual(items.first?.subtitle, "Smart Folder · is:todo")
+        XCTAssertFalse(PaletteRanker.items(query: "todo", notes: [], notebooks: [], commands: [], bodyMatches: [:],
+                                           smartFolders: [folder]).contains { $0.kind == .smartFolder(folder.id) })
+    }
+
+    func testTagRanksByPathWithCount() {
+        let items = PaletteRanker.items(query: "work/ac", notes: [], notebooks: [], commands: [], bodyMatches: [:],
+                                        tags: [("work", 3), ("work/acme", 1), ("home", 2)])
+        XCTAssertEqual(items.first?.kind, .tag("work/acme"))
+        XCTAssertEqual(items.first?.title, "#work/acme")
+        XCTAssertEqual(items.first?.subtitle, "1 note")
+        XCTAssertFalse(items.contains { $0.kind == .tag("home") })
+    }
 }

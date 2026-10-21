@@ -62,6 +62,9 @@ struct NoteItCommands: Commands {
             }
             .menuShortcut(.newNotebook)
 
+            Button("New Smart Folder…") { SmartFolderActions.newSmartFolder() }
+                .menuShortcut(.newSmartFolder)
+
             Divider()
 
             Button("Open Quickly…") { PaletteController.shared.toggle(mode: .everything) }
@@ -92,6 +95,8 @@ struct NoteItCommands: Commands {
                 NotificationCenter.default.post(name: .noteItFocusSearch, object: nil)
             }
             .menuShortcut(.searchNotes)
+
+            SaveSearchMenuButton()
 
             Divider()
 
@@ -147,6 +152,17 @@ struct InspectorMenuButton: View {
 }
 
 /// "Check for Updates…" for the app menu; nothing when updates are off.
+/// Enabled while the main window's search field has text.
+private struct SaveSearchMenuButton: View {
+    @ObservedObject private var store = NoteStore.shared
+
+    var body: some View {
+        Button("Save Search as Smart Folder…") { SmartFolderActions.newSmartFolder(query: store.searchText) }
+            .menuShortcut(.saveSearchAsSmartFolder)
+            .disabled(store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    }
+}
+
 struct CheckForUpdatesButton: View {
     @ObservedObject private var updater = AppUpdater.shared
 

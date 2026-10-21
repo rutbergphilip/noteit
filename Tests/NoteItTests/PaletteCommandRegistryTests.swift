@@ -159,7 +159,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
         store.selectedNoteID = id
 
         let expected: Set<String> = [
-            "newNote", "newNoteFromTemplate", "newTemplate", "openToday", "dailyNoteForDate", "newNotebook", "searchNotes", "find", "findReplace", "export",
+            "newNote", "newNoteFromTemplate", "newTemplate", "openToday", "dailyNoteForDate", "newNotebook", "newSmartFolder", "searchNotes", "find", "findReplace", "export",
             "print", "copyMarkdown", "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn",
         ]
         XCTAssertEqual(availableIDs(store), expected)
@@ -191,6 +191,8 @@ final class PaletteCommandRegistryTests: XCTestCase {
             "togglePin": nil,
             "showRecentlyDeleted": nil,
             "import": nil,
+            "newSmartFolder": nil,
+            "saveSearchAsSmartFolder": nil,
         ]
         for (id, shortcut) in expected {
             let display: String? = shortcut?.display
@@ -268,5 +270,12 @@ final class PaletteCommandRegistryTests: XCTestCase {
         off.perform()
         XCTAssertFalse(prefs.bool(forKey: PrefKey.localAPIEnabled))
         XCTAssertEqual(try XCTUnwrap(command("localAPIOn", in: store)).info.title, "Turn Local API On")
+    }
+
+    func testSaveSearchAsSmartFolderNeedsASearch() {
+        let store = makeStore()
+        XCTAssertFalse(availableIDs(store).contains("saveSearchAsSmartFolder"))
+        store.searchText = "tag:work"
+        XCTAssertTrue(availableIDs(store).contains("saveSearchAsSmartFolder"))
     }
 }

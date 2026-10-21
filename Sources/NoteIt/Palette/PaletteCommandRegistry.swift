@@ -68,6 +68,15 @@ enum PaletteCommandRegistry {
                     NotificationCenter.default.post(name: .noteItNewNotebook, object: nil)
                 }
             },
+            command("newSmartFolder", "New Smart Folder…", symbol: SmartFolder.defaultSymbol, shortcut: shortcuts.current(.newSmartFolder)?.display,
+                    keywords: ["create", "add", "saved search", "filter"]) {
+                SmartFolderActions.newSmartFolder()
+            },
+            command("saveSearchAsSmartFolder", "Save Search as Smart Folder…", symbol: SmartFolder.defaultSymbol,
+                    shortcut: shortcuts.current(.saveSearchAsSmartFolder)?.display, keywords: ["saved search", "filter"],
+                    available: !store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) {
+                SmartFolderActions.newSmartFolder(query: store.searchText)
+            },
             command("searchNotes", "Search Notes", symbol: "magnifyingglass", shortcut: shortcuts.current(.searchNotes)?.display, keywords: ["find", "filter"]) {
                 NotificationCenter.default.post(name: .noteItFocusSearch, object: nil)
             },

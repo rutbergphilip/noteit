@@ -19,8 +19,6 @@ enum PlannedMenuShortcuts {
         Row(command: "showTasks", owner: "organise", shortcut: MenuShortcut("t", [.shift, .command])),
         Row(command: "setDueDate", owner: "organise", shortcut: MenuShortcut("d", [.shift, .command])),
         Row(command: "addReminder", owner: "organise", shortcut: MenuShortcut("r", [.control, .command])),
-        Row(command: "newSmartFolder", owner: "organise", shortcut: nil),
-        Row(command: "saveSearchAsSmartFolder", owner: "organise", shortcut: nil),
         Row(command: "askNotes", owner: "private-ai", shortcut: MenuShortcut("a", [.option, .command])),
         Row(command: "createShareLink", owner: "sharing", shortcut: MenuShortcut("l", [.option, .command])),
         Row(command: "zoomIn", owner: "surfaces-polish", shortcut: MenuShortcut("=", [.control, .command])),

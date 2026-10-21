@@ -14,6 +14,8 @@ enum PaletteMode: Equatable { case everything, commands }
 enum PaletteItemKind: Equatable {
     case note(UUID)
     case notebook(UUID)
+    case smartFolder(UUID)
+    case tag(String)          // tag path
     case command(String)      // PaletteCommandInfo.id
     case createNote(String)   // trimmed title to create
 }
@@ -48,6 +50,8 @@ enum PaletteRanker {
         notebooks: [Notebook],
         commands: [PaletteCommandInfo],
         bodyMatches: [UUID: Double],
+        smartFolders: [SmartFolder] = [],
+        tags: [(path: String, count: Int)] = [],
         limit: Int = 50
     ) -> [PaletteItem] {
         let (mode, text) = parse(raw)
@@ -105,6 +109,23 @@ enum PaletteRanker {
                 ranked.append(Ranked(item: item, score: match.score, kindRank: 1, updatedAt: nil))
             }
 
+            for folder in smartFolders {
+                guard let match = FuzzyMatcher.match(query, in: folder.name) else { continue }
+                let item = PaletteItem(id: "smartFolder:\(folder.id.uuidString)", kind: .smartFolder(folder.id), title: folder.name,
+                                       subtitle: "Smart Folder · \(folder.query)", symbol: folder.symbol, shortcut: nil,
+                                       matchedIndices: match.matchedIndices)
+                ranked.append(Ranked(item: item, score: match.score, kindRank: 1, updatedAt: nil))
+            }
+
+            for tag in tags {
+                let title = "#" + tag.path
+                guard let match = FuzzyMatcher.match(query, in: title) else { continue }
+                let item = PaletteItem(id: "tag:\(tag.path)", kind: .tag(tag.path), title: title,
+                                       subtitle: tag.count == 1 ? "1 note" : "\(tag.count) notes", symbol: "number", shortcut: nil,
+                                       matchedIndices: match.matchedIndices)
+                ranked.append(Ranked(item: item, score: match.score, kindRank: 1, updatedAt: nil))
+            }
+
             for command in commands {
                 if let entry = rankedCommand(command, query: query) { ranked.append(entry) }
             }
@@ -130,7 +151,7 @@ enum PaletteRanker {
     private struct Ranked {
         let item: PaletteItem
         let score: Int
-        let kindRank: Int        // notes, notebooks, commands
+        let kindRank: Int        // notes, then notebooks, smart folders and tags, then commands
         let updatedAt: Date?
         /// Search score of a body-only note match.
         var bodyScore: Double = 0

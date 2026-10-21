@@ -27,7 +27,7 @@ struct NoteListView: View {
         case .tag(let tag): return "#\(tag)"
         case .today: return "Today"
         case .tasks: return "Tasks"
-        case .smartFolder: return "Smart Folder"
+        case .smartFolder(let id): return store.smartFolder(with: id)?.name ?? "Smart Folder"
         }
     }
 
@@ -59,6 +59,18 @@ struct NoteListView: View {
                 .onDeleteCommand {
                     if let note = store.note(with: store.selectedNoteID) { delete(note) }
                 }
+            }
+        }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if isSearching, selection != .recentlyDeleted, query.issues.isEmpty {
+                HStack {
+                    Spacer()
+                    Button("Save as Smart Folder…") { SmartFolderActions.newSmartFolder(query: store.searchText) }
+                        .buttonStyle(.borderless)
+                        .font(.callout)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 4)
             }
         }
         .navigationTitle(title)
