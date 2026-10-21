@@ -72,7 +72,7 @@ final class NoteStore: ObservableObject {
     private var indexSaveWorkItem: DispatchWorkItem?
 
     /// Position hints for `note(with:)`; rebuilt only after `notes` changed and a lookup misses.
-    private var notesVersion = 0
+    private(set) var notesVersion = 0
     private var noteIndexVersion = -1
     private var noteIndexByID: [UUID: Int] = [:]
     /// Editor snapshots taken during a view update and handed to `updateBody` on the next main-queue turn.

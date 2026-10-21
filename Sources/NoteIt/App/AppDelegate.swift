@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Unbundled runs (`swift run`) have no .icns; show the same artwork in the Dock.
             NSApp.applicationIconImage = artwork
         }
+        NoteStore.shared.installLinkIndex()
         NoteStore.shared.startRecentlyDeletedMaintenance()
         AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
