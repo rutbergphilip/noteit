@@ -85,6 +85,13 @@ struct NoteItCommands: Commands {
                 Button("Use Selection for Find") { FindReplaceModel.active()?.useSelectionForFind() }
                     .keyboardShortcut("e", modifiers: .command)
             }
+
+            Divider()
+
+            Button("Link to Note…") {
+                NSApp.sendAction(#selector(NoteItTextView.linkToNote(_:)), to: nil, from: nil)
+            }
+            .menuShortcut(.linkToNote)
         }
 
         CommandGroup(after: .toolbar) {

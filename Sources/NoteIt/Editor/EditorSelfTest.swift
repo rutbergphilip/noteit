@@ -173,6 +173,7 @@ enum EditorSelfTest {
         checkHeadingSentinels()
         await checkDebounce(store: store)
         await checkLinks(store: store)
+        await checkCompletion(store: store)
         log("done")
     }
 
@@ -237,6 +238,55 @@ enum EditorSelfTest {
                 return found
             }()
         log("links: the clicked link now points at the new note \(ok(rewritten))")
+    }
+
+    private static func linkRuns(_ tv: NoteItTextView) -> [(String, NoteLink)] {
+        var runs: [(String, NoteLink)] = []
+        tv.storage.enumerateAttribute(.link, in: NSRange(location: 0, length: tv.storage.length)) { value, range, _ in
+            if let url = value.flatMap(NoteStore.url(from:)), let link = NoteLink(url: url) {
+                runs.append((tv.nsString.substring(with: range), link))
+            }
+        }
+        return runs
+    }
+
+    private static func checkCompletion(store: NoteStore) async {
+        func ok(_ pass: Bool) -> String { pass ? "ok" : "FAIL" }
+        let atlas = store.createNote(in: nil, initial: NoteStore.linkedNoteBody(title: "Atlas Project"))
+        let atlantic = store.createNote(in: nil, initial: NoteStore.linkedNoteBody(title: "Atlantic"))
+        _ = store.createNoteInCurrentContext()
+        await sleep(1)
+        guard let tv = textView else { log("completion: no text view"); return }
+        tv.window?.makeFirstResponder(tv)
+        tv.undoManager?.groupsByEvent = false
+        await type("Completion\nSee [[atl", into: tv)
+        await sleep(0.3)
+        let opened = tv.inlineCompletion.isActive && tv.inlineCompletion.rows.count >= 2
+        log("completion: [[ opens the list \(ok(opened))")
+        let second = tv.inlineCompletion.rows.count > 1 ? tv.inlineCompletion.rows[1].id : ""
+        event(tv) { tv.doCommand(by: #selector(NSResponder.moveDown(_:))) }
+        event(tv) { tv.doCommand(by: #selector(NSResponder.insertNewline(_:))) }
+        await sleep(0.3)
+        let runs = linkRuns(tv)
+        let expected = [atlas, atlantic].first { second == "note:\($0.id.uuidString)" }
+        let accepted = runs.count == 1 && runs.first?.1 == .note(id: expected?.id ?? UUID(), heading: nil)
+            && runs.first?.0 == expected?.title && !tv.string.contains("[[") && !tv.inlineCompletion.isActive
+        log("completion: ↓ ↩ inserts one link run \(ok(accepted))")
+        tv.undoManager?.undo()
+        let undone = tv.string.hasSuffix("See [[atl") && linkRuns(tv).isEmpty
+        log("completion: one undo step restores the typed text \(ok(undone))")
+        tv.undoManager?.redo()
+        tv.setSelectedRange(NSRange(location: tv.storage.length, length: 0))
+
+        await type(" and [[New thing]]", into: tv)
+        await sleep(0.3)
+        let typed = linkRuns(tv).last
+        log("completion: typing [[New thing]] makes an unresolved link \(ok(typed?.0 == "New thing" && typed?.1 == .unresolved(title: "New thing", heading: nil) && !tv.string.contains("]]")))")
+
+        await type(" [[esc", into: tv)
+        event(tv) { tv.doCommand(by: #selector(NSResponder.cancelOperation(_:))) }
+        await sleep(0.2)
+        log("completion: Esc closes the list and leaves the text \(ok(!tv.inlineCompletion.isActive && tv.string.hasSuffix("[[esc")))")
     }
 
     // MARK: Heading sentinels

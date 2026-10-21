@@ -14,6 +14,8 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     private var lineBreakEditLocation: Int?
     private(set) lazy var codeStyler = CodeStyler(textView: self)
     private(set) lazy var linkStyler = LinkStyler(textView: self)
+    private(set) lazy var inlineCompletion = InlineCompletionController(textView: self)
+    weak var linkHost: (any NoteLinkHost)?
     private var hoverTrackingArea: NSTrackingArea?
 
     // MARK: Setup
@@ -540,6 +542,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         guard let text, !hasMarkedText(), replacementRange.location == NSNotFound,
               selectedRange().length == 0, handleMarkdownTrigger(text, dryRun: true) else {
             super.insertText(string, replacementRange: replacementRange)
+            if let text { beginLinkCompletionIfNeeded(afterTyping: text) }
             return
         }
         // Type the character first, then convert on the next run-loop turn: the conversion becomes
@@ -771,7 +774,15 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         ]
         for (i, group) in groups.enumerated() {
             if i > 0 { format.addItem(.separator()) }
-            for cmd in group { format.addItem(menuItem(for: cmd)) }
+            for cmd in group {
+                format.addItem(menuItem(for: cmd))
+                if case .link = cmd, canInsertNoteLink {
+                    let item = NSMenuItem(title: "Link to Note…", action: #selector(linkToNote(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)
+                    format.addItem(item)
+                }
+            }
         }
         let formatItem = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
         formatItem.submenu = format

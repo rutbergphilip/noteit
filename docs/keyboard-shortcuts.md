@@ -26,7 +26,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 
 ### Changing menu shortcuts
 
-The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back and Go Forward can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
+The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back, Go Forward and Link to Note… can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
 
 When recording one:
 
@@ -47,6 +47,7 @@ The button next to a changed shortcut puts back its default, and **Restore Defau
 | ⇧⌘E | Inline code |
 | ⇧⌘H | Highlight on or off |
 | ⌘K | Link… |
+| ⇧⌘K | Link to Note… (the selection becomes the link's text) |
 | ⌘+ / ⌘− | Bigger / smaller text |
 | ⌥⌘\\ | Clear formatting |
 
@@ -136,8 +137,13 @@ And these anywhere in a line:
 | `*italic*` | *italic* |
 | `` `code` `` | `code` |
 | `~~strike~~` | ~~strike~~ |
+| `[[Note title]]` | A link to that note (`[[Title#Heading]]` for a heading, `[[Title\|text]]` to show other text) |
 
 Each conversion can be undone with ⌘Z.
+
+### Note link suggestions
+
+Typing `[[` opens a list of notes under the caret that filters as you type. ↑/↓ (or ⌃P/⌃N) move through it, ↩ or Tab inserts the link, and Esc closes it and leaves what you typed. After `#` the list shows the note's headings.
 
 ## Menu bar panel
 

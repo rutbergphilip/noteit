@@ -47,6 +47,7 @@ struct RichTextEditor: NSViewRepresentable {
         coordinator.textView = textView
         textView.isEditable = isEditable
         textView.delegate = coordinator
+        textView.linkHost = coordinator
         coordinator.controller.textView = textView
         textView.formattingDidChange = { [weak coordinator] in coordinator?.controller.refresh() }
         coordinator.load()
@@ -90,7 +91,7 @@ struct RichTextEditor: NSViewRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    final class Coordinator: NSObject, NSTextViewDelegate, NoteLinkHost {
         var noteID: UUID
         var controller: EditorController
         weak var textView: NoteItTextView?
@@ -115,6 +116,7 @@ struct RichTextEditor: NSViewRepresentable {
 
         func load() {
             guard let textView else { return }
+            textView.inlineCompletion.end()
             cancelScheduledCommit()
             hasPendingChanges = false
             isLoading = true
@@ -307,10 +309,18 @@ struct RichTextEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             if !isLoading { scheduleCommit() }
             controller.refresh()
+            textView?.inlineCompletion.refresh()
         }
 
         func textViewDidChangeSelection(_ notification: Notification) {
             controller.refresh()
+            textView?.inlineCompletion.refresh()
+        }
+
+        /// Arrow keys, Return, Tab and Esc go to an open suggestion list; ⌃P/⌃N arrive as moveUp:/moveDown:.
+        func textView(_ textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            guard let textView = textView as? NoteItTextView else { return false }
+            return textView.inlineCompletion.handle(commandSelector)
         }
 
         func textViewDidChangeTypingAttributes(_ notification: Notification) {

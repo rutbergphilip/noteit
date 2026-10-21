@@ -62,6 +62,8 @@ extension NoteItTextView {
                     s.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: r)
                 }
             }
+        case "]":
+            return handleWikiLinkTrigger(prefix: prefix, para: para, dryRun: dryRun)
         default:
             break
         }
