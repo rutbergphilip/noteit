@@ -173,7 +173,7 @@ struct EditorHeader: View {
         let previous = store.adjacentDailyNote(to: note.id, forward: false)
         let next = store.adjacentDailyNote(to: note.id, forward: true)
         HStack(spacing: 2) {
-            Button { open(previous) } label: { Image(systemName: "chevron.left").frame(width: 18, height: 22) }
+            Button { store.openAdjacentDailyNote(to: note.id, forward: false) } label: { Image(systemName: "chevron.left").frame(width: 18, height: 22) }
                 .disabled(previous == nil)
                 .help(previous.map { "Previous Daily Note: \($0.displayTitle)" } ?? "No earlier daily note")
                 .accessibilityLabel("Previous Daily Note")
@@ -184,7 +184,7 @@ struct EditorHeader: View {
                     DailyCalendarView(selected: day) { showsCalendar = false }
                         .environmentObject(store)
                 }
-            Button { open(next) } label: { Image(systemName: "chevron.right").frame(width: 18, height: 22) }
+            Button { store.openAdjacentDailyNote(to: note.id, forward: true) } label: { Image(systemName: "chevron.right").frame(width: 18, height: 22) }
                 .disabled(next == nil)
                 .help(next.map { "Next Daily Note: \($0.displayTitle)" } ?? "No later daily note")
                 .accessibilityLabel("Next Daily Note")
@@ -193,10 +193,6 @@ struct EditorHeader: View {
         .foregroundStyle(.secondary)
     }
 
-    private func open(_ meta: NoteMeta?) {
-        guard let meta else { return }
-        store.selectedNoteID = meta.id
-    }
 }
 
 /// Shown on a sync conflict copy; "Resolved" clears the badge (also cleared by editing the copy).

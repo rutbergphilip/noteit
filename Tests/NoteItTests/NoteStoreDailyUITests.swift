@@ -93,6 +93,17 @@ final class NoteStoreDailyUITests: XCTestCase {
         XCTAssertNil(store.adjacentDailyNote(to: c.id, forward: true))
     }
 
+    func testAdjacentDailyNoteFromSearchStaysSelected() throws {
+        let store = makeStore()
+        let a = try XCTUnwrap(store.dailyNote(for: date(2026, 10, 1), createIfMissing: true))
+        let b = try XCTUnwrap(store.dailyNote(for: date(2026, 10, 5), createIfMissing: true))
+        store.searchText = "2026-10-05"
+        store.selectedNoteID = b.id
+        store.openAdjacentDailyNote(to: b.id, forward: false)
+        XCTAssertEqual(store.selectedNoteID, a.id)
+        XCTAssertTrue(store.notes(for: store.selection, search: store.searchText).contains { $0.id == a.id })
+    }
+
     func testDaysInMonth() throws {
         let store = makeStore()
         _ = try store.dailyNote(for: date(2026, 10, 1), createIfMissing: true)

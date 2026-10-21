@@ -85,4 +85,10 @@ extension NoteStore {
             : index.byDay.keys.filter { $0 < day }.max()
         return other.flatMap { index.byDay[$0] }.flatMap { note(with: $0) }
     }
+
+    /// ‹ › in a daily note's header. Reveals the note when the current list (a search, Pinned…) doesn't show it.
+    func openAdjacentDailyNote(to id: UUID, forward: Bool) {
+        guard let other = adjacentDailyNote(to: id, forward: forward) else { return }
+        navigate(to: other.id, heading: nil)
+    }
 }
