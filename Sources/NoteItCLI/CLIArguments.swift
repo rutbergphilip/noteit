@@ -6,7 +6,9 @@ struct CLIUsageError: Error, Equatable {
     var message: String
 }
 
-struct ParsedArguments: Equatable {
+/// One parsed command line: the command name, then what followed it.
+struct CLIInvocation: Equatable {
+    var command: String
     var positionals: [String] = []
     var options: [String: [String]] = [:]
     var flags: Set<String> = []
@@ -18,10 +20,27 @@ struct ParsedArguments: Equatable {
 }
 
 enum CLIArguments {
+    /// `argv` is everything after the program name, starting with the command. Each command's value options and
+    /// flags, plus the global ones, come from `CommandSpec`.
+    static func parse(_ argv: [String]) -> Result<CLIInvocation, CLIUsageError> {
+        guard let command = argv.first else {
+            return .failure(CLIUsageError(message: "No command given. Run noteit help for a list."))
+        }
+        guard let spec = CommandSpec.named(command) else {
+            return .failure(CLIUsageError(message: "Unknown command “\(command)”. Run noteit help for a list."))
+        }
+        return Result { () throws(CLIUsageError) in
+            try parseOptions(Array(argv.dropFirst()), command: command,
+                             valueOptions: Set(spec.valueOptions + CommandSpec.globalValueOptions),
+                             flags: Set(spec.flags + CommandSpec.globalFlags))
+        }
+    }
+
     /// `--name value`, `--name=value`, repeated options, `--` ends options, `-` is a positional.
     /// Names are given without the leading dashes.
-    static func parse(_ arguments: [String], valueOptions: Set<String>, flags: Set<String>) throws(CLIUsageError) -> ParsedArguments {
-        var parsed = ParsedArguments()
+    static func parseOptions(_ arguments: [String], command: String, valueOptions: Set<String>,
+                             flags: Set<String>) throws(CLIUsageError) -> CLIInvocation {
+        var parsed = CLIInvocation(command: command)
         var index = 0
         while index < arguments.count {
             let argument = arguments[index]

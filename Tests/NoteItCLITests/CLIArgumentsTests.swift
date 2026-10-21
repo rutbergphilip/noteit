@@ -3,12 +3,15 @@ import Foundation
 import XCTest
 
 final class CLIArgumentsTests: XCTestCase {
-    private func parse(_ arguments: [String]) throws -> ParsedArguments {
-        try CLIArguments.parse(arguments, valueOptions: ["title", "notebook", "tag", "profile"], flags: ["open", "json", "help"])
+    /// `noteit new …`: value options title, notebook, tag and profile; flags open, json, no-launch and help.
+    private func parse(_ arguments: [String]) throws -> CLIInvocation {
+        try CLIArguments.parse(["new"] + arguments).get()
     }
 
     func testParseOptionsAndPositionals() throws {
         let parsed = try parse(["hello", "--title", "Groceries", "--notebook=Home Stuff", "--open", "-", "--json"])
+        XCTAssertEqual(parsed, CLIInvocation(command: "new", positionals: ["hello", "-"],
+                                             options: ["title": ["Groceries"], "notebook": ["Home Stuff"]], flags: ["open", "json"]))
         XCTAssertEqual(parsed.positionals, ["hello", "-"])
         XCTAssertEqual(parsed.value("title"), "Groceries")
         XCTAssertEqual(parsed.value("notebook"), "Home Stuff")
@@ -45,6 +48,12 @@ final class CLIArgumentsTests: XCTestCase {
         XCTAssertThrowsError(try parse(["-x"])) { error in
             XCTAssertEqual(error as? CLIUsageError, CLIUsageError(message: "Unknown option -x."))
         }
+        XCTAssertEqual(try CLIArguments.parse(["search", "x", "--limit", "5"]).get().value("limit"), "5")
+        XCTAssertEqual(CLIArguments.parse(["show", "--limit", "5"]),
+                       .failure(CLIUsageError(message: "Unknown option --limit.")))
+        XCTAssertEqual(CLIArguments.parse(["frobnicate"]),
+                       .failure(CLIUsageError(message: "Unknown command “frobnicate”. Run noteit help for a list.")))
+        XCTAssertEqual(CLIArguments.parse([]), .failure(CLIUsageError(message: "No command given. Run noteit help for a list.")))
         let terminal = Terminal()
         let exit = await offlineCLI(terminal).run(["new", "hello", "--bogus=1"])
         XCTAssertEqual(exit, .usage)

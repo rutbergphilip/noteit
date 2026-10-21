@@ -135,12 +135,8 @@ struct CLI {
         default:
             break
         }
-        guard let spec = CommandSpec.named(name) else {
-            throw CLIUsageError(message: "Unknown command “\(name)”. Run noteit help for a list.")
-        }
-        let parsed = try CLIArguments.parse(Array(arguments.dropFirst()),
-                                            valueOptions: Set(spec.valueOptions + CommandSpec.globalValueOptions),
-                                            flags: Set(spec.flags + CommandSpec.globalFlags))
+        let parsed = try CLIArguments.parse(arguments).get()
+        guard let spec = CommandSpec.named(parsed.command) else { throw CLIUsageError(message: "Unknown command “\(name)”.") }
         if parsed.has("help") {
             io.out(Self.help(for: spec))
             return
@@ -169,7 +165,7 @@ struct CLI {
         }
     }
 
-    private func help(_ parsed: ParsedArguments) throws {
+    private func help(_ parsed: CLIInvocation) throws {
         guard let topic = parsed.positionals.first else {
             io.out(Self.overview())
             return
@@ -209,7 +205,7 @@ struct CLI {
 /// One run of a command with its parsed arguments.
 private struct Command {
     let cli: CLI
-    let parsed: ParsedArguments
+    let parsed: CLIInvocation
     let profile: String
 
     private var context: CLIContext { cli.context }
