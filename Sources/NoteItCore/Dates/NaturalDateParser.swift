@@ -100,6 +100,10 @@ public enum NaturalDateParser {
             guard let clockTime else { return day }
             return day.withTime(hour: clockTime.0, minute: clockTime.1)
         }
+        // Midnight today or tonight is the one at the end of the day, not the one that has passed.
+        if word == "today" || word == "tonight", let clockTime, clockTime == (0, 0) {
+            return adding(days: 1, to: today, calendar: calendar).withTime(hour: 0, minute: 0)
+        }
         switch word {
         case "today": return at(today)
         case "tonight":
