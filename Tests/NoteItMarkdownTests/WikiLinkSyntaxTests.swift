@@ -25,6 +25,22 @@ final class WikiLinkSyntaxTests: XCTestCase {
         XCTAssertEqual(serialize([linked("Plan", "noteit://note?title=Plan")], noteLinkName: { _ in nil }), "See [[Plan]]\n")
     }
 
+    func testLongTargetsAndHeadingsAreCutToTheLinkLimit() throws {
+        let long = String(repeating: "x", count: 130)
+        let parsed = try MarkdownCodec.parse("See [[\(long)]] and [[Plan#\(long)]]\n", resolveNoteLink: MarkdownFixture.resolveNoteLink)
+        guard case .doc(let blocks) = parsed.body.doc, case .paragraph(_, _, let content)? = blocks.first else {
+            return XCTFail("no paragraph")
+        }
+        let hrefs = content.compactMap { inline -> String? in
+            guard case .text(_, let marks) = inline else { return nil }
+            return marks.compactMap { if case .link(let href) = $0 { href } else { nil } }.first
+        }
+        let cut = String(repeating: "x", count: 120)
+        XCTAssertEqual(hrefs, ["noteit://note?title=" + cut, planHref + "?heading=" + cut])
+        XCTAssertEqual(WikiLink.noteHref(hrefs[0]), .unresolved(title: cut, heading: nil))
+        XCTAssertNil(WikiLink.noteHref("noteit://note?title=" + long))
+    }
+
     func testTableCellEscapesThePipe() throws {
         let cell = { (content: [Inline]) in TableCell(header: false, content: [.paragraph(align: nil, indent: nil, content: content)]) }
         let table = DocNode.table(columnWidths: nil, rows: [[cell([.text("shown", marks: [.link(href: planHref)])]),

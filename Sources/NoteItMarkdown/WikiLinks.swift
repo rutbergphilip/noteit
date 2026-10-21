@@ -39,15 +39,19 @@ public struct WikiLink: Sendable, Equatable {
 
     // MARK: noteit:// links
 
+    /// NoteLink.maxTextLength: longer titles and headings don't make a note link.
+    static let maxTextLength = 120
+
     /// `noteit://note/<UUID>` when the target resolves, else `noteit://note?title=<target>`; a heading is added as
     /// `heading=`.
     func href(resolve: (String) -> UUID?) -> String {
+        let heading = heading.map { String($0.prefix(Self.maxTextLength)) }
         if let id = resolve(target) {
             var href = "noteit://note/\(id.uuidString)"
             if let heading { href += "?heading=" + Self.queryEncoded(heading) }
             return href
         }
-        var href = "noteit://note?title=" + Self.queryEncoded(target)
+        var href = "noteit://note?title=" + Self.queryEncoded(String(target.prefix(Self.maxTextLength)))
         if let heading { href += "&heading=" + Self.queryEncoded(heading) }
         return href
     }
