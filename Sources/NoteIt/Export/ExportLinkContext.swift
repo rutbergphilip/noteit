@@ -33,7 +33,7 @@ struct ExportLinkContext {
         }
         var qualified: [UUID: String] = [:]
         for (id, name) in names where uses[TextFold.fold(name), default: 0] > 1 {
-            if let folder = folders[id] { qualified[id] = folder + "/" + name }
+            if let folder = folders[id].map(linkPathPart), !folder.isEmpty { qualified[id] = folder + "/" + name }
         }
         return ExportLinkContext(title: { titles[$0] }, exportedName: { names[$0] }, folder: { folders[$0] },
                                  qualifiedName: { qualified[$0] })
@@ -78,6 +78,12 @@ struct ExportLinkContext {
         var out = parts.map { $0.addingPercentEncoding(withAllowedCharacters: allowed) ?? $0 }.joined(separator: "/")
         if let heading, !heading.isEmpty { out += "#" + HeadingSlug.slug(heading) }
         return out
+    }
+
+    /// A folder name as written in `[[Folder/Name]]`, without the characters that end a wiki-link target. The
+    /// importer matches folders through the same cleaning.
+    static func linkPathPart(_ folder: String) -> String {
+        cleaned(folder, removing: "[]|#^").trimmingCharacters(in: .whitespaces)
     }
 
     private static func cleaned(_ s: String, removing characters: String) -> String {

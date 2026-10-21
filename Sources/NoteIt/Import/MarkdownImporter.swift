@@ -196,7 +196,11 @@ final class MarkdownImporter {
         let base = item.root.deletingLastPathComponent().standardizedFileURL.pathComponents
         let dir = item.url.deletingLastPathComponent().standardizedFileURL.pathComponents
         guard dir.starts(with: base) else { return [] }
-        return dir.dropFirst(base.count).map(TextFold.fold)
+        return dir.dropFirst(base.count).map(foldedPathPart)
+    }
+
+    nonisolated static func foldedPathPart(_ folder: String) -> String {
+        TextFold.fold(ExportLinkContext.linkPathPart(folder))
     }
 
     /// Resolves a wiki-link target to a note in the same import by file name (folded), preferring the one whose
@@ -205,7 +209,7 @@ final class MarkdownImporter {
     static func wikiLinkResolver(names: [String: [WikiTarget]], existing: @escaping (String) -> UUID?) -> WikiLinkResolver {
         { target, heading, folders in
             let candidates = names[TextFold.fold(target)] ?? []
-            let wanted = folders.map(TextFold.fold)
+            let wanted = folders.map(foldedPathPart)
             let match = wanted.isEmpty ? candidates.first
                 : candidates.first { $0.folders.count >= wanted.count && Array($0.folders.suffix(wanted.count)) == wanted }
             if let id = match?.id ?? existing(target) { return .note(id: id, heading: heading) }

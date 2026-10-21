@@ -467,8 +467,16 @@ final class MarkdownRoundTripTests: XCTestCase {
     }
 
     func testSameNamedNotesInTwoNotebooksKeepTheirLinks() async throws {
-        let work = Notebook(id: UUID(), name: "Work", symbol: "book", colorHex: "#0A84FF", sortIndex: 0)
-        let home = Notebook(id: UUID(), name: "Home", symbol: "book", colorHex: "#0A84FF", sortIndex: 1)
+        try await sameNamedRoundTrip(work: "Work", home: "Home", written: "[[Work/Plan]] [[Home/Plan|home]]")
+    }
+
+    func testFolderPartsOfLinksDropLinkSyntaxCharacters() async throws {
+        try await sameNamedRoundTrip(work: "C# Work", home: "[Old]", written: "[[C Work/Plan]] [[Old/Plan|home]]")
+    }
+
+    private func sameNamedRoundTrip(work workName: String, home homeName: String, written: String) async throws {
+        let work = Notebook(id: UUID(), name: workName, symbol: "book", colorHex: "#0A84FF", sortIndex: 0)
+        let home = Notebook(id: UUID(), name: homeName, symbol: "book", colorHex: "#0A84FF", sortIndex: 1)
         func meta(_ title: String, _ notebook: Notebook) -> NoteMeta {
             NoteMeta(id: UUID(), notebookID: notebook.id, title: title, preview: "", isPinned: false,
                      createdAt: Date(), updatedAt: Date(), tags: [])
@@ -490,8 +498,8 @@ final class MarkdownRoundTripTests: XCTestCase {
                                                ("home", .note(id: homePlan.id, heading: nil))])]
         let result = try NoteExporter.exportAll(notebooks: [work, home], notes: [workPlan, homePlan, index],
                                                 format: .markdown, to: folder) { bodies[$0]! }
-        let markdown = try String(contentsOf: result.folder.appendingPathComponent("Home/Index.md"), encoding: .utf8)
-        XCTAssertTrue(markdown.contains("[[Work/Plan]] [[Home/Plan|home]]"), markdown)
+        let markdown = try String(contentsOf: result.folder.appendingPathComponent(homeName + "/Index.md"), encoding: .utf8)
+        XCTAssertTrue(markdown.contains(written), markdown)
 
         let store = NoteStore(location: LibraryLocation(url: folder.appendingPathComponent("Library", isDirectory: true), seedsFreshLibrary: false))
         _ = await MarkdownImporter(store: store).run(MarkdownImporter.items(for: [result.folder])) { _ in }
@@ -499,12 +507,12 @@ final class MarkdownRoundTripTests: XCTestCase {
         func id(_ title: String, in notebook: String) throws -> UUID {
             try XCTUnwrap(store.notes.first { $0.title == title && $0.notebookID.flatMap { notebookNames[$0] }?.hasSuffix(notebook) == true }).id
         }
-        let imported = try id("Index", in: "Home")
+        let imported = try id("Index", in: homeName)
         var links: [NoteLink] = []
         let text = store.body(for: imported)
         text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, _, _ in
             if let url = value as? URL, let link = NoteLink(url: url) { links.append(link) }
         }
-        XCTAssertEqual(links, [.note(id: try id("Plan", in: "Work"), heading: nil), .note(id: try id("Plan", in: "Home"), heading: nil)])
+        XCTAssertEqual(links, [.note(id: try id("Plan", in: workName), heading: nil), .note(id: try id("Plan", in: homeName), heading: nil)])
     }
 }
