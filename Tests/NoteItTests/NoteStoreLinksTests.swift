@@ -289,6 +289,42 @@ final class NoteStoreLinksTests: XCTestCase {
         XCTAssertEqual(tracker.prompt?.newTitle, "Atlas 2")
     }
 
+    func testUndoAndRedoOfRestoreVersionOfferNoLinkUpdates() async throws {
+        let store = makeStore()
+        let target = store.createNote(in: nil, initial: body("Atlas")).id
+        let source = store.createNote(in: nil, initial: body("Source", linking: [("Atlas", .note(id: target, heading: nil)),
+                                                                                 ("Globe", .note(id: target, heading: nil))])).id
+        await waitUntil { store.linkIndex.hasEntry(for: source) }
+        let saved = RenameTracker.idleDelay
+        RenameTracker.idleDelay = .milliseconds(20)
+        defer { RenameTracker.idleDelay = saved }
+        let suite = "noteit-rename-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tracker = RenameTracker()
+        tracker.defaults = defaults
+        tracker.store = store
+        tracker.open(target, title: "Atlas")
+        let harness = EditorHarness()
+        defer { harness.close() }
+        let editor = harness.open(store, target)
+        let undo = try XCTUnwrap(editor.view.undoManager)
+
+        let version = try XCTUnwrap(store.history.record(body("Globe"), extras: .empty, of: target))
+        try store.restoreVersion(version)
+        tracker.titleObserved("Globe", of: target)
+        EditorHarness.settle(undo)
+        for (step, title) in [("undo", "Atlas"), ("redo", "Globe")] {
+            if step == "undo" { undo.undo() } else { undo.redo() }
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: RichTextEditor.Coordinator.commitDelay + 0.2))
+            XCTAssertEqual(store.note(with: target)?.title, title, step)
+            tracker.titleObserved(title, of: target)
+            try await Task.sleep(for: .milliseconds(150))
+            XCTAssertNil(tracker.prompt, step)
+            EditorHarness.settle(undo)
+        }
+    }
+
     func testRewriteOnlyMatchingText() async {
         let store = makeStore()
         let (target, source) = renameFixture(store)
