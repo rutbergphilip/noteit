@@ -11,15 +11,19 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 - **Encryption is chosen when you connect.** You can't change the passphrase or turn encryption on later without starting a new synced library.
 - **Macs only.** There's no iPhone or iPad app.
 - **Version history isn't synced.** Each Mac keeps the versions it recorded itself.
+- **Older versions show nested notebooks flat** and read a nested tag such as `#a/b` as `#a`. Moving or renaming a notebook there keeps where it's nested.
+- **Two Macs offline at the same time may both show a reminder.** Without a connection to the synced folder or bucket, a Mac can't tell that another one already showed it.
 - **NoteIt 0.1.0 doesn't know about Recently Deleted.** A Mac still on 0.1.0 shows deleted notes as normal notes until it's updated, and editing one there brings it back.
 
 ## Notes and editing
 
 - **Markdown export is lossy.** Underline, text colors, highlights, alignment and paragraph indents are dropped, because Markdown has no syntax for them. Export as HTML, PDF or RTFD to keep them.
 - **Quick Capture is plain text.** The title becomes a bold first line; format the note afterwards in the editor. There's one draft at a time, and nothing outside the panel shows that a draft is waiting.
-- **Tags are plain text.** `#hashtags` aren't styled in the editor, can't be renamed or merged, and are only added by typing them.
-- **Simple organization.** Notebooks can't be nested, a note belongs to one notebook, and notes are always sorted pinned first, then by last edit.
-- **Basic search.** All words must match (ignoring case and accents). Results aren't ranked, and matches aren't highlighted.
+- **Tags live in the note text.** Renaming or deleting a tag skips locked notes and notes in Recently Deleted.
+- **One notebook per note.** Notebooks nest up to four levels deep.
+- **Search doesn't look inside attachments** such as PDFs. Best-match ranking applies only when the search has words; otherwise notes are sorted by last edit.
+- **Reminders need NoteIt running.** A reminder that comes due while NoteIt is closed shows the next time it opens, if that's within a day. Reminders need the app bundle, so they don't show when running with `swift run`.
+- **Reminders in locked notes don't ring**, and tasks in locked notes aren't listed in Tasks.
 - **No note info.** There's no word count or created date.
 - **One window.** Notes can't be opened in separate windows.
 
@@ -31,7 +35,7 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 - **Apple Notes formatting is approximate.** Headings are recognized by font size, and fonts and text colors are dropped.
 - **Wikilinks become plain text.** `[[Note]]` and `[[Note|alias]]` keep their text but don't link anywhere, since notes can't link to each other yet. Links to other Markdown files become plain text too.
 - **Markdown that NoteIt has no style for is simplified.** Underline, colors and alignment don't exist in Markdown, HTML inside Markdown is kept as text (except `<br>`), footnotes and math aren't rendered, and other front matter fields are dropped.
-- **Subfolders become flat notebooks** named `Folder / Subfolder`, since notebooks can't be nested.
+- **Subfolders deeper than four levels** become one notebook named `Folder / Subfolder` inside the deepest nested notebook. Apple Notes subfolders become flat notebooks named that way.
 - **Markdown images must be image files inside what you import.** Images outside the chosen folder (or the TextBundle), including ones reached through symlinks, and images over 25 MB are skipped and counted in the summary. For files picked one by one, images are only looked for next to the file. Links other than web, email, phone and FTP links become plain text.
 - **Apple Notes' Recently Deleted folder is recognized by name.** It's matched in every language Notes ships, so a top-level folder of your own with that exact name is skipped too.
 

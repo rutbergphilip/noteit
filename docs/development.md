@@ -13,7 +13,7 @@ This page covers building NoteIt, running it against a scratch library, and the 
 
 ```sh
 swift build                 # debug build
-swift run NoteIt            # run unbundled; launch at login and updates are unavailable this way
+swift run NoteIt            # run unbundled; launch at login, updates and reminder notifications are unavailable this way
 ./scripts/build_app.sh      # release build: build/NoteIt.app → ~/Applications/NoteIt.app
 ```
 
@@ -45,6 +45,14 @@ NOTEIT_DATA_DIR=~/scratch/noteit swift run NoteIt
 ```
 
 The older `INKWELL_*` names of all `NOTEIT_*` variables still work as a fallback.
+
+To try the organise routes of the Local API against a scratch library, run with `NOTEIT_LOCAL_API_DEBUG=1` and use the token it prints (the port is 47600 unless it was changed):
+
+```sh
+curl -s -H "Authorization: Bearer $NOTEIT_LOCAL_API_TOKEN" "http://127.0.0.1:47600/v1/tasks?includeCompleted=1"
+curl -s -H "Authorization: Bearer $NOTEIT_LOCAL_API_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"from":"work","to":"job"}' http://127.0.0.1:47600/v1/tags/rename
+```
 
 ## Tests
 
