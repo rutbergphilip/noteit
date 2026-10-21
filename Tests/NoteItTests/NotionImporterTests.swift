@@ -423,6 +423,16 @@ final class NotionImporterTests: XCTestCase {
                        "> ```\n> [T](Tasks.csv)\n> ```\n[T](Tasks.md)")
     }
 
+    func testOnlyAMatchingFenceClosesACodeBlock() {
+        let plain = "```\n> ```\n[a](x.csv)\n    ```\n[b](y.csv)\n```\n[c](z.csv)"
+        XCTAssertEqual(NotionImporter.prepared(plain), "```\n> ```\n[a](x.csv)\n    ```\n[b](y.csv)\n```\n[c](z.md)")
+        let quoted = "> ```\n> > ```\n> [a](x.csv)\n>     ```\n> [b](y.csv)\n> ```\n[c](z.csv)"
+        XCTAssertEqual(NotionImporter.prepared(quoted), "> ```\n> > ```\n> [a](x.csv)\n>     ```\n> [b](y.csv)\n> ```\n[c](z.md)")
+        let longer = "````\n```\n[a](x.csv)\n````\n[b](y.csv)"
+        XCTAssertEqual(NotionImporter.outsideCode(longer) { $0.replacingOccurrences(of: ".csv", with: ".md") },
+                       "````\n```\n[a](x.csv)\n````\n[b](y.md)")
+    }
+
     func testNames() {
         XCTAssertEqual(NotionNames.stripID("Plan \(projectsID)").title, "Plan")
         XCTAssertEqual(NotionNames.stripID("Plan \(projectsID.uppercased())").id, projectsID)

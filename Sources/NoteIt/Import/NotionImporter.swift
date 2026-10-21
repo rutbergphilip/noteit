@@ -301,27 +301,65 @@ enum NotionImporter {
         }
     }
 
-    /// Tracks fenced code blocks (``` and ~~~, also inside quotes) line by line.
+    /// Tracks fenced code blocks (``` and ~~~, also inside quotes) line by line. As in CommonMark, a block is
+    /// closed only by a fence of the same character, at least as long, indented at most three spaces more than
+    /// the opener and at the opener's quote depth; a line with fewer quote markers ends a quoted block.
     struct CodeFence {
-        private var open: (char: Character, count: Int)?
+        private var open: (char: Character, count: Int, depth: Int, indent: Int)?
 
         /// True for a fence line or a line inside a fenced block.
         mutating func isCode(_ line: String) -> Bool {
-            let trimmed = line.drop { $0 == " " || $0 == "\t" || $0 == ">" }
-            let run = trimmed.prefix { $0 == "`" || $0 == "~" }
-            let marker = run.first.map { c in (char: c, count: run.prefix { $0 == c }.count) }
             if let current = open {
-                if let marker, marker.char == current.char, marker.count >= current.count,
-                   trimmed.dropFirst(marker.count).allSatisfy(\.isWhitespace) {
+                guard let rest = Self.dropQuotes(Substring(line), upTo: current.depth) else {
+                    open = nil
+                    return isCode(line)
+                }
+                let (indent, body) = Self.indentation(rest)
+                if indent <= current.indent + 3, let marker = Self.fence(body), marker.char == current.char,
+                   marker.count >= current.count, body.dropFirst(marker.count).allSatisfy(\.isWhitespace) {
                     open = nil
                 }
                 return true
             }
-            if let marker, marker.count >= 3, !(marker.char == "`" && trimmed.dropFirst(marker.count).contains("`")) {
-                open = marker
-                return true
+            var rest = Substring(line)
+            var depth = 0
+            while let inner = Self.dropQuotes(rest, upTo: 1) {
+                rest = inner
+                depth += 1
             }
-            return false
+            let (indent, body) = Self.indentation(rest)
+            guard let marker = Self.fence(body),
+                  !(marker.char == "`" && body.dropFirst(marker.count).contains("`")) else { return false }
+            open = (marker.char, marker.count, depth, indent)
+            return true
+        }
+
+        /// `line` without `depth` quote markers ("> "), or nil when it has fewer.
+        private static func dropQuotes(_ line: Substring, upTo depth: Int) -> Substring? {
+            var rest = line
+            for _ in 0..<depth {
+                let (indent, body) = indentation(rest)
+                guard indent <= 3, body.first == ">" else { return nil }
+                rest = body.dropFirst()
+                if rest.first == " " { rest = rest.dropFirst() }
+            }
+            return rest
+        }
+
+        private static func indentation(_ line: Substring) -> (Int, Substring) {
+            var width = 0
+            var rest = line
+            while let c = rest.first, c == " " || c == "\t" {
+                width += c == "\t" ? 4 - width % 4 : 1
+                rest = rest.dropFirst()
+            }
+            return (width, rest)
+        }
+
+        private static func fence(_ body: Substring) -> (char: Character, count: Int)? {
+            guard let c = body.first, c == "`" || c == "~" else { return nil }
+            let count = body.prefix { $0 == c }.count
+            return count >= 3 ? (c, count) : nil
         }
     }
 
