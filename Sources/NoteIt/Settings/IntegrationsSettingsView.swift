@@ -324,9 +324,8 @@ struct CommandLineToolSection: View {
         switch state {
         case .notInstalled: return "Not installed"
         case .installed: return "Installed at \(installer.linkURL.path)"
-        case .pointsElsewhere(let path):
-            return CLIInstaller.pointsIntoNoteItApp(URL(fileURLWithPath: path))
-                ? "Points to another copy of NoteIt" : "\(installer.linkURL.path) is used by something else"
+        case .otherCopy: return "Points to another copy of NoteIt"
+        case .pointsElsewhere: return "\(installer.linkURL.path) is used by something else"
         }
     }
 
@@ -334,7 +333,8 @@ struct CommandLineToolSection: View {
         switch state {
         case .notInstalled: Button("Install…") { perform { try installer.install() } }.disabled(working)
         case .installed: Button("Uninstall") { perform { try installer.uninstall() } }.disabled(working)
-        case .pointsElsewhere: Button("Fix") { perform { try installer.install() } }.disabled(working)
+        case .otherCopy: Button("Fix") { perform { try installer.install() } }.disabled(working)
+        case .pointsElsewhere: EmptyView()
         }
     }
 

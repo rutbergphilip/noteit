@@ -112,7 +112,11 @@ enum PaletteCommandRegistry {
 
     private static var cliInstallable: Bool {
         let installer = CLIInstaller.live()
-        return installer.toolURL != nil && installer.state() != .installed
+        guard installer.toolURL != nil else { return false }
+        switch installer.state() {
+        case .notInstalled, .otherCopy: return true
+        case .installed, .pointsElsewhere: return false
+        }
     }
 
     private static func installCommandLineTool() {
