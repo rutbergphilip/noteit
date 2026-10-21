@@ -32,11 +32,11 @@ final class ModelCodingTests: XCTestCase {
     private let fullNotebook = """
     {"id":"0B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F","name":"Inbox","symbol":"tray","colorHex":"#0A84FF",
      "sortIndex":2,"revision":"1B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F","modifiedAt":"2026-01-02T03:04:05Z",
-     "defaultTemplateID":"2B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F"}
+     "defaultTemplateID":"2B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F","parent":"3B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F"}
     """
 
     private let minimalNotebook = """
-    {"id":"0B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F","name":"Inbox","symbol":"tray","colorHex":"#0A84FF","sortIndex":0}
+    {"id":"0B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F","name":"Inbox","symbol":"tray","colorHex":"#0A84FF","sortIndex":0,"parent":null}
     """
 
     func testNoteMetaDecodesAndKeepsKeys() throws {
@@ -64,6 +64,16 @@ final class ModelCodingTests: XCTestCase {
         XCTAssertNil(minimal.revision)
         XCTAssertNil(minimal.modifiedAt)
         try assertSameKeys(minimalNotebook, try encoder.encode(minimal))
+    }
+
+    func testNotebookWithoutParentKeyIsTopLevelAndGainsTheKey() throws {
+        let legacy = Data(##"{"id":"0B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F","name":"A","symbol":"tray","colorHex":"#0A84FF","sortIndex":0}"##.utf8)
+        XCTAssertFalse(Notebook.recordHasParentKey(legacy))
+        let notebook = try decoder.decode(Notebook.self, from: legacy)
+        XCTAssertNil(notebook.parent)
+        let encoded = try encoder.encode(notebook)
+        XCTAssertTrue(Notebook.recordHasParentKey(encoded))
+        XCTAssertTrue(String(decoding: encoded, as: UTF8.self).contains(#""parent":null"#))
     }
 
     func testDisplayTitleOfEmptyTitle() {

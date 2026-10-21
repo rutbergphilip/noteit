@@ -84,12 +84,6 @@ extension NoteStore {
         searchResultCache.removeAll()
     }
 
-    var notebookTree: NotebookTree {
-        NotebookTree(notebooks.map {
-            NotebookNodeInput(id: $0.id, parentID: nil, sortIndex: $0.sortIndex, name: $0.name)
-        })
-    }
-
     func searchResults(for selection: SidebarSelection?, search: String, order: SearchSortOrder) -> [SearchResult] {
         searchResults(for: selection, search: search, order: order, decorated: true)
     }
@@ -97,7 +91,8 @@ extension NoteStore {
     /// `decorated` false skips highlights and snippets (callers that only need the notes).
     func searchResults(for selection: SidebarSelection?, search: String, order: SearchSortOrder,
                        decorated: Bool, now: Date = Date()) -> [SearchResult] {
-        let base = LibraryQuery.notes(notes, for: selection, search: "", now: now, indexedText: { _ in nil })
+        let base = LibraryQuery.notes(notes, for: selection, search: "", now: now, indexedText: { _ in nil },
+                                      notebookScope: notebookIDsIncludingDescendants)
         let query = SearchQuery.parse(search)
         if query.isEmpty {
             return base.map { SearchResult(note: $0, score: nil, titleHighlights: [], snippet: nil, foundInImage: false) }

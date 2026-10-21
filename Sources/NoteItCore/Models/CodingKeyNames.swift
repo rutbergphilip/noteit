@@ -11,6 +11,6 @@ extension NoteMeta {
 
 extension Notebook {
     public static let ownedCodingKeys: Set<String> = [
-        "id", "name", "symbol", "colorHex", "sortIndex", "revision", "modifiedAt", "defaultTemplateID",
+        "id", "name", "symbol", "colorHex", "sortIndex", "revision", "modifiedAt", "defaultTemplateID", "parent",
     ]
 }

@@ -92,7 +92,7 @@ extension NoteStore {
             nb.modifiedAt = payload.modifiedAt
             // The raw copy goes first; if it can't be written the record isn't applied, and the next pass retries.
             try setLastRemoteMeta(RawMeta(sourceRevision: payload.revision, meta: payload.meta), for: nb.id, kind: .notebooks)
-            applyRemoteNotebook(nb)
+            applyRemoteNotebook(nb, hasParentKey: Notebook.recordHasParentKey(payload.meta))
         case .note:
             try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, storage: bodyStorage))
         }

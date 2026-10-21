@@ -75,6 +75,7 @@ final class NoteStore: ObservableObject {
     var searchDocumentCache: SearchDocumentCache?
     var searchResultCache: [SearchResultKey: [SearchResult]] = [:]
     var tagTreeCache: (notesVersion: Int, tree: [TagNode])?
+    var notebookTreeCache: (notebooksVersion: Int, tree: NotebookTree)?
     private var indexSaveWorkItem: DispatchWorkItem?
 
     /// Position hints for `note(with:)`; rebuilt only after `notes` changed and a lookup misses.
@@ -229,7 +230,7 @@ final class NoteStore: ObservableObject {
     }
 
     func count(for selection: SidebarSelection) -> Int {
-        LibraryQuery.count(notes, for: selection, now: Date())
+        LibraryQuery.count(notes, for: selection, now: Date(), notebookScope: notebookIDsIncludingDescendants)
     }
 
     /// Unique tags (lowercased, without `#`) across notes not in Recently Deleted, sorted.
@@ -585,6 +586,13 @@ final class NoteStore: ObservableObject {
     }
 
     /// Saves a user change to note metadata; syncs like any edit.
+    /// A local notebook change: saves and lets sync know, without touching the note selection.
+    func commitNotebookChange() {
+        libraryDirty = true
+        hasUnannouncedLocalChange = true
+        scheduleSave()
+    }
+
     func commitUserMetadataChange() {
         libraryDirty = true
         hasUnannouncedLocalChange = true
@@ -652,10 +660,12 @@ final class NoteStore: ObservableObject {
     // MARK: - Notebooks
 
     @discardableResult
-    func createNotebook(name: String, symbol: String, colorHex: String) -> Notebook {
-        let nextIndex = (notebooks.map(\.sortIndex).max() ?? -1) + 1
+    func createNotebook(name: String, symbol: String, colorHex: String, parentID: UUID? = nil) -> Notebook {
+        let parent = parentID.flatMap { notebookTree.depth(of: $0) < NotebookTree.maxDepth ? $0 : nil }
+        let siblings = notebooks.filter { $0.parent == parent }
+        let nextIndex = (siblings.map(\.sortIndex).max() ?? -1) + 1
         let notebook = Notebook(id: UUID(), name: name, symbol: symbol, colorHex: colorHex, sortIndex: nextIndex,
-                                revision: UUID(), modifiedAt: Date())
+                                revision: UUID(), modifiedAt: Date(), parent: parent)
         notebooks.append(notebook)
         libraryDirty = true
         hasUnannouncedLocalChange = true
@@ -677,33 +687,36 @@ final class NoteStore: ObservableObject {
         scheduleSave()
     }
 
-    /// Deletes the notebook and moves its notes to Recently Deleted. They keep the notebook ID, so
-    /// recovering them falls back to Inbox.
+    /// Deletes the notebook and its sub-notebooks and moves their notes to Recently Deleted. They keep the
+    /// notebook ID, so recovering them falls back to Inbox.
     func deleteNotebook(_ id: UUID, at date: Date = Date()) {
-        let affected = notes.filter { $0.notebookID == id && $0.deletedAt == nil }.map(\.id)
+        let tree = notebookTree
+        let ids = tree.contains(id) ? notebookIDsIncludingDescendants(id) : [id]
+        let parent = tree.effectiveParent(of: id)
+        let affected = notes.filter { $0.notebookID.map(ids.contains) == true && $0.deletedAt == nil }.map(\.id)
         for noteID in affected { handOverPendingEdits(noteID) }
-        if notebook(with: id) != nil {
-            journalSyncDeletion(id, kind: .notebook)
-            appliedRemoteRevisions.notebooks[id.uuidString] = nil
-            queueRawMetaDeletion(id, kind: .notebooks)
+        for removed in ids where notebook(with: removed) != nil {
+            journalSyncDeletion(removed, kind: .notebook)
+            appliedRemoteRevisions.notebooks[removed.uuidString] = nil
+            queueRawMetaDeletion(removed, kind: .notebooks)
         }
-        notebooks.removeAll { $0.id == id }
-        for index in notes.indices where notes[index].notebookID == id && notes[index].deletedAt == nil {
+        notebooks.removeAll { ids.contains($0.id) }
+        for index in notes.indices where notes[index].notebookID.map(ids.contains) == true && notes[index].deletedAt == nil {
             notes[index].deletedAt = date
             notes[index].revision = UUID()
             dispatchDerivedIndexes(.metadata(notes[index]))
         }
-        if selection == .notebook(id) { selection = .allNotes }
-        reindexNotebooks(sortedNotebooks)
+        if case .notebook(let selected) = selection, ids.contains(selected) { selection = .allNotes }
+        reindexNotebooks(notebookTree.siblings(under: parent))
         libraryDirty = true
         hasUnannouncedLocalChange = true
         scheduleSave()
         reconcileSelectionAfterUserAction()
     }
 
-    /// Offsets refer to `sortedNotebooks` order.
-    func moveNotebooks(from source: IndexSet, to destination: Int) {
-        var ordered = sortedNotebooks
+    /// Reorders the children of `parent` (top level when nil); offsets refer to their display order.
+    func moveNotebooks(from source: IndexSet, to destination: Int, parent: UUID? = nil) {
+        var ordered = notebookTree.siblings(under: parent)
         ordered.move(fromOffsets: source, toOffset: destination)
         reindexNotebooks(ordered)
         libraryDirty = true
@@ -711,17 +724,13 @@ final class NoteStore: ObservableObject {
         scheduleSave()
     }
 
-    /// Notebooks whose position changes get a new revision.
-    private func reindexNotebooks(_ ordered: [Notebook]) {
-        let now = Date()
-        notebooks = ordered.enumerated().map { offset, nb in
-            var copy = nb
-            if copy.sortIndex != offset {
-                copy.sortIndex = offset
-                copy.revision = UUID()
-                copy.modifiedAt = now
-            }
-            return copy
+    /// Numbers one sibling group in order; notebooks whose position changes get a new revision.
+    func reindexNotebooks(_ ordered: [UUID], now: Date = Date()) {
+        for (offset, id) in ordered.enumerated() {
+            guard let index = notebooks.firstIndex(where: { $0.id == id }), notebooks[index].sortIndex != offset else { continue }
+            notebooks[index].sortIndex = offset
+            notebooks[index].revision = UUID()
+            notebooks[index].modifiedAt = now
         }
     }
 
@@ -1295,9 +1304,11 @@ final class NoteStore: ObservableObject {
     }
 
     nonisolated static func revisionFields(_ nb: Notebook) -> [String] {
-        let fields = ["notebook", nb.name, nb.symbol, nb.colorHex, String(nb.sortIndex)]
-        guard let template = nb.defaultTemplateID else { return fields }
-        return fields + ["template \(template.uuidString)"]
+        var fields = ["notebook", nb.name, nb.symbol, nb.colorHex, String(nb.sortIndex)]
+        if let template = nb.defaultTemplateID { fields.append("template \(template.uuidString)") }
+        // Appended only when set, so revisions of top-level notebooks stay the same.
+        if let parent = nb.parent { fields.append("parent \(parent.uuidString)") }
+        return fields
     }
 
     /// SHA-256 over the id, the stable fields and the body package's files (sorted by path), as a v8 UUID.
@@ -1468,14 +1479,27 @@ final class NoteStore: ObservableObject {
     }
 
     /// `remote.revision` is recorded as applied; its raw meta must already be written (see `applyRemote`).
-    func applyRemoteNotebook(_ remote: Notebook) {
+    /// A record without a `parent` key comes from NoteIt 0.2 or earlier: the local parent stays, and a nested
+    /// notebook gets a new revision so the next pass pushes the parent back.
+    func applyRemoteNotebook(_ remote: Notebook, hasParentKey: Bool = true) {
+        var applied = remote
+        var repairs = false
         if let index = notebooks.firstIndex(where: { $0.id == remote.id }) {
-            notebooks[index] = remote
+            if !hasParentKey, let local = notebooks[index].parent {
+                applied.parent = local
+                repairs = true
+            }
+            notebooks[index] = applied
         } else {
-            notebooks.append(remote)
+            notebooks.append(applied)
         }
         appliedRemoteRevisions.notebooks[remote.id.uuidString] = remote.revision
         clearSyncDeletion(remote.id)
+        if repairs, let index = notebooks.firstIndex(where: { $0.id == remote.id }) {
+            notebooks[index].revision = UUID()
+            notebooks[index].modifiedAt = Date()
+            hasUnannouncedLocalChange = true
+        }
         libraryDirty = true
         persistRemoteApply()
     }
