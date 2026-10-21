@@ -361,6 +361,7 @@ Other sub-projects add routes without touching the server core:
 | `noteit watch` | Stream changes as JSON lines |
 | `noteit api METHOD PATH [--data JSON\|@file]` | Raw request for scripting |
 | `noteit auth login\|logout\|status`, `noteit status`, `noteit --version`, `noteit help [COMMAND]` | Housekeeping |
+| `noteit completion zsh\|bash\|fish` | Print a tab completion script. Installing the tool from Settings also links all three where the shells look for them; note ids, notebooks and tags are completed live from the Local API when NoteIt is running and you're signed in |
 | `noteit mcp …` | The whole `mcp` command tree belongs to `private-ai` (wave 2); automation only reserves the name. In wave 1 it prints "noteit mcp isn't in this version of NoteIt." and exits 2 |
 
 - `--json` on any read command prints the API JSON unchanged. Exit codes: 0 ok, 1 error, 2 usage, 3 app not reachable or API off, 4 not paired or token revoked, 5 not found, 6 revision conflict.
