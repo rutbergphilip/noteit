@@ -100,6 +100,26 @@ final class EvernoteImporterTests: XCTestCase {
         XCTAssertEqual(Set(groceries.tags), ["home", "shopping-list", "_2024"])
     }
 
+    func testChecklistInTableCellStaysInTheTable() throws {
+        let parsed = try XCTUnwrap(ENEXNoteParser.parse(Data(note("Shop", content: """
+            <table><tr><td><en-todo checked="true"/>Buy milk</td><td><en-todo checked="false"/>Eggs</td></tr></table>
+            """).utf8)))
+        var report = ImportReport()
+        let body = EvernoteImporter.body(for: parsed, title: "Shop", report: &report)
+        let ns = body.string as NSString
+        for (text, mark) in [("Buy milk", "☑"), ("Eggs", "☐")] {
+            let found = ns.range(of: text)
+            XCTAssertNotEqual(found.location, NSNotFound, body.string)
+            let paragraph = ns.paragraphRange(for: found)
+            let style = body.attribute(.paragraphStyle, at: paragraph.location, effectiveRange: nil) as? NSParagraphStyle
+            XCTAssertFalse(style?.textBlocks.isEmpty ?? true, "\(text) left the table")
+            XCTAssertTrue(ns.substring(with: paragraph).hasPrefix(mark + " "), ns.substring(with: paragraph))
+        }
+        XCTAssertEqual(body.attribute(.strikethroughStyle, at: ns.range(of: "Buy milk").location, effectiveRange: nil) as? Int,
+                       NSUnderlineStyle.single.rawValue)
+        XCTAssertNil(body.attribute(.strikethroughStyle, at: ns.range(of: "Eggs").location, effectiveRange: nil))
+    }
+
     func testTagsAreMadeValid() {
         XCTAssertEqual(ImportTags.sanitized("Work Stuff"), "work-stuff")
         XCTAssertEqual(ImportTags.sanitized("2024"), "_2024")

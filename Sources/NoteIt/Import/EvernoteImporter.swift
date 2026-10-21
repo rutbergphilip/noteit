@@ -251,6 +251,11 @@ enum EvernoteImporter {
             var start = offset + 1
             while start < text.length, text.character(at: start) == 32 { start += 1 }
             let ps = body.attribute(.paragraphStyle, at: para.location, effectiveRange: nil) as? NSParagraphStyle
+            if ps?.textBlocks.isEmpty == false {
+                markCheckboxInCell(body, paragraph: para, marker: offset, contentStart: start,
+                                   checked: first == ENMLConverter.checkedTodo)
+                continue
+            }
             let level = marker == nil ? 0 : EditorStyle.listLevel(of: ps)
             let content = NSMutableAttributedString(attributedString: body.attributedSubstring(
                 from: NSRange(location: para.location + start, length: para.length - start)))
@@ -265,6 +270,20 @@ enum EvernoteImporter {
                               range: NSRange(location: 0, length: item.length))
             body.replaceCharacters(in: para, with: item)
         }
+    }
+
+    /// A checklist item can't sit in a table cell, so the cell keeps its place and shows ☐ or ☑ instead.
+    private static func markCheckboxInCell(_ body: NSMutableAttributedString, paragraph: NSRange, marker: Int,
+                                           contentStart: Int, checked: Bool) {
+        let end = NSMaxRange(paragraph) - ((body.string as NSString).substring(with: paragraph).hasSuffix("\n") ? 1 : 0)
+        let contentRange = NSRange(location: paragraph.location + contentStart, length: max(0, end - paragraph.location - contentStart))
+        let content = NSMutableAttributedString(attributedString: body.attributedSubstring(from: contentRange))
+        if checked { NoteItTextView.applyCheckedStyle(content) }
+        let boxAttributes = body.attributes(at: paragraph.location + marker, effectiveRange: nil)
+        let replacement = NSMutableAttributedString(string: (checked ? "☑" : "☐") + " ", attributes: boxAttributes)
+        replacement.append(content)
+        body.replaceCharacters(in: NSRange(location: paragraph.location + marker, length: NSMaxRange(contentRange) - paragraph.location - marker),
+                               with: replacement)
     }
 
     /// Links to Evernote notes become title links named by the link's text.
