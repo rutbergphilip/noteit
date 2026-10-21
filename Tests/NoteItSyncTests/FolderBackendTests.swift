@@ -178,9 +178,9 @@ final class FolderBackendTests: XCTestCase {
         let missing = FolderBackend(root: root.appendingPathComponent("nope"))
         do {
             try await missing.probe()
-            XCTFail("Expected notFound")
+            XCTFail("Expected unavailable")
         } catch let error as StorageError {
-            guard case .notFound = error else { return XCTFail("Unexpected \(error)") }
+            guard case .unavailable = error else { return XCTFail("Unexpected \(error)") }
         }
     }
 

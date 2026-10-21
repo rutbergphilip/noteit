@@ -2,7 +2,14 @@ import CryptoKit
 import Foundation
 
 /// Stores objects as files under a root directory (NAS mount, iCloud Drive, Dropbox, ...).
+///
+/// The root may be on a network volume that goes away. Every call runs on `ioQueue`, never on the caller's
+/// thread or Swift's cooperative pool, because a dead mount can block a system call for minutes. A missing root
+/// or an unreachable volume throws `unavailable`, never `notFound`, and a listing either sees every object or
+/// throws: a partial listing would look like deletions made on another Mac.
 public final class FolderBackend: StorageBackend, @unchecked Sendable {
+    private static let ioQueue = DispatchQueue(label: "NoteIt.FolderBackend.io", qos: .utility, attributes: .concurrent)
+
     static let hashedSizeLimit: Int64 = 256 * 1024
     static let lockFileName = ".noteit-lock"
 
@@ -21,16 +28,27 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
     }
 
     public func list(prefix: String) async throws -> [RemoteObject] {
-        try listSync(prefix: prefix)
+        try await onIOQueue { try self.listSync(prefix: prefix) }
     }
 
     private func listSync(prefix: String) throws -> [RemoteObject] {
         try requireRoot()
         let rootPath = root.resolvingSymlinksInPath().path
+        func relativeKey(_ url: URL) -> String? {
+            let path = url.resolvingSymlinksInPath().path
+            return path.hasPrefix(rootPath + "/") ? String(path.dropFirst(rootPath.count + 1)) : nil
+        }
+        var enumerationError: Error?
         guard let enumerator = fileManager.enumerator(
             at: root,
             includingPropertiesForKeys: [.isRegularFileKey],
-            options: [.skipsHiddenFiles]
+            options: [.skipsHiddenFiles],
+            errorHandler: { url, error in
+                // Folders that can't hold listed keys (a NAS's #recycle, say) may stay unreadable.
+                if let key = relativeKey(url), !key.hasPrefix(prefix), !prefix.hasPrefix(key + "/") { return true }
+                enumerationError = error
+                return false
+            }
         ) else {
             throw StorageError.io("Cannot enumerate \(root.path)")
         }
@@ -38,55 +56,82 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
         for case let url as URL in enumerator {
             let name = url.lastPathComponent
             if name.hasSuffix(".icloud") || name.contains(".tmp-") { continue }
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
-            let path = url.resolvingSymlinksInPath().path
-            guard path.hasPrefix(rootPath + "/") else { continue }
-            let key = String(path.dropFirst(rootPath.count + 1))
-            guard key.hasPrefix(prefix), let info = try? fileInfo(key: key, path: path) else { continue }
+            guard let key = relativeKey(url), key.hasPrefix(prefix) else { continue }
+            let isRegularFile: Bool
+            do {
+                isRegularFile = try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true
+            } catch {
+                if Self.posixCode(of: error) == ENOENT { continue }  // Removed since it was enumerated.
+                throw storageError(error, key: key)
+            }
+            guard isRegularFile else { continue }
+            let path = rootPath + "/" + key
+            let info: (etag: String, size: Int)
+            do {
+                info = try fileInfo(key: key, path: path)
+            } catch StorageError.notFound {
+                continue  // Deleted by another Mac since it was enumerated.
+            }
             objects.append(RemoteObject(key: key, etag: info.etag, size: info.size))
         }
+        if let enumerationError { throw storageError(enumerationError, key: prefix) }
+        // An unmount ends the enumeration early without an error; files that vanished with it were skipped above.
+        try requireRoot()
         return objects.sorted { $0.key < $1.key }
     }
 
     public func get(_ key: String) async throws -> (data: Data, etag: String) {
+        try await onIOQueue { try self.getSync(key) }
+    }
+
+    private func getSync(_ key: String) throws -> (data: Data, etag: String) {
         let url = try fileURL(for: key)
         let fd = Darwin.open(url.path, O_RDONLY | O_CLOEXEC)
-        guard fd >= 0 else {
-            if errno == ENOENT { throw StorageError.notFound(key) }
-            throw StorageError.io(String(cString: strerror(errno)))
-        }
+        guard fd >= 0 else { throw storageError(errno, key: key) }
         defer { close(fd) }
         // Stat and read the same open file so a concurrent rename can't pair these bytes with another write's etag.
         var st = stat()
-        guard fstat(fd, &st) == 0 else { throw StorageError.io(String(cString: strerror(errno))) }
+        guard fstat(fd, &st) == 0 else { throw storageError(errno, key: key) }
         let data: Data
         do {
             data = try FileHandle(fileDescriptor: fd, closeOnDealloc: false).readToEnd() ?? Data()
         } catch {
-            throw StorageError.io(error.localizedDescription)
+            throw storageError(error, key: key)
         }
         return (data, etag(key: key, stamp: Stamp(st), content: data))
     }
 
     @discardableResult
     public func put(_ key: String, data: Data, ifMatch: String?, ifNoneMatch: Bool) async throws -> String {
+        try await onIOQueue { try self.putSync(key, data: data, ifMatch: ifMatch, ifNoneMatch: ifNoneMatch) }
+    }
+
+    private func putSync(_ key: String, data: Data, ifMatch: String?, ifNoneMatch: Bool) throws -> String {
         let url = try fileURL(for: key)
         let dir = url.deletingLastPathComponent()
         let temp = dir.appendingPathComponent(".\(url.lastPathComponent).tmp-\(UUID().uuidString)")
         let stamp: Stamp
         do {
-            try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
-            stamp = try writeNewFile(temp.path, data)
+            try makeDirectories(for: key)
+            stamp = try writeNewFile(temp.path, data, key: key)
         } catch {
-            try? fileManager.removeItem(at: temp)
+            unlink(temp.path)
             if let error = error as? StorageError { throw error }
-            throw StorageError.io(error.localizedDescription)
+            throw storageError(error, key: key)
         }
         // rename keeps the inode and mtime, so the temp file's stat describes the final object.
         let newETag = etag(key: key, stamp: stamp, content: data)
 
         return try withStoreLock {
-            let current = try? fileInfo(key: key, path: url.path).etag
+            let current: String?
+            do {
+                current = try fileInfo(key: key, path: url.path).etag
+            } catch StorageError.notFound {
+                current = nil
+            } catch {
+                unlink(temp.path)
+                throw error
+            }
             if (ifNoneMatch && current != nil) || (ifMatch != nil && current != ifMatch) {
                 try? fileManager.removeItem(at: temp)
                 throw StorageError.preconditionFailed(key)
@@ -100,9 +145,9 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
                 }
             }
             guard rename(temp.path, url.path) == 0 else {
-                let message = String(cString: strerror(errno))
-                try? fileManager.removeItem(at: temp)
-                throw StorageError.io(message)
+                let error = storageError(errno, key: key)
+                unlink(temp.path)
+                throw error
             }
             return newETag
         }
@@ -113,23 +158,18 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
     }
 
     public func delete(_ key: String, ifMatch: String?) async throws {
+        try await onIOQueue { try self.deleteSync(key, ifMatch: ifMatch) }
+    }
+
+    private func deleteSync(_ key: String, ifMatch: String?) throws {
         let url = try fileURL(for: key)
         try withStoreLock {
             if let ifMatch {
-                let current: String
-                do {
-                    current = try fileInfo(key: key, path: url.path).etag
-                } catch {
-                    if access(url.path, F_OK) != 0 { throw StorageError.notFound(key) }
-                    throw error
-                }
+                let current = try fileInfo(key: key, path: url.path).etag
                 if current != ifMatch { throw StorageError.preconditionFailed(key) }
             }
             cacheLock.withLock { hashCache[key] = nil }
-            guard unlink(url.path) == 0 else {
-                if errno == ENOENT { throw StorageError.notFound(key) }
-                throw StorageError.io(String(cString: strerror(errno)))
-            }
+            guard unlink(url.path) == 0 else { throw storageError(errno, key: key) }
         }
     }
 
@@ -153,21 +193,62 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
     }
 
     public func probe() async throws {
-        try requireRoot()
-        let url = root.appendingPathComponent(".noteit-probe-\(UUID().uuidString)")
-        do {
-            try Data("probe".utf8).write(to: url)
-            try fileManager.removeItem(at: url)
-        } catch {
-            throw StorageError.io(error.localizedDescription)
+        try await onIOQueue {
+            try self.requireRoot()
+            let url = self.root.appendingPathComponent(".noteit-probe-\(UUID().uuidString)")
+            do {
+                try Data("probe".utf8).write(to: url)
+                try self.fileManager.removeItem(at: url)
+            } catch {
+                throw self.storageError(error, key: url.lastPathComponent)
+            }
+        }
+    }
+
+    /// Runs blocking file-system work on `ioQueue`, so a hung network mount never holds a cooperative thread.
+    private func onIOQueue<T>(_ work: @escaping () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            Self.ioQueue.async { continuation.resume(with: Result { try work() }) }
         }
     }
 
     private func requireRoot() throws {
-        var isDir: ObjCBool = false
-        guard fileManager.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else {
-            throw StorageError.notFound(root.path)
+        var st = stat()
+        guard stat(root.path, &st) == 0 else {
+            let code = errno
+            throw code == ENOENT || code == ENOTDIR ? unavailable() : Self.storageError(code, key: root.path)
         }
+        guard st.st_mode & S_IFMT == S_IFDIR else { throw unavailable() }
+    }
+
+    private func unavailable() -> StorageError {
+        .unavailable(root.lastPathComponent)
+    }
+
+    /// Creates the key's folders below the root, never the root itself: a share that was unmounted must not be
+    /// replaced by an empty local folder at its mount point.
+    private func makeDirectories(for key: String) throws {
+        try requireRoot()
+        var dir = root
+        for part in key.split(separator: "/").dropLast() {
+            dir.appendPathComponent(String(part), isDirectory: true)
+            if mkdir(dir.path, 0o755) != 0, errno != EEXIST { throw storageError(errno, key: key) }
+        }
+    }
+
+    /// `notFound` only while the root is there; a missing root means the volume went away.
+    private func storageError(_ code: Int32, key: String) -> StorageError {
+        if code == ENOENT || code == ENOTDIR {
+            do { try requireRoot() } catch let error as StorageError { return error } catch {}
+            return .notFound(key)
+        }
+        return Self.storageError(code, key: key)
+    }
+
+    private func storageError(_ error: Error, key: String) -> StorageError {
+        if let error = error as? StorageError { return error }
+        if let code = Self.posixCode(of: error) { return storageError(code, key: key) }
+        return .io(error.localizedDescription)
     }
 
     private func fileURL(for key: String) throws -> URL {
@@ -178,13 +259,13 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
         return root.appendingPathComponent(key)
     }
 
-    private func writeNewFile(_ path: String, _ data: Data) throws -> Stamp {
+    private func writeNewFile(_ path: String, _ data: Data, key: String) throws -> Stamp {
         let fd = Darwin.open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
-        guard fd >= 0 else { throw StorageError.io(String(cString: strerror(errno))) }
+        guard fd >= 0 else { throw storageError(errno, key: key) }
         defer { close(fd) }
         try FileHandle(fileDescriptor: fd, closeOnDealloc: false).write(contentsOf: data)
         var st = stat()
-        guard fstat(fd, &st) == 0 else { throw StorageError.io(String(cString: strerror(errno))) }
+        guard fstat(fd, &st) == 0 else { throw storageError(errno, key: key) }
         return Stamp(st)
     }
 
@@ -199,10 +280,7 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
 
     private func fileInfo(key: String, path: String) throws -> (etag: String, size: Int) {
         var st = stat()
-        guard stat(path, &st) == 0 else {
-            if errno == ENOENT { throw StorageError.notFound(key) }
-            throw StorageError.io(String(cString: strerror(errno)))
-        }
+        guard stat(path, &st) == 0 else { throw storageError(errno, key: key) }
         let stamp = Stamp(st)
         guard stamp.size <= Self.hashedSizeLimit else { return (stamp.etag, Int(stamp.size)) }
         // Files whose stat is unchanged reuse the cached hash instead of being re-read.
@@ -210,22 +288,37 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
             return (cached.etag, Int(stamp.size))
         }
         let fd = Darwin.open(path, O_RDONLY | O_CLOEXEC)
-        guard fd >= 0 else {
-            if errno == ENOENT { throw StorageError.notFound(key) }
-            throw StorageError.io(String(cString: strerror(errno)))
-        }
+        guard fd >= 0 else { throw storageError(errno, key: key) }
         defer { close(fd) }
         var opened = stat()
-        guard fstat(fd, &opened) == 0 else { throw StorageError.io(String(cString: strerror(errno))) }
+        guard fstat(fd, &opened) == 0 else { throw storageError(errno, key: key) }
         let data: Data
         do {
             data = try FileHandle(fileDescriptor: fd, closeOnDealloc: false).readToEnd() ?? Data()
         } catch {
-            throw StorageError.io(error.localizedDescription)
+            throw storageError(error, key: key)
         }
         cacheLock.withLock { _hashedFileReads += 1 }
         let openedStamp = Stamp(opened)
         return (etag(key: key, stamp: openedStamp, content: data), data.count)
+    }
+
+    /// Errors a network volume returns when its server is gone, asleep or unreachable.
+    static let unreachableCodes: Set<Int32> = [ENOTCONN, ETIMEDOUT, ESTALE, EIO, ENXIO, EHOSTDOWN, EHOSTUNREACH,
+                                               ENETDOWN, ENETUNREACH, ENODEV, ECONNRESET, ECONNABORTED, EAUTH, ENEEDAUTH]
+
+    static func storageError(_ code: Int32, key: String) -> StorageError {
+        let message = String(cString: strerror(code))
+        return unreachableCodes.contains(code) ? .unavailable(message) : .io(message)
+    }
+
+    static func posixCode(of error: Error) -> Int32? {
+        var current: NSError? = error as NSError
+        while let error = current {
+            if error.domain == NSPOSIXErrorDomain { return Int32(error.code) }
+            current = error.userInfo[NSUnderlyingErrorKey] as? NSError
+        }
+        return nil
     }
 
     private struct Stamp: Equatable {

@@ -21,6 +21,9 @@ public enum StorageError: Error, Sendable, Equatable {
     case network(String)
     case invalidResponse(String)
     case io(String)
+    /// The storage can't be reached right now (an unmounted or unresponsive network volume). Nothing about its
+    /// contents is known, so it must never be read as empty.
+    case unavailable(String)
 }
 
 public protocol StorageBackend: Sendable {
