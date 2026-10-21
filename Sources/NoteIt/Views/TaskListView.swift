@@ -17,11 +17,11 @@ struct TaskListView: View {
     @EnvironmentObject private var store: NoteStore
     @Environment(\.undoManager) private var undoManager
     @AppStorage(PrefKey.tasksShowCompleted) private var showCompleted = false
-    @State private var selection: TaskKey?
+    @State private var selection: TaskRef?
     @State private var settling: [TaskKey: Settling] = [:]
     @State private var settleGeneration = 0
     @State private var message: String?
-    @State private var editingDue: TaskKey?
+    @State private var editingDue: TaskRef?
 
     /// A checked or reopened row kept where it was for a moment, so a mis-click is easy to undo.
     struct Settling {
@@ -52,8 +52,8 @@ struct TaskListView: View {
                 }
                 .listStyle(.inset)
                 .scrollContentBackground(.hidden)
-                .contextMenu(forSelectionType: TaskKey.self) { keys in
-                    if let key = keys.first, let item = find(key, in: groups) { contextMenu(item) }
+                .contextMenu(forSelectionType: TaskRef.self) { refs in
+                    if let ref = refs.first, let item = find(ref, in: groups) { contextMenu(item) }
                 } primaryAction: { keys in
                     guard let key = keys.first else { return }
                     EditorNavigator.reveal(key.noteID, paragraph: key.paragraph, inAllNotes: true, store: store)
@@ -117,24 +117,23 @@ struct TaskListView: View {
     }
 
     private func row(_ item: TaskItem) -> some View {
-        let key = TaskKey(item.ref)
         return TaskRow(item: item, notebook: store.notebook(with: item.notebookID)) {
             toggle(item, groups: Self.display(live: store.tasks(query: store.searchText, includeCompleted: showCompleted),
                                               settling: settling))
         }
-        .tag(key)
-        .popover(isPresented: Binding(get: { editingDue == key }, set: { if !$0 { editingDue = nil } }), arrowEdge: .trailing) {
+        .tag(item.ref)
+        .popover(isPresented: Binding(get: { editingDue == item.ref }, set: { if !$0 { editingDue = nil } }), arrowEdge: .trailing) {
             DatePopover(title: "Due Date", initial: item.line.due,
-                        onSet: { value in perform { try store.setDue(liveRef(for: item), value) } },
-                        onRemove: item.line.due == nil ? nil : { perform { try store.setDue(liveRef(for: item), nil) } },
+                        onSet: { value in setDue(item, value) },
+                        onRemove: item.line.due == nil ? nil : { setDue(item, nil) },
                         onClose: { editingDue = nil })
         }
     }
 
     @ViewBuilder
     private func contextMenu(_ item: TaskItem) -> some View {
-        Button("Set Due Date…") { editingDue = TaskKey(item.ref) }
-        Button("Remove Due Date") { perform { try store.setDue(liveRef(for: item), nil) } }
+        Button("Set Due Date…") { editingDue = item.ref }
+        Button("Remove Due Date") { setDue(item, nil) }
             .disabled(item.line.due == nil)
         Divider()
         Button("Open Note") {
@@ -146,26 +145,29 @@ struct TaskListView: View {
         }
     }
 
-    private func find(_ key: TaskKey, in groups: [(group: TaskGroup, items: [TaskItem])]) -> TaskItem? {
+    private func find(_ ref: TaskRef, in groups: [(group: TaskGroup, items: [TaskItem])]) -> TaskItem? {
         for entry in groups {
-            if let item = entry.items.first(where: { TaskKey($0.ref) == key }) { return item }
+            if let item = entry.items.first(where: { $0.ref == ref }) { return item }
         }
         return nil
     }
 
-    /// The index's current ref for the row (a settling row keeps the ref it had before it was checked).
-    private func liveRef(for item: TaskItem) -> TaskRef {
-        let key = TaskKey(item.ref)
-        let live = store.tasks(query: "", includeCompleted: true)
-        for items in live.values {
-            if let match = items.first(where: { TaskKey($0.ref) == key }) { return match.ref }
-        }
-        return item.ref
+    /// The ref to edit the row's task with: the listed task with the same text (it may have moved), or the row's own
+    /// ref. Never another task that took the row's line, so the store reports a changed task instead.
+    static func editRef(for item: TaskItem, live: [TaskGroup: [TaskItem]]) -> TaskRef {
+        let candidates = live.values.joined().filter { $0.ref.noteID == item.ref.noteID && $0.ref.textHash == item.ref.textHash }
+        if candidates.contains(where: { $0.ref == item.ref }) { return item.ref }
+        return candidates.count == 1 ? candidates[0].ref : item.ref
     }
 
-    private func perform(_ edit: () throws -> Void) {
+    private func editRef(for item: TaskItem) -> TaskRef {
+        Self.editRef(for: item, live: store.tasks(query: "", includeCompleted: true))
+    }
+
+    private func setDue(_ item: TaskItem, _ value: LocalDateTime?) {
         do {
-            try edit()
+            try store.setDue(editRef(for: item), value)
+            settling[TaskKey(item.ref)] = nil
             message = nil
         } catch {
             message = Self.message(for: error)
@@ -174,7 +176,7 @@ struct TaskListView: View {
 
     private func toggle(_ item: TaskItem, groups: [(group: TaskGroup, items: [TaskItem])]) {
         let key = TaskKey(item.ref)
-        let ref = liveRef(for: item)
+        let ref = editRef(for: item)
         let checked = !item.line.checked
         do {
             try store.setTaskChecked(ref, checked)
@@ -191,6 +193,7 @@ struct TaskListView: View {
         }
         undoManager?.setActionName(checked ? "Check" : "Uncheck")
 
+        if selection == item.ref { selection = newRef }
         var shown = item
         shown.ref = newRef
         shown.line.checked = checked

@@ -79,6 +79,19 @@ final class TaskViewTests: XCTestCase {
         XCTAssertEqual(settled.map(\.group), [.noDate, .completed])
     }
 
+    func testEditRefNeverAdoptsAnotherTaskOnTheSameLine() {
+        let note = UUID()
+        let row = item(2, note: note)
+        let inserted = TaskItem(ref: TaskRef(noteID: note, paragraph: 2, textHash: "other"), line: row.line,
+                                noteTitle: "Note", notebookID: nil, noteUpdatedAt: now)
+        XCTAssertEqual(TaskListView.editRef(for: row, live: [.noDate: [inserted]]), row.ref)
+
+        var moved = row
+        moved.ref.paragraph = 4
+        XCTAssertEqual(TaskListView.editRef(for: row, live: [.noDate: [inserted, moved]]), moved.ref)
+        XCTAssertEqual(TaskListView.editRef(for: row, live: [.noDate: [row, moved]]), row.ref)
+    }
+
     func testDueLabels() {
         let date = { (day: Int, hour: Int?) in LocalDateTime(year: 2026, month: 10, day: day, hour: hour, minute: hour.map { _ in 5 })! }
         XCTAssertEqual(TaskListView.dueLabel(date(21, nil), now: now, calendar: calendar), "Today")
