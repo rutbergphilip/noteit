@@ -45,6 +45,16 @@ final class RankedSearchTests: XCTestCase {
         XCTAssertEqual(store.searchResults(for: .allNotes, search: "invoice", order: .dateEdited).map(\.id), [body, titled])
     }
 
+    func testUntitledNotesDoNotMatchTheirPlaceholderTitle() async {
+        let store = makeStore()
+        let untitled = add(store, "")
+        let named = add(store, "New plan\nfor the note")
+        await indexed(store)
+        XCTAssertEqual(store.notes.first { $0.id == untitled }?.title, "")
+        XCTAssertEqual(store.searchResults(for: .allNotes, search: "note", order: .bestMatch).map(\.id), [named])
+        XCTAssertEqual(store.searchResults(for: .allNotes, search: "title:new", order: .bestMatch).map(\.id), [named])
+    }
+
     func testFilterOnlyQueryKeepsDateOrderWithoutScores() async {
         let store = makeStore()
         let first = add(store, "One #work")

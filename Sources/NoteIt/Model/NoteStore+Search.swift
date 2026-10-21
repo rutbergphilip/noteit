@@ -39,7 +39,7 @@ struct StoreSearchDocument: SearchDocument {
     /// its title only.
     init(meta: NoteMeta, entry: SearchIndexEntry?) {
         self.meta = meta
-        foldedTitle = TextFold.fold(meta.displayTitle)
+        foldedTitle = TextFold.fold(meta.title)
         if meta.isLocked {
             foldedText = []
         } else if let entry {
@@ -143,7 +143,7 @@ extension NoteStore {
             var result = SearchResult(note: item.doc.meta, score: item.score, titleHighlights: [], snippet: nil,
                                       foundInImage: imageTextProvider != nil && item.onlyInImage)
             if decorated, !query.highlightTerms.isEmpty {
-                result.titleHighlights = SearchHighlighter.ranges(of: query.highlightTerms, in: item.doc.meta.displayTitle)
+                result.titleHighlights = SearchHighlighter.ranges(of: query.highlightTerms, in: item.doc.meta.title)
                 if position < Self.snippetLimit, !result.foundInImage, !item.doc.meta.isLocked,
                    let plain = searchIndexer.entries[item.doc.meta.id]?.plain {
                     result.snippet = SearchHighlighter.snippet(of: Self.bodyAfterTitle(plain), terms: query.highlightTerms,
