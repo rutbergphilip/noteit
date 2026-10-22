@@ -166,6 +166,41 @@ final class ExternalChangeTests: XCTestCase {
                        ["Kept.md", "Other.md"], "NoteIt's own write isn't taken for an outside change")
     }
 
+    func testALateWriteOfAnOlderEditKeepsTheWaitingCopyOfTheNewerOne() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let store = open()
+        store.markdownFlushWait = 0
+        store.markdownWriteTimeout = 0.3
+        store.markdownBlockingTimeout = 0.3
+        store.markdownUnavailableRetryInterval = 600
+        let kept = try note(store, titled: "Kept").id
+        let storage = try XCTUnwrap(store.markdownStorage)
+        storage.rootTimeout = 30
+        let firstWrite = DispatchSemaphore(value: 0)
+        let calls = Counter()
+        let realCheck = storage.rootCheck
+        storage.rootCheck = { url in
+            if calls.increment() == 1 { _ = firstWrite.wait(timeout: .now() + 10) }
+            return realCheck(url)
+        }
+
+        store.updateBody(kept, NSAttributedString(string: "Kept\n\nolder edit"))
+        store.flush()
+        try await waitUntil({ store.markdownFolderUnavailable }, "the hung write makes the folder unavailable")
+        store.updateBody(kept, NSAttributedString(string: "Kept\n\nnewer edit"))
+        store.flush()
+        let recovery = { (try? self.fm.contentsOfDirectory(at: store.recoveryURL, includingPropertiesForKeys: nil)) ?? [] }
+        XCTAssertEqual(recovery().filter { $0.pathExtension == "md" }.count, 1)
+
+        firstWrite.signal()
+        try await waitUntil({ store.markdownIOJobs.isEmpty }, "the late write of the older edit finishes")
+        XCTAssertTrue(try read("Kept.md").contains("older edit"))
+        XCTAssertTrue(store.isBodyDirty(kept), "the newer edit still waits")
+        let copies = recovery().filter { $0.pathExtension == "md" }
+        XCTAssertEqual(copies.count, 1, "the newer edit keeps its copy in recovery/")
+        XCTAssertTrue(copies.contains { ((try? String(contentsOf: $0, encoding: .utf8)) ?? "").contains("newer edit") })
+    }
+
     func testTheWatcherStartsOnlyOnceTheFolderAnswers() async throws {
         try put("Kept.md", "# Kept\n\nfirst\n")
         let store = open()

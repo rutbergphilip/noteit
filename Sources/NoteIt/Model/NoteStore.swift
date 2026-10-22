@@ -1507,8 +1507,8 @@ final class NoteStore: ObservableObject {
         if bodyCache[id] == nil || (bodyCache[id] === text && (bodyExtras[id] ?? .empty) == extras) {
             dirtyBodies.remove(id)
             recoveredSnapshots[id] = nil
+            if let copy = markdownWaitingCopies.removeValue(forKey: id) { try? FileManager.default.removeItem(at: copy) }
         }
-        if let copy = markdownWaitingCopies.removeValue(forKey: id) { try? FileManager.default.removeItem(at: copy) }
         unversionedLocalBodies.insert(id)
         if failedBodies.remove(id) != nil {
             // The library and index held back this note's new metadata/text; persist them now.
