@@ -478,7 +478,8 @@ extension NoteStore {
         unblockMarkdownBodyWrites(id, reason: MarkdownBodyStorage.unreadableReason)
         unblockMarkdownBodyWrites(id, reason: MarkdownBodyStorage.missingAttachmentsReason)
         unblockMarkdownBodyWrites(id, reason: Self.missingFileReason)
-        if atLaunch || meta.deletedAt != nil || meta.isLocked || old == nil {
+        // A reader that loaded the file after the edit leaves nothing older to keep in history.
+        if atLaunch || meta.deletedAt != nil || meta.isLocked || old == nil || old?.isEqual(to: body.text) == true {
             dropCachedBody(id)
             setBodyExtras(body.extras, for: id)
             refreshDerivedMetadata(id, from: body.text, frontMatter: adopted.frontMatter, modified: adopted.modified, atLaunch: atLaunch)

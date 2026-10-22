@@ -256,6 +256,17 @@ final class ExternalChangeTests: XCTestCase {
         await withCheckedContinuation { continuation in attachments.afterScheduledSweeps { continuation.resume() } }
     }
 
+    func testAnEditABackgroundReaderLoadedFirstStillReachesTheNote() throws {
+        try put("Note.md", "# Note\n\nfirst\n")
+        let store = open()
+        let id = try note(store, titled: "Note").id
+        try edit("Note.md", "# Note\n\nfirst", "# Renamed\n\nsecond")
+        _ = try store.markdownStorage?.read(id)
+        store.rescanMarkdownFolder()
+        XCTAssertEqual(store.note(with: id)?.title, "Renamed")
+        XCTAssertTrue(store.body(for: id).string.contains("second"))
+    }
+
     func testACleanNoteReloadsAndKeepsItsPreviousTextInHistory() throws {
         try put("Note.md", "# Note\n\nfirst\n")
         let store = open()
