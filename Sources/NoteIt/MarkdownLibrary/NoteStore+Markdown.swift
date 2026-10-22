@@ -10,6 +10,8 @@ import NoteItSync
 extension NoteStore {
     static let outsideNoteItSource = "Outside NoteIt"
     static let missingFileReason = "This note’s file is missing from the folder."
+    /// Posted (object: the store) when a scan succeeds after the Markdown folder was checked or didn't answer.
+    static let markdownFolderAnswered = Notification.Name("NoteItMarkdownFolderAnswered")
     /// A file is renamed after its title once the note has been left alone this long.
     static let idleRenameDelay: TimeInterval = 5
 
@@ -206,6 +208,7 @@ extension NoteStore {
                 if let selected = selectedNoteID, unread.contains(selected), cachedBody(selected) == nil {
                     externallyUpdatedNoteID = selected
                 }
+                NotificationCenter.default.post(name: Self.markdownFolderAnswered, object: self)
             }
             startMarkdownWatcherIfReady()
             return true

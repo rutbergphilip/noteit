@@ -128,6 +128,10 @@ final class SpotlightIndexer: DerivedIndex {
     private var lastEnabled = false
     private var lastIncludesText = true
     private var observer: NSObjectProtocol?
+    private var folderObserver: NSObjectProtocol?
+    /// A rebuild waits for the Markdown folder, or read a note's text while it didn't answer: once the folder
+    /// answers, the index is rebuilt.
+    private var rebuildWhenFolderAnswers = false
 
     /// `isSupported` is false for unbundled runs (`swift run`), where Spotlight stays off.
     init(store: NoteStore, defaults: UserDefaults = .standard, index: SpotlightIndexing,
@@ -159,6 +163,10 @@ final class SpotlightIndexer: DerivedIndex {
         observer = NotificationCenter.default.addObserver(forName: UserDefaults.didChangeNotification, object: nil,
                                                           queue: nil) { [weak self] _ in
             Task { @MainActor [weak self] in self?.preferencesChanged() }
+        }
+        folderObserver = NotificationCenter.default.addObserver(forName: NoteStore.markdownFolderAnswered, object: store,
+                                                                queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.markdownFolderAnswered() }
         }
         let dirty = defaults.bool(forKey: PrefKey.spotlightIndexDirty)
         if isEnabled, dirty || defaults.integer(forKey: PrefKey.spotlightIndexVersion) != Self.indexVersion {
@@ -203,10 +211,23 @@ final class SpotlightIndexer: DerivedIndex {
     /// Rebuild Spotlight Index, and the rebuilds the indexer schedules itself.
     func rebuildNow() {
         guard isEnabled, let store else { return }
+        // Every note would be indexed without its text while the folder is checked or doesn't answer.
+        if store.markdownFolderUnavailable {
+            rebuildWhenFolderAnswers = true
+            health.markDirty()
+            return
+        }
+        rebuildWhenFolderAnswers = false
         let notes = store.notes
         Task { @MainActor [weak self] in
             await self?.performRebuild(notes: notes) { [weak store] id in await store?.indexText(id) ?? .text(nil) }
         }
+    }
+
+    private func markdownFolderAnswered() {
+        guard rebuildWhenFolderAnswers else { return }
+        rebuildWhenFolderAnswers = false
+        rebuildNow()
     }
 
     /// Hands pending changes to Core Spotlight and waits up to `timeout` for them, so a change made just before
@@ -281,6 +302,7 @@ final class SpotlightIndexer: DerivedIndex {
                 case .unavailable:
                     // Kept by title until a rebuild once the folder answers again.
                     self.health.recordFailure()
+                    self.rebuildWhenFolderAnswers = true
                     text = nil
                 }
                 self.stage(SpotlightItemBuilder.item(for: meta, text: text, includeText: self.includesText))
@@ -332,7 +354,9 @@ final class SpotlightIndexer: DerivedIndex {
                 let version = stagedVersions[meta.id.uuidString, default: 0]
                 switch await text(meta.id) {
                 case .text(let text): read = text
-                case .unavailable: health.recordFailure()
+                case .unavailable:
+                    health.recordFailure()
+                    rebuildWhenFolderAnswers = true
                 }
                 guard generation == rebuildGeneration, isEnabled else { return }
                 // A hook for the note while its text was read already staged a newer item.

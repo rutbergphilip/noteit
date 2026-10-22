@@ -443,6 +443,108 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertNil(fake.items[untouched.uuidString])
     }
 
+    /// Reopens the library with its launch scan held until `release` is called.
+    private func reopenWhileChecking() -> (store: NoteStore, release: () -> Void) {
+        let gate = DispatchGroup()
+        gate.enter()
+        var released = false
+        let storage = MarkdownBodyStorageTests.make(root, renames: false)
+        storage.rootCheck = { url in
+            _ = gate.wait(timeout: .now() + 10)
+            return FileManager.default.fileExists(atPath: url.path)
+        }
+        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+                                                        renameFilesOnTitleChange: false),
+                              bodyStorage: storage)
+        addTeardownBlock { if !released { gate.leave() } }
+        return (store, {
+            guard !released else { return }
+            released = true
+            gate.leave()
+        })
+    }
+
+    private func settle(_ indexer: SpotlightIndexer, for seconds: TimeInterval = 5, until done: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        repeat {
+            indexer.flush()
+            await indexer.settle()
+            try await Task.sleep(nanoseconds: 5_000_000)
+        } while !done() && Date() < deadline
+    }
+
+    func testASpotlightRebuildDueAtLaunchWaitsForTheFolderToAnswer() async throws {
+        try put("Plan.md", "# Plan\n\nquarter goals\n")
+        var store: NoteStore? = open()
+        let plan = try note(store!, titled: "Plan").id
+        store?.flush()
+        store = nil
+        let suite = "noteit-external-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: PrefKey.spotlightIndexDirty)
+
+        let (reopened, release) = reopenWhileChecking()
+        XCTAssertTrue(reopened.markdownFolderChecking)
+        let fake = FakeSpotlightIndex()
+        let indexer = SpotlightIndexer(store: reopened, defaults: defaults, index: fake, isSupported: true, flushDelay: 60)
+        indexer.start()
+        try await settle(indexer, for: 0.3) { false }
+        XCTAssertNil(fake.items[plan.uuidString], "nothing is indexed without text while the folder is checked")
+
+        release()
+        reopened.waitForLaunchScan(timeout: 10)
+        try await settle(indexer) { fake.items[plan.uuidString] != nil && !defaults.bool(forKey: PrefKey.spotlightIndexDirty) }
+        XCTAssertTrue(fake.items[plan.uuidString]?.textContent?.contains("quarter goals") == true)
+        XCTAssertFalse(defaults.bool(forKey: PrefKey.spotlightIndexDirty), "the rebuild read every note, so the index is clean")
+    }
+
+    func testEditsMadeWhileClosedReachSpotlightWhenItStartsBeforeTheLaunchScanApplies() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        var store: NoteStore? = open()
+        let kept = try note(store!, titled: "Kept").id
+        store?.flush()
+        store = nil
+        try edit("Kept.md", "first", "edited while closed")
+        let suite = "noteit-external-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(SpotlightIndexer.indexVersion, forKey: PrefKey.spotlightIndexVersion)
+
+        let (reopened, release) = reopenWhileChecking()
+        let fake = FakeSpotlightIndex()
+        let indexer = SpotlightIndexer(store: reopened, defaults: defaults, index: fake, isSupported: true, flushDelay: 60)
+        indexer.start()
+        release()
+        reopened.waitForLaunchScan(timeout: 10)
+        try await settle(indexer) { fake.items[kept.uuidString]?.textContent?.contains("edited while closed") == true }
+        XCTAssertTrue(fake.items[kept.uuidString]?.textContent?.contains("edited while closed") == true)
+        XCTAssertFalse(fake.calls.contains(.deleteAll))
+    }
+
+    func testANoteIndexedWithoutTextWhileTheFolderDidntAnswerGetsItsTextWhenItAnswers() async throws {
+        try put("Plan.md", "# Plan\n\nquarter goals\n")
+        let store = open()
+        let plan = try note(store, titled: "Plan").id
+        let suite = "noteit-external-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(SpotlightIndexer.indexVersion, forKey: PrefKey.spotlightIndexVersion)
+        let fake = FakeSpotlightIndex()
+        let indexer = SpotlightIndexer(store: store, defaults: defaults, index: fake, isSupported: true, flushDelay: 60)
+        indexer.start()
+        store.dropCachedBody(plan)
+        store.markdownFolderBecameUnavailable()
+        indexer.noteChanged(try XCTUnwrap(store.note(with: plan)), body: NSAttributedString())
+        try await settle(indexer) { fake.items[plan.uuidString] != nil }
+        XCTAssertNotNil(fake.items[plan.uuidString])
+        XCTAssertFalse(fake.items[plan.uuidString]?.textContent?.contains("quarter goals") == true)
+
+        store.rescanNow()
+        try await settle(indexer) { fake.items[plan.uuidString]?.textContent?.contains("quarter goals") == true }
+        XCTAssertTrue(fake.items[plan.uuidString]?.textContent?.contains("quarter goals") == true)
+    }
+
     func testASpotlightRebuildNeverWaitsOnTheMainThreadForAMarkdownFolder() async throws {
         for index in 0..<3 { try put("Note \(index).md", "# Note \(index)\n\ntext \(index)\n") }
         let store = open()
