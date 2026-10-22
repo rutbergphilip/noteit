@@ -15,6 +15,9 @@ struct ImportReport: Equatable {
     var tagsSkipped = 0
     /// ZIP files inside an export that couldn't be opened, by name; their contents weren't imported.
     var archivesSkipped: [String] = []
+    /// Files and folders in an export's ZIPs given a numbered name because theirs was already taken (names that
+    /// differ only in case or Unicode form, or a repeated name).
+    var filesRenamed = 0
     /// Tables cut to their first `NotionImporter.maxTableRows` rows, by name.
     var truncatedTables: [String] = []
     var cancelled = false
@@ -45,6 +48,10 @@ struct ImportReport: Equatable {
         if let archive = archivesSkipped.first {
             parts.append(archivesSkipped.count == 1 ? "Couldn't open “\(archive)”, so its pages weren't imported."
                          : "Couldn't open \(archivesSkipped.count.formatted()) ZIP files (“\(archive)” and others), so their pages weren't imported.")
+        }
+        if filesRenamed > 0 {
+            parts.append(filesRenamed == 1 ? "1 file in the archive was renamed because another had the same name."
+                         : "\(filesRenamed.formatted()) files in the archive were renamed because others had the same names.")
         }
         if encryptedSectionsSkipped > 0 {
             parts.append(encryptedSectionsSkipped == 1 ? "1 note had encrypted sections that were skipped."

@@ -367,6 +367,71 @@ final class ZipDirectoryTests: XCTestCase {
         XCTAssertEqual(leftovers().subtracting(before), [])
     }
 
+    /// Unpacks `files` and returns each written file's path inside the folder with its text.
+    private func unpackedTexts(_ files: [(String, String)]) throws -> [String: String] {
+        let url = try save(ZipFixture(files: files.map { .init(name: Array($0.0.utf8), data: Data($0.1.utf8)) }),
+                           as: "Clash-\(UUID().uuidString).zip")
+        var limits = ZipLimits.standard
+        let folder = try XCTUnwrap(try MarkdownImporter.unzip(url, within: &limits))
+        defer { try? fm.removeItem(at: folder) }
+        var texts: [String: String] = [:]
+        let enumerator = try XCTUnwrap(fm.enumerator(at: folder, includingPropertiesForKeys: [.isRegularFileKey]))
+        for case let file as URL in enumerator where (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+            let path = String(file.resolvingSymlinksInPath().path.dropFirst(folder.resolvingSymlinksInPath().path.count + 1))
+            texts[path.precomposedStringWithCanonicalMapping] = try String(contentsOf: file, encoding: .utf8)
+        }
+        return texts
+    }
+
+    func testNamesDifferingOnlyInCaseAreBothKept() throws {
+        XCTAssertEqual(try unpackedTexts([("Notes/README.md", "upper"), ("Notes/readme.md", "lower")]),
+                       ["Notes/README.md": "upper", "Notes/readme 2.md": "lower"])
+    }
+
+    func testNFCAndNFDNamesAreBothKept() throws {
+        let nfc = "Café.md".precomposedStringWithCanonicalMapping
+        let nfd = "Café.md".decomposedStringWithCanonicalMapping
+        XCTAssertNotEqual(Array(nfc.utf8), Array(nfd.utf8))
+        XCTAssertEqual(try unpackedTexts([(nfc, "one"), (nfd, "two")]), [nfc: "one", "Café 2.md": "two"])
+    }
+
+    func testRepeatedNamesAreBothKept() throws {
+        XCTAssertEqual(try unpackedTexts([("Page.md", "first"), ("Page.md", "second"), ("Page 2.md", "third"), ("LICENSE", "a"), ("LICENSE", "b")]),
+                       ["Page.md": "first", "Page 2.md": "second", "Page 2 2.md": "third", "LICENSE": "a", "LICENSE 2": "b"])
+    }
+
+    func testFileAndFolderWithTheSameNameAreBothKept() throws {
+        XCTAssertEqual(try unpackedTexts([("Doc", "file"), ("doc/inner.md", "in folder"), ("doc/more.md", "also"),
+                                          ("Folder/x.md", "x"), ("folder", "file after folder"), ("Folder/", "")]),
+                       ["Doc": "file", "doc 2/inner.md": "in folder", "doc 2/more.md": "also",
+                        "Folder/x.md": "x", "folder 2": "file after folder"])
+    }
+
+    func testManyRepeatedNamesUnpackWithoutRetryingEveryNumber() throws {
+        let count = 5_000
+        let url = try save(ZipFixture(files: (0..<count).map { _ in .init(name: Array("a.md".utf8), data: Data()) }
+                                        + (0..<count).map { _ in .init(name: Array("d/x".utf8), data: Data()) }),
+                           as: "Many.zip")
+        var limits = ZipLimits.standard
+        let start = Date()
+        let result = try XCTUnwrap(try MarkdownImporter.unpack(url, within: &limits))
+        defer { try? fm.removeItem(at: result.folder) }
+        XCTAssertLessThan(Date().timeIntervalSince(start), 20)
+        XCTAssertEqual(result.renamed, 2 * (count - 1))
+        XCTAssertTrue(fm.fileExists(atPath: result.folder.appendingPathComponent("a \(count).md").path))
+        XCTAssertTrue(fm.fileExists(atPath: result.folder.appendingPathComponent("d/x \(count)").path))
+    }
+
+    func testRenamedEntriesAreCountedInTheReport() async throws {
+        let outer = try save(ZipFixture(files: [page("# Page\nOne"), page("# Page\nTwo"),
+                                                .init(name: Array("page \(pageID).MD".utf8), data: Data("# Page\nThree".utf8))]),
+                             as: "Twice.zip")
+        let report = try await NotionImporter.importExport(outer, into: makeStore())
+        XCTAssertEqual(report.notesImported, 3)
+        XCTAssertEqual(report.filesRenamed, 2)
+        XCTAssertTrue(report.summary.contains("2 files in the archive were renamed"), report.summary)
+    }
+
     func testDittoArchiveWithSwedishNamesUnpacks() throws {
         let folder = base.appendingPathComponent("Källa/Möte å ä ö", isDirectory: true)
         try fm.createDirectory(at: folder.appendingPathComponent("Bilder ö"), withIntermediateDirectories: true)

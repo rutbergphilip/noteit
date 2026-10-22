@@ -7,7 +7,9 @@ import zlib
 /// the directory are the ones written. Local headers are only used to find each entry's data and must agree with the
 /// directory. Stored and deflated entries are supported; output is counted as it is written and checked against
 /// each entry's stated size and CRC-32. Names are written in precomposed (NFC) form, and folders are opened one
-/// component at a time without following symbolic links. On any failure or cancellation the destination is removed.
+/// component at a time without following symbolic links. Nothing is overwritten: an entry whose name is already taken
+/// on disk (a repeated name, or one differing only in case or Unicode form) gets the next free "name 2.ext".
+/// On any failure or cancellation the destination is removed.
 enum ZipExtractor {
     enum Failure: Error, Equatable, LocalizedError {
         /// Not a readable ZIP archive.
@@ -40,8 +42,10 @@ enum ZipExtractor {
         var entries: Int
         /// Bytes actually written.
         var bytes: Int64
-        /// Bytes written for each file, by its "/"-separated path in NFC.
+        /// Bytes written for each file, by its "/"-separated path on disk, in NFC.
         var fileSizes: [String: Int64]
+        /// Files and folders written under another name because theirs was taken.
+        var renamed = 0
     }
 
     static let chunkSize = 64 * 1024
@@ -100,16 +104,27 @@ enum ZipExtractor {
         defer { input.deallocate(); output.deallocate() }
         var total: Int64 = 0
         var sizes: [String: Int64] = [:]
+        var folderNames: [String: String] = [:]
+        var nextNumbers: [String: Int] = [:]
+        var renamed = 0
+        let attempts = directory.entries.count + 1
         for (entry, plan) in zip(directory.entries, plans) {
             try Task.checkCancellation()
             let folders = plan.isDirectory ? plan.components : Array(plan.components.dropLast())
-            let parent = try openFolder(folders, under: root, entry: entry.name)
+            let (parent, path) = try openFolder(folders, under: root, entry: entry.name, names: &folderNames,
+                                                nextNumbers: &nextNumbers, renamed: &renamed, attempts: attempts)
             defer { close(parent) }
             if plan.isDirectory { continue }
             let dataStart = try locateData(entry, in: fd, fileSize: fileSize, directoryOffset: directory.directoryOffset)
-            let file = openat(parent, plan.components.last!, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
-            guard file >= 0 else { throw Failure.damaged(entry.name) }
+            let wanted = plan.components.last!
+            var file: Int32 = -1
+            let created = try firstFree(wanted, in: path, nextNumbers: &nextNumbers, attempts: attempts) { name in
+                file = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+                return file >= 0 ? true : errno == EEXIST ? false : nil
+            }
+            guard let name = created, file >= 0 else { throw Failure.damaged(entry.name) }
             defer { close(file) }
+            if name != wanted { renamed += 1 }
             var written: UInt64 = 0
             var crc = zlib.crc32(0, nil, 0)
             let sink: (UnsafePointer<UInt8>, Int) throws -> Void = { bytes, count in
@@ -127,26 +142,85 @@ enum ZipExtractor {
                 try inflate(entry, from: fd, at: dataStart, input: input, output: output, into: sink)
             }
             guard written == entry.uncompressedSize, UInt32(crc) == entry.crc32 else { throw Failure.damaged(entry.name) }
-            sizes[plan.components.joined(separator: "/"), default: 0] += Int64(written)
+            sizes[(path + [name]).joined(separator: "/")] = Int64(written)
         }
-        return Result(folder: destination, entries: directory.entries.count, bytes: total, fileSizes: sizes)
+        return Result(folder: destination, entries: directory.entries.count, bytes: total, fileSizes: sizes, renamed: renamed)
     }
 
-    /// Opens (creating as needed) the folders below `root`, refusing any that is a symbolic link or not a folder.
-    private static func openFolder(_ components: [String], under root: Int32, entry: String) throws -> Int32 {
+    /// "readme.md", 2 → "readme 2.md"; "LICENSE", 2 → "LICENSE 2".
+    static func numbered(_ name: String, _ number: Int) -> String {
+        let ext = (name as NSString).pathExtension
+        let stem = (name as NSString).deletingPathExtension
+        return ext.isEmpty || stem.isEmpty ? "\(name) \(number)" : "\(stem) \(number).\(ext)"
+    }
+
+    /// Tries `name`, then numbered names, until `create` succeeds (true) or fails other than because the name is
+    /// taken (nil). The numbered search resumes where the last one for this name in `folder` stopped, so a name
+    /// repeated many times doesn't make each search start again at "name 2".
+    private static func firstFree(_ name: String, in folder: [String], nextNumbers: inout [String: Int], attempts: Int,
+                                  create: (String) -> Bool?) throws -> String? {
+        switch create(name) {
+        case true?: return name
+        case nil: return nil
+        case false?: break
+        }
+        let key = (folder + [name.lowercased()]).joined(separator: "/")
+        var number = nextNumbers[key] ?? 2
+        for _ in 0..<attempts {
+            try Task.checkCancellation()
+            let candidate = numbered(name, number)
+            number += 1
+            switch create(candidate) {
+            case true?:
+                nextNumbers[key] = number
+                return candidate
+            case nil: return nil
+            case false?: continue
+            }
+        }
+        return nil
+    }
+
+    /// Opens (creating as needed) the folders below `root`, never following a symbolic link. A folder whose name
+    /// is taken by a file gets the next free numbered name, remembered in `names` (by its path in the archive) so
+    /// later entries in it land in the same place. Returns the folder and its path on disk.
+    private static func openFolder(_ components: [String], under root: Int32, entry: String, names: inout [String: String],
+                                   nextNumbers: inout [String: Int], renamed: inout Int, attempts: Int) throws -> (Int32, [String]) {
         var current = dup(root)
         guard current >= 0 else { throw Failure.damaged(entry) }
-        for component in components {
-            if mkdirat(current, component, 0o755) != 0, errno != EEXIST {
-                close(current)
-                throw Failure.damaged(entry)
+        var path: [String] = []
+        for (depth, component) in components.enumerated() {
+            let key = components[...depth].joined(separator: "/")
+            var next: Int32 = -1
+            var name = names[key] ?? component
+            if names[key] != nil {
+                next = openat(current, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+            } else {
+                // An existing folder of the plain name is merged into; a file or link there means a numbered name.
+                let parent = current
+                let found: String?
+                do {
+                    found = try firstFree(component, in: path, nextNumbers: &nextNumbers, attempts: attempts) { candidate in
+                        if mkdirat(parent, candidate, 0o755) != 0, errno != EEXIST { return nil }
+                        next = openat(parent, candidate, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                        return next >= 0 ? true : errno == ENOTDIR || errno == ELOOP ? false : nil
+                    }
+                } catch {
+                    close(current)
+                    throw error
+                }
+                if let found, next >= 0 {
+                    name = found
+                    names[key] = name
+                    if name != component { renamed += 1 }
+                }
             }
-            let next = openat(current, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             close(current)
             guard next >= 0 else { throw Failure.damaged(entry) }
             current = next
+            path.append(name)
         }
-        return current
+        return (current, path)
     }
 
     /// Where the entry's data starts, after checking that its local header names the same entry and method.

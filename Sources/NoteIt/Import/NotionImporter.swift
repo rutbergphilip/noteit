@@ -60,7 +60,7 @@ enum NotionImporter {
     static func importExport(_ url: URL, into store: NoteStore, limits: ZipLimits = .standard,
                              progress: (ImportProgress) -> Void = { _ in }) async throws -> ImportReport {
         let unpacking = Task.detached { try Self.contentRoots(for: url, limits: limits) }
-        let (roots, temporary, failed) = try await withTaskCancellationHandler {
+        let (roots, temporary, failed, renamed) = try await withTaskCancellationHandler {
             try await unpacking.value
         } onCancel: {
             unpacking.cancel()
@@ -74,6 +74,7 @@ enum NotionImporter {
         }
         var report = await importPages(pages, roots: roots, into: store, progress: progress)
         report.archivesSkipped = failed
+        report.filesRenamed = renamed
         return report
     }
 
@@ -82,11 +83,11 @@ enum NotionImporter {
     /// The folders holding the export: the chosen folder or the unzipped archive, plus each ZIP at its top level
     /// unzipped (one level only).
     /// `temporary` lists the unzipped folders, for the caller to remove; `failed` names the part ZIPs that
-    /// couldn't be opened.
+    /// couldn't be opened; `renamed` counts files and folders unzipped under another name because theirs was taken.
     /// Archives that together unpack past `limits` throw `ImportError.archiveTooLarge`; an outer archive or part
     /// holding symbolic links, encrypted entries or unknown compression methods throws `.unsupportedArchive`.
     nonisolated static func contentRoots(for url: URL, limits: ZipLimits = .standard) throws
-        -> (roots: [URL], temporary: [URL], failed: [String]) {
+        -> (roots: [URL], temporary: [URL], failed: [String], renamed: Int) {
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { throw ImportError.unreadableArchive(url.lastPathComponent) }
@@ -96,6 +97,7 @@ enum NotionImporter {
         var finished = false
         defer { if !finished { for folder in temporary { try? fm.removeItem(at: folder) } } }
         var writtenSizes: [String: Int64] = [:]
+        var renamed = 0
         if !isDir.boolValue {
             guard url.pathExtension.lowercased() == "zip", let unpacked = try MarkdownImporter.unpack(url, within: &budget) else {
                 throw ImportError.unreadableArchive(url.lastPathComponent)
@@ -103,6 +105,7 @@ enum NotionImporter {
             temporary.append(unpacked.folder)
             root = unpacked.folder
             writtenSizes = unpacked.fileSizes
+            renamed = unpacked.renamed
         }
         var roots = [root]
         var failed: [String] = []
@@ -113,16 +116,17 @@ enum NotionImporter {
             // and charged at the bytes it unpacks to, that first charge is given back. Parts that aren't opened stay charged.
             var opened = budget
             opened.maxBytes += writtenSizes[zip.lastPathComponent.precomposedStringWithCanonicalMapping] ?? 0
-            guard let unpacked = try MarkdownImporter.unzip(zip, within: &opened) else {
+            guard let unpacked = try MarkdownImporter.unpack(zip, within: &opened) else {
                 failed.append(zip.lastPathComponent)
                 continue
             }
             budget = opened
-            temporary.append(unpacked)
-            roots.append(unpacked)
+            renamed += unpacked.renamed
+            temporary.append(unpacked.folder)
+            roots.append(unpacked.folder)
         }
         finished = true
-        return (roots, temporary, failed)
+        return (roots, temporary, failed, renamed)
     }
 
     /// Every page and database in `roots`, merged by their path inside the export, parents first.
