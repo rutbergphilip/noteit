@@ -321,6 +321,7 @@ final class AutomationService {
             case .locked: throw .noteLocked
             case .writeBlocked, .taskChanged: throw .noteUnreadable
             case .versionNotSaved: throw .versionNotSaved
+            case .folderNotAvailable(let folder): throw .folderNotAvailable(folder)
             }
         } catch {
             throw .noteUnreadable

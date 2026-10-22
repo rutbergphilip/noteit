@@ -3,6 +3,7 @@ import XCTest
 @testable import NoteIt
 import NoteItCore
 import NoteItMarkdown
+import NoteItAPI
 
 /// markdown-storage Task 4.2: changes made to the Markdown folder while NoteIt is open.
 @MainActor
@@ -351,6 +352,58 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(FolderScanner.frontMatterID(Data(try read("New.md").utf8)), new.id,
                        "a file added while NoteIt was closed takes its id at once")
         XCTAssertTrue(reopened.notesChangedBeforeDerivedIndexes.contains(new.id))
+    }
+
+    func testNothingIsBuiltOnAPlaceholderBodyWhileTheFolderIsStillBeingChecked() async throws {
+        try put("Plan.md", "# Plan\n\nfirst line\nsecond line\n")
+        var store: NoteStore? = open()
+        let plan = try note(store!, titled: "Plan").id
+        store?.flush()
+        store = nil
+        let original = try read("Plan.md")
+        let gate = DispatchGroup()
+        gate.enter()
+        var released = false
+        defer { if !released { gate.leave() } }
+        let storage = MarkdownBodyStorageTests.make(root, renames: false)
+        storage.rootCheck = { url in
+            _ = gate.wait(timeout: .now() + 10)
+            return FileManager.default.fileExists(atPath: url.path)
+        }
+        let reopened = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+                                                           renameFilesOnTitleChange: false),
+                                 bodyStorage: storage)
+        XCTAssertTrue(reopened.markdownFolderChecking)
+
+        XCTAssertThrowsError(try reopened.editBody(plan, actionName: "Append") { $0.append(NSAttributedString(string: "\nadded")) }) {
+            XCTAssertEqual($0 as? BodyEditError, .folderNotAvailable("content"))
+        }
+        reopened.updateBody(plan, NSAttributedString(string: "Plan\nreplaced"))
+        XCTAssertFalse(reopened.isBodyDirty(plan))
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "placeholder-\(UUID().uuidString)"))
+        let service = AutomationService(store: reopened, defaults: defaults,
+                                        staged: StagedUploads(directory: root.appendingPathComponent("staged")))
+        do {
+            _ = try await service.append(plan, text: "from the API", format: .text, position: .end, timestamp: false, ifRevision: nil)
+            XCTFail("appended to a placeholder")
+        } catch {
+            XCTAssertEqual(error, .folderNotAvailable("content"))
+            XCTAssertTrue(error.message.contains("“content”"), error.message)
+            XCTAssertEqual(error.apiCode, .notReady)
+        }
+        XCTAssertThrowsError(try service.bodyString(of: plan, format: .text))
+
+        gate.leave()
+        released = true
+        reopened.waitForLaunchScan(timeout: 10)
+        reopened.flush()
+        reopened.waitForMarkdownWrites(upTo: 10)
+        XCTAssertEqual(try read("Plan.md"), original)
+        try reopened.editBody(plan, actionName: "Append") { $0.append(NSAttributedString(string: "\nadded")) }
+        reopened.flush()
+        reopened.waitForMarkdownWrites(upTo: 10)
+        XCTAssertTrue(try read("Plan.md").contains("second line"))
+        XCTAssertTrue(try read("Plan.md").contains("added"))
     }
 
     func testEditsMadeWhileNoteItWasClosedReachSpotlightAtTheNextLaunch() async throws {

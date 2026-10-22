@@ -401,6 +401,13 @@ final class NoteStore: ObservableObject {
         return loaded
     }
 
+    /// The content folder's name while the note's Markdown file hasn't been read (the folder is being checked or
+    /// doesn't answer), so `body(for:)` only gave a placeholder that nothing may be built on; nil once it's read.
+    func unreadMarkdownFolder(of id: UUID) -> String? {
+        guard let markdownStorage, bodyCache[id] == nil else { return nil }
+        return markdownStorage.contentRootURL.lastPathComponent
+    }
+
     func plainText(for id: UUID) -> String {
         BodyCodec.plainText(of: body(for: id))
     }
@@ -452,6 +459,10 @@ final class NoteStore: ObservableObject {
         // Notes in Recently Deleted are read-only.
         guard let index = noteIndex(id), notes[index].deletedAt == nil else { return }
         let textUnchanged = body(for: id).isEqual(to: text)
+        if unreadMarkdownFolder(of: id) != nil {
+            NSLog("NoteIt: not changing note \(id): its Markdown file hasn't been read yet")
+            return
+        }
         let extrasChanged = extras.map { $0 != (bodyExtras[id] ?? .empty) } ?? false
         if textUnchanged, !extrasChanged { return }
         if let extras, extrasChanged { setBodyExtras(extras, for: id) }

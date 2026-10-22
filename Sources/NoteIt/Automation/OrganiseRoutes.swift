@@ -289,6 +289,7 @@ enum OrganiseRoutes {
         case .writeBlocked: .noteUnreadable
         case .taskChanged: .revisionMismatch
         case .versionNotSaved: .internal
+        case .folderNotAvailable: .notReady
         }
     }
 
@@ -300,6 +301,7 @@ enum OrganiseRoutes {
         case .writeBlocked: "That note can't be read, so it can't be changed."
         case .taskChanged: "That task changed. Fetch the tasks again."
         case .versionNotSaved: "Something went wrong."
+        case .folderNotAvailable(let folder): BodyEditError.folderNotAvailableMessage(folder)
         }
     }
 

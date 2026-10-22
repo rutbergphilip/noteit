@@ -46,6 +46,7 @@ extension AutomationService {
         let meta = try existing(id)
         if meta.isLocked { throw .noteLocked }
         let text = store.body(for: id)
+        if let folder = store.unreadMarkdownFolder(of: id) { throw .folderNotAvailable(folder) }
         switch format {
         case .text:
             return store.plainText(for: id)
@@ -84,6 +85,7 @@ extension AutomationService {
             case .locked: throw .noteLocked
             case .writeBlocked, .taskChanged: throw .noteUnreadable
             case .versionNotSaved: throw .versionNotSaved
+            case .folderNotAvailable(let folder): throw .folderNotAvailable(folder)
             }
         } catch let error as AutomationError {
             throw error
