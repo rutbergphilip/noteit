@@ -748,10 +748,44 @@ final class ExternalChangeTests: XCTestCase {
         }
         let export = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
                                                  to: exportFolder(), body: store.bodyForOutput)
-        export.bodyWhenRead = { await store.bodyForOutputWhenRead($0) }
+        export.bodyWhenRead = { await store.bodyForOutputWhenRead($0, isCancelled: $1) }
         let result = try await export.write { _ in true }
         XCTAssertEqual(result.noteCount, 20)
         XCTAssertEqual(result.skipped, [])
+    }
+
+    func testAnExportOnASlowFolderNeverBlocksTheMainThreadWhileReading() async throws {
+        let (store, storage) = try openWithUncachedNotes(5)
+        storage.readFileData = { url in
+            Thread.sleep(forTimeInterval: 1.2)
+            return try Data(contentsOf: url)
+        }
+        let export = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
+                                                 to: exportFolder(), body: store.bodyForOutput)
+        export.bodyWhenRead = { await store.bodyForOutputWhenRead($0, isCancelled: $1) }
+        let heartbeat = MainThreadHeartbeat()
+        heartbeat.start()
+        let result = try await export.write { _ in true }
+        heartbeat.stop()
+        XCTAssertEqual(result.noteCount, 5)
+        XCTAssertLessThan(heartbeat.longestGap, 0.3, "the main thread was blocked while a note was read")
+    }
+
+    func testCancellingAnExportDoesntWaitForASlowRead() async throws {
+        let (store, storage) = try openWithUncachedNotes(3)
+        storage.readFileData = { url in
+            Thread.sleep(forTimeInterval: 3)
+            return try Data(contentsOf: url)
+        }
+        let export = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
+                                                 to: exportFolder(), body: store.bodyForOutput)
+        export.bodyWhenRead = { await store.bodyForOutputWhenRead($0, isCancelled: $1) }
+        let started = Date()
+        export.isCancelled = { Date().timeIntervalSince(started) > 0.3 }
+        let result = try await export.write { _ in true }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5)
+        XCTAssertEqual(result.noteCount, 0)
+        XCTAssertEqual(result.skipped, [], "a cancelled export lists nothing as skipped")
     }
 
     func testAnExportOnAHungFolderSkipsAndListsTheNotesPromptly() async throws {
@@ -767,7 +801,7 @@ final class ExternalChangeTests: XCTestCase {
         }
         let export = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
                                                  to: exportFolder(), body: store.bodyForOutput)
-        export.bodyWhenRead = { await store.bodyForOutputWhenRead($0) }
+        export.bodyWhenRead = { await store.bodyForOutputWhenRead($0, isCancelled: $1) }
         let started = Date()
         let result = try await export.write { _ in true }
         XCTAssertLessThan(Date().timeIntervalSince(started), 3)
@@ -1300,4 +1334,28 @@ private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
     func increment() -> Int { lock.withLock { count += 1; return count } }
+}
+
+/// The longest time the main thread went without running a block queued every 20 ms.
+@MainActor
+private final class MainThreadHeartbeat {
+    private var last = Date()
+    private var running = false
+    private(set) var longestGap: TimeInterval = 0
+
+    func start() {
+        running = true
+        last = Date()
+        beat()
+    }
+
+    func stop() { running = false }
+
+    private func beat() {
+        let now = Date()
+        longestGap = max(longestGap, now.timeIntervalSince(last))
+        last = now
+        guard running else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) { MainActor.assumeIsolated { self.beat() } }
+    }
 }

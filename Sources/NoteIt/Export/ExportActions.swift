@@ -204,9 +204,9 @@ enum ExportActions {
             lastFormat = format
             do {
                 let notes = try export(folder, format)
-                notes.bodyWhenRead = { [store] id in
+                notes.bodyWhenRead = { [store] id, isCancelled in
                     NotificationCenter.default.post(name: .noteItWillExportNote, object: id)
-                    return await store.bodyForOutputWhenRead(id)
+                    return await store.bodyForOutputWhenRead(id, isCancelled: isCancelled)
                 }
                 run(notes, title: title)
             } catch {
@@ -223,6 +223,7 @@ enum ExportActions {
         let progress = ExportProgress(total: export.total)
         var sheet: NSWindow?
         isExporting = true
+        export.isCancelled = { progress.isCancelled }
         Task { @MainActor in
             defer { isExporting = false }
             do {

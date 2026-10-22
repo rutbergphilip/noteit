@@ -342,7 +342,10 @@ final class NotesExport {
     private let files: [File]
     private let body: (UUID) -> NSAttributedString?
     /// Used by `write(slice:progress:)` instead of `body`: may wait (suspended) for a read still running.
-    var bodyWhenRead: ((UUID) async -> NSAttributedString?)?
+    /// The second argument says whether the export was cancelled meanwhile.
+    var bodyWhenRead: ((UUID, () -> Bool) async -> NSAttributedString?)?
+    /// Checked while `bodyWhenRead` waits, so a cancel doesn't wait for a slow read.
+    var isCancelled: () -> Bool = { false }
     private let links: ExportLinkContext
     private(set) var written = 0
     private(set) var skipped: [String] = []
@@ -392,7 +395,13 @@ final class NotesExport {
         while !isFinished {
             let start = clock.now
             repeat {
-                if let bodyWhenRead { try write(await bodyWhenRead(files[next].note.id)) } else { try writeNext() }
+                if let bodyWhenRead {
+                    let text = await bodyWhenRead(files[next].note.id, isCancelled)
+                    if isCancelled() { return result }
+                    try write(text)
+                } else {
+                    try writeNext()
+                }
             } while !isFinished && clock.now - start < slice
             guard progress(self), !isFinished else { break }
             try? await Task.sleep(for: .milliseconds(1))

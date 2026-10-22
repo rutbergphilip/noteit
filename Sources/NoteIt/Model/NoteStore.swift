@@ -370,6 +370,11 @@ final class NoteStore: ObservableObject {
     // MARK: - Bodies
 
     func body(for id: UUID) -> NSAttributedString {
+        body(for: id, wait: nil)
+    }
+
+    /// `wait` is how long the main thread waits for a Markdown read it starts (`markdownBodyMainWait` when nil).
+    func body(for id: UUID, wait: TimeInterval?) -> NSAttributedString {
         if let cached = bodyCache[id] {
             touchBody(id)
             return cached
@@ -377,7 +382,7 @@ final class NoteStore: ObservableObject {
         let url = bodyURL(for: id)
         var loaded = NSAttributedString()
         if let markdownStorage {
-            switch readMarkdownBody(id, from: markdownStorage) {
+            switch readMarkdownBody(id, from: markdownStorage, wait: wait) {
             case .read(let stored):
                 loaded = stored.text
                 setBodyExtras(stored.extras, for: id)
@@ -425,18 +430,22 @@ final class NoteStore: ObservableObject {
     /// The note's body for export, print, copy, share or the API; nil while it's a placeholder for a file that
     /// wasn't read, which is never output as the note's content.
     func bodyForOutput(_ id: UUID) -> NSAttributedString? {
-        let text = body(for: id)
+        bodyForOutput(id, wait: nil)
+    }
+
+    func bodyForOutput(_ id: UUID, wait: TimeInterval?) -> NSAttributedString? {
+        let text = body(for: id, wait: wait)
         return unreadMarkdownFolder(of: id) == nil ? text : nil
     }
 
     /// `bodyForOutput`, but while a read of the folder is still running (this note's or another's) it waits for it,
     /// suspended rather than blocking, and tries again: nil only once the read failed to answer or the folder is
-    /// unavailable.
-    func bodyForOutputWhenRead(_ id: UUID) async -> NSAttributedString? {
+    /// unavailable. Reads start without a main-thread wait; nil as soon as `isCancelled` says so.
+    func bodyForOutputWhenRead(_ id: UUID, isCancelled: () -> Bool = { false }) async -> NSAttributedString? {
         let deadline = Date().addingTimeInterval(2 * markdownBlockingTimeout)
         while true {
-            if let body = bodyForOutput(id) { return body }
-            guard markdownStorage != nil, !markdownFolderUnavailable, Date() < deadline,
+            if let body = bodyForOutput(id, wait: 0) { return body }
+            guard !isCancelled(), markdownStorage != nil, !markdownFolderUnavailable, Date() < deadline,
                   markdownReads[id] != nil || markdownReads.values.contains(where: { !$0.isFinished }) else { return nil }
             try? await Task.sleep(nanoseconds: 20_000_000)
         }
