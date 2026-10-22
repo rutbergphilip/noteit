@@ -72,7 +72,8 @@ struct EditorContainerView: View {
                         .padding(.horizontal, 16)
                 }
                 if let message = store.loadError(for: id) {
-                    LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked)
+                    LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked,
+                                    retry: store.canRetryReadingBody(id) ? { store.retryReadingBody(id) } : nil)
                 }
                 if let notice = store.bodySaveNotice(for: id) {
                     LoadErrorBanner(message: notice, file: nil, readOnly: false, title: "This note isn’t saved")
@@ -285,6 +286,7 @@ struct LoadErrorBanner: View {
     let file: URL?
     let readOnly: Bool
     var title: String? = nil
+    var retry: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -302,6 +304,10 @@ struct LoadErrorBanner: View {
                     .help(message)
             }
             Spacer(minLength: 8)
+            if let retry {
+                Button("Retry", action: retry)
+                    .controlSize(.small)
+            }
             if let file {
                 Button("Show in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([file])

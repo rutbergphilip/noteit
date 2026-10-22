@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import XCTest
 import os
 @testable import NoteIt
@@ -891,6 +892,42 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(store.notes.count, count)
     }
 
+    func testAnOpenNoteWhoseSlowReadFailsIsntReadAgainAndAgain() async throws {
+        try put("Plan.md", "# Plan\n\nPlan text\n")
+        let store = open()
+        let storage = try XCTUnwrap(store.markdownStorage)
+        let plan = try note(store, titled: "Plan").id
+        store.dropCachedBody(plan)
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        storage.readFileData = { url in
+            guard url.lastPathComponent == "Plan.md" else { return try Data(contentsOf: url) }
+            reads.withLock { $0 += 1 }
+            Thread.sleep(forTimeInterval: 1.5)
+            throw POSIXError(.ETIMEDOUT)
+        }
+        store.selectedNoteID = plan
+        // What an open editor does when told the note changed (`reloadIfStale`).
+        let reload = store.$externallyUpdatedNoteID.sink { id in
+            if id == plan { DispatchQueue.main.async { _ = store.body(for: plan) } }
+        }
+        defer { reload.cancel() }
+        _ = store.body(for: plan)
+        let heartbeat = MainThreadHeartbeat()
+        heartbeat.start()
+        try await Task.sleep(for: .seconds(6))
+        heartbeat.stop()
+        XCTAssertEqual(reads.withLock { $0 }, 1, "a failed read is retried only on a change, Retry or after a long pause")
+        XCTAssertNotNil(store.loadError(for: plan))
+        XCTAssertLessThan(heartbeat.longestGap, 0.5)
+
+        reads.withLock { $0 = 0 }
+        storage.readFileData = { url in try Data(contentsOf: url) }
+        store.retryReadingBody(plan)
+        try await waitUntil({ store.cachedBody(plan) != nil }, "Retry reads the note")
+        XCTAssertEqual(store.body(for: plan).string, "Plan\nPlan text")
+        XCTAssertNil(store.loadError(for: plan))
+    }
+
     func testANoteWhoseFileFailedToReadIsNeverOutputAsEmpty() async throws {
         let (store, ids, failing) = try openWithFailingRead(["Plan", "Other"], failing: "Plan")
         let plan = try XCTUnwrap(ids["Plan"])
@@ -926,6 +963,9 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual((try? APIJSON.decoder().decode(APIErrorBody.self, from: response.body))?.error.code, .noteUnreadable)
 
         failing.withLock { $0 = false }
+        XCTAssertEqual(store.body(for: plan).string, "", "not read again right away")
+        store.retryReadingBody(plan)
+        try await waitUntil({ _ = store.body(for: plan); return store.cachedBody(plan) != nil }, "a later read is made")
         XCTAssertEqual(store.body(for: plan).string, "Plan\nPlan text", "a later read that succeeds is used")
         XCTAssertNil(store.loadError(for: plan))
         XCTAssertFalse(store.isBodyWriteBlocked(plan))

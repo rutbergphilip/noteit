@@ -135,6 +135,10 @@ final class NoteStore: ObservableObject {
     /// A rescan that takes longer means the folder is unavailable; notes are then read-only until it responds.
     var markdownScanTimeout: TimeInterval = 20
     var markdownUnavailableRetryInterval: TimeInterval = 15
+    /// How long a note whose Markdown file failed to read waits before a view's `body(for:)` reads it again.
+    var markdownFailedReadRetryInterval: TimeInterval = 15
+    /// When a note whose file failed to read may be read again; until then `body(for:)` doesn't touch the file.
+    private var markdownFailedReadRetryAt: [UUID: Date] = [:]
     var markdownUnavailableRetryScheduled = false
     /// Set while the content folder doesn't respond (a network volume that hangs): the editor is read-only and
     /// nothing is read from or written to the folder.
@@ -382,6 +386,13 @@ final class NoteStore: ObservableObject {
         let url = bodyURL(for: id)
         var loaded = NSAttributedString()
         if let markdownStorage {
+            var wait = wait
+            if loadErrors[id] != nil, let retry = markdownFailedReadRetryAt[id] {
+                // Views and indexes ask again and again; a failed file is read again only after a pause, a change
+                // the scan saw, or Retry, and then without a main-thread wait.
+                guard Date() >= retry else { return NSAttributedString() }
+                wait = 0
+            }
             switch readMarkdownBody(id, from: markdownStorage, wait: wait) {
             case .read(let stored):
                 clearUnreadableMarkdownBody(id)
@@ -397,6 +408,7 @@ final class NoteStore: ObservableObject {
             case .failed(let error):
                 // Never cached: shown empty and read-only, never output or built on, and read again next time.
                 handleUnreadableMarkdownBody(id, at: url, error: error)
+                markdownFailedReadRetryAt[id] = Date().addingTimeInterval(markdownFailedReadRetryInterval)
                 return NSAttributedString()
             case .unanswered:
                 // Shown as last known and read again once the folder answers; never cached, so never written.
@@ -783,7 +795,22 @@ final class NoteStore: ObservableObject {
               let storage = markdownStorage, storage.index.entry(id) == job.entry else { return }
         markdownReads[id] = job
         _ = body(for: id)
-        externallyUpdatedNoteID = id
+        // A read that failed isn't cached: reloading the editor would only read it again.
+        if bodyCache[id] != nil { externallyUpdatedNoteID = id }
+    }
+
+    /// Retry in the load-error banner, or a change the scan saw: the next read of a note whose file failed to read
+    /// happens now, off the main thread.
+    func retryReadingBody(_ id: UUID) {
+        guard loadErrors[id] != nil, markdownFailedReadRetryAt[id] != nil else { return }
+        markdownFailedReadRetryAt[id] = .distantPast
+        guard selectedNoteID == id || OpenEditorRegistry.shared.hasObservers(for: id) else { return }
+        _ = body(for: id)
+        if bodyCache[id] != nil { externallyUpdatedNoteID = id }
+    }
+
+    func canRetryReadingBody(_ id: UUID) -> Bool {
+        markdownStorage != nil && loadErrors[id] != nil && markdownFailedReadRetryAt[id] != nil
     }
 
     /// A Markdown file that exists but can't be read: shown empty and never written, so it needs no backup.
@@ -803,6 +830,7 @@ final class NoteStore: ObservableObject {
 
     /// A Markdown file that failed to read and has now been read (or is gone): the note is usable again.
     private func clearUnreadableMarkdownBody(_ id: UUID) {
+        markdownFailedReadRetryAt[id] = nil
         guard loadErrors[id] != nil else { return }
         loadErrors[id] = nil
         loadErrorFiles[id] = nil

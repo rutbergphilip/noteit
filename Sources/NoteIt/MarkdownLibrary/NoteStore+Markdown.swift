@@ -361,6 +361,7 @@ extension NoteStore {
         for (id, path) in result.changed.sorted(by: { $0.value < $1.value }) where result.moved[id] == nil {
             applyContentChange(id, at: path, reads: reads, atLaunch: atLaunch)
         }
+        for id in Set(result.changed.keys).union(result.moved.keys) { retryReadingBody(id) }
         var newFiles: [NewFile] = result.added.sorted().map { NewFile(id: nil, path: $0, assign: true) }
         newFiles += result.duplicateIDs.sorted().map { NewFile(id: nil, path: $0, assign: true) }
         importFiles(atLaunch ? newFiles : settledFiles(newFiles, reads: reads), reads: reads, atLaunch: atLaunch)
