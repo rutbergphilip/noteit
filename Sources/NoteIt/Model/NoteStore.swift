@@ -2411,18 +2411,26 @@ final class NoteStore: ObservableObject {
         case file(URL)
     }
 
-    /// A Markdown file is parsed here, because `completeExport` only reads RTFD. A known file that can't be read
-    /// throws rather than sending an empty body.
+    /// A Markdown file is parsed here, because `completeExport` only reads RTFD. A known file that is missing or
+    /// can't be read throws rather than sending an empty body.
     func exportBodySource(_ id: UUID) throws -> ExportBody {
         if let cached = bodyCache[id] {
             return .text(cached.copy() as? NSAttributedString ?? NSAttributedString(attributedString: cached))
         }
         guard bodyStorage.kind != .rtfd else { return .file(bodyStorage.fileURL(for: id)) }
         guard let markdownStorage, markdownStorage.revisionInputURL(for: id) != nil else { return .text(NSAttributedString()) }
-        // Through body(for:), so a read an editor waits for is cached and the editor reloaded.
-        let text = body(for: id, wait: markdownBlockingTimeout)
-        guard bodyCache[id] != nil, loadErrors[id] == nil else { throw NoteStoreSyncError.unreadableBody(id) }
-        return .text(text.copy() as? NSAttributedString ?? NSAttributedString(attributedString: text))
+        guard case .read(let stored) = readMarkdownBody(id, from: markdownStorage, wait: markdownBlockingTimeout) else {
+            throw NoteStoreSyncError.unreadableBody(id)
+        }
+        // Cached as body(for:) does, so an editor waiting for this read is reloaded with it.
+        clearUnreadableMarkdownBody(id)
+        setBodyExtras(stored.extras, for: id)
+        if let reason = stored.readOnlyReason { blockBodyWrites(id, reason: reason) }
+        bodyCache[id] = stored.text
+        touchBody(id)
+        gaveMarkdownBody(id, nil)
+        trimBodyCache()
+        return .text(stored.text.copy() as? NSAttributedString ?? NSAttributedString(attributedString: stored.text))
     }
 
     /// Adjusts metadata of a note just created by sync (e.g. a conflict copy); counts as a local change.
