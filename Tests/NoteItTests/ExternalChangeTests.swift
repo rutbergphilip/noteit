@@ -653,6 +653,73 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(hits.count, 40)
     }
 
+    func testANoteWaitingForAnotherReadIsReadWhenThatReadWasTakenOnTheMainThread() async throws {
+        let (store, ids, allGates) = try openWithGatedReads(["Ahead", "Waiting"], gated: ["Ahead"])
+        var gates = allGates
+        defer { gates.values.forEach { $0.leave() } }
+        let (ahead, waiting) = (ids["Ahead"]!, ids["Waiting"]!)
+        _ = store.body(for: ahead)
+        store.selectedNoteID = waiting
+        _ = store.body(for: waiting)
+        try await waitUntil({ store.isMarkdownBodyLoading(waiting) }, "waits for the other read")
+
+        gates.removeValue(forKey: "Ahead")?.leave()
+        Thread.sleep(forTimeInterval: 0.3)
+        XCTAssertTrue(store.body(for: ahead).string.contains("Ahead text"), "taken before its end reaches the main thread")
+        store.externallyUpdatedNoteID = nil
+        try await waitUntil({ store.cachedBody(waiting) != nil }, "the waiting note is read")
+        XCTAssertEqual(store.externallyUpdatedNoteID, waiting)
+        XCTAssertFalse(store.isMarkdownBodyLoading(waiting))
+    }
+
+    func testANoteWaitingForAnotherReadSurvivesAnEndedReadWhileAThirdRuns() async throws {
+        let (store, ids, allGates) = try openWithGatedReads(["Ahead", "Waiting", "Third"], gated: ["Ahead", "Third"])
+        var gates = allGates
+        defer { gates.values.forEach { $0.leave() } }
+        let (ahead, waiting, third) = (ids["Ahead"]!, ids["Waiting"]!, ids["Third"]!)
+        _ = store.body(for: ahead)
+        store.selectedNoteID = waiting
+        _ = store.body(for: waiting)
+        try await waitUntil({ store.isMarkdownBodyLoading(waiting) }, "waits for the other read")
+
+        gates.removeValue(forKey: "Ahead")?.leave()
+        Thread.sleep(forTimeInterval: 0.3)
+        _ = store.body(for: ahead)
+        _ = store.body(for: third)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertTrue(store.isMarkdownBodyLoading(waiting), "still waiting while the third read runs")
+        XCTAssertTrue(store.isMarkdownBodyUnread(waiting))
+
+        gates.removeValue(forKey: "Third")?.leave()
+        try await waitUntil({ store.cachedBody(waiting) != nil }, "the waiting note is read once the third read ends")
+        XCTAssertTrue(store.body(for: waiting).string.contains("Waiting text"))
+        XCTAssertFalse(store.isMarkdownBodyLoading(waiting))
+    }
+
+    /// Notes titled `titles` with no cached bodies; reads of the `gated` ones wait for their gate to be left.
+    private func openWithGatedReads(_ titles: [String], gated: Set<String>)
+        throws -> (NoteStore, [String: UUID], [String: DispatchGroup]) {
+        for title in titles { try put("\(title).md", "# \(title)\n\n\(title) text\n") }
+        let store = open()
+        store.markdownBodyMainWait = 0.1
+        let storage = try XCTUnwrap(store.markdownStorage)
+        var ids: [String: UUID] = [:]
+        for title in titles { ids[title] = try note(store, titled: title).id }
+        for id in ids.values { store.dropCachedBody(id) }
+        var gates: [String: DispatchGroup] = [:]
+        for title in gated {
+            let gate = DispatchGroup()
+            gate.enter()
+            gates[title] = gate
+        }
+        let byFile = Dictionary(uniqueKeysWithValues: gates.map { ("\($0.key).md", $0.value) })
+        storage.readFileData = { url in
+            _ = byFile[url.lastPathComponent]?.wait(timeout: .now() + 4)
+            return try Data(contentsOf: url)
+        }
+        return (store, ids, gates)
+    }
+
     func testReadsStuckOnBothReadersKeepTheFolderUnavailableAndTheNoteReadOnly() async throws {
         try await readsStuckOnBothReaders(hanging: ["Hang A", "Hang B"])
     }

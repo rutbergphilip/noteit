@@ -209,6 +209,7 @@ extension NoteStore {
                 if let selected = selectedNoteID, unread.contains(selected), cachedBody(selected) == nil {
                     externallyUpdatedNoteID = selected
                 }
+                readDeferredMarkdownBodies()
                 NotificationCenter.default.post(name: Self.markdownFolderAnswered, object: self)
             }
             startMarkdownWatcherIfReady()

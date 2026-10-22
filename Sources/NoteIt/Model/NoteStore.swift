@@ -646,6 +646,9 @@ final class NoteStore: ObservableObject {
             return .unanswered
         }
         if markdownReads[id] === job { markdownReads[id] = nil }
+        if !markdownReadsDeferred.isEmpty {
+            DispatchQueue.main.async { [weak self] in self?.readDeferredMarkdownBodies() }
+        }
         if markdownBodiesLoading.contains(id) {
             DispatchQueue.main.async { [weak self] in self?.markdownBodiesLoading.remove(id) }
         }
@@ -669,6 +672,31 @@ final class NoteStore: ObservableObject {
                 self.markdownBodiesLoading.insert(id)
             }
         }
+    }
+
+    /// Notes that waited for another read: once no read runs and a reader is free, the open one is read and the
+    /// editor reloaded; the others stay unread until opened. While a read runs its end calls this again; with no
+    /// reader free the folder isn't answering, and they wait for it to answer.
+    func readDeferredMarkdownBodies() {
+        guard !markdownReadsDeferred.isEmpty, !markdownFolderUnavailable else { return }
+        guard let storage = markdownStorage else {
+            markdownBodiesLoading.subtract(markdownReadsDeferred)
+            markdownReadsDeferred = []
+            return
+        }
+        guard !markdownReads.values.contains(where: { !$0.isFinished }) else { return }
+        let root = storage.contentRootURL.path
+        guard (0..<Self.markdownReadThreads).contains(where: { !BoundedFileAccess.shared.isRunning("markdown-read:\(root):\($0)") }) else {
+            markdownFolderBecameUnavailable()
+            return
+        }
+        let deferred = markdownReadsDeferred
+        markdownReadsDeferred = []
+        markdownBodiesLoading.subtract(deferred)
+        guard let selected = selectedNoteID, deferred.contains(selected), cachedBody(selected) == nil,
+              note(with: selected) != nil else { return }
+        _ = body(for: selected)
+        if cachedBody(selected) != nil { externallyUpdatedNoteID = selected }
     }
 
     /// The note shows a placeholder (its last known text, or nothing) because its file wasn't read: never editable.
@@ -697,21 +725,15 @@ final class NoteStore: ObservableObject {
     /// A read `body(for:)` stopped waiting for ended: an editor showing the note gets it, a folder that didn't answer
     /// becomes unavailable. A read of a file that changed meanwhile is dropped.
     private func markdownReadEnded(_ id: UUID, _ job: MarkdownReadJob) {
+        // Whichever read ended (or was taken already), notes waiting for one are read once a reader is free.
+        defer { readDeferredMarkdownBodies() }
         let wasLoading = markdownBodiesLoading.remove(id) != nil
-        let deferred = markdownReadsDeferred
-        markdownReadsDeferred = []
-        markdownBodiesLoading.subtract(deferred)
         guard markdownReads[id] === job else { return }
         markdownReads[id] = nil
         guard let outcome = job.outcome else {
             markdownBodiesNotRead.insert(id)
             markdownFolderBecameUnavailable()
             return
-        }
-        // A note opened while this read ran is read now.
-        if let selected = selectedNoteID, selected != id, deferred.contains(selected), cachedBody(selected) == nil,
-           !markdownFolderUnavailable {
-            externallyUpdatedNoteID = selected
         }
         if case .unanswered = outcome { return }
         guard wasLoading, bodyCache[id] == nil, note(with: id) != nil, !markdownFolderUnavailable,
