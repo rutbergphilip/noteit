@@ -397,7 +397,28 @@ final class ZipDirectoryTests: XCTestCase {
 
     func testRepeatedNamesAreBothKept() throws {
         XCTAssertEqual(try unpackedTexts([("Page.md", "first"), ("Page.md", "second"), ("Page 2.md", "third"), ("LICENSE", "a"), ("LICENSE", "b")]),
-                       ["Page.md": "first", "Page 2.md": "second", "Page 2 2.md": "third", "LICENSE": "a", "LICENSE 2": "b"])
+                       ["Page.md": "first", "Page 3.md": "second", "Page 2.md": "third", "LICENSE": "a", "LICENSE 2": "b"])
+    }
+
+    func testNumberedNamesNeverTakeANameALaterEntryHas() throws {
+        XCTAssertEqual(try unpackedTexts([("Page.md", "first"), ("page.md", "second"), ("PAGE 2.md", "real two"),
+                                          ("doc", "file"), ("doc/x.md", "renamed folder"), ("Doc 2/y.md", "real folder"),
+                                          ("sub/n.md", "1"), ("sub/n.md", "2"), ("SUB/N 2.md", "real n2")]),
+                       ["Page.md": "first", "page 3.md": "second", "PAGE 2.md": "real two",
+                        "doc": "file", "doc 3/x.md": "renamed folder", "Doc 2/y.md": "real folder",
+                        "sub/n.md": "1", "sub/n 3.md": "2", "sub/N 2.md": "real n2"])
+    }
+
+    func testReservedNamesAreComparedAsTheVolumeComparesThem() throws {
+        XCTAssertEqual(try unpackedTexts([("Strasse.md", "1"), ("Straße.md", "2"), ("Strasse 2.md", "3")]),
+                       ["Strasse.md": "1", "Straße 3.md": "2", "Strasse 2.md": "3"])
+    }
+
+    func testCaseVariantsOfARenamedFolderShareIt() throws {
+        XCTAssertEqual(try unpackedTexts([("a", "file"), ("A/x.md", "x"), ("a/y.md", "y")]),
+                       ["a": "file", "A 2/x.md": "x", "A 2/y.md": "y"])
+        XCTAssertEqual(try unpackedTexts([("a", "file"), ("a", "file two"), ("a/x.md", "x"), ("A/y.md", "y"), ("a/", "")]),
+                       ["a": "file", "a 2": "file two", "a 3/x.md": "x", "a 3/y.md": "y"])
     }
 
     func testFileAndFolderWithTheSameNameAreBothKept() throws {

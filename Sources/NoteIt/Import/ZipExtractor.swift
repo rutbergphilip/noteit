@@ -8,7 +8,8 @@ import zlib
 /// directory. Stored and deflated entries are supported; output is counted as it is written and checked against
 /// each entry's stated size and CRC-32. Names are written in precomposed (NFC) form, and folders are opened one
 /// component at a time without following symbolic links. Nothing is overwritten: an entry whose name is already taken
-/// on disk (a repeated name, or one differing only in case or Unicode form) gets the next free "name 2.ext".
+/// on disk (a repeated name, or one differing only in case or Unicode form) gets the next free "name 2.ext" that no
+/// entry of the archive has as its own name.
 /// On any failure or cancellation the destination is removed.
 enum ZipExtractor {
     enum Failure: Error, Equatable, LocalizedError {
@@ -104,27 +105,23 @@ enum ZipExtractor {
         defer { input.deallocate(); output.deallocate() }
         var total: Int64 = 0
         var sizes: [String: Int64] = [:]
-        var folderNames: [String: String] = [:]
-        var nextNumbers: [String: Int] = [:]
-        var renamed = 0
-        let attempts = directory.entries.count + 1
+        var naming = Naming(plans: plans)
         for (entry, plan) in zip(directory.entries, plans) {
             try Task.checkCancellation()
             let folders = plan.isDirectory ? plan.components : Array(plan.components.dropLast())
-            let (parent, path) = try openFolder(folders, under: root, entry: entry.name, names: &folderNames,
-                                                nextNumbers: &nextNumbers, renamed: &renamed, attempts: attempts)
+            let (parent, path) = try openFolder(folders, under: root, entry: entry.name, naming: &naming)
             defer { close(parent) }
             if plan.isDirectory { continue }
             let dataStart = try locateData(entry, in: fd, fileSize: fileSize, directoryOffset: directory.directoryOffset)
             let wanted = plan.components.last!
             var file: Int32 = -1
-            let created = try firstFree(wanted, in: path, nextNumbers: &nextNumbers, attempts: attempts) { name in
+            let created = try naming.firstFree(wanted, in: folders, onDisk: path, resume: true) { name in
                 file = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
                 return file >= 0 ? true : errno == EEXIST ? false : nil
             }
             guard let name = created, file >= 0 else { throw Failure.damaged(entry.name) }
             defer { close(file) }
-            if name != wanted { renamed += 1 }
+            if name != wanted { naming.renamed += 1 }
             var written: UInt64 = 0
             var crc = zlib.crc32(0, nil, 0)
             let sink: (UnsafePointer<UInt8>, Int) throws -> Void = { bytes, count in
@@ -144,7 +141,7 @@ enum ZipExtractor {
             guard written == entry.uncompressedSize, UInt32(crc) == entry.crc32 else { throw Failure.damaged(entry.name) }
             sizes[(path + [name]).joined(separator: "/")] = Int64(written)
         }
-        return Result(folder: destination, entries: directory.entries.count, bytes: total, fileSizes: sizes, renamed: renamed)
+        return Result(folder: destination, entries: directory.entries.count, bytes: total, fileSizes: sizes, renamed: naming.renamed)
     }
 
     /// "readme.md", 2 → "readme 2.md"; "LICENSE", 2 → "LICENSE 2".
@@ -154,53 +151,88 @@ enum ZipExtractor {
         return ext.isEmpty || stem.isEmpty ? "\(name) \(number)" : "\(stem) \(number).\(ext)"
     }
 
-    /// Tries `name`, then numbered names, until `create` succeeds (true) or fails other than because the name is
-    /// taken (nil). The numbered search resumes where the last one for this name in `folder` stopped, so a name
-    /// repeated many times doesn't make each search start again at "name 2".
-    private static func firstFree(_ name: String, in folder: [String], nextNumbers: inout [String: Int], attempts: Int,
-                                  create: (String) -> Bool?) throws -> String? {
-        switch create(name) {
-        case true?: return name
-        case nil: return nil
-        case false?: break
-        }
-        let key = (folder + [name.lowercased()]).joined(separator: "/")
-        var number = nextNumbers[key] ?? 2
-        for _ in 0..<attempts {
-            try Task.checkCancellation()
-            let candidate = numbered(name, number)
-            number += 1
-            switch create(candidate) {
-            case true?:
-                nextNumbers[key] = number
-                return candidate
-            case nil: return nil
-            case false?: continue
+    /// How names that are taken on disk are replaced, for one archive. Names are compared case-folded and in NFC,
+    /// as a case-insensitive volume compares them ("Straße" and "STRASSE" are one name).
+    private struct Naming {
+        /// The case-folded names entries of the archive have in each folder (by its case-folded archive path), which
+        /// a numbered name never takes.
+        var reserved: [String: Set<String>] = [:]
+        /// Where each folder (by its case-folded archive path) was created on disk, so its case variants share it.
+        var folders: [String: String] = [:]
+        /// Where the numbered search for a file name in a folder on disk resumes.
+        var nextNumbers: [String: Int] = [:]
+        var renamed = 0
+        let attempts: Int
+
+        init(plans: [Plan]) {
+            for plan in plans {
+                for depth in plan.components.indices {
+                    reserved[Self.key(plan.components[..<depth]), default: []].insert(Self.fold(plan.components[depth]))
+                }
             }
+            attempts = 2 * plans.count + 2
         }
-        return nil
+
+        static func fold(_ name: String) -> String {
+            name.folding(options: .caseInsensitive, locale: nil).precomposedStringWithCanonicalMapping
+        }
+
+        static func key<S: Sequence<String>>(_ path: S) -> String {
+            path.map(fold).joined(separator: "/")
+        }
+
+        /// Tries `name`, then numbered names not reserved in `folder`, until `create` succeeds (true) or fails other
+        /// than because the name is taken (nil). With `resume`, the numbered search starts where the last one for
+        /// this name stopped, so a name repeated many times doesn't make each search start again at "name 2".
+        mutating func firstFree(_ name: String, in folder: [String], onDisk path: [String], resume: Bool,
+                                create: (String) -> Bool?) throws -> String? {
+            switch create(name) {
+            case true?: return name
+            case nil: return nil
+            case false?: break
+            }
+            let taken = reserved[Self.key(folder)] ?? []
+            let resumeKey = Self.key(path + [name])
+            var number = resume ? nextNumbers[resumeKey] ?? 2 : 2
+            for _ in 0..<attempts {
+                try Task.checkCancellation()
+                let candidate = numbered(name, number)
+                number += 1
+                if taken.contains(Self.fold(candidate)) { continue }
+                switch create(candidate) {
+                case true?:
+                    if resume { nextNumbers[resumeKey] = number }
+                    return candidate
+                case nil: return nil
+                case false?: continue
+                }
+            }
+            return nil
+        }
     }
 
     /// Opens (creating as needed) the folders below `root`, never following a symbolic link. A folder whose name
-    /// is taken by a file gets the next free numbered name, remembered in `names` (by its path in the archive) so
-    /// later entries in it land in the same place. Returns the folder and its path on disk.
-    private static func openFolder(_ components: [String], under root: Int32, entry: String, names: inout [String: String],
-                                   nextNumbers: inout [String: Int], renamed: inout Int, attempts: Int) throws -> (Int32, [String]) {
+    /// is taken by a file gets a numbered name, remembered by its case-folded archive path so later entries in it
+    /// and its case variants land in the same place; the numbered search starts at 2 each time, so an existing
+    /// numbered folder is reused before a new one is made. Returns the folder and its path on disk.
+    private static func openFolder(_ components: [String], under root: Int32, entry: String,
+                                   naming: inout Naming) throws -> (Int32, [String]) {
         var current = dup(root)
         guard current >= 0 else { throw Failure.damaged(entry) }
         var path: [String] = []
         for (depth, component) in components.enumerated() {
-            let key = components[...depth].joined(separator: "/")
+            let key = Naming.key(components[...depth])
             var next: Int32 = -1
-            var name = names[key] ?? component
-            if names[key] != nil {
+            var name = naming.folders[key] ?? component
+            if naming.folders[key] != nil {
                 next = openat(current, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             } else {
                 // An existing folder of the plain name is merged into; a file or link there means a numbered name.
                 let parent = current
                 let found: String?
                 do {
-                    found = try firstFree(component, in: path, nextNumbers: &nextNumbers, attempts: attempts) { candidate in
+                    found = try naming.firstFree(component, in: Array(components[..<depth]), onDisk: path,
+                                                 resume: false) { candidate in
                         if mkdirat(parent, candidate, 0o755) != 0, errno != EEXIST { return nil }
                         next = openat(parent, candidate, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
                         return next >= 0 ? true : errno == ENOTDIR || errno == ELOOP ? false : nil
@@ -211,8 +243,8 @@ enum ZipExtractor {
                 }
                 if let found, next >= 0 {
                     name = found
-                    names[key] = name
-                    if name != component { renamed += 1 }
+                    naming.folders[key] = name
+                    if name != component { naming.renamed += 1 }
                 }
             }
             close(current)
