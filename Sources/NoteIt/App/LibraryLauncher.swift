@@ -44,13 +44,15 @@ struct LibraryLauncher {
     var showLibraryLocationUnreadable: (String) -> Void = { LibraryLauncher.presentLibraryLocationUnreadable($0) }
     /// Asked before a located folder that can't be shown to be this library is used; false refuses it.
     var confirmUnverifiedFolder: (URL) -> Bool = { LibraryLauncher.presentConfirmUnverifiedFolder($0) }
-    /// Inspects the Markdown content folder, which may be on a NAS that went away: nil when it didn't answer in time.
+    /// Inspects the Markdown content folder, which may be on a NAS that went away: nil when it didn't answer within
+    /// `contentRootLaunchWait`. The library then opens at the recorded path and its first scan finds out.
     var checkContentRoot: (LibraryLocationFile) -> ContentRootCheck? = { file in
-        BoundedFileAccess.shared.runBlocking(key: "content-root:\(file.path)", timeout: LibraryLauncher.contentRootTimeout) {
+        BoundedFileAccess.shared.runBlocking(key: "content-root:\(file.path)", timeout: LibraryLauncher.contentRootLaunchWait) {
             LibraryLauncher.inspectContentRoot(file)
         }
     }
 
+    nonisolated static let contentRootLaunchWait: TimeInterval = 1
     nonisolated static let contentRootTimeout: TimeInterval = 10
 
     struct ContentRootCheck: Equatable {
@@ -123,8 +125,9 @@ struct LibraryLauncher {
         }
         guard file.format == .markdown else { return .open(location) }
         guard let check = checkContentRoot(file) else {
-            log("NoteIt: the library folder \(file.path) didn't respond")
-            return .contentRootMissing(file.contentRootURL, dataDir: location.url)
+            log("NoteIt: the library folder \(file.path) didn't respond yet; opening it while it is checked")
+            return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false, format: .markdown,
+                                         contentRootURL: file.contentRootURL, renameFilesOnTitleChange: file.renameFilesOnTitleChange))
         }
         record(check, in: &file, dataDir: location.url)
         guard check.isFolder else { return .contentRootMissing(check.root, dataDir: location.url) }

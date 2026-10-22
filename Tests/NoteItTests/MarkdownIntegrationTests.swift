@@ -31,7 +31,7 @@ final class MarkdownIntegrationTests: XCTestCase {
     }
 
     private func open(links: Bool = false) -> NoteStore {
-        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+        let store = NoteStore.opened(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
                                                         renameFilesOnTitleChange: false),
                               bodyStorage: MarkdownBodyStorageTests.make(root, renames: false))
         store.preferences = defaults

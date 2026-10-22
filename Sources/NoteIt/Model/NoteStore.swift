@@ -139,6 +139,15 @@ final class NoteStore: ObservableObject {
     /// Set while the content folder doesn't respond (a network volume that hangs): the editor is read-only and
     /// nothing is read from or written to the folder.
     @Published var markdownFolderUnavailable = false
+    /// The library opened from `library.json` and the first scan of the content folder hasn't come back yet; the
+    /// folder counts as unavailable meanwhile.
+    @Published var markdownFolderChecking = false
+    /// Until the first scan is applied, a scan applies with launch semantics (new files take ids right away).
+    var markdownLaunchScanPending = false
+    /// The first scan reads every changed file, so it may take longer than a rescan.
+    var markdownLaunchScanTimeout: TimeInterval = 60
+    /// The scan running off the main thread, if any.
+    var markdownScanJob: MarkdownIOJob?
     var markdownWatcher: MarkdownFolderWatcher?
     /// The app asked for the watcher; it starts after the first scan that succeeds.
     var markdownWatchWanted = false
@@ -167,8 +176,8 @@ final class NoteStore: ObservableObject {
     var markdownWaitingCopies: [UUID: URL] = [:]
     /// Notes whose body couldn't be read because the folder didn't answer; they are read again once it does.
     var markdownBodiesNotRead: Set<UUID> = []
-    /// Notes the launch scan changed, added or removed before any derived index was registered; persistent indexes
-    /// (Spotlight) update these rather than trust what they kept from the last run.
+    /// Notes the launch scan changed, added or removed; persistent indexes (Spotlight) that start after it update
+    /// these rather than trust what they kept from the last run.
     var notesChangedBeforeDerivedIndexes: Set<UUID> = []
     /// Called when the mass-deletion guard holds a batch, with the number of held notes.
     var onManyNotesDisappeared: ((Int) -> Void)?

@@ -88,7 +88,7 @@ final class LibraryConverterTests: XCTestCase {
     }
 
     private func openMarkdown(renames: Bool = true) -> NoteStore {
-        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+        let store = NoteStore.opened(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
                                                         renameFilesOnTitleChange: renames))
         store.markdownFlushWait = 10
         store.waitForMarkdownWrites(upTo: 10)

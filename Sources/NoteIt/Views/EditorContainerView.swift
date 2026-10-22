@@ -47,7 +47,9 @@ struct EditorContainerView: View {
                         .padding(.horizontal, 16)
                 }
                 if store.markdownFolderUnavailable, let folder = store.markdownStorage?.contentRootURL {
-                    Text("“\(folder.lastPathComponent)” isn’t responding. Notes are read-only until it’s back.")
+                    Text(store.markdownFolderChecking
+                         ? "Checking “\(folder.lastPathComponent)”… Notes are read-only until it answers."
+                         : "“\(folder.lastPathComponent)” isn’t responding. Notes are read-only until it’s back.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)

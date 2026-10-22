@@ -55,7 +55,7 @@ final class LibraryLauncherTests: XCTestCase {
 
     /// Launches through the real store; fails the test if NoteIt was told to quit.
     private func launchStore(_ launcher: LibraryLauncher, file: StaticString = #filePath, line: UInt = #line) -> NoteStore? {
-        launcher.launch(open: { NoteStore(location: $0) }, quit: { XCTFail("unexpected quit", file: file, line: line) })
+        launcher.launch(open: { NoteStore.opened(location: $0) }, quit: { XCTFail("unexpected quit", file: file, line: line) })
     }
 
     /// A genuine library written by the store itself, with one note of our own.
@@ -94,7 +94,7 @@ final class LibraryLauncherTests: XCTestCase {
     }
 
     func testSeedCreatesInboxIdeasAndOnePinnedWelcomeNote() throws {
-        let store = try XCTUnwrap(NoteStore(location: LibraryLocation(url: current, seedsFreshLibrary: true)))
+        let store = try XCTUnwrap(NoteStore.opened(location: LibraryLocation(url: current, seedsFreshLibrary: true)))
         XCTAssertEqual(store.notebooks.map(\.name), ["Inbox", "Ideas"])
         XCTAssertEqual(store.notes.count, 1)
         let welcome = try XCTUnwrap(store.notes.first)
@@ -160,7 +160,7 @@ final class LibraryLauncherTests: XCTestCase {
         let before = try snapshot()
         var asked = 0, quitCalled = 0, opened = 0
         let launcher = launcher(running: { true }, quit: { asked += 1; return false })
-        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore(location: $0) }, quit: { quitCalled += 1 })
+        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore.opened(location: $0) }, quit: { quitCalled += 1 })
         XCTAssertNil(store)
         XCTAssertEqual(asked, 1)
         XCTAssertEqual(quitCalled, 1)
@@ -277,7 +277,7 @@ final class LibraryLauncherTests: XCTestCase {
 
         let before = try snapshot()
         var quitCalled = 0, opened = 0
-        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore(location: $0) }, quit: { quitCalled += 1 })
+        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore.opened(location: $0) }, quit: { quitCalled += 1 })
         XCTAssertNil(store)
         XCTAssertEqual(opened, 0)
         XCTAssertEqual(quitCalled, 1)
@@ -417,7 +417,7 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertNil(LibraryLauncher.relocate(to: mine, dataDir: dataDir, timeout: 2), "a retry doesn't wait for the stuck check")
     }
 
-    func testUnresponsiveContentFolderIsReportedWithoutHangingLaunch() throws {
+    func testUnresponsiveContentFolderOpensTheLibraryWhileItIsCheckedWithoutHangingLaunch() throws {
         let content = base.appendingPathComponent("NAS Notes", isDirectory: true)
         try fm.createDirectory(at: content, withIntermediateDirectories: true)
         try writeLocationFile(markdownFile(at: content))
@@ -433,10 +433,10 @@ final class LibraryLauncherTests: XCTestCase {
         }
 
         let started = Date()
-        let store: NoteStore? = launcher.launch(open: { NoteStore(location: $0) }, quit: {})
+        let store: NoteStore? = launcher.launch(open: { NoteStore(location: $0) }, quit: { XCTFail("unexpected quit") })
         XCTAssertLessThan(Date().timeIntervalSince(started), 5)
-        XCTAssertNil(store)
-        XCTAssertEqual(missingAlerts, [content])
+        XCTAssertEqual(store?.markdownStorage?.contentRootURL, content.standardizedFileURL)
+        XCTAssertEqual(missingAlerts, [], "a folder that is slow to answer isn't reported missing")
     }
 
     func testCorruptLocationFileOpensRTFDWithoutSeedingAndIsSetAside() throws {
@@ -466,7 +466,7 @@ final class LibraryLauncherTests: XCTestCase {
             return XCTFail("not reported", file: file, line: line)
         }
         var quitCalled = 0, opened = 0
-        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore(location: $0) }, quit: { quitCalled += 1 })
+        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore.opened(location: $0) }, quit: { quitCalled += 1 })
         XCTAssertNil(store, file: file, line: line)
         XCTAssertEqual(opened, 0, file: file, line: line)
         XCTAssertEqual(quitCalled, 1, file: file, line: line)
@@ -496,17 +496,17 @@ final class LibraryLauncherTests: XCTestCase {
 
     func testStoreSeedsOnlyWhenAllowed() {
         let notAllowed = base.appendingPathComponent("a", isDirectory: true)
-        XCTAssertTrue(NoteStore(location: LibraryLocation(url: notAllowed, seedsFreshLibrary: false)).notes.isEmpty)
+        XCTAssertTrue(NoteStore.opened(location: LibraryLocation(url: notAllowed, seedsFreshLibrary: false)).notes.isEmpty)
         XCTAssertFalse(fm.fileExists(atPath: notAllowed.appendingPathComponent("seed-manifest.json").path))
 
         let allowed = base.appendingPathComponent("b", isDirectory: true)
-        XCTAssertTrue(titles(NoteStore(location: LibraryLocation(url: allowed, seedsFreshLibrary: true))).contains("Welcome to NoteIt"))
+        XCTAssertTrue(titles(NoteStore.opened(location: LibraryLocation(url: allowed, seedsFreshLibrary: true))).contains("Welcome to NoteIt"))
     }
 
     func testStoreNeverSeedsOverAnExistingLibrary() {
         makeLibrary(at: current, title: "Mine")
         let expected = titles(NoteStore(rootURL: current))
-        XCTAssertEqual(titles(NoteStore(location: LibraryLocation(url: current, seedsFreshLibrary: true))), expected)
+        XCTAssertEqual(titles(NoteStore.opened(location: LibraryLocation(url: current, seedsFreshLibrary: true))), expected)
     }
 }
 

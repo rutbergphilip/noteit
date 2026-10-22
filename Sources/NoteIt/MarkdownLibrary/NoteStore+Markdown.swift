@@ -75,11 +75,15 @@ extension NoteStore {
         markdownScanWaiters = []
         let entries = storage.index.allEntries
         let folders = storage.index.allNotebookFolders
-        BoundedFileAccess.shared.run(key: "markdown-scan:" + storage.contentRootURL.path, timeout: markdownScanTimeout,
+        let timeout = markdownLaunchScanPending ? markdownLaunchScanTimeout : markdownScanTimeout
+        let job = MarkdownIOJob()
+        markdownScanJob = job
+        BoundedFileAccess.shared.run(key: "markdown-scan:" + storage.contentRootURL.path, timeout: timeout,
                                      markdownScanWork(storage)) { outcome in
-            DispatchQueue.main.async { [weak self] in
+            job.finished { [weak self] in
                 MainActor.assumeIsolated {
                     guard let self else { return }
+                    if self.markdownScanJob === job { self.markdownScanJob = nil }
                     self.markdownScanRunning = false
                     guard self.markdownStorage === storage else {
                         waiters.forEach { $0(false) }
@@ -128,11 +132,6 @@ extension NoteStore {
         case scanned(FolderScanResult, MarkdownScanReads)
     }
 
-    private func scanMarkdownFolderNow(_ storage: MarkdownBodyStorage, timeout: TimeInterval? = nil) -> MarkdownScanOutcome? {
-        BoundedFileAccess.shared.runBlocking(key: "markdown-scan-now:" + storage.contentRootURL.path,
-                                             timeout: timeout ?? markdownScanTimeout, markdownScanWork(storage))
-    }
-
     private func markdownScanWork(_ storage: MarkdownBodyStorage) -> () -> MarkdownScanOutcome {
         let root = storage.contentRootURL
         let index = storage.index
@@ -164,17 +163,19 @@ extension NoteStore {
         case .missing:
             markdownConfirmingHeldDeletions = false
             markdownFolderUnavailable = false
+            markdownFolderChecking = false
             markdownFolderWentMissing()
             return false
         case .scanned(var result, let reads):
             // Writes still on the IO queue may be half recorded; the scan is applied once they finish.
             if before != nil, !markdownIOJobs.isEmpty {
                 markdownScanAfterWrites = true
-                if markdownFolderUnavailable { markdownFolderBecameUnavailable() }
+                if markdownFolderUnavailable, !markdownFolderChecking { markdownFolderBecameUnavailable() }
                 return nil
             }
             let wasUnavailable = markdownFolderUnavailable
             markdownFolderUnavailable = false
+            markdownFolderChecking = false
             markdownFolderReportedMissing = false
             if let before {
                 guard storage.index.allNotebookFolders == before.folders else { return nil }
@@ -193,7 +194,11 @@ extension NoteStore {
                 MassDeletionGuard.save([], dataDir: rootURL)
                 for id in held { unblockMarkdownBodyWrites(id, reason: Self.missingFileReason) }
             }
-            applyExternalChanges(result, reads: reads, atLaunch: false, confirmsMassDeletion: confirming)
+            if markdownLaunchScanPending {
+                applyLaunchScan(result, reads: reads, confirmsMassDeletion: confirming)
+            } else {
+                applyExternalChanges(result, reads: reads, atLaunch: false, confirmsMassDeletion: confirming)
+            }
             if wasUnavailable {
                 scheduleSave()
                 let unread = markdownBodiesNotRead
@@ -211,8 +216,9 @@ extension NoteStore {
     /// treated as removed, and the folder is tried again every `markdownUnavailableRetryInterval`.
     func markdownFolderBecameUnavailable() {
         guard let storage = markdownStorage else { return }
-        if !markdownFolderUnavailable {
+        if !markdownFolderUnavailable || markdownFolderChecking {
             markdownFolderUnavailable = true
+            markdownFolderChecking = false
             NSLog("NoteIt: the library folder \(storage.contentRootURL.path) doesn't respond; nothing is written until it does")
         }
         guard !markdownUnavailableRetryScheduled else { return }
@@ -284,9 +290,6 @@ extension NoteStore {
         attachmentSweepTimer = nil
     }
 
-    /// The launch scan reads every changed file, so it may take longer than a rescan.
-    static let launchScanTimeout: TimeInterval = 60
-
     /// How often unused attachments are looked for when nothing else is written.
     static let attachmentSweepInterval: TimeInterval = 60 * 60
 
@@ -306,12 +309,21 @@ extension NoteStore {
         storage.onRootUnresponsive = { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.markdownFolderBecameUnavailable() } }
         }
-        guard storage.contentRootExists else { return }
+        // The folder may be on a volume that hangs: the library opens from library.json, read-only, and the folder is
+        // scanned off the main thread.
+        markdownLaunchScanPending = true
+        markdownFolderUnavailable = true
+        markdownFolderChecking = true
+        markdownFolderNeedsScan()
+    }
+
+    /// The first scan: new files take their ids right away, files whose notes aren't in `library.json` become notes,
+    /// and the notes it changed are kept for indexes that start later. Nothing is versioned.
+    private func applyLaunchScan(_ result: FolderScanResult, reads: MarkdownScanReads, confirmsMassDeletion: Bool) {
+        guard let storage = markdownStorage else { return }
+        markdownLaunchScanPending = false
         let before = notes
-        guard case .scanned(let result, let reads) = scanMarkdownFolderNow(storage, timeout: Self.launchScanTimeout) else {
-            return markdownFolderBecameUnavailable()
-        }
-        applyExternalChanges(result, reads: reads, atLaunch: true)
+        applyExternalChanges(result, reads: reads, atLaunch: true, confirmsMassDeletion: confirmsMassDeletion)
         let tombstones = Set(syncDeletions().keys)
         let orphans = storage.index.ids.filter { note(with: $0) == nil && !tombstones.contains($0) && !isTombstoned($0) }
         if !orphans.isEmpty {
@@ -324,7 +336,8 @@ extension NoteStore {
         changed.formUnion(result.changed.keys)
         changed.formUnion(result.moved.keys)
         notesChangedBeforeDerivedIndexes.formUnion(changed)
-        storage.attachments.scheduleSweep()
+        if note(with: selectedNoteID) == nil { selectedNoteID = notes(for: selection, search: "").first?.id }
+        flush()
     }
 
     /// Applies one scan: notebook folders first, so new files land in their notebooks, then files, then

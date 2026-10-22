@@ -22,7 +22,7 @@ final class ExternalChangeTests: XCTestCase {
     }
 
     private func open() -> NoteStore {
-        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+        let store = NoteStore.opened(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
                                                         renameFilesOnTitleChange: false),
                               bodyStorage: MarkdownBodyStorageTests.make(root, renames: false))
         store.markdownClock = { Date().addingTimeInterval(10) }
@@ -312,6 +312,45 @@ final class ExternalChangeTests: XCTestCase {
             if value != nil { attachments += 1 }
         }
         XCTAssertEqual(attachments, 1, "the picture was read by the scan, before it went away")
+    }
+
+    func testTheLibraryOpensAtOnceWhileItsFolderIsStillBeingScanned() throws {
+        try put("Plan.md", "# Plan\n\nfirst\n")
+        var store: NoteStore? = open()
+        let plan = try note(store!, titled: "Plan").id
+        store?.flush()
+        store = nil
+        try put("New.md", "# New\n\nadded while closed\n")
+        let gate = DispatchGroup()
+        gate.enter()
+        var released = false
+        defer { if !released { gate.leave() } }
+        let storage = MarkdownBodyStorageTests.make(root, renames: false)
+        storage.rootCheck = { url in
+            _ = gate.wait(timeout: .now() + 10)
+            return FileManager.default.fileExists(atPath: url.path)
+        }
+
+        let started = Date()
+        let reopened = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+                                                           renameFilesOnTitleChange: false),
+                                 bodyStorage: storage)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "opening never waits for the folder")
+        XCTAssertTrue(reopened.markdownFolderChecking)
+        XCTAssertTrue(reopened.markdownFolderUnavailable, "read-only until the folder answers")
+        XCTAssertNotNil(reopened.note(with: plan), "the library opens from library.json")
+        XCTAssertNil(reopened.notes.first { $0.title == "New" })
+
+        gate.leave()
+        released = true
+        reopened.waitForLaunchScan(timeout: 10)
+        XCTAssertFalse(reopened.markdownFolderChecking)
+        XCTAssertFalse(reopened.markdownFolderUnavailable)
+        let new = try note(reopened, titled: "New")
+        reopened.waitForMarkdownWrites(upTo: 10)
+        XCTAssertEqual(FolderScanner.frontMatterID(Data(try read("New.md").utf8)), new.id,
+                       "a file added while NoteIt was closed takes its id at once")
+        XCTAssertTrue(reopened.notesChangedBeforeDerivedIndexes.contains(new.id))
     }
 
     func testEditsMadeWhileNoteItWasClosedReachSpotlightAtTheNextLaunch() async throws {

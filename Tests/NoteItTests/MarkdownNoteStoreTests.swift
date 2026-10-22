@@ -22,7 +22,7 @@ final class MarkdownNoteStoreTests: XCTestCase {
     }
 
     private func open(renames: Bool = true) -> NoteStore {
-        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+        let store = NoteStore.opened(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
                                                         renameFilesOnTitleChange: renames),
                               bodyStorage: MarkdownBodyStorageTests.make(root, renames: renames))
         store.markdownFlushWait = 10

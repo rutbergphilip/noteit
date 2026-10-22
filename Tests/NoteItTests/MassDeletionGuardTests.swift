@@ -21,7 +21,7 @@ final class MassDeletionGuardTests: XCTestCase {
 
     private func open() -> NoteStore {
         let data = root.appendingPathComponent("data", isDirectory: true)
-        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+        let store = NoteStore.opened(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
                                                         renameFilesOnTitleChange: false),
                               bodyStorage: MarkdownBodyStorageTests.make(root, renames: false))
         store.markdownClock = { Date().addingTimeInterval(10) }
