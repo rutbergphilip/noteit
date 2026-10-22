@@ -99,6 +99,8 @@ final class ImportModel: ObservableObject {
             run(source) { model in
                 do {
                     return try await NotionImporter.importExport(url, into: model.store) { model.progress = $0 }
+                } catch is CancellationError {
+                    return ImportReport(cancelled: true)
                 } catch let error as ImportError {
                     model.phase = .failed(error)
                     return nil

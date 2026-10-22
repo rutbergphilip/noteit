@@ -1,8 +1,9 @@
 import Foundation
 import XCTest
+import zlib
 @testable import NoteIt
 
-/// Builds stored (uncompressed) ZIP archives byte by byte.
+/// Builds ZIP archives byte by byte, stored or deflated, optionally lying in their headers.
 private struct ZipFixture {
     struct File {
         var name: [UInt8]
@@ -10,48 +11,78 @@ private struct ZipFixture {
         var utf8Flag = false
         /// A Zip64 size written in the central directory instead of the real one.
         var statedZip64Size: UInt64?
+        var deflate = false
+        /// The method written to both headers instead of 0 or 8.
+        var method: Int?
+        /// A size written to the central directory instead of the real one.
+        var statedSize: UInt32?
+        /// A name written to the local header instead of `name`.
+        var localName: [UInt8]?
+        var crc: UInt32?
+        var flags = 0
+        /// Unix mode written to the external attributes instead of a regular file's.
+        var mode: UInt32?
+        /// False leaves the entry out of the central directory.
+        var listed = true
     }
 
     /// 0 = MS-DOS/FAT, 3 = Unix.
     var host: UInt8 = 3
     var files: [File]
     var zip64 = false
+    /// Sizes and offsets moved into Zip64 extra fields.
+    var zip64Fields = false
+    /// Entry counts written to the end record instead of the real ones (this disk, total).
+    var statedCounts: (Int, Int)?
 
     func data() -> Data {
         typealias Z = ZipFixture
         var out = Data()
         var central = Data()
+        var listed = 0
         for file in files {
-            let flags = file.utf8Flag ? 0x0800 : 0
-            let crc = Z.crc32(file.data)
+            let flags = (file.utf8Flag ? 0x0800 : 0) | file.flags
+            let crc = file.crc ?? Z.crc32(file.data)
+            let payload = file.deflate ? try! (file.data as NSData).compressed(using: .zlib) as Data : file.data
+            let method = file.method ?? (file.deflate ? 8 : 0)
             let size = UInt32(file.data.count)
+            let packed = UInt32(payload.count)
             let offset = UInt32(out.count)
-            let local: [Data] = [Z.le32(0x0403_4B50), Z.le16(20), Z.le16(flags), Z.le16(0), Z.le16(0), Z.le16(0),
-                                 Z.le32(crc), Z.le32(size), Z.le32(size), Z.le16(file.name.count), Z.le16(0),
-                                 Data(file.name), file.data]
+            let localName = file.localName ?? file.name
+            let local: [Data] = [Z.le32(0x0403_4B50), Z.le16(20), Z.le16(flags), Z.le16(method), Z.le16(0), Z.le16(0),
+                                 Z.le32(crc), Z.le32(packed), Z.le32(size), Z.le16(localName.count), Z.le16(0),
+                                 Data(localName), payload]
             out += local.reduce(Data(), +)
-            let extra = file.statedZip64Size.map { [Z.le16(1), Z.le16(8), Z.le64($0)].reduce(Data(), +) } ?? Data()
-            let attributes: UInt32 = host == 0 ? 0x20 : 0o100644 << 16
-            let stated: UInt32 = file.statedZip64Size == nil ? size : 0xFFFF_FFFF
+            guard file.listed else { continue }
+            listed += 1
+            var extra = file.statedZip64Size.map { [Z.le16(1), Z.le16(8), Z.le64($0)].reduce(Data(), +) } ?? Data()
+            if zip64Fields {
+                extra = [Z.le16(1), Z.le16(24), Z.le64(UInt64(size)), Z.le64(UInt64(packed)), Z.le64(UInt64(offset))]
+                    .reduce(Data(), +)
+            }
+            let attributes: UInt32 = host == 0 ? 0x20 : (file.mode ?? 0o100644) << 16
+            let stated: UInt32 = zip64Fields || file.statedZip64Size != nil ? 0xFFFF_FFFF : file.statedSize ?? size
             let header: [Data] = [Z.le32(0x0201_4B50), Z.le16(Int(host) << 8 | 20), Z.le16(20), Z.le16(flags),
-                                  Z.le16(0), Z.le16(0), Z.le16(0), Z.le32(crc), Z.le32(size), Z.le32(stated),
+                                  Z.le16(method), Z.le16(0), Z.le16(0), Z.le32(crc),
+                                  Z.le32(zip64Fields ? 0xFFFF_FFFF : packed), Z.le32(stated),
                                   Z.le16(file.name.count), Z.le16(extra.count), Z.le16(0), Z.le16(0), Z.le16(0),
-                                  Z.le32(attributes), Z.le32(offset), Data(file.name), extra]
+                                  Z.le32(attributes), Z.le32(zip64Fields ? 0xFFFF_FFFF : offset), Data(file.name), extra]
             central += header.reduce(Data(), +)
         }
+        let counts = statedCounts ?? (listed, listed)
         let centralOffset = UInt64(out.count)
         out += central
         var end: [Data]
         if zip64 {
             let recordOffset = UInt64(out.count)
             end = [Z.le32(0x0606_4B50), Z.le64(44), Z.le16(45), Z.le16(45), Z.le32(0), Z.le32(0),
-                   Z.le64(UInt64(files.count)), Z.le64(UInt64(files.count)),
+                   Z.le64(UInt64(counts.0)), Z.le64(UInt64(counts.1)),
                    Z.le64(UInt64(central.count)), Z.le64(centralOffset)]
             end += [Z.le32(0x0706_4B50), Z.le32(0), Z.le64(recordOffset), Z.le32(1)]
             end += [Z.le32(0x0605_4B50), Z.le16(0), Z.le16(0), Z.le16(0xFFFF), Z.le16(0xFFFF),
                     Z.le32(0xFFFF_FFFF), Z.le32(0xFFFF_FFFF), Z.le16(0)]
         } else {
-            end = [Z.le32(0x0605_4B50), Z.le16(0), Z.le16(0), Z.le16(files.count), Z.le16(files.count),
+            end = [Z.le32(0x0605_4B50), Z.le16(0), Z.le16(0), Z.le16(counts.0), Z.le16(counts.1),
                    Z.le32(UInt32(central.count)), Z.le32(UInt32(centralOffset)), Z.le16(0)]
         }
         return out + end.reduce(Data(), +)
@@ -62,12 +93,7 @@ private struct ZipFixture {
     static func le64(_ v: UInt64) -> Data { withUnsafeBytes(of: v.littleEndian) { Data($0) } }
 
     static func crc32(_ data: Data) -> UInt32 {
-        var crc: UInt32 = 0xFFFF_FFFF
-        for byte in data {
-            crc ^= UInt32(byte)
-            for _ in 0..<8 { crc = crc & 1 == 1 ? (crc >> 1) ^ 0xEDB8_8320 : crc >> 1 }
-        }
-        return ~crc
+        data.withUnsafeBytes { UInt32(zlib.crc32(0, $0.bindMemory(to: UInt8.self).baseAddress, uInt($0.count))) }
     }
 }
 
@@ -143,7 +169,7 @@ final class ZipDirectoryTests: XCTestCase {
         let inner = try part()
         let outer = try save(ZipFixture(host: 0, files: [.init(name: Array("Export-Part-1.zip".utf8), data: inner)]),
                              as: "Notion.zip")
-        XCTAssertEqual(MarkdownImporter.topLevelZipSizes(outer), ["Export-Part-1.zip": Int64(inner.count)])
+        XCTAssertEqual(MarkdownImporter.zipEntries(outer), ["Export-Part-1.zip"])
         let report = try await importExport(outer, into: makeStore(), parts: [inner])
         XCTAssertEqual(report.notesImported, 1)
     }
@@ -219,5 +245,160 @@ final class ZipDirectoryTests: XCTestCase {
                 XCTAssertEqual(error as? ImportError, .unreadableArchive(name))
             }
         }
+    }
+
+    // MARK: Extraction follows the central directory
+
+    private func leftovers() -> Set<String> {
+        Set(((try? fm.contentsOfDirectory(atPath: fm.temporaryDirectory.path)) ?? []).filter { $0.hasPrefix("noteit-import-") })
+    }
+
+    /// Unpacks `fixture`, expecting it to be refused without leaving anything behind; returns the error, if one was thrown.
+    @discardableResult
+    private func assertRefused(_ fixture: ZipFixture, limits: ZipLimits = ZipLimits(maxEntries: 100, maxBytes: 100 << 20),
+                               file: StaticString = #filePath, line: UInt = #line) throws -> Error? {
+        let url = try save(fixture, as: "Refused-\(UUID().uuidString).zip")
+        let before = leftovers()
+        var limits = limits
+        var thrown: Error?
+        do {
+            if let folder = try MarkdownImporter.unzip(url, within: &limits) {
+                XCTFail("unpacked to \(folder.path)", file: file, line: line)
+                try? fm.removeItem(at: folder)
+            }
+        } catch {
+            thrown = error
+        }
+        XCTAssertEqual(leftovers().subtracting(before), [], "partial output left behind", file: file, line: line)
+        return thrown
+    }
+
+    private func page(_ text: String = "# Page\nBody") -> ZipFixture.File {
+        .init(name: Array("Page \(pageID).md".utf8), data: Data(text.utf8))
+    }
+
+    func testLyingCentralSizeIsRefused() throws {
+        let big = ZipFixture.File(name: Array("big.bin".utf8), data: Data(count: 5_000_000), deflate: true, statedSize: 1)
+        let error = try assertRefused(ZipFixture(files: [page(), big]))
+        guard case .archiveTooLarge? = error as? ImportError else { return XCTFail("\(String(describing: error))") }
+    }
+
+    func testDeflateBombOverTheCapIsAbortedWithAClearError() async throws {
+        let bomb = ZipFixture.File(name: Array("bomb.bin".utf8), data: Data(count: 50_000_000), deflate: true, statedSize: 1_000)
+        let url = try save(ZipFixture(files: [page(), bomb]), as: "Bomb.zip")
+        let before = leftovers()
+        do {
+            _ = try await NotionImporter.importExport(url, into: makeStore(), limits: ZipLimits(maxEntries: 10, maxBytes: 10 << 20))
+            XCTFail("No error thrown")
+        } catch {
+            XCTAssertEqual(error as? ImportError, .archiveTooLarge("Bomb.zip"))
+        }
+        XCTAssertEqual(leftovers().subtracting(before), [])
+    }
+
+    func testEntryMissingFromTheDirectoryIsNotUnpacked() throws {
+        let hidden = ZipFixture.File(name: Array("hidden.bin".utf8), data: Data(count: 1_000_000), listed: false)
+        let url = try save(ZipFixture(files: [page(), hidden]), as: "Hidden.zip")
+        var limits = ZipLimits(maxEntries: 100, maxBytes: 1_000)
+        let folder = try XCTUnwrap(try MarkdownImporter.unzip(url, within: &limits))
+        defer { try? fm.removeItem(at: folder) }
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: folder.path), ["Page \(pageID).md"])
+        XCTAssertEqual(limits.maxEntries, 99)
+    }
+
+    func testEndRecordCountsMustMatchTheDirectory() throws {
+        let files = [page(), .init(name: Array("extra.md".utf8), data: Data("more".utf8))]
+        for counts in [(1, 1), (2, 1), (1, 2)] {
+            let fixture = ZipFixture(files: files, statedCounts: counts)
+            let url = try save(fixture, as: "Count.zip")
+            XCTAssertNil(MarkdownImporter.zipTotals(url), "\(counts)")
+            try assertRefused(fixture)
+        }
+    }
+
+    func testLocalNameMustMatchTheDirectory() throws {
+        let escaped = "evil-\(UUID().uuidString).txt"
+        let target = fm.temporaryDirectory.appendingPathComponent(escaped)
+        defer { try? fm.removeItem(at: target) }
+        let evil = ZipFixture.File(name: Array("aa/\(escaped)".utf8), data: Data("oops".utf8),
+                                   localName: Array("../\(escaped)".utf8))
+        try assertRefused(ZipFixture(files: [page(), evil]))
+        XCTAssertFalse(fm.fileExists(atPath: target.path))
+    }
+
+    func testCRCMismatchIsRefused() throws {
+        for deflate in [false, true] {
+            let bad = ZipFixture.File(name: Array("bad.md".utf8), data: Data("checked".utf8), deflate: deflate, crc: 0x1234_5678)
+            try assertRefused(ZipFixture(files: [page(), bad]))
+        }
+    }
+
+    func testSymlinkEncryptedAndUnknownMethodEntriesAreRefusedWithAReason() throws {
+        let cases: [(ZipFixture.File, String)] = [
+            (.init(name: Array("link.md".utf8), data: Data("Page \(pageID).md".utf8), mode: 0o120777), "symbolic link"),
+            (.init(name: Array("secret.md".utf8), data: Data("garbage".utf8), flags: 1), "encrypted"),
+            (.init(name: Array("bz.md".utf8), data: Data("garbage".utf8), method: 12), "compression method"),
+        ]
+        for (file, reason) in cases {
+            let error = try assertRefused(ZipFixture(files: [page(), file]))
+            let message = (error as? LocalizedError)?.errorDescription ?? ""
+            XCTAssertTrue(message.contains(reason), "\(reason): \(message)")
+            XCTAssertTrue(message.contains(file.name.map { String(UnicodeScalar($0)) }.joined()), message)
+        }
+    }
+
+    func testCancelledUnpackLeavesNothing() async throws {
+        let url = try save(ZipFixture(files: [page(), .init(name: Array("big.bin".utf8), data: Data(count: 5_000_000), deflate: true)]),
+                           as: "Cancel.zip")
+        let before = leftovers()
+        let task = Task.detached { () throws -> URL? in
+            while !Task.isCancelled { await Task.yield() }
+            var limits = ZipLimits.standard
+            return try MarkdownImporter.unzip(url, within: &limits)
+        }
+        task.cancel()
+        do {
+            let folder = try await task.value
+            XCTFail("unpacked to \(folder?.path ?? "nil")")
+            if let folder { try? fm.removeItem(at: folder) }
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+        XCTAssertEqual(leftovers().subtracting(before), [])
+    }
+
+    func testDittoArchiveWithSwedishNamesUnpacks() throws {
+        let folder = base.appendingPathComponent("Källa/Möte å ä ö", isDirectory: true)
+        try fm.createDirectory(at: folder.appendingPathComponent("Bilder ö"), withIntermediateDirectories: true)
+        try Data("# Möte\nÅ ä ö".utf8).write(to: folder.appendingPathComponent("Anteckning ä.md"))
+        try Data(repeating: 65, count: 300_000).write(to: folder.appendingPathComponent("Bilder ö/Bild å.bin"))
+        let zip = base.appendingPathComponent("Svenska.zip")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
+        process.arguments = ["-c", "-k", "--keepParent", folder.path, zip.path]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0)
+
+        var limits = ZipLimits.standard
+        let unpacked = try XCTUnwrap(try MarkdownImporter.unzip(zip, within: &limits))
+        defer { try? fm.removeItem(at: unpacked) }
+        let root = unpacked.appendingPathComponent("Möte å ä ö")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("Anteckning ä.md"), encoding: .utf8), "# Möte\nÅ ä ö")
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent("Bilder ö/Bild å.bin")).count, 300_000)
+        let names = try fm.contentsOfDirectory(atPath: root.path)
+        XCTAssertTrue(names.allSatisfy { $0 == $0.precomposedStringWithCanonicalMapping }, "\(names)")
+    }
+
+    func testZip64ArchiveImports() async throws {
+        let outer = try save(ZipFixture(files: [
+            page("# Wide\nZip64 sizes"),
+            .init(name: Array("Other \(pageID.replacingOccurrences(of: "1", with: "2")).md".utf8),
+                  data: Data(("# Other\n" + String(repeating: "text ", count: 20_000)).utf8), deflate: true),
+        ], zip64: true, zip64Fields: true), as: "Wide.zip")
+        let totals = try XCTUnwrap(MarkdownImporter.zipTotals(outer))
+        XCTAssertEqual(totals.entries, 2)
+        let report = try await NotionImporter.importExport(outer, into: makeStore())
+        XCTAssertEqual(report.notesImported, 2)
     }
 }

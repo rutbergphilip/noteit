@@ -126,7 +126,8 @@ final class MarkdownImporter {
                     report: inout ImportReport) -> Bool {
         let ext = item.url.pathExtension.lowercased()
         if ext == "textpack" {
-            guard let unpacked = Self.unzip(item.url) else { return false }
+            // A cancelled unpack isn't an unreadable file.
+            guard let unpacked = Self.unzip(item.url) else { return Task.isCancelled }
             defer { try? fileManager.removeItem(at: unpacked) }
             guard let bundle = Self.textBundle(in: unpacked) else { return false }
             return importBundle(bundle, named: item.url.deletingPathExtension().lastPathComponent, item: item, id: id, report: &report)
@@ -214,8 +215,8 @@ final class MarkdownImporter {
         }
     }
 
-    /// Unpacks a zip archive (a `.textpack`, a Notion export) into a temporary folder, refusing archives with
-    /// entries that would land outside it.
+    /// Unpacks a zip archive (a `.textpack`, a Notion export) into a temporary folder with `ZipExtractor`, refusing
+    /// archives with entries that would land outside it.
     nonisolated static func unzip(_ url: URL) -> URL? {
         var limits = ZipLimits.standard
         return try? unzip(url, within: &limits)
@@ -224,32 +225,30 @@ final class MarkdownImporter {
     /// `unzip(_:)` that also takes the archive's entries and unpacked size off `limits`, throwing
     /// `ImportError.archiveTooLarge` when they don't fit. Nil when the archive can't be opened.
     nonisolated static func unzip(_ url: URL, within limits: inout ZipLimits) throws -> URL? {
-        let fileManager = FileManager.default
-        guard let directory = ZipDirectory.read(url) else { return nil }
-        let bytes = Int64(clamping: directory.totalUncompressedSize)
-        guard directory.entries.count <= limits.maxEntries, bytes <= limits.maxBytes else {
-            throw ImportError.archiveTooLarge(url.lastPathComponent)
-        }
-        guard directory.entries.allSatisfy({ isSafeZipEntry($0.name) }) else { return nil }
-        limits.maxEntries -= directory.entries.count
-        limits.maxBytes -= bytes
-        let destination = fileManager.temporaryDirectory.appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.arguments = ["-x", "-k", url.path, destination.path]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        try unpack(url, within: &limits)?.folder
+    }
+
+    /// `unzip(_:within:)` that also returns how many bytes were written for each file. Symbolic links, encrypted
+    /// entries and unknown compression methods throw `ImportError.unsupportedArchive`; cancellation is rethrown.
+    nonisolated static func unpack(_ url: URL, within limits: inout ZipLimits) throws -> ZipExtractor.Result? {
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
+        let result: ZipExtractor.Result
         do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
+            result = try ZipExtractor.extract(url, to: destination, maxEntries: limits.maxEntries, maxBytes: limits.maxBytes)
+        } catch ZipExtractor.Failure.tooLarge {
+            throw ImportError.archiveTooLarge(url.lastPathComponent)
+        } catch let failure as ZipExtractor.Failure {
+            switch failure {
+            case .symlink, .encrypted, .unsupportedMethod:
+                throw ImportError.unsupportedArchive(url.lastPathComponent, reason: failure.errorDescription ?? "")
+            default:
+                return nil
+            }
         }
-        guard process.terminationStatus == 0, staysInside(destination) else {
-            try? fileManager.removeItem(at: destination)
-            return nil
-        }
-        return destination
+        limits.maxEntries -= result.entries
+        limits.maxBytes -= result.bytes
+        return result
     }
 
     /// The entry names in a zip archive, or nil when it can't be read.
@@ -262,29 +261,9 @@ final class MarkdownImporter {
         ZipDirectory.read(url).map { ($0.entries.count, Int64(clamping: $0.totalUncompressedSize)) }
     }
 
-    /// The unpacked size the archive's directory states for each `.zip` file at its top level, by name in
-    /// precomposed (NFC) form, so it matches whichever form the file system gives back.
-    nonisolated static func topLevelZipSizes(_ url: URL) -> [String: Int64]? {
-        guard let directory = ZipDirectory.read(url) else { return nil }
-        var sizes: [String: Int64] = [:]
-        for entry in directory.entries where !entry.name.contains("/") && entry.name.lowercased().hasSuffix(".zip") {
-            sizes[entry.name.precomposedStringWithCanonicalMapping] = Int64(clamping: entry.uncompressedSize)
-        }
-        return sizes
-    }
-
     nonisolated static func isSafeZipEntry(_ name: String) -> Bool {
         let parts = name.split(separator: "/", omittingEmptySubsequences: false)
         return !name.hasPrefix("/") && !name.hasPrefix("~") && !parts.contains("..")
-    }
-
-    /// True when everything under `folder`, with symlinks followed, is still inside it.
-    nonisolated static func staysInside(_ folder: URL) -> Bool {
-        guard let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil) else { return false }
-        for case let url as URL in enumerator where !isInside(url, root: folder) {
-            return false
-        }
-        return true
     }
 
     /// The bundle inside an unpacked `.textpack`, or the unpacked folder itself.

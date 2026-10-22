@@ -59,7 +59,12 @@ enum NotionImporter {
 
     static func importExport(_ url: URL, into store: NoteStore, limits: ZipLimits = .standard,
                              progress: (ImportProgress) -> Void = { _ in }) async throws -> ImportReport {
-        let (roots, temporary, failed) = try await Task.detached { try Self.contentRoots(for: url, limits: limits) }.value
+        let unpacking = Task.detached { try Self.contentRoots(for: url, limits: limits) }
+        let (roots, temporary, failed) = try await withTaskCancellationHandler {
+            try await unpacking.value
+        } onCancel: {
+            unpacking.cancel()
+        }
         defer { for folder in temporary { try? FileManager.default.removeItem(at: folder) } }
         let pages: [Page]
         do {
@@ -78,7 +83,8 @@ enum NotionImporter {
     /// unzipped (one level only).
     /// `temporary` lists the unzipped folders, for the caller to remove; `failed` names the part ZIPs that
     /// couldn't be opened.
-    /// Archives that together unpack past `limits` throw `ImportError.archiveTooLarge`.
+    /// Archives that together unpack past `limits` throw `ImportError.archiveTooLarge`; an outer archive or part
+    /// holding symbolic links, encrypted entries or unknown compression methods throws `.unsupportedArchive`.
     nonisolated static func contentRoots(for url: URL, limits: ZipLimits = .standard) throws
         -> (roots: [URL], temporary: [URL], failed: [String]) {
         let fm = FileManager.default
@@ -89,25 +95,24 @@ enum NotionImporter {
         var budget = limits
         var finished = false
         defer { if !finished { for folder in temporary { try? fm.removeItem(at: folder) } } }
-        var listedParts: [String: Int64] = [:]
+        var writtenSizes: [String: Int64] = [:]
         if !isDir.boolValue {
-            listedParts = MarkdownImporter.topLevelZipSizes(url) ?? [:]
-            guard url.pathExtension.lowercased() == "zip", let unpacked = try MarkdownImporter.unzip(url, within: &budget) else {
+            guard url.pathExtension.lowercased() == "zip", let unpacked = try MarkdownImporter.unpack(url, within: &budget) else {
                 throw ImportError.unreadableArchive(url.lastPathComponent)
             }
-            temporary.append(unpacked)
-            root = unpacked
+            temporary.append(unpacked.folder)
+            root = unpacked.folder
+            writtenSizes = unpacked.fileSizes
         }
         var roots = [root]
         var failed: [String] = []
         let top = (try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         for zip in top.filter({ $0.pathExtension.lowercased() == "zip" })
             .sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }) {
-            // A part was charged in full as a file of the outer archive; once it is opened and charged at its
-            // unpacked size, that first charge is given back. Parts that aren't opened stay charged.
-            let onDisk = ((try? zip.resourceValues(forKeys: [.fileSizeKey]))?.fileSize).map(Int64.init) ?? 0
+            // A part was charged as the bytes written for it when the outer archive was unpacked; once it is opened
+            // and charged at the bytes it unpacks to, that first charge is given back. Parts that aren't opened stay charged.
             var opened = budget
-            opened.maxBytes += min(listedParts[zip.lastPathComponent.precomposedStringWithCanonicalMapping] ?? 0, onDisk)
+            opened.maxBytes += writtenSizes[zip.lastPathComponent.precomposedStringWithCanonicalMapping] ?? 0
             guard let unpacked = try MarkdownImporter.unzip(zip, within: &opened) else {
                 failed.append(zip.lastPathComponent)
                 continue
