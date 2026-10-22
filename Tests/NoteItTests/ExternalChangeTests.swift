@@ -201,6 +201,27 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertTrue(copies.contains { ((try? String(contentsOf: $0, encoding: .utf8)) ?? "").contains("newer edit") })
     }
 
+    func testARescanNeverWaitsForTheFolderOnTheMainThread() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let store = open()
+        store.markdownScanTimeout = 30
+        let gate = DispatchSemaphore(value: 0)
+        let realScan = store.markdownFolderScan
+        store.markdownFolderScan = { root, index, ledger in
+            _ = gate.wait(timeout: .now() + 5)
+            return realScan(root, index, ledger)
+        }
+        let started = Date()
+        let rescan = Task { await store.rescanMarkdownFolder() }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "the main thread runs while the scan waits")
+        try edit("Kept.md", "first", "changed")
+        gate.signal()
+        let applied = await rescan.value
+        XCTAssertTrue(applied)
+        XCTAssertTrue(store.body(for: try note(store, titled: "Kept").id).string.contains("changed"))
+    }
+
     func testTheWatcherStartsOnlyOnceTheFolderAnswers() async throws {
         try put("Kept.md", "# Kept\n\nfirst\n")
         let store = open()
@@ -340,7 +361,7 @@ final class ExternalChangeTests: XCTestCase {
         }
 
         try edit("Photo.md", "![photo](_attachments/photo.png)", "no picture now")
-        store.rescanMarkdownFolder()
+        _ = await store.rescanMarkdownFolder()
         try await waitForSweeps(store)
         XCTAssertEqual(trashed.names, [])
 
@@ -358,7 +379,7 @@ final class ExternalChangeTests: XCTestCase {
         var store = open()
         try await waitForSweeps(store)
         try edit("Photo.md", "![photo](_attachments/photo.png)", "no picture now")
-        store.rescanMarkdownFolder()
+        _ = await store.rescanMarkdownFolder()
         try await waitForSweeps(store)
         store.stopWatchingMarkdownFolder()
 
@@ -413,7 +434,7 @@ final class ExternalChangeTests: XCTestCase {
         let id = try note(store, titled: "Note").id
         try edit("Note.md", "# Note\n\nfirst", "# Renamed\n\nsecond")
         _ = try store.markdownStorage?.read(id)
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         XCTAssertEqual(store.note(with: id)?.title, "Renamed")
         XCTAssertTrue(store.body(for: id).string.contains("second"))
     }
@@ -432,7 +453,7 @@ final class ExternalChangeTests: XCTestCase {
 
         let modified = Date(timeIntervalSince1970: 1_900_000_000)
         try edit("Note.md", "first", "second", modified: modified)
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         store.flush()
 
         let after = try XCTUnwrap(store.note(with: id))
@@ -443,7 +464,7 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(posted, 1)
         XCTAssertTrue(try read("Note.md").contains("second"))
 
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         store.flush()
         XCTAssertEqual(store.note(with: id)?.revision, after.revision, "a second scan changes nothing")
         XCTAssertEqual(store.history.versions(of: id).count, versions + 1)
@@ -459,7 +480,7 @@ final class ExternalChangeTests: XCTestCase {
         store.updateBody(id, mine)
 
         try edit("Note.md", "first", "theirs")
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         store.flush()
 
         XCTAssertTrue(store.body(for: id).string.contains("mine"))
@@ -476,11 +497,11 @@ final class ExternalChangeTests: XCTestCase {
         let now = Date()
         store.markdownClock = { now }
         try put("Fresh.md", "# Fresh\n\nstill being written\n", modified: now.addingTimeInterval(-1))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         XCTAssertNil(store.notes.first { $0.title == "Fresh" }, "a file younger than 2 seconds isn't read yet")
 
         store.markdownClock = { now.addingTimeInterval(1.5) }
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         let fresh = try note(store, titled: "Fresh")
         XCTAssertEqual(fresh.preview, "still being written")
         XCTAssertTrue(try read("Fresh.md").contains("id: \(fresh.id.uuidString)"))
@@ -494,7 +515,7 @@ final class ExternalChangeTests: XCTestCase {
         store.flush()
 
         try fm.removeItem(at: content.appendingPathComponent("Gone.md"))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         store.flush()
 
         XCTAssertNotNil(store.note(with: id)?.deletedAt)
@@ -519,7 +540,7 @@ final class ExternalChangeTests: XCTestCase {
         try fm.moveItem(at: content.appendingPathComponent("Work"), to: content.appendingPathComponent("Office"))
         try fm.moveItem(at: content.appendingPathComponent("Home"), to: content.appendingPathComponent("Office/Home"))
         try fm.removeItem(at: content.appendingPathComponent("Archive"))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         store.flush()
 
         XCTAssertEqual(store.notebook(with: work)?.name, "Office")
@@ -543,7 +564,7 @@ final class ExternalChangeTests: XCTestCase {
         let saved = try XCTUnwrap(store.note(with: id))
         let versions = store.history.versions(of: id).count
 
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         XCTAssertEqual(store.note(with: id)?.revision, saved.revision)
         XCTAssertEqual(store.history.versions(of: id).count, versions)
         XCTAssertNil(store.notes.first { $0.conflictSource != nil })
@@ -555,7 +576,7 @@ final class ExternalChangeTests: XCTestCase {
         let id = try note(store, titled: "Note").id
         store.flush()
         try Data([0x23, 0x20, 0xFF, 0xFE, 0x0A]).write(to: content.appendingPathComponent("Note.md"))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         XCTAssertEqual(store.loadError(for: id), MarkdownBodyStorage.unreadableReason)
         store.updateBody(id, NSAttributedString(string: "Note\nreplaced"))
         store.flush()
@@ -570,8 +591,8 @@ final class ExternalChangeTests: XCTestCase {
         var reported: [URL] = []
         store.onMarkdownFolderMissing = { reported.append($0) }
         try fm.moveItem(at: content, to: root.appendingPathComponent("elsewhere"))
-        store.rescanMarkdownFolder()
-        store.rescanMarkdownFolder()
+        store.rescanNow()
+        store.rescanNow()
         XCTAssertEqual(reported, [content])
         XCTAssertNil(store.note(with: id)?.deletedAt)
     }

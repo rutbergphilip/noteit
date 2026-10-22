@@ -124,6 +124,10 @@ final class NoteStore: ObservableObject {
     var hasPendingMarkdownRenames = false
     var markdownScanRunning = false
     var markdownScanAgain = false
+    /// Callers waiting for a scan that starts after they asked and is applied; true when it was.
+    var markdownScanWaiters: [(Bool) -> Void] = []
+    /// **Move to Recently Deleted** was chosen; the next scan that is applied deletes the held notes still missing.
+    var markdownConfirmingHeldDeletions = false
     /// How a rescan reads the content folder; tests inject one that hangs like a dead network volume.
     var markdownFolderScan: @Sendable (URL, MarkdownPathIndex, WriteLedger) -> FolderScanResult = {
         FolderScanner.scan(contentRoot: $0, index: $1, ledger: $2)

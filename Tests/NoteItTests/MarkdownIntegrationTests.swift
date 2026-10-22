@@ -180,7 +180,7 @@ final class MarkdownIntegrationTests: XCTestCase {
         try fm.removeItem(at: content.appendingPathComponent("Gone.md"))
         try fm.moveItem(at: content.appendingPathComponent("Stays.md"), to: content.appendingPathComponent("Work/Stays.md"))
         store.newFileSettleDelay = 0
-        store.rescanMarkdownFolder()
+        _ = await store.rescanMarkdownFolder()
         let added = try note(store, titled: "Added").id
         indexer.flush()
         await indexer.settle()

@@ -66,7 +66,7 @@ final class MassDeletionGuardTests: XCTestCase {
         store.onManyNotesDisappeared = { asked.append($0) }
 
         try fm.removeItem(at: content.appendingPathComponent("Work"))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         store.flush()
 
         XCTAssertEqual(asked, [6], "a deleted notebook folder counts its notes")
@@ -83,10 +83,10 @@ final class MassDeletionGuardTests: XCTestCase {
         XCTAssertEqual(store.loadError(for: first), NoteStore.missingFileReason)
         XCTAssertTrue(store.body(for: first).string.contains("text"), "a held note shows its last known text")
 
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         XCTAssertEqual(asked, [6], "the same batch isn't asked about twice")
 
-        store.confirmHeldDeletions()
+        store.confirmHeldDeletionsNow()
         store.flush()
         XCTAssertTrue(store.heldMarkdownDeletions.isEmpty)
         XCTAssertTrue(held.allSatisfy { store.note(with: $0)?.deletedAt != nil })
@@ -96,16 +96,71 @@ final class MassDeletionGuardTests: XCTestCase {
         XCTAssertEqual(trash.filter { $0.hasSuffix(".md") }.count, 6)
     }
 
+    func testConfirmingNeverWaitsForTheFolderAndKeepsTheBatchUntilAScanApplies() throws {
+        let store = try library(6, others: 10)
+        let held = ids(store, prefix: "Note ")
+        try fm.removeItem(at: content.appendingPathComponent("Work"))
+        store.rescanNow()
+        XCTAssertEqual(store.heldMarkdownDeletions, Set(held))
+        let gate = DispatchSemaphore(value: 0)
+        let realScan = store.markdownFolderScan
+        store.markdownScanTimeout = 30
+        store.markdownFolderScan = { root, index, ledger in
+            _ = gate.wait(timeout: .now() + 5)
+            return realScan(root, index, ledger)
+        }
+
+        let started = Date()
+        store.confirmHeldDeletions()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5, "the button doesn't wait for the folder")
+        XCTAssertEqual(store.heldMarkdownDeletions, Set(held), "the batch stays held until a scan applies")
+        store.markdownFolderScan = realScan
+        gate.signal()
+        NoteStore.spin(until: { store.heldMarkdownDeletions.isEmpty }, timeout: 10)
+        XCTAssertTrue(held.allSatisfy { store.note(with: $0)?.deletedAt != nil })
+    }
+
+    func testConfirmingWaitsForQueuedWritesBeforeItAppliesAScan() throws {
+        let store = try library(6, others: 10)
+        let held = ids(store, prefix: "Note ")
+        try fm.removeItem(at: content.appendingPathComponent("Work"))
+        store.rescanNow()
+        XCTAssertEqual(store.heldMarkdownDeletions, Set(held))
+        let other = try XCTUnwrap(store.notes.first { $0.title == "Other 0" }).id
+        let storage = try XCTUnwrap(store.markdownStorage)
+        store.markdownFlushWait = 0
+        storage.rootTimeout = 30
+        let write = DispatchSemaphore(value: 0)
+        let calls = HeldCounter()
+        let realCheck = storage.rootCheck
+        storage.rootCheck = { url in
+            if calls.increment() == 1 { _ = write.wait(timeout: .now() + 10) }
+            return realCheck(url)
+        }
+        store.updateBody(other, NSAttributedString(string: "Other 0\n\nqueued edit"))
+        store.flush()
+
+        store.confirmHeldDeletions()
+        RunLoop.main.run(until: Date() + 0.5)
+        XCTAssertEqual(store.heldMarkdownDeletions, Set(held), "a scan that ran beside a queued write isn't applied")
+        write.signal()
+        NoteStore.spin(until: { store.heldMarkdownDeletions.isEmpty }, timeout: 10)
+        XCTAssertTrue(held.allSatisfy { store.note(with: $0)?.deletedAt != nil })
+        XCTAssertNil(store.note(with: other)?.deletedAt)
+        XCTAssertEqual(store.notes.filter { $0.title.hasPrefix("Other 0") }.count, 1, "NoteIt's own write isn't a new file")
+        XCTAssertTrue(try String(contentsOf: content.appendingPathComponent("Other 0.md"), encoding: .utf8).contains("queued edit"))
+    }
+
     func testFilesComingBackClearTheBatch() throws {
         let store = try library(6, others: 10)
         let held = ids(store, prefix: "Note ")
         let away = root.appendingPathComponent("away")
         try fm.moveItem(at: content.appendingPathComponent("Work"), to: away)
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         XCTAssertEqual(store.heldMarkdownDeletions.count, 6)
 
         try fm.moveItem(at: away, to: content.appendingPathComponent("Work"))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         store.flush()
         XCTAssertTrue(store.heldMarkdownDeletions.isEmpty)
         XCTAssertTrue(held.allSatisfy { store.note(with: $0)?.deletedAt == nil && store.loadError(for: $0) == nil })
@@ -116,7 +171,7 @@ final class MassDeletionGuardTests: XCTestCase {
         var store: NoteStore? = try library(6, others: 10)
         let held = try XCTUnwrap(store.map { ids($0, prefix: "Note ") })
         try fm.removeItem(at: content.appendingPathComponent("Work"))
-        store?.rescanMarkdownFolder()
+        store?.rescanNow()
         store?.flush()
         store = nil
 
@@ -135,7 +190,7 @@ final class MassDeletionGuardTests: XCTestCase {
         let held = ids(store, prefix: "Note ")
         let work = try XCTUnwrap(store.notebooks.first { $0.name == "Work" }).id
         try fm.removeItem(at: content.appendingPathComponent("Work"))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         XCTAssertEqual(store.heldMarkdownDeletions, Set(held))
 
         let id = held[0]
@@ -145,7 +200,7 @@ final class MassDeletionGuardTests: XCTestCase {
         let file = try XCTUnwrap(store.markdownStorage).fileURL(for: id)
         XCTAssertTrue(try String(contentsOf: file, encoding: .utf8).contains("new text"))
 
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         store.flush()
         XCTAssertEqual(store.heldMarkdownDeletions, Set(held.dropFirst()))
         XCTAssertNil(store.note(with: id)?.deletedAt)
@@ -158,7 +213,7 @@ final class MassDeletionGuardTests: XCTestCase {
         var asked: [Int] = []
         store.onManyNotesDisappeared = { asked.append($0) }
         try fm.removeItem(at: content.appendingPathComponent("Work"))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         XCTAssertTrue(asked.isEmpty)
         XCTAssertTrue(ids(store, prefix: "Note ").allSatisfy { store.note(with: $0)?.deletedAt != nil })
     }
@@ -174,4 +229,10 @@ final class MassDeletionGuardTests: XCTestCase {
         XCTAssertTrue(held.allSatisfy { reopened.note(with: $0)?.deletedAt == nil })
         XCTAssertNotNil(reopened.notebooks.first { $0.name == "Work" })
     }
+}
+
+private final class HeldCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() -> Int { lock.withLock { count += 1; return count } }
 }

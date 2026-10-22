@@ -65,12 +65,14 @@ extension NoteStore {
     /// Rescans the content folder off the main thread and applies the result on it; calls while a scan runs ask
     /// for one more after it. A scan that doesn't finish within `markdownScanTimeout` makes the folder unavailable.
     func markdownFolderNeedsScan() {
-        guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return }
+        guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return finishScanWaiters(markdownStorage == nil) }
         guard !markdownScanRunning else {
             markdownScanAgain = true
             return
         }
         markdownScanRunning = true
+        let waiters = markdownScanWaiters
+        markdownScanWaiters = []
         let entries = storage.index.allEntries
         let folders = storage.index.allNotebookFolders
         BoundedFileAccess.shared.run(key: "markdown-scan:" + storage.contentRootURL.path, timeout: markdownScanTimeout,
@@ -79,8 +81,18 @@ extension NoteStore {
                 MainActor.assumeIsolated {
                     guard let self else { return }
                     self.markdownScanRunning = false
-                    guard self.markdownStorage === storage else { return }
-                    self.finishMarkdownScan(outcome, since: (entries, folders))
+                    guard self.markdownStorage === storage else {
+                        waiters.forEach { $0(false) }
+                        return
+                    }
+                    let applied = self.finishMarkdownScan(outcome, since: (entries, folders))
+                    if let applied {
+                        waiters.forEach { $0(applied) }
+                    } else {
+                        // Left for a scan after the queued writes, or a stale result: the waiters wait for that one.
+                        self.markdownScanWaiters.insert(contentsOf: waiters, at: 0)
+                        if !self.markdownScanAfterWrites { self.markdownScanAgain = true }
+                    }
                     if self.markdownScanAgain {
                         self.markdownScanAgain = false
                         self.markdownFolderNeedsScan()
@@ -90,18 +102,25 @@ extension NoteStore {
         }
     }
 
-    /// Scans and applies before returning, waiting at most `markdownScanTimeout`: for a caller that needs the
-    /// library caught up with the folder before it goes on (a conversion).
-    /// False when the folder is missing or doesn't answer.
-    @discardableResult
-    func rescanMarkdownFolder() -> Bool {
-        guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return true }
-        waitForMarkdownWrites(upTo: markdownBlockingTimeout)
-        guard markdownIOJobs.isEmpty else { return false }
-        let outcome = scanMarkdownFolderNow(storage)
-        finishMarkdownScan(outcome, since: nil)
-        if case .scanned = outcome { return true }
-        return false
+    private func finishScanWaiters(_ applied: Bool) {
+        let waiters = markdownScanWaiters
+        markdownScanWaiters = []
+        waiters.forEach { $0(applied) }
+    }
+
+    /// Scans off the main thread and applies the result after any queued writes, then calls `done`: for a caller
+    /// that needs the library caught up with the folder before it goes on (a conversion). False when the folder
+    /// is missing or doesn't answer.
+    func rescanMarkdownFolder(then done: @escaping (Bool) -> Void) {
+        guard markdownStorage != nil, !isClosedForLibrarySwitch else { return done(true) }
+        markdownScanWaiters.append(done)
+        markdownFolderNeedsScan()
+    }
+
+    func rescanMarkdownFolder() async -> Bool {
+        await withCheckedContinuation { continuation in
+            rescanMarkdownFolder { continuation.resume(returning: $0) }
+        }
     }
 
     enum MarkdownScanOutcome {
@@ -131,28 +150,34 @@ extension NoteStore {
     }
 
     /// `since`: the index when a background scan started. Notes NoteIt wrote meanwhile are left to the next scan,
-    /// and a notebook folder NoteIt renamed meanwhile makes the whole result stale.
+    /// and a notebook folder NoteIt renamed meanwhile makes the whole result stale. Whether the scan was applied;
+    /// nil when it is left for a later scan.
+    @discardableResult
     private func finishMarkdownScan(_ outcome: MarkdownScanOutcome?,
-                                    since before: (entries: [UUID: MarkdownFileEntry], folders: [UUID: String])?) {
-        guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return }
+                                    since before: (entries: [UUID: MarkdownFileEntry], folders: [UUID: String])?) -> Bool? {
+        guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return false }
         switch outcome {
         case nil:
+            markdownConfirmingHeldDeletions = false
             markdownFolderBecameUnavailable()
+            return false
         case .missing:
+            markdownConfirmingHeldDeletions = false
             markdownFolderUnavailable = false
             markdownFolderWentMissing()
+            return false
         case .scanned(var result, let reads):
             // Writes still on the IO queue may be half recorded; the scan is applied once they finish.
             if before != nil, !markdownIOJobs.isEmpty {
                 markdownScanAfterWrites = true
                 if markdownFolderUnavailable { markdownFolderBecameUnavailable() }
-                return
+                return nil
             }
             let wasUnavailable = markdownFolderUnavailable
             markdownFolderUnavailable = false
             markdownFolderReportedMissing = false
             if let before {
-                guard storage.index.allNotebookFolders == before.folders else { return markdownFolderNeedsScan() }
+                guard storage.index.allNotebookFolders == before.folders else { return nil }
                 let now = storage.index.allEntries
                 let written = Set(before.entries.keys).symmetricDifference(now.keys)
                     .union(now.filter { id, entry in
@@ -160,7 +185,15 @@ extension NoteStore {
                     }.keys)
                 result.leaveOut(written)
             }
-            applyExternalChanges(result, reads: reads, atLaunch: false)
+            let confirming = markdownConfirmingHeldDeletions && !heldMarkdownDeletions.isEmpty
+            markdownConfirmingHeldDeletions = false
+            if confirming {
+                let held = heldMarkdownDeletions
+                heldMarkdownDeletions = []
+                MassDeletionGuard.save([], dataDir: rootURL)
+                for id in held { unblockMarkdownBodyWrites(id, reason: Self.missingFileReason) }
+            }
+            applyExternalChanges(result, reads: reads, atLaunch: false, confirmsMassDeletion: confirming)
             if wasUnavailable {
                 scheduleSave()
                 let unread = markdownBodiesNotRead
@@ -170,6 +203,7 @@ extension NoteStore {
                 }
             }
             startMarkdownWatcherIfReady()
+            return true
         }
     }
 
@@ -689,18 +723,16 @@ extension NoteStore {
         onManyNotesDisappeared?(heldMarkdownDeletions.count)
     }
 
-    /// **Move to Recently Deleted**: the held notes whose files are still missing are deleted as usual.
-    func confirmHeldDeletions() {
-        guard let storage = markdownStorage, storage.contentRootExists, !heldMarkdownDeletions.isEmpty else { return }
-        let held = heldMarkdownDeletions
-        heldMarkdownDeletions = []
-        MassDeletionGuard.save([], dataDir: rootURL)
-        for id in held { unblockMarkdownBodyWrites(id, reason: Self.missingFileReason) }
-        switch scanMarkdownFolderNow(storage) {
-        case .scanned(let result, let reads): applyExternalChanges(result, reads: reads, atLaunch: false, confirmsMassDeletion: true)
-        case .missing: markdownFolderWentMissing()
-        case nil: markdownFolderBecameUnavailable()
+    /// **Move to Recently Deleted**: the held notes whose files are still missing are deleted as usual, by the next
+    /// scan that is applied (off the main thread, after any queued writes). A folder that is missing or doesn't
+    /// answer keeps the batch held. `done` gets whether the scan was applied.
+    func confirmHeldDeletions(then done: ((Bool) -> Void)? = nil) {
+        guard markdownStorage != nil, !heldMarkdownDeletions.isEmpty else {
+            done?(false)
+            return
         }
+        markdownConfirmingHeldDeletions = true
+        rescanMarkdownFolder { done?($0) }
     }
 
     /// What a held note shows: its last known text, since its file is missing.

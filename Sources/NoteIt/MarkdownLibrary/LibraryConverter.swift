@@ -319,9 +319,9 @@ final class LibraryConverter {
     private var snapshot: Snapshot { Snapshot(notes: store.notes, notebooks: store.notebooks) }
 
     /// Called before moving and again right before the commit.
-    private func requireUnchanged(since before: Snapshot) throws {
+    private func requireUnchanged(since before: Snapshot) async throws {
         // Edits saved by other apps reach the store through the watcher's debounce, which can't run in between.
-        guard store.rescanMarkdownFolder() else { throw LibraryConversionError.folderMissing }
+        guard await store.rescanMarkdownFolder() else { throw LibraryConversionError.folderMissing }
         flush(store)
         guard snapshot == before, !store.hasUnsavedChanges else { throw LibraryConversionError.libraryChangedDuringConversion }
     }
@@ -432,7 +432,7 @@ final class LibraryConverter {
         }
         if !failed.isEmpty { throw LibraryConversionError.notRoundTripping(failed) }
         try stop(after: .verified)
-        try requireUnchanged(since: before)
+        try await requireUnchanged(since: before)
 
         // 5. Move into place. This library's earlier files that differ go aside first; one that holds what neither
         // NoteIt wrote there nor would write now is kept beside it as a copy with a new id.
@@ -504,7 +504,7 @@ final class LibraryConverter {
         try stop(after: .moved)
 
         // 6. Commit.
-        try requireUnchanged(since: before)
+        try await requireUnchanged(since: before)
         let index = dataDir.appendingPathComponent(MarkdownPathIndex.fileName)
         journal.installedIndex = true
         try journal.save(dataDir: dataDir)
@@ -671,7 +671,7 @@ final class LibraryConverter {
         }
         if !failed.isEmpty { throw LibraryConversionError.notRoundTripping(failed) }
         try stop(after: .verified)
-        try requireUnchanged(since: before)
+        try await requireUnchanged(since: before)
 
         // 5. Move into place.
         let names = ["notes", "body-extras"]
@@ -699,7 +699,7 @@ final class LibraryConverter {
         try stop(after: .moved)
 
         // 6. Commit.
-        try requireUnchanged(since: before)
+        try await requireUnchanged(since: before)
         try LibraryLocationFile(format: .rtfd, path: LibraryLocationFile.displayPath(dataDir), libraryID: libraryID)
             .write(dataDir: dataDir)
         journal.committed = true

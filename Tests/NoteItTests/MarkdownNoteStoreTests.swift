@@ -204,7 +204,7 @@ final class MarkdownNoteStoreTests: XCTestCase {
         store.registerDerivedIndex(recorder)
         let text = try read("Note.md").replacingOccurrences(of: "old", with: "new words")
         try Data(text.utf8).write(to: content.appendingPathComponent("Note.md"))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         XCTAssertTrue(recorder.calls.contains { if case .changed(id, let body) = $0 { return body.contains("new words") } else { return false } })
         XCTAssertEqual(store.note(with: id)?.preview, "new words")
     }
@@ -242,7 +242,7 @@ final class MarkdownNoteStoreTests: XCTestCase {
 
         let text = try read("Work/Remote.md").replacingOccurrences(of: "Z\n---\n", with: "Z\nmood: calm\n---\n")
         try Data(text.utf8).write(to: content.appendingPathComponent("Work/Remote.md"))
-        store.rescanMarkdownFolder()
+        store.rescanNow()
         rtfd.updateBody(id, body("Remote\nedited"))
         try store.applyRemote(rtfd.exportPayload(id: id, kind: .note, deviceID: "a"))
         XCTAssertTrue(try read("Work/Remote.md").contains("mood: calm"), "unknown keys survive a remote edit")
