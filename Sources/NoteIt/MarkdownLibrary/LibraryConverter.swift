@@ -1042,6 +1042,7 @@ final class LibraryConverter {
         let fm = FileManager.default
         var previous: URL?
         let root = URL(fileURLWithPath: journal.contentRoot, isDirectory: true)
+        forgetRefusedRemotes(dataDir: dataDir)
         switch journal.direction {
         case .toMarkdown:
             let leftovers = ["notes", "body-extras"].map { dataDir.appendingPathComponent($0, isDirectory: true) }
@@ -1075,6 +1076,22 @@ final class LibraryConverter {
         removeStaging(journal)
         try? fm.removeItem(at: LibraryConversionJournal.url(dataDir: dataDir))
         return previous
+    }
+
+    /// Remote notes refused for this library's format (e.g. an attachment too large for a Markdown folder) may
+    /// fit the new one, so every sync state forgets its refusals and the next pass pulls them.
+    nonisolated static func forgetRefusedRemotes(dataDir: URL) {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dataDir.path)) ?? []
+        for name in names where name.hasPrefix("sync-state") && name.hasSuffix(".json") {
+            let url = dataDir.appendingPathComponent(name)
+            guard let data = try? Data(contentsOf: url),
+                  var object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  object.removeValue(forKey: "refusedRemotes") != nil,
+                  let cleaned = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]) else { continue }
+            do { try cleaned.write(to: url, options: .atomic) } catch {
+                NSLog("NoteIt: couldn't clear refused remote notes in \(name): \(error)")
+            }
+        }
     }
 }
 

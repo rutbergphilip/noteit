@@ -2,6 +2,7 @@ import AppKit
 import XCTest
 @testable import NoteIt
 import NoteItCore
+import NoteItSync
 
 /// markdown-storage Task 5.1: converting a library between RTFD and a Markdown folder.
 @MainActor
@@ -226,6 +227,34 @@ final class LibraryConverterTests: XCTestCase {
         XCTAssertEqual(kept(rtfd), notes)
         assertSameBodies(texts, bodies(rtfd))
         XCTAssertEqual(rtfd.history.versions(of: target.id).count, versions)
+    }
+
+    func testAConversionForgetsRemoteNotesTheOldFormatRefusedSoSyncPullsThem() async throws {
+        let store = try makeRTFDLibrary()
+        let refused = UUID(), synced = UUID()
+        let base = SyncState.Base(revision: UUID(), remoteMetaETag: "kept")
+        let files = ["sync-state-store1.json", "sync-state-store2.json"].map { data.appendingPathComponent($0) }
+        func refuse() throws {
+            for url in files {
+                try SyncState(bases: [synced: base], lastDeviceWrite: Date(timeIntervalSinceReferenceDate: 812_345_678.123),
+                              refusedRemotes: [refused: .init(metaETag: "e1", reason: "too large")]).save(to: url)
+            }
+        }
+        try refuse()
+        _ = try await converter(store).convert(to: .markdown(content))
+        for url in files {
+            XCTAssertEqual(SyncState.load(from: url).refusedRemotes, [:], "\(url.lastPathComponent) after converting to Markdown")
+            XCTAssertEqual(SyncState.load(from: url).bases, [synced: base])
+        }
+
+        let markdown = openMarkdown()
+        try refuse()
+        _ = try await converter(markdown).convert(to: .rtfd)
+        for url in files {
+            XCTAssertEqual(SyncState.load(from: url).refusedRemotes, [:], "\(url.lastPathComponent) after converting back")
+            XCTAssertEqual(SyncState.load(from: url).bases, [synced: base], "the rest of the sync state is kept")
+            XCTAssertEqual(SyncState.load(from: url).lastDeviceWrite, Date(timeIntervalSinceReferenceDate: 812_345_678.123))
+        }
     }
 
     func testAdoptingAFolderKeepsItsFileNames() async throws {
