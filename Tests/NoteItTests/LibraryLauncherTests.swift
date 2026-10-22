@@ -153,6 +153,44 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: current.path))
     }
 
+    func testAnInterruptedConversionThatDoesntFinishAtLaunchOpensNothingUntilItHas() throws {
+        try fm.createDirectory(at: current, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: LibraryConversionJournal.url(dataDir: current))
+        let before = try snapshot()
+        let gate = DispatchGroup()
+        gate.enter()
+        var released = false
+        func release() {
+            guard !released else { return }
+            released = true
+            gate.leave()
+        }
+        defer { release() }
+        var launcher = launcher(override: current.path)
+        launcher.finishInterruptedConversion = { _ in _ = gate.wait(timeout: .now() + 10) }
+        var shown = 0
+        launcher.showConversionPending = { _, _ in
+            shown += 1
+            return false
+        }
+        var quit = false
+        let start = Date()
+        let store: NoteStore? = launcher.launch(open: { location -> NoteStore in XCTFail("opened"); return NoteStore.opened(location: location) }, quit: { quit = true })
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3, "the main thread doesn't wait for the folder")
+        XCTAssertNil(store)
+        XCTAssertEqual(shown, 1)
+        XCTAssertTrue(quit)
+        XCTAssertEqual(try snapshot(), before, "nothing is seeded or set aside")
+
+        launcher.showConversionPending = { _, finishing in
+            release()
+            return finishing.wait(timeout: 10)
+        }
+        var opened: LibraryLocation?
+        _ = launcher.launch(open: { opened = $0 }, quit: { XCTFail("quit") })
+        XCTAssertEqual(opened, LibraryLocation(url: current, seedsFreshLibrary: false))
+    }
+
     func testQuitNoteItNeverTouchesTheDisk() throws {
         makeLibrary(at: legacy, title: "From Inkwell")
         try fm.createDirectory(at: current, withIntermediateDirectories: true)

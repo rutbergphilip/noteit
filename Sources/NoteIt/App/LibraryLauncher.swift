@@ -25,6 +25,9 @@ struct LibraryLauncher {
         /// The Markdown library's content folder isn't there: nothing may be opened or written until the user
         /// locates it.
         case contentRootMissing(URL, dataDir: URL)
+        /// A library conversion was interrupted and finishing or undoing it hasn't ended within
+        /// `conversionLaunchWait` (its folder may hang): nothing may be opened, seeded or set aside until it has.
+        case conversionPending(dataDir: URL, PendingConversion)
         /// `library-location.json` is there but can't be used (newer version or format, read error): nothing may be
         /// opened or written. The reason is shown to the user.
         case libraryLocationUnreadable(String)
@@ -52,7 +55,14 @@ struct LibraryLauncher {
         }
     }
 
+    /// Finishes or rolls back an interrupted library conversion. It runs off the main thread: it reads and moves
+    /// files in a content folder that may be on a volume that hangs.
+    var finishInterruptedConversion: @Sendable (URL) -> Void = { LibraryConverter.finishInterrupted(dataDir: $0) }
+    /// Shown while that hasn't ended; returns true once it has, false for Quit.
+    var showConversionPending: (URL, PendingConversion) -> Bool = { LibraryLauncher.presentConversionPending($0, $1) }
+
     nonisolated static let contentRootLaunchWait: TimeInterval = 1
+    nonisolated static let conversionLaunchWait: TimeInterval = 1
     nonisolated static let contentRootTimeout: TimeInterval = 10
 
     struct ContentRootCheck: Equatable {
@@ -108,7 +118,13 @@ struct LibraryLauncher {
 
     /// A Markdown library is never seeded, and neither is a data folder whose location file is damaged.
     private func applyingLocationFile(to location: LibraryLocation) -> Decision {
-        LibraryConverter.finishInterrupted(dataDir: location.url)
+        if fileManager.fileExists(atPath: LibraryConversionJournal.url(dataDir: location.url).path) {
+            let finishing = PendingConversion(dataDir: location.url, work: finishInterruptedConversion)
+            guard finishing.wait(timeout: Self.conversionLaunchWait) else {
+                log("NoteIt: an interrupted library conversion is still being finished; waiting for it")
+                return .conversionPending(dataDir: location.url, finishing)
+            }
+        }
         // A conversion that couldn't be finished or undone: nothing is set aside or seeded until it is.
         let conversionPending = fileManager.fileExists(atPath: LibraryConversionJournal.url(dataDir: location.url).path)
         var file: LibraryLocationFile
@@ -192,6 +208,11 @@ struct LibraryLauncher {
                 }
             }
             log("NoteIt: quitting; the library folder \(url.path) is missing")
+            quit()
+            return nil
+        case .conversionPending(let dataDir, let finishing):
+            if showConversionPending(dataDir, finishing) { return launch(open: open, quit: quit) }
+            log("NoteIt: quitting; an interrupted library conversion hasn't finished")
             quit()
             return nil
         case .libraryLocationUnreadable(let reason):
@@ -319,6 +340,22 @@ struct LibraryLauncher {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
+    /// Waits for `finishing` with a Quit button; the alert closes by itself once it has ended.
+    static func presentConversionPending(_ dataDir: URL, _ finishing: PendingConversion) -> Bool {
+        _ = NSApplication.shared
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Finishing the library conversion…"
+        alert.informativeText = "NoteIt was converting your library when it last quit, and the library folder isn’t responding. Your notes open once the conversion is finished; nothing is changed meanwhile. If the folder is on a disk or NAS, check that it’s connected."
+        alert.addButton(withTitle: "Quit")
+        let timer = Timer(timeInterval: 0.25, repeats: true) { _ in
+            if finishing.wait(timeout: 0) { NSApp.stopModal(withCode: .OK) }
+        }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        defer { timer.invalidate() }
+        return alert.runModal() == .OK || finishing.wait(timeout: 0)
+    }
+
     static func presentLibraryLocationUnreadable(_ reason: String) {
         _ = NSApplication.shared
         NSApp.activate(ignoringOtherApps: true)
@@ -400,4 +437,24 @@ struct LibraryEvidence: Sendable {
         evidence.foundIDs = found.count
         return evidence
     }
+}
+
+/// Finishing or undoing an interrupted library conversion, running off the main thread.
+final class PendingConversion: Equatable, @unchecked Sendable {
+    private let done = DispatchGroup()
+
+    init(dataDir: URL, work: @escaping @Sendable (URL) -> Void) {
+        done.enter()
+        DispatchQueue.global(qos: .userInitiated).async { [done] in
+            work(dataDir)
+            done.leave()
+        }
+    }
+
+    /// Whether it has ended, waiting up to `timeout`.
+    func wait(timeout: TimeInterval) -> Bool {
+        done.wait(timeout: .now() + timeout) == .success
+    }
+
+    static func == (lhs: PendingConversion, rhs: PendingConversion) -> Bool { lhs === rhs }
 }
