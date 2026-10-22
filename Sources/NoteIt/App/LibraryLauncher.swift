@@ -42,6 +42,8 @@ struct LibraryLauncher {
     /// located, or nil for Quit.
     var showContentRootMissing: (URL, String?) -> URL? = { LibraryLauncher.presentContentRootMissing($0, refused: $1) }
     var showLibraryLocationUnreadable: (String) -> Void = { LibraryLauncher.presentLibraryLocationUnreadable($0) }
+    /// Asked before a located folder that can't be shown to be this library is used; false refuses it.
+    var confirmUnverifiedFolder: (URL) -> Bool = { LibraryLauncher.presentConfirmUnverifiedFolder($0) }
     /// Inspects the Markdown content folder, which may be on a NAS that went away: nil when it didn't answer in time.
     var checkContentRoot: (LibraryLocationFile) -> ContentRootCheck? = { file in
         BoundedFileAccess.shared.runBlocking(key: "content-root:\(file.path)", timeout: LibraryLauncher.contentRootTimeout) {
@@ -180,7 +182,7 @@ struct LibraryLauncher {
         case .contentRootMissing(let url, let dataDir):
             var refused: String?
             while let chosen = showContentRootMissing(url, refused) {
-                refused = Self.relocate(to: chosen, dataDir: dataDir, fileManager: fileManager)
+                refused = Self.relocate(to: chosen, dataDir: dataDir, fileManager: fileManager, confirmUnverified: confirmUnverifiedFolder)
                 if refused == nil {
                     log("NoteIt: library folder located at \(chosen.path)")
                     return launch(open: open, quit: quit)
@@ -197,9 +199,13 @@ struct LibraryLauncher {
         }
     }
 
-    /// Points `library-location.json` at `folder` after checking that it holds this library's notes; returns why
-    /// it was refused, or nil. Nothing else is written, so a wrong choice changes nothing.
-    nonisolated static func relocate(to folder: URL, dataDir: URL, fileManager: FileManager = .default) -> String? {
+    /// Points `library-location.json` at `folder` after checking that it holds this library: its `.noteit/library.json`
+    /// has this library's id, or (without one) more than half of the note ids on record are in its files' front
+    /// matter. A folder of another library is refused; with no notes on record, a folder without the library id
+    /// needs `confirmUnverified`. Returns why it was refused, or nil. Nothing else is written, so a wrong choice
+    /// changes nothing.
+    nonisolated static func relocate(to folder: URL, dataDir: URL, fileManager: FileManager = .default,
+                                     confirmUnverified: (URL) -> Bool = { _ in false }) -> String? {
         let folder = folder.standardizedFileURL
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
@@ -212,10 +218,24 @@ struct LibraryLauncher {
               file.format == .markdown else {
             return "NoteIt can’t read its library settings."
         }
-        let known = MarkdownPathIndex(dataDir: dataDir).allEntries.values.map(\.path)
-            .filter { !$0.hasPrefix(MarkdownBodyStorage.trashFolder + "/") }
-        if !known.isEmpty, !known.contains(where: { fileManager.fileExists(atPath: folder.appendingPathComponent($0).path) }) {
-            return "\(LibraryLocationFile.displayPath(folder)) doesn’t have the notes of your library. Choose the folder that holds them."
+        let known = Set(MarkdownPathIndex(dataDir: dataDir).allEntries.filter { !FolderScanner.isTrash($0.value.path) }.keys)
+        let name = LibraryLocationFile.displayPath(folder)
+        guard let evidence = BoundedFileAccess.shared.runBlocking(key: "locate:\(folder.path)", timeout: contentRootTimeout, {
+            LibraryEvidence.collect(in: folder, knownIDs: known)
+        }) else {
+            return "\(name) didn’t respond. If it’s on a disk or NAS, check that it’s connected and try again."
+        }
+        if let other = evidence.libraryID, other != file.libraryID {
+            return "\(name) holds another NoteIt library. Choose the folder that holds this library’s notes."
+        }
+        if evidence.libraryID == nil {
+            if known.isEmpty {
+                guard confirmUnverified(folder) else {
+                    return "\(name) isn’t marked as your library. Choose the folder that holds your notes."
+                }
+            } else if evidence.foundIDs * 2 <= known.count {
+                return "\(name) doesn’t have the notes of your library. Choose the folder that holds them."
+            }
         }
         file.path = LibraryLocationFile.displayPath(folder)
         file.bookmark = try? folder.bookmarkData()
@@ -256,7 +276,7 @@ struct LibraryLauncher {
     static func contentRootLost(_ url: URL, dataDir: URL) {
         var refused: String?
         while let chosen = presentContentRootMissing(url, refused: refused) {
-            refused = relocate(to: chosen, dataDir: dataDir)
+            refused = relocate(to: chosen, dataDir: dataDir, confirmUnverified: presentConfirmUnverifiedFolder)
             if refused == nil {
                 relaunch()
                 return
@@ -276,6 +296,18 @@ struct LibraryLauncher {
             try? task.run()
         }
         NSApp.terminate(nil)
+    }
+
+    static func presentConfirmUnverifiedFolder(_ folder: URL) -> Bool {
+        _ = NSApplication.shared
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Use “\(folder.lastPathComponent)” for your notes?"
+        alert.informativeText = "NoteIt can’t tell whether \(LibraryLocationFile.displayPath(folder)) holds your library. If you use it, the Markdown files in it become your notes."
+        alert.addButton(withTitle: "Use Folder")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     static func presentLibraryLocationUnreadable(_ reason: String) {
@@ -311,4 +343,42 @@ struct LibraryLauncher {
         isLegacyAppRunning: { LegacyAppQuitter.isRunning() },
         quitLegacyApp: { LegacyAppQuitter.quit(reason: .moveNotes) }
     )
+}
+
+/// What a located folder shows about which library it holds.
+struct LibraryEvidence: Sendable {
+    /// The id in its `.noteit/library.json`, if any.
+    var libraryID: UUID?
+    /// How many of the known note ids its Markdown files carry.
+    var foundIDs = 0
+
+    /// Reads front matter until more than half of `knownIDs` are found; skips hidden folders, links and large files.
+    nonisolated static func collect(in folder: URL, knownIDs: Set<UUID>) -> LibraryEvidence {
+        var evidence = LibraryEvidence(libraryID: LibraryConverter.libraryFileID(in: folder))
+        guard !knownIDs.isEmpty else { return evidence }
+        var found = Set<UUID>()
+        func walk(_ url: URL, depth: Int) {
+            guard depth <= NotebookFolders.maxDepth + 1, found.count * 2 <= knownIDs.count,
+                  let names = try? FileManager.default.contentsOfDirectory(atPath: url.path) else { return }
+            for name in names.sorted() where !name.hasPrefix(".") {
+                guard found.count * 2 <= knownIDs.count else { return }
+                let item = url.appendingPathComponent(name)
+                var info = stat()
+                guard lstat(item.path, &info) == 0 else { continue }
+                switch info.st_mode & S_IFMT {
+                case S_IFDIR:
+                    walk(item, depth: depth + 1)
+                case S_IFREG where FolderScanner.isMarkdown(name) && Int64(info.st_size) <= FolderScanner.maxFileSize:
+                    if let data = try? Data(contentsOf: item), let id = FolderScanner.frontMatterID(data), knownIDs.contains(id) {
+                        found.insert(id)
+                    }
+                default:
+                    continue
+                }
+            }
+        }
+        walk(folder, depth: 0)
+        evidence.foundIDs = found.count
+        return evidence
+    }
 }

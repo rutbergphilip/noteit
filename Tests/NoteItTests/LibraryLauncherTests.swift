@@ -291,11 +291,12 @@ final class LibraryLauncherTests: XCTestCase {
         let other = base.appendingPathComponent("Other", isDirectory: true)
         try fm.createDirectory(at: moved.appendingPathComponent("Work"), withIntermediateDirectories: true)
         try fm.createDirectory(at: other, withIntermediateDirectories: true)
-        try Data("# Plan\n".utf8).write(to: moved.appendingPathComponent("Work/Plan.md"))
+        let planID = UUID()
+        try Data("---\nid: \(planID.uuidString)\n---\n# Plan\n".utf8).write(to: moved.appendingPathComponent("Work/Plan.md"))
         try Data("# Unrelated\n".utf8).write(to: other.appendingPathComponent("Unrelated.md"))
         try fm.createDirectory(at: dataDir.appendingPathComponent("notes"), withIntermediateDirectories: true)
         let index = MarkdownPathIndex(dataDir: dataDir)
-        index.set(MarkdownFileEntry(path: "Work/Plan.md"), for: UUID())
+        index.set(MarkdownFileEntry(path: "Work/Plan.md"), for: planID)
         try index.save()
         try writeLocationFile(markdownFile(at: gone))
 
@@ -311,6 +312,75 @@ final class LibraryLauncherTests: XCTestCase {
         guard case .loaded(let saved) = LibraryLocationFile.load(dataDir: dataDir) else { return XCTFail("not saved") }
         XCTAssertEqual(saved.contentRootURL.standardizedFileURL, moved.standardizedFileURL)
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: other.path), ["Unrelated.md"], "a refused folder isn't touched")
+    }
+
+    private func note(_ id: UUID?, _ name: String, in folder: URL) throws {
+        try fm.createDirectory(at: folder.appendingPathComponent(name).deletingLastPathComponent(), withIntermediateDirectories: true)
+        let front = id.map { "---\nid: \($0.uuidString)\n---\n" } ?? ""
+        try Data((front + "# Note\n").utf8).write(to: folder.appendingPathComponent(name))
+    }
+
+    private func libraryFile(_ id: UUID, in folder: URL) throws {
+        try fm.createDirectory(at: LibraryConverter.libraryFileURL(in: folder).deletingLastPathComponent(), withIntermediateDirectories: true)
+        try LibraryConverter.libraryFileData(libraryID: id).write(to: LibraryConverter.libraryFileURL(in: folder))
+    }
+
+    /// A Markdown library in a folder that went away, with `ids` on record.
+    private func lostLibrary(_ ids: [UUID: String]) throws -> LibraryLocationFile {
+        try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let index = MarkdownPathIndex(dataDir: dataDir)
+        for (id, path) in ids { index.set(MarkdownFileEntry(path: path), for: id) }
+        try index.save()
+        let file = markdownFile(at: base.appendingPathComponent("Gone", isDirectory: true))
+        try writeLocationFile(file)
+        return file
+    }
+
+    func testLocateNeedsMostOfTheLibrarysNoteIDsNotJustAMatchingPath() throws {
+        let welcome = UUID(), plan = UUID(), ideas = UUID()
+        let file = try lostLibrary([welcome: "Welcome to NoteIt.md", plan: "Plan.md", ideas: "Ideas.md"])
+        let foreign = base.appendingPathComponent("Foreign", isDirectory: true)
+        try note(nil, "Welcome to NoteIt.md", in: foreign)
+        try note(UUID(), "Plan.md", in: foreign)
+        let some = base.appendingPathComponent("Some", isDirectory: true)
+        try note(welcome, "Welcome to NoteIt.md", in: some)
+        let mine = base.appendingPathComponent("Mine", isDirectory: true)
+        try note(welcome, "Renamed.md", in: mine)
+        try note(plan, "Work/Plan.md", in: mine)
+        let foreignBefore = try snapshot()
+
+        XCTAssertNotNil(LibraryLauncher.relocate(to: foreign, dataDir: dataDir))
+        XCTAssertNotNil(LibraryLauncher.relocate(to: some, dataDir: dataDir), "one note of three is not a clear majority")
+        XCTAssertEqual(try snapshot(), foreignBefore, "nothing is written for a refused folder")
+        XCTAssertNil(LibraryLauncher.relocate(to: mine, dataDir: dataDir))
+        guard case .loaded(let saved) = LibraryLocationFile.load(dataDir: dataDir) else { return XCTFail("not saved") }
+        XCTAssertEqual(saved.contentRootURL.standardizedFileURL, mine.standardizedFileURL)
+        XCTAssertEqual(saved.libraryID, file.libraryID)
+    }
+
+    func testLocateRefusesAnotherLibrarysFolder() throws {
+        let plan = UUID()
+        _ = try lostLibrary([plan: "Plan.md"])
+        let other = base.appendingPathComponent("Other Library", isDirectory: true)
+        try note(plan, "Plan.md", in: other)
+        try libraryFile(UUID(), in: other)
+
+        XCTAssertTrue(LibraryLauncher.relocate(to: other, dataDir: dataDir)?.contains("another NoteIt library") == true)
+    }
+
+    func testLocateWithNoNotesOnRecordNeedsTheLibraryIDOrConfirmation() throws {
+        let file = try lostLibrary([:])
+        let unmarked = base.appendingPathComponent("Unmarked", isDirectory: true)
+        try note(nil, "Anything.md", in: unmarked)
+        var asked: [URL] = []
+
+        XCTAssertNotNil(LibraryLauncher.relocate(to: unmarked, dataDir: dataDir, confirmUnverified: { asked.append($0); return false }))
+        XCTAssertEqual(asked.count, 1)
+        XCTAssertNil(LibraryLauncher.relocate(to: unmarked, dataDir: dataDir, confirmUnverified: { _ in true }))
+
+        let marked = base.appendingPathComponent("Marked", isDirectory: true)
+        try libraryFile(file.libraryID, in: marked)
+        XCTAssertNil(LibraryLauncher.relocate(to: marked, dataDir: dataDir, confirmUnverified: { _ in XCTFail("asked"); return false }))
     }
 
     func testUnresponsiveContentFolderIsReportedWithoutHangingLaunch() throws {
