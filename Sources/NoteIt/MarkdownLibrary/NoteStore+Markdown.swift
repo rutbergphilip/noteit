@@ -130,10 +130,11 @@ extension NoteStore {
         let root = storage.contentRootURL
         let index = storage.index
         let check = storage.rootCheck
+        let ledger = storage.ledger
         let scan = markdownFolderScan
         return {
             guard check(root) else { return .missing }
-            let result = scan(root, index)
+            let result = scan(root, index, ledger)
             return check(root) ? .scanned(result) : .missing
         }
     }
@@ -189,7 +190,7 @@ extension NoteStore {
     /// Starts the FSEvents watcher; the app calls this once the library is loaded.
     func startWatchingMarkdownFolder() {
         guard let storage = markdownStorage, markdownWatcher == nil else { return }
-        let watcher = MarkdownFolderWatcher(root: storage.contentRootURL, ledger: storage.ledger,
+        let watcher = MarkdownFolderWatcher(root: storage.contentRootURL,
                                             onChange: { [weak self] in self?.markdownFolderNeedsScan() },
                                             onRootChanged: { [weak self] in self?.markdownFolderNeedsScan() })
         guard watcher.start() else { return NSLog("NoteIt: couldn't watch \(storage.contentRootURL.path) for changes") }

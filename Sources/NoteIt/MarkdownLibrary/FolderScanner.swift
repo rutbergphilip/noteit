@@ -47,8 +47,10 @@ enum FolderScanner {
     static let maxFileSize: Int64 = 10 * 1024 * 1024
     static let trashFolder = ".trash"
 
-    static func scan(contentRoot: URL, index: MarkdownPathIndex, largeLibraryThreshold: Int = largeLibraryThreshold,
-                     maxFileSize: Int64 = maxFileSize) -> FolderScanResult {
+    /// Files whose bytes `ledger` records as just written by NoteIt at their path are left to the write that is
+    /// recording them.
+    static func scan(contentRoot: URL, index: MarkdownPathIndex, ledger: WriteLedger? = nil,
+                     largeLibraryThreshold: Int = largeLibraryThreshold, maxFileSize: Int64 = maxFileSize) -> FolderScanResult {
         var result = FolderScanResult()
         var files: [(path: String, stat: MarkdownFileStat)] = []
         var placeholders = Set<String>()
@@ -70,12 +72,13 @@ enum FolderScanner {
                 continue
             }
             seen.insert(id)
-            compare(file, id: id, entry: entry, contentRoot: contentRoot, index: index, result: &result)
+            compare(file, id: id, entry: entry, contentRoot: contentRoot, index: index, ledger: ledger, result: &result)
         }
 
         var claimed = Set<UUID>()
         for file in unknown {
             let data = try? readData(contentRoot.appendingPathComponent(file.path))
+            if let data, ledger?.isOwnWrite(path: file.path, sha256: AttachmentStore.sha256(data)) == true { continue }
             var id = data.flatMap(frontMatterID)
             if id == nil, let inodeID = inodes[file.stat.inode], file.stat.inode != 0, !seen.contains(inodeID),
                let entry = entries[inodeID], !exists(entry.path, in: contentRoot) {
@@ -117,18 +120,19 @@ enum FolderScanner {
     }
 
     private static func compare(_ file: (path: String, stat: MarkdownFileStat), id: UUID, entry: MarkdownFileEntry,
-                                contentRoot: URL, index: MarkdownPathIndex, result: inout FolderScanResult) {
+                                contentRoot: URL, index: MarkdownPathIndex, ledger: WriteLedger?, result: inout FolderScanResult) {
         if file.path != entry.path { result.moved[id] = file.path }
         guard !file.stat.matches(entry) else { return }
         guard let data = try? readData(contentRoot.appendingPathComponent(file.path)) else { return }
-        if AttachmentStore.sha256(data) == entry.sha256 {
+        let sha = AttachmentStore.sha256(data)
+        if sha == entry.sha256 {
             index.update(id) { stored in
                 guard stored.sha256 == entry.sha256 else { return }
                 stored.size = file.stat.size
                 stored.mtimeNs = file.stat.mtimeNs
                 stored.inode = file.stat.inode
             }
-        } else {
+        } else if ledger?.isOwnWrite(path: file.path, sha256: sha) != true {
             result.changed[id] = file.path
         }
     }

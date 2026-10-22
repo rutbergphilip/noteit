@@ -3,8 +3,8 @@ import Foundation
 
 /// Watches the content folder with FSEvents (spec §3.5). File-level events arrive after 0.3 s; once 0.5 s pass
 /// without another one, or at most `maxDelay` after the first, `onChange` asks for a rescan, which compares every file with `markdown-files.json` and so
-/// also covers editors that save through a temp file and a rename. Events for files NoteIt just wrote (still
-/// carrying a hash in the ledger) and for `.noteit/` are dropped. `onRootChanged` reports the folder itself
+/// also covers editors that save through a temp file and a rename; the rescan tells NoteIt's own writes (still
+/// carrying a hash in the ledger) apart. Events for `.noteit/` are dropped, and no file is read here. `onRootChanged` reports the folder itself
 /// being moved, renamed or unmounted. FSEvents doesn't see changes made by other Macs on a network volume, so there
 /// the folder is also rescanned every `networkPollInterval`.
 final class MarkdownFolderWatcher: @unchecked Sendable {
@@ -14,23 +14,13 @@ final class MarkdownFolderWatcher: @unchecked Sendable {
     static let maxDelay: TimeInterval = 2
     static let networkPollInterval: TimeInterval = 15
 
-    private let root: URL
-    private let ledger: WriteLedger
-    private let onChange: @MainActor () -> Void
-    private let onRootChanged: @MainActor () -> Void
-    private let queue = DispatchQueue(label: "NoteIt.MarkdownFolderWatcher")
+    private let core: Core
     private var stream: FSEventStreamRef?
-    private var pending: DispatchWorkItem?
-    /// The first event the pending rescan waits for; runs on `queue`.
-    private var firstPendingEvent: DispatchTime?
     private var poll: DispatchSourceTimer?
 
-    init(root: URL, ledger: WriteLedger, onChange: @escaping @MainActor () -> Void,
+    init(root: URL, onChange: @escaping @MainActor () -> Void,
          onRootChanged: @escaping @MainActor () -> Void) {
-        self.root = root.resolvingSymlinksInPath().standardizedFileURL
-        self.ledger = ledger
-        self.onChange = onChange
-        self.onRootChanged = onRootChanged
+        core = Core(root: root.resolvingSymlinksInPath().standardizedFileURL, onChange: onChange, onRootChanged: onRootChanged)
     }
 
     deinit { stop() }
@@ -38,86 +28,121 @@ final class MarkdownFolderWatcher: @unchecked Sendable {
     @discardableResult
     func start() -> Bool {
         guard stream == nil else { return true }
-        var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
-                                           retain: nil, release: nil, copyDescription: nil)
+        let info = Unmanaged.passRetained(core).toOpaque()
+        var context = FSEventStreamContext(version: 0, info: info, retain: nil,
+                                           release: { Unmanaged<Core>.fromOpaque($0!).release() }, copyDescription: nil)
         let flags = UInt32(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagNoDefer
             | kFSEventStreamCreateFlagWatchRoot | kFSEventStreamCreateFlagUseCFTypes)
         let callback: FSEventStreamCallback = { _, info, count, paths, eventFlags, _ in
             guard let info else { return }
-            let watcher = Unmanaged<MarkdownFolderWatcher>.fromOpaque(info).takeUnretainedValue()
+            let core = Unmanaged<Core>.fromOpaque(info).takeUnretainedValue()
             let list = Unmanaged<CFArray>.fromOpaque(paths).takeUnretainedValue() as? [String] ?? []
             let flags = (0..<count).map { eventFlags[$0] }
-            watcher.handle(Array(zip(list, flags)))
+            core.handle(Array(zip(list, flags)))
         }
-        guard let created = FSEventStreamCreate(nil, callback, &context, [root.path] as CFArray,
+        guard let created = FSEventStreamCreate(nil, callback, &context, [core.root.path] as CFArray,
                                                 FSEventStreamEventId(kFSEventStreamEventIdSinceNow), Self.latency, flags)
-        else { return false }
-        FSEventStreamSetDispatchQueue(created, queue)
+        else {
+            Unmanaged<Core>.fromOpaque(info).release()
+            return false
+        }
+        FSEventStreamSetDispatchQueue(created, core.queue)
         guard FSEventStreamStart(created) else {
             FSEventStreamInvalidate(created)
             FSEventStreamRelease(created)
             return false
         }
         stream = created
-        if (try? root.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal) == false {
-            let timer = DispatchSource.makeTimerSource(queue: queue)
+        if (try? core.root.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal) == false {
+            let timer = DispatchSource.makeTimerSource(queue: core.queue)
             timer.schedule(deadline: .now() + Self.networkPollInterval, repeating: Self.networkPollInterval)
-            timer.setEventHandler { [weak self] in
-                guard let self else { return }
-                DispatchQueue.main.async { MainActor.assumeIsolated { self.onChange() } }
-            }
+            timer.setEventHandler { [core] in core.requestRescan() }
             timer.resume()
             poll = timer
         }
         return true
     }
 
+    /// Never waits: the stream is torn down on the watcher's queue, and nothing it still had pending is reported.
     func stop() {
         poll?.cancel()
         poll = nil
+        core.stop()
         guard let stream else { return }
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
         self.stream = nil
-        queue.sync { pending?.cancel() }
+        let box = StreamBox(stream)
+        core.queue.async {
+            FSEventStreamStop(box.stream)
+            FSEventStreamInvalidate(box.stream)
+            FSEventStreamRelease(box.stream)
+        }
     }
 
-    /// Runs on `queue`.
-    private func handle(_ events: [(path: String, flags: FSEventStreamEventFlags)]) {
-        var relevant = false
-        for event in events {
-            if event.flags & UInt32(kFSEventStreamEventFlagRootChanged) != 0 {
-                DispatchQueue.main.async { MainActor.assumeIsolated { self.onRootChanged() } }
-                return
+    private struct StreamBox: @unchecked Sendable {
+        let stream: FSEventStreamRef
+        init(_ stream: FSEventStreamRef) { self.stream = stream }
+    }
+
+    /// What the stream's callbacks reach; it outlives the watcher until the stream is released.
+    private final class Core: @unchecked Sendable {
+        let root: URL
+        let queue = DispatchQueue(label: "NoteIt.MarkdownFolderWatcher")
+        private let onChange: @MainActor () -> Void
+        private let onRootChanged: @MainActor () -> Void
+        private let lock = NSLock()
+        private var stopped = false
+        /// Run on `queue`.
+        private var pending: DispatchWorkItem?
+        private var firstPendingEvent: DispatchTime?
+
+        init(root: URL, onChange: @escaping @MainActor () -> Void, onRootChanged: @escaping @MainActor () -> Void) {
+            self.root = root
+            self.onChange = onChange
+            self.onRootChanged = onRootChanged
+        }
+
+        func stop() { lock.withLock { stopped = true } }
+
+        private var isStopped: Bool { lock.withLock { stopped } }
+
+        func requestRescan() {
+            DispatchQueue.main.async { [self] in
+                MainActor.assumeIsolated { if !isStopped { onChange() } }
             }
-            let rescan = UInt32(kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
-                | kFSEventStreamEventFlagKernelDropped)
-            if event.flags & rescan != 0 || isRelevant(event.path, flags: event.flags) { relevant = true }
         }
-        guard relevant else { return }
-        pending?.cancel()
-        let now = DispatchTime.now()
-        let first = firstPendingEvent ?? now
-        firstPendingEvent = first
-        let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
-            self.firstPendingEvent = nil
-            DispatchQueue.main.async { MainActor.assumeIsolated { self.onChange() } }
-        }
-        pending = work
-        queue.asyncAfter(deadline: min(now + Self.debounce, first + Self.maxDelay), execute: work)
-    }
 
-    private func isRelevant(_ path: String, flags: FSEventStreamEventFlags) -> Bool {
-        guard let relative = Self.relativePath(path, root: root.path) else { return true }
-        if relative.isEmpty { return true }
-        if relative == MarkdownBodyStorage.privateFolder || relative.hasPrefix(MarkdownBodyStorage.privateFolder + "/") {
-            return false
+        /// Runs on `queue`. Looks at paths only: reading a file here could hang on a network volume, and the
+        /// rescan tells NoteIt's own writes apart through the ledger.
+        func handle(_ events: [(path: String, flags: FSEventStreamEventFlags)]) {
+            guard !isStopped else { return }
+            var relevant = false
+            for event in events {
+                if event.flags & UInt32(kFSEventStreamEventFlagRootChanged) != 0 {
+                    DispatchQueue.main.async { [self] in
+                        MainActor.assumeIsolated { if !isStopped { onRootChanged() } }
+                    }
+                    return
+                }
+                if isRelevant(event.path) { relevant = true }
+            }
+            guard relevant else { return }
+            pending?.cancel()
+            let now = DispatchTime.now()
+            let first = firstPendingEvent ?? now
+            firstPendingEvent = first
+            let work = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.firstPendingEvent = nil
+                self.requestRescan()
+            }
+            pending = work
+            queue.asyncAfter(deadline: min(now + MarkdownFolderWatcher.debounce, first + MarkdownFolderWatcher.maxDelay), execute: work)
         }
-        guard flags & UInt32(kFSEventStreamEventFlagItemIsFile) != 0, relative.lowercased().hasSuffix(".md"),
-              let data = FileManager.default.contents(atPath: path) else { return true }
-        return !ledger.isOwnWrite(path: relative, sha256: AttachmentStore.sha256(data))
+
+        private func isRelevant(_ path: String) -> Bool {
+            guard let relative = MarkdownFolderWatcher.relativePath(path, root: root.path) else { return true }
+            return relative != MarkdownBodyStorage.privateFolder && !relative.hasPrefix(MarkdownBodyStorage.privateFolder + "/")
+        }
     }
 
     /// FSEvents reports real paths (`/private/var/…`), so both sides are compared after resolving.

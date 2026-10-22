@@ -66,7 +66,7 @@ final class ExternalChangeTests: XCTestCase {
         store.markdownUnavailableRetryInterval = 0.2
         let realScan = store.markdownFolderScan
         let hung = DispatchSemaphore(value: 0)
-        store.markdownFolderScan = { _, _ in
+        store.markdownFolderScan = { _, _, _ in
             _ = hung.wait(timeout: .now() + 3)
             var result = FolderScanResult()
             result.removed = [kept]
@@ -354,7 +354,7 @@ final class ExternalChangeTests: XCTestCase {
 
     func testAFileWrittenWithoutPauseDoesNotPostponeTheRescanForever() throws {
         var rescans: [Date] = []
-        let watcher = MarkdownFolderWatcher(root: content, ledger: WriteLedger(), onChange: { rescans.append(Date()) },
+        let watcher = MarkdownFolderWatcher(root: content, onChange: { rescans.append(Date()) },
                                             onRootChanged: {})
         XCTAssertTrue(watcher.start())
         defer { watcher.stop() }
@@ -369,6 +369,39 @@ final class ExternalChangeTests: XCTestCase {
         }
         let first = try XCTUnwrap(rescans.first, "a file written every 0.1 s must not hold the rescan back")
         XCTAssertLessThan(first.timeIntervalSince(start), MarkdownFolderWatcher.maxDelay + 1)
+    }
+
+    func testTheWatcherReadsNoFileAndItsStopNeverWaits() throws {
+        var rescans = 0
+        let watcher = MarkdownFolderWatcher(root: content, onChange: { rescans += 1 }, onRootChanged: {})
+        XCTAssertTrue(watcher.start())
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        try put("Edited.md", "# Edited\n")
+        let deadline = Date().addingTimeInterval(3)
+        while rescans == 0, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertEqual(rescans, 1, "the event asks for a rescan without reading the file")
+        try put("Next.md", "# Next\n")
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        let started = Date()
+        watcher.stop()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1, "stopping never waits for the watcher's queue")
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(rescans, 1, "nothing pending is reported after the stop")
+    }
+
+    func testTheScanTellsNoteItsOwnWritesApartThroughTheLedger() throws {
+        try put("Note.md", "# Note\n\nfirst\n")
+        let store = open()
+        let storage = try XCTUnwrap(store.markdownStorage)
+        let id = try note(store, titled: "Note").id
+        let rewritten = Data("---\nid: \(id.uuidString)\n---\n# Note\n\nbeing written\n".utf8)
+        storage.ledger.record(path: "Note.md", sha256: AttachmentStore.sha256(rewritten))
+        try rewritten.write(to: content.appendingPathComponent("Note.md"))
+        try Data("# Fresh\n".utf8).write(to: content.appendingPathComponent("Fresh.md"))
+        storage.ledger.record(path: "Fresh.md", sha256: AttachmentStore.sha256(Data("# Fresh\n".utf8)))
+        let result = FolderScanner.scan(contentRoot: content, index: storage.index, ledger: storage.ledger)
+        XCTAssertEqual(result.changed, [:], "a file NoteIt is writing isn't an outside edit")
+        XCTAssertEqual(result.added, [])
     }
 }
 

@@ -125,7 +125,9 @@ final class NoteStore: ObservableObject {
     var markdownScanRunning = false
     var markdownScanAgain = false
     /// How a rescan reads the content folder; tests inject one that hangs like a dead network volume.
-    var markdownFolderScan: @Sendable (URL, MarkdownPathIndex) -> FolderScanResult = { FolderScanner.scan(contentRoot: $0, index: $1) }
+    var markdownFolderScan: @Sendable (URL, MarkdownPathIndex, WriteLedger) -> FolderScanResult = {
+        FolderScanner.scan(contentRoot: $0, index: $1, ledger: $2)
+    }
     /// A rescan that takes longer means the folder is unavailable; notes are then read-only until it responds.
     var markdownScanTimeout: TimeInterval = 20
     var markdownUnavailableRetryInterval: TimeInterval = 15
