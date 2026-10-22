@@ -106,13 +106,23 @@ extension NoteStore {
                                             onRootChanged: { [weak self] in self?.rescanMarkdownFolder() })
         guard watcher.start() else { return NSLog("NoteIt: couldn't watch \(storage.contentRootURL.path) for changes") }
         markdownWatcher = watcher
+        let attachments = storage.attachments
+        let timer = Timer(timeInterval: Self.attachmentSweepInterval, repeats: true) { _ in attachments.scheduleSweep() }
+        timer.tolerance = 5 * 60
+        RunLoop.main.add(timer, forMode: .common)
+        attachmentSweepTimer = timer
         rescanMarkdownFolder()
     }
 
     func stopWatchingMarkdownFolder() {
         markdownWatcher?.stop()
         markdownWatcher = nil
+        attachmentSweepTimer?.invalidate()
+        attachmentSweepTimer = nil
     }
+
+    /// How often unused attachments are looked for when nothing else is written.
+    static let attachmentSweepInterval: TimeInterval = 60 * 60
 
     private func markdownFolderWentMissing() {
         guard let storage = markdownStorage, !markdownFolderReportedMissing else { return }
@@ -141,6 +151,7 @@ extension NoteStore {
         if result.hasNoteChanges || notes != before || notebooks != notebooksBefore {
             notesChangedBeforeDerivedIndexes = true
         }
+        storage.attachments.scheduleSweep()
     }
 
     /// Applies one scan: notebook folders first, so new files land in their notebooks, then files, then
@@ -172,6 +183,7 @@ extension NoteStore {
         metadataChanged = removeNotebooksWithoutFolders(result.notebookFolders) || metadataChanged
         try? storage.index.save()
         if metadataChanged { commitOutsideMetadataChange() }
+        storage.attachments.scheduleSweep()
     }
 
     // MARK: Notebook folders

@@ -16,6 +16,9 @@ final class AttachmentStore: @unchecked Sendable {
     private let lock = NSLock()
     private var seenReferenced: Set<String> = []
     private var unreferencedSince: [String: Date] = [:]
+    private let sweepQueue = DispatchQueue(label: "NoteIt.AttachmentSweep", qos: .utility)
+    private let sweepLock = NSLock()
+    private var sweepQueued = false
 
     init(contentRoot: URL, index: MarkdownPathIndex) {
         self.contentRoot = contentRoot
@@ -28,8 +31,18 @@ final class AttachmentStore: @unchecked Sendable {
 
     /// Stores `attachment` (its SHA-256 is `sha`) unless a file with the same bytes is there, and returns the file
     /// name in `_attachments/`.
+    /// Runs under the sweep's lock and restarts the file's 24 hours, so a sweep can't trash a file a note is being
+    /// written to refer to.
     func store(_ attachment: Attachment, sha: String) throws -> String {
         guard AttachmentLimit.allows(byteCount: attachment.data.count) else { throw StoreError.tooLarge(attachment.name) }
+        return try lock.withLock {
+            let name = try storeUnlocked(attachment, sha: sha)
+            unreferencedSince[name.lowercased()] = nil
+            return name
+        }
+    }
+
+    private func storeUnlocked(_ attachment: Attachment, sha: String) throws -> String {
         if let existing = existingFile(sha: sha) { return existing }
         let fm = FileManager.default
         try fm.createDirectory(at: folderURL, withIntermediateDirectories: true)
@@ -78,25 +91,40 @@ final class AttachmentStore: @unchecked Sendable {
         return counts
     }
 
-    /// Moves files unreferenced for 24 hours to the Trash and returns their names. Run after writes and scans.
+    /// Runs `sweep()` on a serial background queue. A sweep already waiting to start covers this call too, and one
+    /// stuck on a folder that stopped answering holds back only later sweeps.
+    func scheduleSweep() {
+        let enqueue = sweepLock.withLock { () -> Bool in
+            defer { sweepQueued = true }
+            return !sweepQueued
+        }
+        guard enqueue else { return }
+        sweepQueue.async { [self] in
+            sweepLock.withLock { sweepQueued = false }
+            sweep()
+        }
+    }
+
+    /// Moves files unreferenced for 24 hours to the Trash and returns their names. Run after writes and scans
+    /// through `scheduleSweep()`.
     @discardableResult
     func sweep() -> [String] {
         let counts = referenceCounts()
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: folderURL.path)) ?? []).filter { !$0.hasPrefix(".") }
         let date = now()
         var trashed: [String] = []
-        lock.withLock {
-            for name in names {
+        for name in names {
+            lock.withLock {
                 let key = name.lowercased()
                 if counts[key, default: 0] > 0 {
                     seenReferenced.insert(key)
                     unreferencedSince[key] = nil
-                    continue
+                    return
                 }
-                guard seenReferenced.contains(key) else { continue }
+                guard seenReferenced.contains(key) else { return }
                 let since = unreferencedSince[key] ?? date
                 unreferencedSince[key] = since
-                guard date.timeIntervalSince(since) >= Self.graceInterval else { continue }
+                guard date.timeIntervalSince(since) >= Self.graceInterval else { return }
                 do {
                     try trash(folderURL.appendingPathComponent(name))
                     trashed.append(name)
@@ -108,6 +136,11 @@ final class AttachmentStore: @unchecked Sendable {
             }
         }
         return trashed
+    }
+
+    /// Calls `done` on the sweep queue once every sweep scheduled so far has run.
+    func afterScheduledSweeps(_ done: @escaping @Sendable () -> Void) {
+        sweepQueue.async(execute: done)
     }
 
     static func sha256(_ data: Data) -> String {

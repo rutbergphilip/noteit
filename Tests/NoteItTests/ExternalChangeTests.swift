@@ -78,6 +78,41 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertTrue(fake.calls.contains(.deleteAll) || fake.items[gone.uuidString] == nil)
     }
 
+    func testAnAttachmentNoNoteRefersToGoesToTheTrashADayLaterWithoutAnyCallFromTheTest() async throws {
+        try put("_attachments/photo.png", "png bytes")
+        try put("_attachments/kept.png", "kept bytes")
+        try put("Photo.md", "# Photo\n\n![photo](_attachments/photo.png)\n")
+        try put("Kept.md", "# Kept\n\n![kept](_attachments/kept.png)\n")
+        let store = open()
+        try await waitForSweeps(store)
+        let attachments = try XCTUnwrap(store.markdownStorage?.attachments)
+        var clock = Date()
+        let trashed = LockedNames()
+        attachments.now = { clock }
+        attachments.trash = { url in
+            trashed.append(url.lastPathComponent)
+            try FileManager.default.removeItem(at: url)
+        }
+
+        try edit("Photo.md", "![photo](_attachments/photo.png)", "no picture now")
+        store.rescanMarkdownFolder()
+        try await waitForSweeps(store)
+        XCTAssertEqual(trashed.names, [])
+
+        clock.addTimeInterval(AttachmentStore.graceInterval + 1)
+        _ = store.createNote(in: nil, initial: NSAttributedString(string: "Other\nwritten a day later"))
+        store.flush()
+        try await waitForSweeps(store)
+        XCTAssertEqual(trashed.names, ["photo.png"])
+        XCTAssertTrue(fm.fileExists(atPath: content.appendingPathComponent("_attachments/kept.png").path))
+    }
+
+    /// Waits until the sweeps the store scheduled have run.
+    private func waitForSweeps(_ store: NoteStore) async throws {
+        let attachments = try XCTUnwrap(store.markdownStorage?.attachments)
+        await withCheckedContinuation { continuation in attachments.afterScheduledSweeps { continuation.resume() } }
+    }
+
     func testACleanNoteReloadsAndKeepsItsPreviousTextInHistory() throws {
         try put("Note.md", "# Note\n\nfirst\n")
         let store = open()
@@ -268,4 +303,11 @@ final class ExternalChangeTests: XCTestCase {
         let first = try XCTUnwrap(rescans.first, "a file written every 0.1 s must not hold the rescan back")
         XCTAssertLessThan(first.timeIntervalSince(start), MarkdownFolderWatcher.maxDelay + 1)
     }
+}
+
+private final class LockedNames: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String] = []
+    var names: [String] { lock.withLock { stored } }
+    func append(_ name: String) { lock.withLock { stored.append(name) } }
 }

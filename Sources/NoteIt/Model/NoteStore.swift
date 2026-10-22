@@ -124,6 +124,7 @@ final class NoteStore: ObservableObject {
     var hasPendingMarkdownRenames = false
     var markdownScanScheduled = false
     var markdownWatcher: MarkdownFolderWatcher?
+    var attachmentSweepTimer: Timer?
     /// Called once when the content folder goes away while the library is open; the app asks the user to locate it.
     var onMarkdownFolderMissing: ((URL) -> Void)?
     var markdownFolderReportedMissing = false
@@ -1171,7 +1172,10 @@ final class NoteStore: ObservableObject {
             writePendingBody(id)
         }
 
-        if markdownStorage != nil { syncMarkdownLayout() }
+        if let markdownStorage {
+            syncMarkdownLayout()
+            markdownStorage.attachments.scheduleSweep()
+        }
         if libraryDirty || !fm.fileExists(atPath: libraryURL.path) {
             saveLibrary()
         }
