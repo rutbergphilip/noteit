@@ -980,6 +980,23 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertTrue(store.isBodyWriteBlocked(plan))
     }
 
+    func testAnEditTypedOverTheLastKnownTextIsNeverSaved() async throws {
+        let (store, plan, editor, harness, finish) = try openEditorOverASlowReadTakenByAnotherCaller {
+            Data("# Plan\n\nNew text\n".utf8)
+        }
+        defer { harness.close() }
+        finish()
+        // Before the editor's reload arrives, an edit lands on the placeholder it still shows.
+        EditorHarness.type(" typed", in: editor.view)
+        editor.coordinator.commit()
+        XCTAssertEqual(store.cachedBody(plan)?.string, "Plan\nNew text")
+        XCTAssertFalse(store.isBodyDirty(plan))
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertFalse(try read("Plan.md").contains("typed"))
+        try await waitUntil({ editor.view.string == "Plan\nNew text" }, "the editor shows the note's real text")
+    }
+
     func testANoteWhoseFileFailedToReadIsNeverOutputAsEmpty() async throws {
         let (store, ids, failing) = try openWithFailingRead(["Plan", "Other"], failing: "Plan")
         let plan = try XCTUnwrap(ids["Plan"])

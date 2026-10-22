@@ -537,11 +537,14 @@ final class NoteStore: ObservableObject {
 
     /// Stores a local edit. A non-nil `extras` replaces `bodyExtras[id]` in the same body write (only NoteStore's own
     /// code passes it); a change of extras alone is a stored change too.
-    func updateBody(_ id: UUID, _ text: NSAttributedString, extras: ContainerExtras? = nil) {
+    /// `basedOnPlaceholder`: an editor's text that started from a placeholder (the last known text or nothing,
+    /// shown while the file wasn't read), which is never saved, even once the file has been read.
+    func updateBody(_ id: UUID, _ text: NSAttributedString, extras: ContainerExtras? = nil, basedOnPlaceholder: Bool = false) {
         // A direct commit is newer than any snapshot still waiting for its turn.
         stagedEditorBodies[id] = nil
         // Notes in Recently Deleted are read-only.
         guard let index = noteIndex(id), notes[index].deletedAt == nil else { return }
+        guard !basedOnPlaceholder else { return refuseEditOnPlaceholder(id) }
         let textUnchanged = body(for: id).isEqual(to: text)
         if bodyNotReadError(id) != nil {
             NSLog("NoteIt: not changing note \(id): its Markdown file hasn't been read")
@@ -573,7 +576,8 @@ final class NoteStore: ObservableObject {
 
     /// For editor commits made inside a SwiftUI view update. Sync calls `commitStagedEditorBody` before it
     /// compares revisions, so a snapshot still waiting for its turn can never be overwritten by a pull.
-    func stageEditorCommit(_ id: UUID, _ snapshot: NSAttributedString) {
+    func stageEditorCommit(_ id: UUID, _ snapshot: NSAttributedString, basedOnPlaceholder: Bool = false) {
+        guard !basedOnPlaceholder else { return refuseEditOnPlaceholder(id) }
         stagedEditorBodies[id] = snapshot
         DispatchQueue.main.async { [weak self] in
             MainActor.assumeIsolated { _ = self?.commitStagedEditorBody(id) }
@@ -588,11 +592,23 @@ final class NoteStore: ObservableObject {
     }
 
     /// `updateBody` for the editor's own commits; reports a changed title on `editorTitleCommits`.
-    func commitEditorBody(_ id: UUID, _ snapshot: NSAttributedString) {
+    func commitEditorBody(_ id: UUID, _ snapshot: NSAttributedString, basedOnPlaceholder: Bool = false) {
         let before = note(with: id)?.title
-        updateBody(id, snapshot)
+        updateBody(id, snapshot, basedOnPlaceholder: basedOnPlaceholder)
         guard !savingProgrammaticEdit else { return }
         if let after = note(with: id)?.title, after != before { editorTitleCommits.send((id, after)) }
+    }
+
+    /// Whether the body `body(for:)` just gave is a placeholder rather than the note's text.
+    func isShowingMarkdownPlaceholder(_ id: UUID) -> Bool {
+        markdownStorage != nil && bodyCache[id] == nil
+    }
+
+    private func refuseEditOnPlaceholder(_ id: UUID) {
+        NSLog("NoteIt: not saving an edit to note \(id) made before its Markdown file was read")
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated { self?.externallyUpdatedNoteID = id }
+        }
     }
 
     func hasStagedEditorBody(_ id: UUID) -> Bool {
