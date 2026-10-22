@@ -907,11 +907,13 @@ final class ExternalChangeTests: XCTestCase {
         }
         store.selectedNoteID = plan
         // What an open editor does when told the note changed (`reloadIfStale`).
+        var shown = NSAttributedString()
         let reload = store.$externallyUpdatedNoteID.sink { id in
-            if id == plan { DispatchQueue.main.async { _ = store.body(for: plan) } }
+            if id == plan { DispatchQueue.main.async { shown = store.body(for: plan) } }
         }
         defer { reload.cancel() }
-        _ = store.body(for: plan)
+        shown = store.body(for: plan)
+        XCTAssertEqual(shown.string, "Plan\nPlan text", "shown as last known while it's read")
         let heartbeat = MainThreadHeartbeat()
         heartbeat.start()
         try await Task.sleep(for: .seconds(6))
@@ -919,6 +921,8 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(reads.withLock { $0 }, 1, "a failed read is retried only on a change, Retry or after a long pause")
         XCTAssertNotNil(store.loadError(for: plan))
         XCTAssertLessThan(heartbeat.longestGap, 0.5)
+        XCTAssertEqual(shown.string, "", "the editor no longer shows the last known text as the note")
+        XCTAssertTrue(store.isBodyWriteBlocked(plan), "and stays read-only")
 
         reads.withLock { $0 = 0 }
         storage.readFileData = { url in try Data(contentsOf: url) }

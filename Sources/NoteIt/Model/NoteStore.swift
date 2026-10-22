@@ -795,8 +795,9 @@ final class NoteStore: ObservableObject {
               let storage = markdownStorage, storage.index.entry(id) == job.entry else { return }
         markdownReads[id] = job
         _ = body(for: id)
-        // A read that failed isn't cached: reloading the editor would only read it again.
-        if bodyCache[id] != nil { externallyUpdatedNoteID = id }
+        // Also after a failure, so editors drop the last known text; their reload doesn't read the file again
+        // before markdownFailedReadRetryAt.
+        externallyUpdatedNoteID = id
     }
 
     /// Retry in the load-error banner, or a change the scan saw: the next read of a note whose file failed to read
@@ -806,7 +807,7 @@ final class NoteStore: ObservableObject {
         markdownFailedReadRetryAt[id] = .distantPast
         guard selectedNoteID == id || OpenEditorRegistry.shared.hasObservers(for: id) else { return }
         _ = body(for: id)
-        if bodyCache[id] != nil { externallyUpdatedNoteID = id }
+        externallyUpdatedNoteID = id
     }
 
     func canRetryReadingBody(_ id: UUID) -> Bool {
