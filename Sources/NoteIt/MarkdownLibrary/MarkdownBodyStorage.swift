@@ -170,7 +170,8 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     }
 
     /// Moves every notebook folder whose place changed in two steps, first aside under a temporary name beside it
-    /// and then to its new place, so swapped names and cycles work. A folder that can't reach its new place goes
+    /// and then to its new place, so swapped names and cycles work; a folder that only follows its parent isn't
+    /// moved on its own. Notes record the path they had before the pass, never a temporary one. A folder that can't reach its new place goes
     /// back (or stays recorded where it is), so the notes in it can still be written.
     private func placeNotebooks(_ tree: [Notebook]) throws {
         let fm = FileManager.default
@@ -178,9 +179,19 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         let ordered = tree.sorted { depth(of: $0.id) < depth(of: $1.id) }
         var firstError: Error?
         var original: [UUID: String] = [:]
+        let originalFolders = index.allNotebookFolders
+        let originalPaths = index.allEntries.mapValues(\.path)
+        defer { index.recordFormerPaths(originalPaths) }
+        /// A folder whose parent moves and which keeps its name and parent goes along with the parent.
+        func movesWithParent(_ notebook: Notebook) -> Bool {
+            guard let parent = notebook.parent, let old = originalFolders[notebook.id], let wanted = target[notebook.id],
+                  let parentOld = originalFolders[parent], let parentWanted = target[parent] else { return false }
+            let name = (old as NSString).lastPathComponent
+            return old == parentOld + "/" + name && wanted == parentWanted + "/" + name
+        }
         for notebook in ordered where depth(of: notebook.id) <= NotebookFolders.maxDepth && !keepsMissing(notebook.id) {
             guard let wanted = target[notebook.id], let old = index.notebookFolder(notebook.id), old != wanted,
-                  fm.fileExists(atPath: url(of: old).path) else { continue }
+                  !movesWithParent(notebook), fm.fileExists(atPath: url(of: old).path) else { continue }
             let aside = MarkdownPathIndex.folder(of: old).isEmpty ? "" : MarkdownPathIndex.folder(of: old) + "/"
             let temp = aside + (old as NSString).lastPathComponent + " " + UUID().uuidString.prefix(8)
             do {
@@ -193,7 +204,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         }
         for notebook in ordered {
             do {
-                try placeNotebook(notebook, target: target[notebook.id], formerFolder: original[notebook.id])
+                try placeNotebook(notebook, target: target[notebook.id])
             } catch {
                 firstError = firstError ?? error
                 let parentExists = { (path: String) in fm.fileExists(atPath: self.url(of: MarkdownPathIndex.folder(of: path)).path) }
@@ -206,7 +217,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         if let firstError { throw firstError }
     }
 
-    private func placeNotebook(_ notebook: Notebook, target: String?, formerFolder: String?) throws {
+    private func placeNotebook(_ notebook: Notebook, target: String?) throws {
         guard !keepsMissing(notebook.id), let target else { return }
         let owns = depth(of: notebook.id) <= NotebookFolders.maxDepth
         guard owns else { return index.setNotebookFolder(target, for: notebook.id) }
@@ -215,7 +226,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
             if FileManager.default.fileExists(atPath: from.path) {
                 try Self.move(from, to: url(of: target))
             }
-            index.moveFolder(old, to: target, formerFolder: formerFolder)
+            index.moveFolder(old, to: target, recordingFormerPaths: false)
         }
         index.setNotebookFolder(target, for: notebook.id)
         let folder = url(of: target)

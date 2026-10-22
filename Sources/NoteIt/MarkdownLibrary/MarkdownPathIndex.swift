@@ -174,18 +174,14 @@ final class MarkdownPathIndex: @unchecked Sendable {
         }
     }
 
-    /// Rewrites every note and notebook path under `old` to sit under `new` (a folder renamed or moved).
-    /// `formerFolder` is recorded in the notes' `formerPaths` instead of `old` (a folder moved through a temporary
-    /// name records where it came from); `recordingFormerPaths: false` records nothing.
-    func moveFolder(_ old: String, to new: String, formerFolder: String? = nil, recordingFormerPaths: Bool = true) {
+    /// Rewrites every note and notebook path under `old` to sit under `new` (a folder renamed or moved), keeping
+    /// each note's old path in `formerPaths` unless `recordingFormerPaths` is false.
+    func moveFolder(_ old: String, to new: String, recordingFormerPaths: Bool = true) {
         lock.withLock {
             let prefix = old.lowercased() + "/"
             for (id, entry) in entries where entry.path.lowercased().hasPrefix(prefix) {
                 var moved = entry
-                if recordingFormerPaths {
-                    let former = formerFolder.map { $0 + "/" + entry.path.dropFirst(prefix.count) } ?? entry.path
-                    if !moved.formerPaths.contains(former) { moved.formerPaths.append(former) }
-                }
+                if recordingFormerPaths, !moved.formerPaths.contains(entry.path) { moved.formerPaths.append(entry.path) }
                 if moved.formerPaths.count > 20 { moved.formerPaths.removeFirst(moved.formerPaths.count - 20) }
                 moved.path = new + "/" + entry.path.dropFirst(prefix.count)
                 entries[id] = moved
@@ -199,6 +195,24 @@ final class MarkdownPathIndex: @unchecked Sendable {
             }
             rebuildPaths()
             changed()
+        }
+    }
+
+    /// Notes whose path is no longer the one in `originals` keep it in `formerPaths`.
+    func recordFormerPaths(_ originals: [UUID: String]) {
+        lock.withLock {
+            var any = false
+            for (id, path) in originals {
+                guard var entry = entries[id], entry.path != path else { continue }
+                let current = entry.path
+                entry.formerPaths.removeAll { $0.caseInsensitiveCompare(current) == .orderedSame }
+                if !entry.formerPaths.contains(path) { entry.formerPaths.append(path) }
+                guard entry.formerPaths != entries[id]?.formerPaths else { continue }
+                if entry.formerPaths.count > 20 { entry.formerPaths.removeFirst(entry.formerPaths.count - 20) }
+                entries[id] = entry
+                any = true
+            }
+            if any { changed() }
         }
     }
 

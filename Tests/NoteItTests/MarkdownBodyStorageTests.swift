@@ -285,19 +285,25 @@ final class MarkdownBodyStorageTests: XCTestCase {
     func testSwappedNotebookNamesAndNamesTakenOnDiskStillPlaceEveryFolder() throws {
         let storage = storage()
         var a = notebook("A"), b = notebook("B"), inner = notebook("Inner", parent: a.id)
-        storage.setNotebooks([a, b, inner])
+        let deeper = notebook("Deeper", parent: inner.id)
+        storage.setNotebooks([a, b, inner, deeper])
         let inA = meta("In A", notebook: a), inB = meta("In B", notebook: b), deep = meta("Deep", notebook: inner)
+        let deepest = meta("Deepest", notebook: deeper)
         try storage.write(body("In A\nx"), extras: .empty, for: inA, notebook: a)
         try storage.write(body("In B\nx"), extras: .empty, for: inB, notebook: b)
         try storage.write(body("Deep\nx"), extras: .empty, for: deep, notebook: inner)
+        try storage.write(body("Deepest\nx"), extras: .empty, for: deepest, notebook: deeper)
 
         a.name = "B"
         b.name = "A"
-        storage.setNotebooks([a, b, inner])
+        storage.setNotebooks([a, b, inner, deeper])
         try storage.reconcileNotebooks()
         XCTAssertEqual(storage.index.entry(inA.id)?.path, "B/In A.md")
         XCTAssertEqual(storage.index.entry(inB.id)?.path, "A/In B.md")
         XCTAssertEqual(storage.index.entry(deep.id)?.path, "B/Inner/Deep.md")
+        XCTAssertEqual(storage.index.entry(deepest.id)?.path, "B/Inner/Deeper/Deepest.md")
+        XCTAssertEqual(storage.index.entry(deep.id)?.formerPaths, ["A/Inner/Deep.md"], "only the real old path")
+        XCTAssertEqual(storage.index.entry(deepest.id)?.formerPaths, ["A/Inner/Deeper/Deepest.md"])
         XCTAssertEqual(try NotebookFolders.read(content.appendingPathComponent("B")).notebook.id, a.id)
         XCTAssertEqual(try NotebookFolders.read(content.appendingPathComponent("A")).notebook.id, b.id)
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: content.path).filter { !$0.hasPrefix(".") }.sorted(), ["A", "B"])
@@ -307,7 +313,7 @@ final class MarkdownBodyStorageTests: XCTestCase {
         try fm.createSymbolicLink(at: content.appendingPathComponent("Linked"), withDestinationURL: content.appendingPathComponent("Archive"))
         a.name = "Archive"
         b.name = "linked"
-        storage.setNotebooks([a, b, inner])
+        storage.setNotebooks([a, b, inner, deeper])
         try storage.reconcileNotebooks()
         XCTAssertEqual(storage.index.notebookFolder(a.id), "Archive 2")
         XCTAssertEqual(storage.index.notebookFolder(b.id), "linked 2")
