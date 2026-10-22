@@ -9,6 +9,7 @@ import NoteItMarkdown
 /// the 24 hours span relaunches.
 final class AttachmentStore: @unchecked Sendable {
     static let graceInterval: TimeInterval = 24 * 60 * 60
+    static let sweepStateFileName = "attachment-sweep.json"
 
     let contentRoot: URL
     private let index: MarkdownPathIndex
@@ -30,7 +31,7 @@ final class AttachmentStore: @unchecked Sendable {
 
     private var sweepStateURL: URL {
         contentRoot.appendingPathComponent(MarkdownBodyStorage.privateFolder, isDirectory: true)
-            .appendingPathComponent("attachment-sweep.json")
+            .appendingPathComponent(Self.sweepStateFileName)
     }
 
     init(contentRoot: URL, index: MarkdownPathIndex) {

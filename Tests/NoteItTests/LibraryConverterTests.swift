@@ -13,6 +13,7 @@ final class LibraryConverterTests: XCTestCase {
     private var pauses = 0
     private var resumes = 0
     private var flushes = 0
+    private var trashed: [String] = []
 
     override func setUpWithError() throws {
         root = fm.temporaryDirectory.appendingPathComponent("noteit-convert-\(UUID().uuidString)", isDirectory: true)
@@ -20,6 +21,7 @@ final class LibraryConverterTests: XCTestCase {
         pauses = 0
         resumes = 0
         flushes = 0
+        trashed = []
     }
 
     override func tearDownWithError() throws {
@@ -72,7 +74,17 @@ final class LibraryConverterTests: XCTestCase {
             store.flush()
         }
         converter.availableSpace = { _ in 1 << 40 }
+        converter.trash = { [unowned self] url in try moveToTestTrash(url) }
         return converter
+    }
+
+    /// Stands in for the macOS Trash: records the path relative to `root` and moves the item under `root/Trash`.
+    private func moveToTestTrash(_ url: URL) throws {
+        let base = root.resolvingSymlinksInPath().path
+        trashed.append(String(url.resolvingSymlinksInPath().path.dropFirst(base.count + 1)))
+        let bin = root.appendingPathComponent("Trash/\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: bin, withIntermediateDirectories: true)
+        try fm.moveItem(at: url, to: bin.appendingPathComponent(url.lastPathComponent))
     }
 
     private func openMarkdown(renames: Bool = true) -> NoteStore {
@@ -447,6 +459,61 @@ final class LibraryConverterTests: XCTestCase {
         assertSameBodies(texts, bodies(markdown).filter { texts[$0.key] != nil })
         XCTAssertEqual(markdown.note(with: moved)?.notebookID, nil)
         XCTAssertEqual(try String(contentsOf: content.appendingPathComponent("Mine.md"), encoding: .utf8).contains("written by hand"), true)
+    }
+
+    func testAFileEditedOutsideNoteItIsKeptAsAVisibleCopyWhenConvertingBack() async throws {
+        _ = try await converter(try makeRTFDLibrary()).convert(to: .markdown(content))
+        _ = try await converter(openMarkdown()).convert(to: .rtfd)
+        let rtfd = openRTFD()
+        let target = try XCTUnwrap(rtfd.notes.first { $0.title == "Target" }).id
+        let source = try XCTUnwrap(rtfd.notes.first { $0.title == "Source" }).id
+        rtfd.updateBody(target, body("Target", ["Edited in NoteIt"]))
+        rtfd.updateBody(source, body("Source", ["Edited in NoteIt too"]))
+        rtfd.flush()
+        let targetPath = try XCTUnwrap(markdownIDs(content).first { $0.value == target }?.key)
+        let targetURL = content.appendingPathComponent(targetPath)
+        let outside = try String(contentsOf: targetURL, encoding: .utf8).replacingOccurrences(of: "Deep inside", with: "Edited outside")
+        try Data(outside.utf8).write(to: targetURL)
+        try Data(outside.utf8).write(to: targetURL.deletingLastPathComponent().appendingPathComponent("Target copy.md"))
+
+        let result = try await converter(rtfd).convert(to: .markdown(content))
+        let folder = (targetPath as NSString).deletingLastPathComponent + "/"
+        XCTAssertEqual(Set(result.conflictCopies), [folder + "Target (Edited Outside NoteIt).md",
+                                                    folder + "Target copy (Edited Outside NoteIt).md"])
+        let files = markdownIDs(content)
+        XCTAssertEqual(files[targetPath], target)
+        XCTAssertTrue(try String(contentsOf: targetURL, encoding: .utf8).contains("Edited in NoteIt"))
+        XCTAssertNil(files[folder + "Target copy.md"], "the outside duplicate is now a copy with its own id")
+        for copy in result.conflictCopies {
+            XCTAssertTrue(try String(contentsOf: content.appendingPathComponent(copy), encoding: .utf8).contains("Edited outside"))
+            let id = try XCTUnwrap(files[copy] ?? nil)
+            XCTAssertNotEqual(id, target)
+        }
+        let copyIDs = result.conflictCopies.compactMap { files[$0] ?? nil }
+        XCTAssertEqual(Set(copyIDs).count, 2)
+        XCTAssertNil(markdownIDs(content).keys.first { $0.contains("Source (Edited") }, "a file NoteIt wrote itself is replaced quietly")
+        let markdown = openMarkdown()
+        for id in copyIDs { XCTAssertNotNil(markdown.note(with: id), "a copy is a note of its own") }
+        XCTAssertTrue(markdown.body(for: target).string.contains("Edited in NoteIt"))
+        XCTAssertFalse(fm.fileExists(atPath: content.appendingPathComponent(".noteit").path)
+                       && ((try? fm.contentsOfDirectory(atPath: content.appendingPathComponent(".noteit").path)) ?? [])
+                           .contains { $0.hasPrefix("replaced-") }, "nothing is hidden in .noteit")
+        XCTAssertFalse(trashed.isEmpty, "the files that were replaced went to the Trash")
+    }
+
+    func testConvertingToRTFDTrashesReplacedFilesAndLeavesOtherFilesInTheFolder() async throws {
+        _ = try await converter(try makeRTFDLibrary()).convert(to: .markdown(content))
+        let replaced = content.appendingPathComponent(".noteit/replaced-convert-old/Plan.md")
+        try fm.createDirectory(at: replaced.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("# Plan\n\nmine\n".utf8).write(to: replaced)
+        let other = content.appendingPathComponent(".noteit/notes-to-self.txt")
+        try Data("mine".utf8).write(to: other)
+
+        _ = try await converter(openMarkdown()).convert(to: .rtfd)
+        XCTAssertEqual(trashed, ["Notes/.noteit/replaced-convert-old"])
+        XCTAssertTrue(fm.fileExists(atPath: other.path), "a file NoteIt didn't write stays")
+        XCTAssertFalse(fm.fileExists(atPath: content.appendingPathComponent(".noteit/library.json").path))
+        XCTAssertFalse(fm.fileExists(atPath: content.appendingPathComponent(".noteit/staging").path))
     }
 
     func testRollingBackAConversionIntoAnEarlierFolderPutsTheReplacedFilesBack() async throws {

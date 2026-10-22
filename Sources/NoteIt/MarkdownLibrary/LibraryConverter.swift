@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import NoteItCore
+import NoteItMarkdown
 
 /// What the conversion sheet needs to know about a folder before converting into it (spec §3.6).
 struct FolderInspection: Equatable {
@@ -79,7 +80,8 @@ struct LibraryConversionJournal: Codable, Equatable {
     /// as "not committed": something else removed it. Nil in older journals, which are treated as true.
     var locationFileExisted: Bool?
     /// Files of this library from an earlier conversion that the new files replace, relative to the content folder,
-    /// with their SHA-256; they are moved to `replacedFolder` before the new files go in and back on rollback.
+    /// with their SHA-256; they are moved to `replacedFolder` before the new files go in, back on rollback, and to the
+    /// Trash once the conversion is committed.
     var replaced: [Move]?
     /// `.noteit/replaced-<time>`, relative to the content folder.
     var replacedFolder: String?
@@ -123,6 +125,13 @@ final class LibraryConverter {
     struct Result {
         var location: LibraryLocation
         var previousLibrary: URL?
+        /// Files of this library that were changed outside NoteIt and are kept beside NoteIt's version under a new
+        /// name and id, relative to the Markdown folder.
+        var conflictCopies: [String] = []
+    }
+
+    nonisolated static func moveToTrash(_ url: URL) throws {
+        try FileManager.default.trashItem(at: url, resultingItemURL: nil)
     }
 
     nonisolated static let libraryFileName = "library.json"
@@ -138,6 +147,7 @@ final class LibraryConverter {
     var verify: (UUID, NSAttributedString, NSAttributedString) -> Bool = { _, a, b in BodyCodec.semanticallyEqual(a, b) }
     var interruption: Step?
     var now: () -> Date = Date.init
+    var trash: (URL) throws -> Void = LibraryConverter.moveToTrash
     /// Notes converted so far, of all.
     var progress: ((Int, Int) -> Void)?
 
@@ -282,7 +292,7 @@ final class LibraryConverter {
             throw interrupted
         } catch {
             if !store.isClosedForLibrarySwitch {
-                Self.finishInterrupted(dataDir: dataDir)
+                Self.finishInterrupted(dataDir: dataDir, trash: trash)
                 store.libraryConversionInProgress = false
                 resumeSync()
             }
@@ -361,10 +371,13 @@ final class LibraryConverter {
         try staging.reconcileNotebooks()
         var setAside = Set(earlier.notebooks.filter { reusedFolders[$0.id] == nil && store.notebook(with: $0.id) != nil }
             .map { $0.path + "/" + NotebookFolders.fileName })
+        let written = EarlierMarkdownFiles.load(dataDir: dataDir)
         var reusedFiles: [UUID: String] = [:]
+        for (id, files) in Dictionary(grouping: earlier.notes, by: \.id) where store.note(with: id) != nil {
+            reusedFiles[id] = (files.first { $0.path == written[id]?.path } ?? files[0]).path
+        }
         for file in earlier.notes {
-            if let note = store.note(with: file.id), reusedFiles[file.id] == nil {
-                reusedFiles[file.id] = file.path
+            if let note = store.note(with: file.id), reusedFiles[file.id] == file.path {
                 var entry = MarkdownFileEntry(path: file.path)
                 entry.nameTitle = note.title
                 staging.index.set(entry, for: file.id)
@@ -421,7 +434,8 @@ final class LibraryConverter {
         try stop(after: .verified)
         try requireUnchanged(since: before)
 
-        // 5. Move into place. This library's earlier files that differ go aside first.
+        // 5. Move into place. This library's earlier files that differ go aside first; one that holds what neither
+        // NoteIt wrote there nor would write now is kept beside it as a copy with a new id.
         let files = Self.stagedFiles(in: contentStaging)
         var planned: [LibraryConversionJournal.Move] = []
         var replacing = setAside
@@ -445,9 +459,23 @@ final class LibraryConverter {
             planned.append(.init(path: path, sha256: sha))
         }
         var replaced: [LibraryConversionJournal.Move] = []
+        var conflictCopies: [String] = []
+        var taken = Set(files.map { $0.lowercased() })
         for path in replacing.sorted() {
             guard let data = try? Data(contentsOf: folder.appendingPathComponent(path)) else { continue }
-            replaced.append(.init(path: path, sha256: AttachmentStore.sha256(data)))
+            let sha = AttachmentStore.sha256(data)
+            replaced.append(.init(path: path, sha256: sha))
+            guard FolderScanner.isMarkdown(path), let id = FolderScanner.frontMatterID(data),
+                  sha != written[id]?.sha256,
+                  sha != (try? Data(contentsOf: staging.fileURL(for: id))).map(AttachmentStore.sha256) else { continue }
+            let copy = Self.conflictCopyPath(for: path, in: folder, staging: contentStaging, taken: taken)
+            taken.insert(copy.lowercased())
+            let copyData = Self.withNewID(data)
+            let stagedCopy = contentStaging.appendingPathComponent(copy)
+            try fm.createDirectory(at: stagedCopy.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try copyData.write(to: stagedCopy)
+            planned.append(.init(path: copy, sha256: AttachmentStore.sha256(copyData)))
+            conflictCopies.append(copy)
         }
         let replacedFolder = MarkdownBodyStorage.privateFolder + "/replaced-\(stamp)"
         if !replaced.isEmpty {
@@ -495,10 +523,10 @@ final class LibraryConverter {
         try stop(after: .committed)
 
         // 7. Keep the RTFD bodies as the previous library.
-        let previous = Self.finishCommitted(journal, dataDir: dataDir, now: now())
+        let previous = Self.finishCommitted(journal, dataDir: dataDir, now: now(), trash: trash)
         return Result(location: LibraryLocation(url: dataDir, seedsFreshLibrary: false, format: .markdown, contentRootURL: folder,
                                                 renameFilesOnTitleChange: !inspection.adopts),
-                      previousLibrary: previous)
+                      previousLibrary: previous, conflictCopies: conflictCopies)
     }
 
     /// Empty files and folders in `staging` for every name in `folder`, so staged names don't clash with them.
@@ -680,18 +708,18 @@ final class LibraryConverter {
         try stop(after: .committed)
 
         // 7. NoteIt's own files go; the Markdown files stay as they are.
-        _ = Self.finishCommitted(journal, dataDir: dataDir, now: now())
+        _ = Self.finishCommitted(journal, dataDir: dataDir, now: now(), trash: trash)
         return Result(location: LibraryLocation(url: dataDir, seedsFreshLibrary: false), previousLibrary: nil)
     }
 
     // MARK: Interrupted conversions
 
     /// Finishes or rolls back a conversion that a crash interrupted; runs before the library is loaded.
-    nonisolated static func finishInterrupted(dataDir: URL) {
+    nonisolated static func finishInterrupted(dataDir: URL, trash: (URL) throws -> Void = moveToTrash) {
         guard let journal = LibraryConversionJournal.load(dataDir: dataDir) else { return }
         switch state(of: journal, dataDir: dataDir) {
         case .committed:
-            _ = finishCommitted(journal, dataDir: dataDir, now: Date())
+            _ = finishCommitted(journal, dataDir: dataDir, now: Date(), trash: trash)
         case .notCommitted:
             rollBack(journal, dataDir: dataDir)
         case .unknown:
@@ -863,10 +891,48 @@ final class LibraryConverter {
         if names.allSatisfy({ $0 == ".DS_Store" }) { try? fm.removeItem(at: folder) }
     }
 
-    /// Step 7. Returns the previous library's folder, when one was made.
-    nonisolated private static func finishCommitted(_ journal: LibraryConversionJournal, dataDir: URL, now: Date) -> URL? {
+    /// `<stem> (Edited Outside NoteIt).md` beside `path`, numbered when that name is taken.
+    nonisolated private static func conflictCopyPath(for path: String, in folder: URL, staging: URL, taken: Set<String>) -> String {
+        let directory = (path as NSString).deletingLastPathComponent
+        let name = (path as NSString).lastPathComponent
+        let stem = (name as NSString).deletingPathExtension, ext = (name as NSString).pathExtension
+        var number = 1
+        while true {
+            let candidate = "\(stem) (Edited Outside NoteIt)\(number == 1 ? "" : " \(number)").\(ext)"
+            let copy = directory.isEmpty ? candidate : directory + "/" + candidate
+            if !taken.contains(copy.lowercased()), !exists(folder.appendingPathComponent(copy)),
+               !exists(staging.appendingPathComponent(copy)) { return copy }
+            number += 1
+        }
+    }
+
+    /// `data` with a fresh id in its front matter.
+    nonisolated private static func withNewID(_ data: Data) -> Data {
+        guard let text = String(data: data, encoding: .utf8), var frontMatter = try? FrontMatter.read(text).0 else { return data }
+        frontMatter.id = UUID()
+        return MarkdownBodyStorage.patchingFrontMatter(data, with: frontMatter)
+    }
+
+    /// Moves `.noteit/replaced-*` folders of `root` to the Trash; one that can't go stays where it is.
+    nonisolated private static func trashReplacedFolders(in root: URL, trash: (URL) throws -> Void) {
+        let privateFolder = root.appendingPathComponent(MarkdownBodyStorage.privateFolder, isDirectory: true)
+        for name in ((try? FileManager.default.contentsOfDirectory(atPath: privateFolder.path)) ?? []).sorted()
+        where name.hasPrefix("replaced-") {
+            do {
+                try trash(privateFolder.appendingPathComponent(name, isDirectory: true))
+            } catch {
+                NSLog("NoteIt: couldn't move \(name) to the Trash; it stays in \(privateFolder.path): \(error)")
+            }
+        }
+    }
+
+    /// Step 7. Returns the previous library's folder, when one was made. Removes only NoteIt's own files: staging,
+    /// the journal and NoteIt's files in `.noteit/`; files set aside by a conversion go to the Trash.
+    nonisolated private static func finishCommitted(_ journal: LibraryConversionJournal, dataDir: URL, now: Date,
+                                                    trash: (URL) throws -> Void) -> URL? {
         let fm = FileManager.default
         var previous: URL?
+        let root = URL(fileURLWithPath: journal.contentRoot, isDirectory: true)
         switch journal.direction {
         case .toMarkdown:
             let leftovers = ["notes", "body-extras"].map { dataDir.appendingPathComponent($0, isDirectory: true) }
@@ -881,10 +947,17 @@ final class LibraryConverter {
                     return nil
                 }
             }
+            trashReplacedFolders(in: root, trash: trash)
+            try? fm.removeItem(at: EarlierMarkdownFiles.url(dataDir: dataDir))
         case .toRTFD:
-            let root = URL(fileURLWithPath: journal.contentRoot, isDirectory: true)
+            EarlierMarkdownFiles.record(MarkdownPathIndex(dataDir: dataDir), dataDir: dataDir)
             if fm.fileExists(atPath: root.path) {
-                try? fm.removeItem(at: root.appendingPathComponent(MarkdownBodyStorage.privateFolder, isDirectory: true))
+                trashReplacedFolders(in: root, trash: trash)
+                let privateFolder = root.appendingPathComponent(MarkdownBodyStorage.privateFolder, isDirectory: true)
+                for name in ["staging", libraryFileName, AttachmentStore.sweepStateFileName] {
+                    try? fm.removeItem(at: privateFolder.appendingPathComponent(name))
+                }
+                removeIfEmpty(privateFolder)
             }
             for name in [MarkdownPathIndex.fileName, MassDeletionGuard.fileName] {
                 try? fm.removeItem(at: dataDir.appendingPathComponent(name))
@@ -893,5 +966,37 @@ final class LibraryConverter {
         removeStaging(journal)
         try? fm.removeItem(at: LibraryConversionJournal.url(dataDir: dataDir))
         return previous
+    }
+}
+
+/// What NoteIt last wrote to each note's Markdown file (path and SHA-256), kept in the data folder when a library
+/// goes back to RTFD, so converting into that folder again can tell NoteIt's own files from ones edited outside it.
+struct EarlierMarkdownFiles {
+    struct File: Codable, Equatable {
+        var path: String
+        var sha256: String
+    }
+
+    static let fileName = "earlier-markdown-files.json"
+
+    static func url(dataDir: URL) -> URL { dataDir.appendingPathComponent(fileName) }
+
+    static func load(dataDir: URL) -> [UUID: File] {
+        guard let data = try? Data(contentsOf: url(dataDir: dataDir)),
+              let raw = try? JSONDecoder().decode([String: File].self, from: data) else { return [:] }
+        return Dictionary(uniqueKeysWithValues: raw.compactMap { key, file in UUID(uuidString: key).map { ($0, file) } })
+    }
+
+    static func record(_ index: MarkdownPathIndex, dataDir: URL) {
+        let files = index.allEntries.filter { !$0.value.sha256.isEmpty }
+        guard !files.isEmpty else { return }
+        let raw = Dictionary(uniqueKeysWithValues: files.map { ($0.key.uuidString, File(path: $0.value.path, sha256: $0.value.sha256)) })
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        do {
+            try encoder.encode(raw).write(to: url(dataDir: dataDir), options: .atomic)
+        } catch {
+            NSLog("NoteIt: couldn't keep the list of Markdown files NoteIt wrote: \(error)")
+        }
     }
 }
