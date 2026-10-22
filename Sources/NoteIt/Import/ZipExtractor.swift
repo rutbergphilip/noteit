@@ -24,7 +24,7 @@ enum ZipExtractor {
         case symlink(String)
         case encrypted(String)
         case unsupportedMethod(String, UInt16)
-        /// A name nested more than `maxDepth` folders deep, with a part longer than `maxComponentBytes`, or whose
+        /// A name nested more than `maxDepth` folders deep, with a part longer than `maxComponentLength`, or whose
         /// path on disk would pass `maxPathBytes` (which file APIs taking paths can't reach, not even to delete it).
         case nameTooLong(String)
 
@@ -56,7 +56,8 @@ enum ZipExtractor {
 
     static let chunkSize = 64 * 1024
     static let maxDepth = 256
-    static let maxComponentBytes = 255
+    /// APFS's limit for one name, counted in UTF-16 units of the name as written (NFC here), not in bytes.
+    static let maxComponentLength = 255
     static let maxPathBytes = Int(PATH_MAX) - 1
 
     /// Unpacks `archive` into `destination`, which must not exist yet.
@@ -116,7 +117,7 @@ enum ZipExtractor {
         }
         guard parts.count <= maxDepth else { throw Failure.nameTooLong(name) }
         let components = parts.map(\.precomposedStringWithCanonicalMapping)
-        guard components.allSatisfy({ $0.utf8.count <= maxComponentBytes }),
+        guard components.allSatisfy({ $0.utf16.count <= maxComponentLength }),
               components.reduce(base, { $0 + 1 + $1.utf8.count }) <= maxPathBytes else {
             throw Failure.nameTooLong(name)
         }
@@ -167,6 +168,7 @@ enum ZipExtractor {
                                                resume: true) { name in
                 guard fits(name, after: folderBytes) else { tooLong = true; return nil }
                 file = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+                if file < 0, errno == ENAMETOOLONG { tooLong = true }
                 return file >= 0 ? true : errno == EEXIST ? false : nil
             }
             guard let name = created, file >= 0 else {
@@ -284,7 +286,7 @@ enum ZipExtractor {
 
     /// Whether `name` can be created in a folder whose path takes `bytes`, numbered names included.
     private static func fits(_ name: String, after bytes: Int) -> Bool {
-        name.utf8.count <= maxComponentBytes && bytes + 1 + name.utf8.count <= maxPathBytes
+        name.utf16.count <= maxComponentLength && bytes + 1 + name.utf8.count <= maxPathBytes
     }
 
     /// Opens (creating as needed) the folders `plan` lies in below `root`, never following a symbolic link. A
@@ -312,8 +314,12 @@ enum ZipExtractor {
                     found = try naming.firstFree(component, folded: plan.folded[depth], in: depth == 0 ? 0 : ids[depth - 1],
                                                  resume: false) { candidate in
                         guard fits(candidate, after: bytes) else { tooLong = true; return nil }
-                        if mkdirat(parent, candidate, 0o755) != 0, errno != EEXIST { return nil }
+                        if mkdirat(parent, candidate, 0o755) != 0, errno != EEXIST {
+                            if errno == ENAMETOOLONG { tooLong = true }
+                            return nil
+                        }
                         next = openat(parent, candidate, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                        if next < 0, errno == ENAMETOOLONG { tooLong = true }
                         return next >= 0 ? true : errno == ENOTDIR || errno == ELOOP ? false : nil
                     }
                 } catch {

@@ -349,7 +349,7 @@ final class ZipDirectoryTests: XCTestCase {
 
     func testTooDeepOrTooLongNamesAreRefusedWithAReason() throws {
         let deep = String(repeating: "d/", count: 299) + "x.md"
-        let long = String(repeating: "é", count: 128) + ".md"
+        let long = String(repeating: "漢", count: 256)
         let part = String(repeating: "e", count: 255)
         let cases = [[deep], [long], [String(repeating: "d/", count: 30_000) + "x.md"],
                      [[part, part, part, part].joined(separator: "/")], [part, part], [part, part + "/x.md"]]
@@ -360,6 +360,16 @@ final class ZipDirectoryTests: XCTestCase {
             let message = (error as? LocalizedError)?.errorDescription ?? ""
             XCTAssertTrue(message.contains("too deeply nested or too long"), message)
         }
+    }
+
+    func testNamesAreLimitedInCharactersNotBytes() throws {
+        let han = String(repeating: "漢", count: 100) + ".md", accents = String(repeating: "é", count: 200)
+        let longest = String(repeating: "漢", count: 255), numbered = String(repeating: "漢", count: 253)
+        XCTAssertEqual(try unpackedTexts([(han, "a"), (accents, "b"), (longest + "/x.md", "c"), (numbered, "d"), (numbered, "e")]),
+                       [han: "a", accents: "b", longest + "/x.md": "c", numbered: "d", numbered + " 2": "e"])
+        let tooLong = String(repeating: "漢", count: 254)
+        let error = try assertRefused(ZipFixture(files: [page()] + [tooLong, tooLong].map { .init(name: Array($0.utf8), data: Data()) }))
+        XCTAssertTrue(((error as? LocalizedError)?.errorDescription ?? "").contains("too long"), "\(String(describing: error))")
     }
 
     func testPathsAreLimitedByTheirRealLengthOnDisk() throws {

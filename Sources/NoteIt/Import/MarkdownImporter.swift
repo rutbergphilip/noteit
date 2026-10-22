@@ -229,7 +229,7 @@ final class MarkdownImporter {
     }
 
     /// `unzip(_:within:)` that also returns how many bytes were written for each file. Symbolic links, encrypted
-    /// entries, unknown compression methods and names nested more than 256 deep or with a part over 255 bytes
+    /// entries, unknown compression methods and names nested more than 256 deep or with a part over 255 characters
     /// throw `ImportError.unsupportedArchive`; cancellation is rethrown.
     nonisolated static func unpack(_ url: URL, within limits: inout ZipLimits) throws -> ZipExtractor.Result? {
         let destination = FileManager.default.temporaryDirectory
