@@ -203,8 +203,9 @@ extension NoteStore {
             }
             if wasUnavailable {
                 scheduleSave()
+                // The open note stays unread (read-only) until the editor reads it again.
                 let unread = markdownBodiesNotRead
-                markdownBodiesNotRead = []
+                markdownBodiesNotRead = unread.filter { $0 == selectedNoteID }
                 if let selected = selectedNoteID, unread.contains(selected), cachedBody(selected) == nil {
                     externallyUpdatedNoteID = selected
                 }

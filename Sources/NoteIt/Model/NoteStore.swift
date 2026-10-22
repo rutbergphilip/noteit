@@ -175,7 +175,10 @@ final class NoteStore: ObservableObject {
     /// Recovery copies of edits waiting for an unavailable folder, one per note, removed once the edit is written.
     var markdownWaitingCopies: [UUID: URL] = [:]
     /// Notes whose body couldn't be read because the folder didn't answer; they are read again once it does.
-    var markdownBodiesNotRead: Set<UUID> = []
+    var markdownBodiesNotRead: Set<UUID> = [] {
+        didSet { if markdownBodiesNotRead != oldValue { publishMarkdownBodiesNotRead() } }
+    }
+    private var markdownBodiesNotReadPublishScheduled = false
     /// The longest `body(for:)` waits for a note's file; a slower read goes on off the main thread and the note shows
     /// as loading until it ends (up to `markdownBlockingTimeout`).
     var markdownBodyMainWait: TimeInterval = 1
@@ -605,8 +608,14 @@ final class NoteStore: ObservableObject {
             guard inFlight.isEmpty,
                   let key = (0..<Self.markdownReadThreads).lazy.map({ "markdown-read:\(root):\($0)" })
                       .first(where: { !BoundedFileAccess.shared.isRunning($0) }) else {
-                // With no read left to end (threads held by reads that timed out), there's nothing to wait for.
-                if inFlight.isEmpty { markdownBodiesNotRead.insert(id) } else { deferMarkdownRead(id) }
+                guard inFlight.isEmpty else {
+                    deferMarkdownRead(id)
+                    return .unanswered
+                }
+                // Both readers are held by reads that timed out and haven't ended: the folder isn't answering, and
+                // it's tried again (a scan, then this read) until one ends.
+                markdownBodiesNotRead.insert(id)
+                markdownFolderBecameUnavailable()
                 return .unanswered
             }
             job = MarkdownReadJob(entry: entry)
@@ -658,6 +667,25 @@ final class NoteStore: ObservableObject {
             MainActor.assumeIsolated {
                 guard let self, self.markdownReadsDeferred.contains(id) else { return }
                 self.markdownBodiesLoading.insert(id)
+            }
+        }
+    }
+
+    /// The note shows a placeholder (its last known text, or nothing) because its file wasn't read: never editable.
+    func isMarkdownBodyUnread(_ id: UUID) -> Bool {
+        markdownBodiesNotRead.contains(id) && cachedBody(id) == nil
+    }
+
+    /// Views read `markdownBodiesNotRead` directly; this publishes a change on the next turn, as it can change
+    /// during a view update.
+    private func publishMarkdownBodiesNotRead() {
+        guard !markdownBodiesNotReadPublishScheduled else { return }
+        markdownBodiesNotReadPublishScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.markdownBodiesNotReadPublishScheduled = false
+                self.objectWillChange.send()
             }
         }
     }

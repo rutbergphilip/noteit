@@ -653,6 +653,62 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(hits.count, 40)
     }
 
+    func testReadsStuckOnBothReadersKeepTheFolderUnavailableAndTheNoteReadOnly() async throws {
+        try await readsStuckOnBothReaders(hanging: ["Hang A", "Hang B"])
+    }
+
+    func testOneFileThatHangsWhileTheScanAnswersKeepsTheFolderUnavailableAndTheNoteReadOnly() async throws {
+        try await readsStuckOnBothReaders(hanging: ["Hang A", "Hang A"])
+    }
+
+    /// Each name in `hanging` is read once (its read outlives the whole timeout) and followed by a scan that answers,
+    /// which leaves both readers held by reads that timed out.
+    private func readsStuckOnBothReaders(hanging: [String]) async throws {
+        for title in Array(Set(hanging)) + ["Fine"] { try put("\(title).md", "# \(title)\n\n\(title) text\n") }
+        let store = open()
+        store.markdownBlockingTimeout = 0.3
+        store.markdownBodyMainWait = 0.05
+        store.markdownUnavailableRetryInterval = 600
+        let storage = try XCTUnwrap(store.markdownStorage)
+        for meta in store.notes { store.dropCachedBody(meta.id) }
+        let gate = DispatchGroup()
+        gate.enter()
+        var released = false
+        defer { if !released { gate.leave() } }
+        let hangingFiles = Set(hanging.map { "\($0).md" })
+        storage.readFileData = { url in
+            if hangingFiles.contains(url.lastPathComponent) { _ = gate.wait(timeout: .now() + 20) }
+            return try Data(contentsOf: url)
+        }
+        for title in hanging {
+            let id = try note(store, titled: title).id
+            XCTAssertNil(store.cachedBody(id))
+            _ = store.body(for: id)
+            try await waitUntil({ store.markdownFolderUnavailable }, "a read past the timeout")
+            let answered = await store.rescanMarkdownFolder()
+            XCTAssertTrue(answered)
+            XCTAssertFalse(store.markdownFolderUnavailable, "the scan answers")
+        }
+
+        let fine = try note(store, titled: "Fine").id
+        store.selectedNoteID = fine
+        _ = store.body(for: fine)
+        XCTAssertNil(store.cachedBody(fine))
+        XCTAssertTrue(store.markdownFolderUnavailable, "no reader left: the folder isn't answering")
+        XCTAssertTrue(store.isMarkdownBodyUnread(fine), "the editor stays read-only over the placeholder")
+
+        released = true
+        gate.leave()
+        storage.readFileData = { try Data(contentsOf: $0) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        store.externallyUpdatedNoteID = nil
+        let answered = await store.rescanMarkdownFolder()
+        XCTAssertTrue(answered)
+        XCTAssertEqual(store.externallyUpdatedNoteID, fine, "the open note is read again")
+        XCTAssertTrue(store.body(for: fine).string.contains("Fine text"))
+        XCTAssertFalse(store.isMarkdownBodyUnread(fine))
+    }
+
     func testASpotlightRebuildNeverWaitsOnTheMainThreadForAMarkdownFolder() async throws {
         for index in 0..<3 { try put("Note \(index).md", "# Note \(index)\n\ntext \(index)\n") }
         let store = open()
