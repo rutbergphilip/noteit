@@ -78,6 +78,11 @@ struct LibraryConversionJournal: Codable, Equatable {
     /// Whether `library-location.json` existed before the conversion. When it did, a missing file is never taken
     /// as "not committed": something else removed it. Nil in older journals, which are treated as true.
     var locationFileExisted: Bool?
+    /// Files of this library from an earlier conversion that the new files replace, relative to the content folder,
+    /// with their SHA-256; they are moved to `replacedFolder` before the new files go in and back on rollback.
+    var replaced: [Move]?
+    /// `.noteit/replaced-<time>`, relative to the content folder.
+    var replacedFolder: String?
     /// Set right after the location file is written; from then on the conversion is only ever finished.
     var committed = false
 
@@ -344,12 +349,32 @@ final class LibraryConverter {
         try fm.createDirectory(at: contentStaging, withIntermediateDirectories: true)
         try fm.createDirectory(at: dataStaging, withIntermediateDirectories: true)
 
-        // 3. Stage. Placeholders for the folder's own files keep staged names clear of them.
-        let placeholders = try mirrorNames(of: folder, into: contentStaging)
+        // 3. Stage. Placeholders for the folder's own files keep staged names clear of them; files and notebook
+        // folders this library wrote there before keep their places.
+        var placeholders = try mirrorNames(of: folder, into: contentStaging)
         let staging = MarkdownBodyStorage(contentRoot: contentStaging, dataDir: dataStaging, renameFilesOnTitleChange: false)
         staging.trash = { _ in }
         staging.setNotebooks(store.notebooks)
+        let earlier = Self.libraryFiles(in: folder)
+        let reusedFolders = Self.reusableNotebookFolders(earlier.notebooks, tree: store.notebooks)
+        for (id, path) in reusedFolders { staging.index.setNotebookFolder(path, for: id) }
         try staging.reconcileNotebooks()
+        var setAside = Set(earlier.notebooks.filter { reusedFolders[$0.id] == nil && store.notebook(with: $0.id) != nil }
+            .map { $0.path + "/" + NotebookFolders.fileName })
+        var reusedFiles: [UUID: String] = [:]
+        for file in earlier.notes {
+            if let note = store.note(with: file.id), reusedFiles[file.id] == nil {
+                reusedFiles[file.id] = file.path
+                var entry = MarkdownFileEntry(path: file.path)
+                entry.nameTitle = note.title
+                staging.index.set(entry, for: file.id)
+                staging.allowRecreatingMissingFile(file.id)
+                try? fm.removeItem(at: contentStaging.appendingPathComponent(file.path))
+                placeholders.removeAll { $0 == file.path }
+            } else if store.note(with: file.id) != nil || store.isTombstoned(file.id) {
+                setAside.insert(file.path)
+            }
+        }
         var failed: [UUID] = []
         var sources: [UUID: StoredBody] = [:]
         let notes = store.notes
@@ -378,6 +403,7 @@ final class LibraryConverter {
                   data.range(of: Data("noteit://note".utf8)) != nil else { continue }
             try staging.write(source.text, extras: source.extras, for: note, notebook: store.notebook(with: note.notebookID))
         }
+        for (id, path) in reusedFiles where staging.index.entry(id)?.path != path { setAside.insert(path) }
         try staging.index.save()
         try removePlaceholders(placeholders, in: contentStaging)
         try stop(after: .staged)
@@ -395,24 +421,46 @@ final class LibraryConverter {
         try stop(after: .verified)
         try requireUnchanged(since: before)
 
-        // 5. Move into place.
+        // 5. Move into place. This library's earlier files that differ go aside first.
         let files = Self.stagedFiles(in: contentStaging)
         var planned: [LibraryConversionJournal.Move] = []
+        var replacing = setAside
         for path in files {
             let staged = contentStaging.appendingPathComponent(path)
             let target = folder.appendingPathComponent(path)
             let sha = AttachmentStore.sha256(try Data(contentsOf: staged))
             if Self.exists(target) {
-                guard !Self.isDirectory(target), let existing = try? Data(contentsOf: target),
-                      AttachmentStore.sha256(existing) == sha else {
+                guard !Self.isDirectory(target), let existing = try? Data(contentsOf: target) else {
                     throw LibraryConversionError.fileInTheWay(path)
                 }
-                continue
+                if AttachmentStore.sha256(existing) == sha {
+                    replacing.remove(path)
+                    continue
+                }
+                guard Self.isReplaceable(path, existing: existing, staged: staged, setAside: setAside) else {
+                    throw LibraryConversionError.fileInTheWay(path)
+                }
+                replacing.insert(path)
             }
             planned.append(.init(path: path, sha256: sha))
         }
+        var replaced: [LibraryConversionJournal.Move] = []
+        for path in replacing.sorted() {
+            guard let data = try? Data(contentsOf: folder.appendingPathComponent(path)) else { continue }
+            replaced.append(.init(path: path, sha256: AttachmentStore.sha256(data)))
+        }
+        let replacedFolder = MarkdownBodyStorage.privateFolder + "/replaced-\(stamp)"
+        if !replaced.isEmpty {
+            journal.replaced = replaced
+            journal.replacedFolder = replacedFolder
+        }
         journal.moves = planned
         try journal.save(dataDir: dataDir)
+        for move in replaced {
+            let aside = folder.appendingPathComponent(replacedFolder).appendingPathComponent(move.path)
+            try fm.createDirectory(at: aside.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.moveItem(at: folder.appendingPathComponent(move.path), to: aside)
+        }
         for move in planned {
             let target = folder.appendingPathComponent(move.path)
             try createFolders(for: move.path, in: folder, journal: &journal)
@@ -682,6 +730,17 @@ final class LibraryConverter {
             guard !isDirectory(url), let data = try? Data(contentsOf: url), AttachmentStore.sha256(data) == move.sha256 else { continue }
             try? fm.removeItem(at: url)
         }
+        if let replacedFolder = journal.replacedFolder {
+            let aside = root.appendingPathComponent(replacedFolder, isDirectory: true)
+            for move in journal.replaced ?? [] {
+                let original = root.appendingPathComponent(move.path)
+                let kept = aside.appendingPathComponent(move.path)
+                guard !exists(original), let data = try? Data(contentsOf: kept), AttachmentStore.sha256(data) == move.sha256 else { continue }
+                try? fm.createDirectory(at: original.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? fm.moveItem(at: kept, to: original)
+            }
+            removeEmptyFolders(aside)
+        }
         if journal.wroteLibraryFile, libraryFileID(in: root) == journal.libraryID {
             try? fm.removeItem(at: libraryFileURL(in: root))
         }
@@ -713,6 +772,89 @@ final class LibraryConverter {
         let dataStaging = URL(fileURLWithPath: journal.dataStaging, isDirectory: true)
         try? fm.removeItem(at: dataStaging)
         removeIfEmpty(dataStaging.deletingLastPathComponent())
+    }
+
+    /// Removes `folder` and the folders in it that hold nothing else.
+    nonisolated private static func removeEmptyFolders(_ folder: URL) {
+        let fm = FileManager.default
+        for name in (try? fm.contentsOfDirectory(atPath: folder.path)) ?? [] {
+            let url = folder.appendingPathComponent(name, isDirectory: true)
+            if isDirectory(url) { removeEmptyFolders(url) }
+        }
+        removeIfEmpty(folder)
+    }
+
+    // MARK: Files of an earlier conversion
+
+    struct LibraryFile: Equatable {
+        var path: String
+        var id: UUID
+    }
+
+    /// Markdown files with an id in their front matter (`.trash/` included) and notebook folders with a
+    /// `.noteit-notebook.json`, sorted by path.
+    nonisolated static func libraryFiles(in folder: URL) -> (notes: [LibraryFile], notebooks: [LibraryFile]) {
+        var notes: [LibraryFile] = []
+        var notebooks: [LibraryFile] = []
+        func walk(_ relative: String, depth: Int) {
+            let url = relative.isEmpty ? folder : folder.appendingPathComponent(relative, isDirectory: true)
+            guard depth <= NotebookFolders.maxDepth + 1,
+                  let names = try? FileManager.default.contentsOfDirectory(atPath: url.path) else { return }
+            for name in names.sorted() {
+                if name.hasPrefix("."), !(relative.isEmpty && name == FolderScanner.trashFolder) { continue }
+                let path = relative.isEmpty ? name : relative + "/" + name
+                var info = stat()
+                guard lstat(url.appendingPathComponent(name).path, &info) == 0 else { continue }
+                switch info.st_mode & S_IFMT {
+                case S_IFDIR:
+                    if let id = notebookFileID(url.appendingPathComponent(name).appendingPathComponent(NotebookFolders.fileName)) {
+                        notebooks.append(LibraryFile(path: path, id: id))
+                    }
+                    walk(path, depth: depth + 1)
+                case S_IFREG where FolderScanner.isMarkdown(name) && Int64(info.st_size) <= FolderScanner.maxFileSize:
+                    if let data = try? Data(contentsOf: url.appendingPathComponent(name)), let id = FolderScanner.frontMatterID(data) {
+                        notes.append(LibraryFile(path: path, id: id))
+                    }
+                default:
+                    continue
+                }
+            }
+        }
+        walk("", depth: 0)
+        return (notes, notebooks)
+    }
+
+    nonisolated private static func notebookFileID(_ url: URL) -> UUID? {
+        guard let data = try? Data(contentsOf: url),
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return (raw["id"] as? String).flatMap(UUID.init(uuidString:))
+    }
+
+    /// The earlier notebook folders that stay where the tree would put them, so staging writes into them.
+    nonisolated static func reusableNotebookFolders(_ folders: [LibraryFile], tree: [Notebook]) -> [UUID: String] {
+        let known = Set(tree.map(\.id))
+        var kept: [UUID: String] = [:]
+        for folder in folders where known.contains(folder.id) && kept[folder.id] == nil { kept[folder.id] = folder.path }
+        while true {
+            let target = NotebookFolders.layout(tree, existing: kept)
+            let staying = kept.filter { target[$0.key] == $0.value }
+            if staying.count == kept.count { return kept }
+            kept = staying
+        }
+    }
+
+    /// A differing file may be replaced only when it is one of this library's earlier files, or the notebook file of
+    /// a folder whose notebook it already describes.
+    nonisolated private static func isReplaceable(_ path: String, existing: Data, staged: URL, setAside: Set<String>) -> Bool {
+        if setAside.contains(path) { return true }
+        if (path as NSString).lastPathComponent == NotebookFolders.fileName {
+            guard let id = notebookFileID(staged) else { return false }
+            let raw = try? JSONSerialization.jsonObject(with: existing) as? [String: Any]
+            return (raw?["id"] as? String).flatMap(UUID.init(uuidString:)) == id
+        }
+        guard FolderScanner.isMarkdown(path), let stagedData = try? Data(contentsOf: staged),
+              let id = FolderScanner.frontMatterID(stagedData) else { return false }
+        return FolderScanner.frontMatterID(existing) == id
     }
 
     nonisolated private static func removeIfEmpty(_ folder: URL) {

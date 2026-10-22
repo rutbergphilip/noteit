@@ -412,6 +412,63 @@ final class LibraryConverterTests: XCTestCase {
         assertSameTree(tree(content), contentBefore)
     }
 
+    /// Markdown files under `folder` (`.noteit` skipped) → their front-matter id.
+    private func markdownIDs(_ folder: URL) -> [String: UUID?] {
+        tree(folder).keys.filter { FolderScanner.isMarkdown($0) && !$0.hasPrefix(".noteit") }
+            .reduce(into: [:]) { result, path in
+                result[path] = (try? Data(contentsOf: folder.appendingPathComponent(path))).flatMap(FolderScanner.frontMatterID)
+            }
+    }
+
+    func testConvertingBackIntoTheFolderOfAnEarlierConversionReusesItsFiles() async throws {
+        _ = try await converter(try makeRTFDLibrary()).convert(to: .markdown(content))
+        let firstFiles = markdownIDs(content)
+        _ = try await converter(openMarkdown()).convert(to: .rtfd)
+        let rtfd = openRTFD()
+        let edited = try XCTUnwrap(rtfd.notes.first { $0.title == "Target" }).id
+        rtfd.updateBody(edited, body("Target", ["Edited while RTFD"]))
+        let moved = try XCTUnwrap(rtfd.notes.first { $0.title == "Source" }).id
+        rtfd.moveNote(moved, to: nil)
+        try Data("# Mine\n\nwritten by hand\n".utf8).write(to: content.appendingPathComponent("Mine.md"))
+        rtfd.flush()
+        let notes = kept(rtfd)
+        let texts = bodies(rtfd)
+
+        _ = try await converter(rtfd).convert(to: .markdown(content))
+        let markdown = openMarkdown()
+        let files = markdownIDs(content)
+        let ids = files.values.compactMap { $0 }
+        XCTAssertEqual(ids.count, Set(ids).count, "no id is in two files: \(files)")
+        let sourcePath = try XCTUnwrap(firstFiles.first { $0.value == moved }?.key)
+        XCTAssertNotEqual(sourcePath, "Source.md")
+        XCTAssertEqual(Set(files.keys).subtracting(firstFiles.keys), ["Mine.md", "Source.md"], "existing files are reused, not staged beside")
+        XCTAssertEqual(Set(firstFiles.keys).subtracting(files.keys), [sourcePath], "only the moved note's old file goes aside")
+        XCTAssertEqual(Set(markdown.notes.map(\.id)), Set(notes.map(\.id)).union(files["Mine.md"].flatMap { $0 }.map { [$0] } ?? []))
+        assertSameBodies(texts, bodies(markdown).filter { texts[$0.key] != nil })
+        XCTAssertEqual(markdown.note(with: moved)?.notebookID, nil)
+        XCTAssertEqual(try String(contentsOf: content.appendingPathComponent("Mine.md"), encoding: .utf8).contains("written by hand"), true)
+    }
+
+    func testRollingBackAConversionIntoAnEarlierFolderPutsTheReplacedFilesBack() async throws {
+        _ = try await converter(try makeRTFDLibrary()).convert(to: .markdown(content))
+        _ = try await converter(openMarkdown()).convert(to: .rtfd)
+        let rtfd = openRTFD()
+        let edited = try XCTUnwrap(rtfd.notes.first { $0.title == "Target" }).id
+        rtfd.updateBody(edited, body("Target", ["Edited while RTFD"]))
+        rtfd.flush()
+        let before = tree(content)
+
+        let converter = converter(rtfd)
+        converter.interruption = .moved
+        do {
+            _ = try await converter.convert(to: .markdown(content))
+            XCTFail("not interrupted")
+        } catch is LibraryConverter.Interrupted {}
+        XCTAssertNotEqual(tree(content).filter { !$0.key.hasPrefix(".noteit") }, before.filter { !$0.key.hasPrefix(".noteit") })
+        LibraryConverter.finishInterrupted(dataDir: data)
+        assertSameTree(tree(content), before, "the earlier files are back and nothing else is left")
+    }
+
     /// An RTFD library converted to Markdown and back, stopped after the RTFD bodies moved into the data folder.
     private func interruptedConversionToRTFD() async throws {
         _ = try await converter(try makeRTFDLibrary()).convert(to: .markdown(content))
