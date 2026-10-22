@@ -154,7 +154,7 @@ enum PaletteCommandRegistry {
                 store.selection = .recentlyDeleted
                 WindowRouter.showMainWindow()
             },
-            command("import", "Import…", symbol: "square.and.arrow.down", shortcut: nil, keywords: ["markdown", "apple notes"]) {
+            command("import", "Import…", symbol: "square.and.arrow.down", shortcut: nil, keywords: ["markdown", "apple notes", "evernote", "enex", "notion"]) {
                 ImportSheetPresenter.show()
             },
             command("settings", "Settings…", symbol: "gearshape", shortcut: MenuShortcuts.settings.display, keywords: ["preferences", "options"]) {

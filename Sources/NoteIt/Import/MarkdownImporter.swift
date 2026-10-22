@@ -1,6 +1,14 @@
 import AppKit
 import NoteItCore
 
+/// How many entries and unpacked bytes the archives of one import may hold, so a ZIP bomb is refused.
+struct ZipLimits: Sendable {
+    var maxEntries: Int
+    var maxBytes: Int64
+
+    static let standard = ZipLimits(maxEntries: 200_000, maxBytes: 8 << 30)
+}
+
 /// Imports Markdown and plain-text files, Obsidian vaults and Bear exports (`.textbundle` folders,
 /// `.textpack` zips or plain Markdown).
 @MainActor
@@ -105,27 +113,11 @@ final class MarkdownImporter {
             await Task.yield()
         }
         progress(ImportProgress(completed: report.cancelled ? report.notesImported : items.count, total: items.count))
-        unresolveLinksToSkipped(planned: Dictionary(zip(ids, items.map { $0.url.deletingPathExtension().lastPathComponent }),
-                                                    uniquingKeysWith: { a, _ in a }))
+        store.unresolveLinksToSkipped(in: createdIDs,
+                                      planned: Dictionary(zip(ids, items.map { $0.url.deletingPathExtension().lastPathComponent }),
+                                                          uniquingKeysWith: { a, _ in a }))
         store.flush()
         return report
-    }
-
-    /// Links to notes that a cancel or an unreadable file kept out of the import become title links.
-    private func unresolveLinksToSkipped(planned: [UUID: String]) {
-        let missing = planned.filter { store.note(with: $0.key) == nil }
-        guard !missing.isEmpty else { return }
-        for id in createdIDs {
-            let body = NSMutableAttributedString(attributedString: store.body(for: id))
-            var changed = false
-            body.enumerateAttribute(.link, in: NSRange(location: 0, length: body.length)) { value, range, _ in
-                guard let url = value as? URL, case let .note(target, heading)? = NoteLink(url: url),
-                      let title = missing[target] else { return }
-                body.addAttribute(.link, value: NoteLink.unresolved(title: title, heading: heading).clamped.url, range: range)
-                changed = true
-            }
-            if changed { store.replaceImportedBody(id, body) }
-        }
     }
 
     /// Imports one file or bundle. Returns false when it couldn't be read.
@@ -134,7 +126,8 @@ final class MarkdownImporter {
                     report: inout ImportReport) -> Bool {
         let ext = item.url.pathExtension.lowercased()
         if ext == "textpack" {
-            guard let unpacked = unzip(item.url) else { return false }
+            // A cancelled unpack isn't an unreadable file.
+            guard let unpacked = Self.unzip(item.url) else { return Task.isCancelled }
             defer { try? fileManager.removeItem(at: unpacked) }
             guard let bundle = Self.textBundle(in: unpacked) else { return false }
             return importBundle(bundle, named: item.url.deletingPathExtension().lastPathComponent, item: item, id: id, report: &report)
@@ -222,59 +215,56 @@ final class MarkdownImporter {
         }
     }
 
-    /// Unpacks a `.textpack` into a temporary folder, refusing archives with entries that would land outside it.
-    private func unzip(_ url: URL) -> URL? {
-        guard let entries = Self.zipEntries(url), entries.allSatisfy(Self.isSafeZipEntry) else { return nil }
-        let destination = fileManager.temporaryDirectory.appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.arguments = ["-x", "-k", url.path, destination.path]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-        guard process.terminationStatus == 0, Self.staysInside(destination) else {
-            try? fileManager.removeItem(at: destination)
-            return nil
-        }
-        return destination
+    /// Unpacks a zip archive (a `.textpack`, a Notion export) into a temporary folder with `ZipExtractor`, refusing
+    /// archives with entries that would land outside it.
+    nonisolated static func unzip(_ url: URL) -> URL? {
+        var limits = ZipLimits.standard
+        return try? unzip(url, within: &limits)
     }
 
-    /// The entry names in a zip archive, or nil when it can't be listed.
-    nonisolated static func zipEntries(_ url: URL) -> [String]? {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
-        process.arguments = ["-1", url.path]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+    /// `unzip(_:)` that also takes the archive's entries and unpacked size off `limits`, throwing
+    /// `ImportError.archiveTooLarge` when they don't fit. Nil when the archive can't be opened.
+    nonisolated static func unzip(_ url: URL, within limits: inout ZipLimits) throws -> URL? {
+        try unpack(url, within: &limits)?.folder
+    }
+
+    /// `unzip(_:within:)` that also returns how many bytes were written for each file. Symbolic links, encrypted
+    /// entries, unknown compression methods and names nested more than 256 deep or with a part over 255 characters
+    /// throw `ImportError.unsupportedArchive`; cancellation is rethrown.
+    nonisolated static func unpack(_ url: URL, within limits: inout ZipLimits) throws -> ZipExtractor.Result? {
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
+        let result: ZipExtractor.Result
         do {
-            try process.run()
-        } catch {
-            return nil
+            result = try ZipExtractor.extract(url, to: destination, maxEntries: limits.maxEntries, maxBytes: limits.maxBytes)
+        } catch ZipExtractor.Failure.tooLarge {
+            throw ImportError.archiveTooLarge(url.lastPathComponent)
+        } catch let failure as ZipExtractor.Failure {
+            switch failure {
+            case .symlink, .encrypted, .unsupportedMethod, .nameTooLong:
+                throw ImportError.unsupportedArchive(url.lastPathComponent, reason: failure.errorDescription ?? "")
+            default:
+                return nil
+            }
         }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else { return nil }
-        return text.split(whereSeparator: \.isNewline).map(String.init)
+        limits.maxEntries -= result.entries
+        limits.maxBytes -= result.bytes
+        return result
+    }
+
+    /// The entry names in a zip archive, or nil when it can't be read.
+    nonisolated static func zipEntries(_ url: URL) -> [String]? {
+        ZipDirectory.read(url)?.entries.map(\.name)
+    }
+
+    /// The number of entries in a zip archive and their unpacked size, as its directory states them.
+    nonisolated static func zipTotals(_ url: URL) -> (entries: Int, bytes: Int64)? {
+        ZipDirectory.read(url).map { ($0.entries.count, Int64(clamping: $0.totalUncompressedSize)) }
     }
 
     nonisolated static func isSafeZipEntry(_ name: String) -> Bool {
         let parts = name.split(separator: "/", omittingEmptySubsequences: false)
         return !name.hasPrefix("/") && !name.hasPrefix("~") && !parts.contains("..")
-    }
-
-    /// True when everything under `folder`, with symlinks followed, is still inside it.
-    nonisolated static func staysInside(_ folder: URL) -> Bool {
-        guard let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil) else { return false }
-        for case let url as URL in enumerator where !isInside(url, root: folder) {
-            return false
-        }
-        return true
     }
 
     /// The bundle inside an unpacked `.textpack`, or the unpacked folder itself.

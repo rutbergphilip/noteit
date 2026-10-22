@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum ImportSource: String, CaseIterable, Identifiable {
-    case markdown, bear, appleNotes
+    case markdown, bear, appleNotes, evernote, notion
 
     var id: String { rawValue }
 
@@ -11,6 +11,8 @@ enum ImportSource: String, CaseIterable, Identifiable {
         case .markdown: "Markdown & Obsidian"
         case .bear: "Bear"
         case .appleNotes: "Apple Notes"
+        case .evernote: "Evernote"
+        case .notion: "Notion"
         }
     }
 
@@ -19,6 +21,8 @@ enum ImportSource: String, CaseIterable, Identifiable {
         case .markdown: "A folder or .md and .txt files. Subfolders become notebooks, and images come along."
         case .bear: "Notes exported from Bear as TextBundle, TextPack or Markdown, with their images."
         case .appleNotes: "Reads every folder straight from the Notes app. macOS asks for permission the first time."
+        case .evernote: "Choose one or more .enex files exported from Evernote. Each file becomes a notebook."
+        case .notion: "Choose the .zip from Notion's Export › Markdown & CSV. Pages keep their images and tables."
         }
     }
 
@@ -27,6 +31,8 @@ enum ImportSource: String, CaseIterable, Identifiable {
         case .markdown: "doc.text"
         case .bear: "pawprint"
         case .appleNotes: "note.text"
+        case .evernote: "square.and.arrow.down.on.square"
+        case .notion: "doc.on.doc"
         }
     }
 
@@ -35,6 +41,8 @@ enum ImportSource: String, CaseIterable, Identifiable {
         case .markdown: Tokens.Color.notebookIndigo
         case .bear: Tokens.Color.notebookRed
         case .appleNotes: Tokens.Color.notebookOrange
+        case .evernote: Tokens.Color.notebookGreen
+        case .notion: Tokens.Color.notebookGray
         }
     }
 }
@@ -76,6 +84,31 @@ final class ImportModel: ObservableObject {
             run(source) { model in
                 await MarkdownImporter(store: model.store).run(items) { model.progress = $0 }
             }
+        case .evernote:
+            guard let urls = chooseFiles(for: source) else { return }
+            let items = EvernoteImporter.items(for: urls)
+            guard !items.isEmpty else {
+                phase = .failed(.nothingToImport)
+                return
+            }
+            run(source) { model in
+                await EvernoteImporter.importItems(items, into: model.store) { model.progress = $0 }
+            }
+        case .notion:
+            guard let url = chooseFiles(for: source)?.first else { return }
+            run(source) { model in
+                do {
+                    return try await NotionImporter.importExport(url, into: model.store) { model.progress = $0 }
+                } catch is CancellationError {
+                    return ImportReport(cancelled: true)
+                } catch let error as ImportError {
+                    model.phase = .failed(error)
+                    return nil
+                } catch {
+                    model.phase = .failed(.unreadableArchive(url.lastPathComponent))
+                    return nil
+                }
+            }
         case .appleNotes:
             run(.appleNotes) { model in
                 do {
@@ -100,6 +133,7 @@ final class ImportModel: ObservableObject {
             guard let self else { return }
             if let report = await work(self) {
                 self.phase = report.notesImported == 0 && report.lockedSkipped == 0 && report.notesSkipped == 0
+                    && report.filesSkipped == 0 && report.archivesSkipped.isEmpty
                     && !report.cancelled && !report.permissionDenied
                     ? .failed(.nothingToImport)
                     : .finished(report)
@@ -121,12 +155,15 @@ final class ImportModel: ObservableObject {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = true
+        panel.allowsMultipleSelection = source != .notion
         panel.treatsFilePackagesAsDirectories = false
         panel.prompt = "Import"
-        panel.message = source == .bear
-            ? "Choose the files or folder you exported from Bear."
-            : "Choose a folder, such as an Obsidian vault, or Markdown and text files."
+        panel.message = switch source {
+        case .bear: "Choose the files or folder you exported from Bear."
+        case .evernote: "Choose .enex files, or a folder of them. Subfolders become notebook stacks."
+        case .notion: "Choose the .zip you exported from Notion, or its unzipped folder."
+        default: "Choose a folder, such as an Obsidian vault, or Markdown and text files."
+        }
         return panel.runModal() == .OK && !panel.urls.isEmpty ? panel.urls : nil
     }
 }
