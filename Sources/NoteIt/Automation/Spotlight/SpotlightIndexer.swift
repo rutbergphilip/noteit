@@ -52,11 +52,11 @@ private final class SpotlightIndexHealth: @unchecked Sendable {
 
     var changeCount: Int { lock.withLock { changes } }
 
+    // Defaults are written outside the lock: writing posts a notification that observers on the main queue receive
+    // while the writer waits, and the main thread takes the lock.
     func markDirty() {
-        lock.withLock {
-            changes += 1
-            if !defaults.bool(forKey: PrefKey.spotlightIndexDirty) { defaults.set(true, forKey: PrefKey.spotlightIndexDirty) }
-        }
+        lock.withLock { changes += 1 }
+        if !defaults.bool(forKey: PrefKey.spotlightIndexDirty) { defaults.set(true, forKey: PrefKey.spotlightIndexDirty) }
     }
 
     func recordFailure() {
@@ -68,9 +68,8 @@ private final class SpotlightIndexHealth: @unchecked Sendable {
 
     /// Clears the dirty flag when nothing has changed since `change` was taken and nothing has failed.
     func clean(asOf change: Int) {
-        lock.withLock {
-            if change == changes, !failedSinceRebuild { defaults.removeObject(forKey: PrefKey.spotlightIndexDirty) }
-        }
+        guard lock.withLock({ change == changes && !failedSinceRebuild }) else { return }
+        removeDirtyFlag(asOf: change)
     }
 
     func rebuildStarted() {
@@ -79,12 +78,20 @@ private final class SpotlightIndexHealth: @unchecked Sendable {
 
     /// Writes the index version only when every call since the rebuild started succeeded.
     func rebuildFinished(asOf change: Int, version: Int) {
-        lock.withLock {
-            guard failures == failuresAtRebuildStart else { return }
+        let succeeded = lock.withLock { () -> Bool in
+            guard failures == failuresAtRebuildStart else { return false }
             failedSinceRebuild = false
-            defaults.set(version, forKey: PrefKey.spotlightIndexVersion)
-            if change == changes { defaults.removeObject(forKey: PrefKey.spotlightIndexDirty) }
+            return true
         }
+        guard succeeded else { return }
+        defaults.set(version, forKey: PrefKey.spotlightIndexVersion)
+        if lock.withLock({ change == changes }) { removeDirtyFlag(asOf: change) }
+    }
+
+    /// A change or failure that came while the flag was removed sets it again.
+    private func removeDirtyFlag(asOf change: Int) {
+        defaults.removeObject(forKey: PrefKey.spotlightIndexDirty)
+        if lock.withLock({ change != changes || failedSinceRebuild }) { defaults.set(true, forKey: PrefKey.spotlightIndexDirty) }
     }
 }
 
@@ -284,8 +291,9 @@ final class SpotlightIndexer: DerivedIndex {
 
     func rebuild(notes: [NoteMeta], body: @escaping (UUID) -> NSAttributedString?) async {
         guard isEnabled else { return }
+        let read = { (id: UUID) in body(id).map { BodyCodec.plainText(of: $0) } }
         await performRebuild(notes: notes) { id in
-            .text(await Task.detached(priority: .utility) { body(id).map(BodyCodec.plainText(of:)) }.value)
+            .text(await Task.detached(priority: .utility) { read(id) }.value)
         }
     }
 
