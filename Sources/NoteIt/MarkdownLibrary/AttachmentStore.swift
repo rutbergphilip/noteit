@@ -5,7 +5,8 @@ import NoteItMarkdown
 
 /// `_attachments/` of a Markdown library (spec §3.4): one file per distinct content, shared by every note. A file
 /// no note refers to goes to the macOS Trash 24 hours after its last reference went, and only if NoteIt saw it
-/// referenced; NoteIt never deletes it outright.
+/// referenced; NoteIt never deletes it outright. What the sweep saw is kept in `.noteit/attachment-sweep.json`, so
+/// the 24 hours span relaunches.
 final class AttachmentStore: @unchecked Sendable {
     static let graceInterval: TimeInterval = 24 * 60 * 60
 
@@ -13,12 +14,24 @@ final class AttachmentStore: @unchecked Sendable {
     private let index: MarkdownPathIndex
     var now: () -> Date = Date.init
     var trash: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
+    var beforeTrashing: (String) -> Void = { _ in }
     private let lock = NSLock()
     private var seenReferenced: Set<String> = []
     private var unreferencedSince: [String: Date] = [:]
     private let sweepQueue = DispatchQueue(label: "NoteIt.AttachmentSweep", qos: .utility)
     private let sweepLock = NSLock()
     private var sweepQueued = false
+    private var loadedSweepState = false
+
+    private struct SweepState: Codable {
+        var referenced: [String]
+        var unreferencedSince: [String: Date]
+    }
+
+    private var sweepStateURL: URL {
+        contentRoot.appendingPathComponent(MarkdownBodyStorage.privateFolder, isDirectory: true)
+            .appendingPathComponent("attachment-sweep.json")
+    }
 
     init(contentRoot: URL, index: MarkdownPathIndex) {
         self.contentRoot = contentRoot
@@ -109,10 +122,15 @@ final class AttachmentStore: @unchecked Sendable {
     /// through `scheduleSweep()`.
     @discardableResult
     func sweep() -> [String] {
+        loadSweepStateOnce()
         let counts = referenceCounts()
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: folderURL.path)) ?? []).filter { !$0.hasPrefix(".") }
         let date = now()
         var trashed: [String] = []
+        let before = lock.withLock { (seenReferenced, unreferencedSince) }
+        defer {
+            if lock.withLock({ before != (seenReferenced, unreferencedSince) }) { saveSweepState() }
+        }
         for name in names {
             lock.withLock {
                 let key = name.lowercased()
@@ -125,6 +143,11 @@ final class AttachmentStore: @unchecked Sendable {
                 let since = unreferencedSince[key] ?? date
                 unreferencedSince[key] = since
                 guard date.timeIntervalSince(since) >= Self.graceInterval else { return }
+                beforeTrashing(name)
+                guard referenceCounts()[key, default: 0] == 0 else {
+                    unreferencedSince[key] = nil
+                    return
+                }
                 do {
                     try trash(folderURL.appendingPathComponent(name))
                     trashed.append(name)
@@ -136,6 +159,29 @@ final class AttachmentStore: @unchecked Sendable {
             }
         }
         return trashed
+    }
+
+    private func loadSweepStateOnce() {
+        guard !lock.withLock({ loadedSweepState }) else { return }
+        let saved = (try? Data(contentsOf: sweepStateURL)).flatMap { try? JSONDecoder().decode(SweepState.self, from: $0) }
+        lock.withLock {
+            loadedSweepState = true
+            guard let saved else { return }
+            seenReferenced.formUnion(saved.referenced)
+            unreferencedSince.merge(saved.unreferencedSince) { current, _ in current }
+        }
+    }
+
+    private func saveSweepState() {
+        let state = lock.withLock { SweepState(referenced: seenReferenced.sorted(), unreferencedSince: unreferencedSince) }
+        do {
+            try FileManager.default.createDirectory(at: sweepStateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            try encoder.encode(state).write(to: sweepStateURL, options: .atomic)
+        } catch {
+            NSLog("NoteIt: couldn't save the attachment sweep state: \(error)")
+        }
     }
 
     /// Calls `done` on the sweep queue once every sweep scheduled so far has run.

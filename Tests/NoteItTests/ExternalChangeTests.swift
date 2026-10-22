@@ -201,6 +201,55 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertTrue(fm.fileExists(atPath: content.appendingPathComponent("_attachments/kept.png").path))
     }
 
+    func testTheDayAnAttachmentWaitsForTheTrashSpansRelaunches() async throws {
+        try put("_attachments/photo.png", "png bytes")
+        try put("Photo.md", "# Photo\n\n![photo](_attachments/photo.png)\n")
+        var store = open()
+        try await waitForSweeps(store)
+        try edit("Photo.md", "![photo](_attachments/photo.png)", "no picture now")
+        store.rescanMarkdownFolder()
+        try await waitForSweeps(store)
+        store.stopWatchingMarkdownFolder()
+
+        store = open()
+        let attachments = try XCTUnwrap(store.markdownStorage?.attachments)
+        try await waitForSweeps(store)
+        let trashed = LockedNames()
+        attachments.now = { Date().addingTimeInterval(AttachmentStore.graceInterval + 60) }
+        attachments.trash = { url in
+            trashed.append(url.lastPathComponent)
+            try FileManager.default.removeItem(at: url)
+        }
+        attachments.scheduleSweep()
+        try await waitForSweeps(store)
+        XCTAssertEqual(trashed.names, ["photo.png"], "the day started before the relaunch")
+    }
+
+    func testASweepLooksForAReferenceAgainRightBeforeTrashing() async throws {
+        try put("_attachments/photo.png", "png bytes")
+        try put("Photo.md", "# Photo\n\n![photo](_attachments/photo.png)\n")
+        let store = open()
+        try await waitForSweeps(store)
+        let attachments = try XCTUnwrap(store.markdownStorage?.attachments)
+        let index = try XCTUnwrap(store.markdownStorage?.index)
+        let id = try XCTUnwrap(store.notes.first { $0.title == "Photo" }?.id)
+        var entry = try XCTUnwrap(index.entry(id))
+        entry.attachments = []
+        index.set(entry, for: id)
+        var clock = Date()
+        attachments.now = { clock }
+        attachments.sweep()
+        clock.addTimeInterval(AttachmentStore.graceInterval + 1)
+        let trashed = LockedNames()
+        attachments.trash = { url in trashed.append(url.lastPathComponent) }
+        attachments.beforeTrashing = { _ in
+            entry.attachments = ["photo.png"]
+            index.set(entry, for: id)
+        }
+        attachments.sweep()
+        XCTAssertEqual(trashed.names, [], "a note referred to it again while the sweep ran")
+    }
+
     /// Waits until the sweeps the store scheduled have run.
     private func waitForSweeps(_ store: NoteStore) async throws {
         let attachments = try XCTUnwrap(store.markdownStorage?.attachments)
