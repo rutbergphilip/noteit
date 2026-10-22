@@ -4,6 +4,8 @@ import NoteItSync
 enum NoteStoreSyncError: Error, Equatable {
     case notFound(UUID)
     case unreadableBody(UUID)
+    /// Edits that couldn't be written to the note's file; they sync once they are saved.
+    case unsavedBody(UUID)
     case missingBody(UUID)
     case invalidPayload(String)
 }
@@ -67,6 +69,9 @@ extension NoteStore {
             guard let meta = note(with: id), let revision = meta.revision else { throw NoteStoreSyncError.notFound(id) }
             // An unreadable body loads as empty; never push that over a good remote copy.
             if hasUnreadableBody(id) { throw NoteStoreSyncError.unreadableBody(id) }
+            // The library keeps the saved revision for it, so after a relaunch that older version would look like a
+            // newer local change and be pushed over this one.
+            if hasBodyThatCantBeSaved(id) { throw NoteStoreSyncError.unsavedBody(id) }
             let merged = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .notes))
                 .merged(with: try Self.encoder.encode(meta), ownedKeys: NoteMeta.ownedCodingKeys)
             return (RecordPayload(id: id, kind: .note, revision: revision, modifiedAt: meta.updatedAt,

@@ -334,6 +334,40 @@ final class MarkdownNoteStoreTests: XCTestCase {
         XCTAssertTrue(try read("Small.md").hasSuffix("without it\n"))
     }
 
+    func testAnEditThatCantBeSavedIsntSyncedSoARelaunchCantPushAnOlderVersionOverIt() async throws {
+        let backend = InMemoryBackend()
+        _ = try await SyncEngine.connect(backend: backend, passphrase: nil, encryptNew: false)
+        let stateURL = root.appendingPathComponent("a-sync.json")
+        func engine(_ store: NoteStore) -> SyncEngine {
+            SyncEngine(backend: backend, cipher: PassthroughCipher(), local: NoteStoreSyncAdapter(store: store, deviceID: "A"),
+                       stateURL: stateURL, deviceID: "A", deviceName: "A")
+        }
+        var store: NoteStore? = open()
+        let id = store!.createNote(in: nil, initial: body("Small\nfine")).id
+        store!.flush()
+        store!.waitForMarkdownWrites(upTo: 10)
+        var sync: SyncEngine? = engine(store!)
+        let first = try await sync!.sync()
+        XCTAssertEqual(first.pushed, 1)
+        let saved = store!.note(with: id)?.revision
+
+        store!.updateBody(id, OversizedAttachment.body("Small", attachmentNamed: "huge.mov"))
+        store!.flush()
+        store!.waitForMarkdownWrites(upTo: 10)
+        XCTAssertNotNil(store!.bodySaveNotice(for: id))
+        let unsaved = try await sync!.sync()
+        XCTAssertEqual(unsaved.pushed, 0, "an edit that isn't in the note's file isn't sent to other devices")
+        XCTAssertFalse(unsaved.errors.isEmpty)
+
+        sync = nil
+        store = nil
+        let relaunched = open()
+        XCTAssertEqual(relaunched.note(with: id)?.revision, saved)
+        let afterRelaunch = try await engine(relaunched).sync()
+        XCTAssertEqual(afterRelaunch.pushed, 0, "nothing older is pushed over what other devices have")
+        XCTAssertEqual(afterRelaunch.errors, [])
+    }
+
     func testARemoteNoteWithAnAttachmentOver25MBIsRefusedForSync() async throws {
         let rtfd = NoteStore(rootURL: root.appendingPathComponent("rtfd", isDirectory: true))
         let id = rtfd.createNote(in: nil, initial: OversizedAttachment.body("Remote", attachmentNamed: "huge.mov")).id

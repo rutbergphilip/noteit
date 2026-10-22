@@ -441,6 +441,12 @@ final class NoteStore: ObservableObject {
         dirtyBodies.contains(id)
     }
 
+    /// Unsaved edits whose last write failed (an attachment over 25 MB, an error), or that wait for a Markdown
+    /// folder that doesn't answer.
+    func hasBodyThatCantBeSaved(_ id: UUID) -> Bool {
+        dirtyBodies.contains(id) && (failedBodies.contains(id) || (markdownStorage != nil && markdownFolderUnavailable))
+    }
+
     /// The backup of an unreadable body (or the original, if it couldn't be backed up).
     func loadErrorFile(for id: UUID) -> URL? {
         loadErrorFiles[id]
