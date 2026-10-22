@@ -327,6 +327,52 @@ final class LibraryConverterTests: XCTestCase {
         XCTAssertTrue(store.body(for: note.id).string.contains("Edited"))
     }
 
+    func testAFolderThatStopsAnsweringFailsTheConversionWithoutBlockingTheMainThread() async throws {
+        _ = try await converter(try makeRTFDLibrary()).convert(to: .markdown(content))
+        let store = openMarkdown()
+        let storage = try XCTUnwrap(store.markdownStorage)
+        let gate = DispatchSemaphore(value: 0)
+        storage.readFileData = { url in
+            gate.wait()
+            gate.signal()
+            return try Data(contentsOf: url)
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { gate.signal() }
+        let converter = converter(store)
+        converter.ioTimeout = 0.5
+        var ticks = 0
+        var converting = true
+        let ticker = Task { @MainActor in
+            while converting {
+                ticks += 1
+                try? await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
+        let started = Date()
+        do {
+            _ = try await converter.convert(to: .rtfd)
+            XCTFail("converted")
+        } catch let error as LibraryConversionError {
+            XCTAssertEqual(error, .folderNotResponding)
+        }
+        converting = false
+        await ticker.value
+        XCTAssertLessThan(Date().timeIntervalSince(started), 2.5)
+        XCTAssertGreaterThan(ticks, 10)
+        XCTAssertFalse(store.libraryConversionInProgress)
+        XCTAssertFalse(store.isClosedForLibrarySwitch)
+        let deadline = Date() + 10
+        while LibraryConversionJournal.load(dataDir: data) != nil, Date() < deadline {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertNil(LibraryConversionJournal.load(dataDir: data))
+        XCTAssertEqual(tree(data).keys.filter { $0.hasPrefix("notes/") || $0.hasPrefix("backups/staging") }, [])
+        guard case .loaded(let location) = LibraryLocationFile.load(dataDir: data, setsAsideDamaged: false, log: { _ in }) else {
+            return XCTFail("no location file")
+        }
+        XCTAssertEqual(location.format, .markdown)
+    }
+
     // MARK: Crashes
 
     func testAnInterruptedConversionToMarkdownIsUndoneOrFinished() async throws {

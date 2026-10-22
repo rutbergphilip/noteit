@@ -1389,12 +1389,11 @@ final class NoteStore: ObservableObject {
         if let deadline, job.wait(upTo: deadline.timeIntervalSinceNow), libraryDirty { saveLibrary() }
     }
 
-    /// A flush that waits up to `seconds` for its Markdown writes, for callers that need them on disk.
-    func flushWaitingForWrites(upTo seconds: TimeInterval) {
-        let saved = markdownFlushWait
-        markdownFlushWait = max(saved, seconds)
-        defer { markdownFlushWait = saved }
+    /// Flushes and waits up to `seconds` for the queued Markdown writes without blocking the main thread.
+    func flushAndWaitForWrites(upTo seconds: TimeInterval) async {
         flush()
+        let deadline = Date() + seconds
+        while !markdownIOJobs.isEmpty, Date() < deadline { try? await Task.sleep(nanoseconds: 20_000_000) }
     }
 
     /// Waits up to `seconds` for the queued Markdown writes and applies their results.

@@ -35,6 +35,8 @@ enum LibraryConversionError: Error, Equatable {
     case destinationOverlapsLibrary
     case alreadyInFormat
     case folderMissing
+    /// The content folder stopped answering (an unresponsive network volume); nothing was switched.
+    case folderNotResponding
     case notEnoughSpace(needed: Int64, available: Int64)
     /// Notes whose staged copy doesn't read back the same; nothing outside staging was changed.
     case notRoundTripping([UUID])
@@ -141,7 +143,7 @@ final class LibraryConverter {
     var dataDir: URL { store.rootURL }
     var pauseSync: () async -> Void = { await SyncController.shared.suspendForLibraryConversion() }
     var resumeSync: () -> Void = { SyncController.shared.resumeAfterLibraryConversion() }
-    var flush: (NoteStore) -> Void = { $0.flushWaitingForWrites(upTo: $0.markdownBlockingTimeout) }
+    var flush: (NoteStore) async -> Void = { await $0.flushAndWaitForWrites(upTo: $0.markdownBlockingTimeout) }
     var availableSpace: (URL) -> Int64? = LibraryConverter.availableSpace
     /// Whether a staged body reads back as the source; `BodyCodec.semanticallyEqual` by default.
     var verify: (UUID, NSAttributedString, NSAttributedString) -> Bool = { _, a, b in BodyCodec.semanticallyEqual(a, b) }
@@ -150,6 +152,9 @@ final class LibraryConverter {
     var trash: (URL) throws -> Void = LibraryConverter.moveToTrash
     /// Notes converted so far, of all.
     var progress: ((Int, Int) -> Void)?
+    /// How long one step of file work may take before the folder counts as not answering.
+    var ioTimeout: TimeInterval = 60
+    private let ioQueue = DispatchQueue(label: "NoteIt.LibraryConverter.io", qos: .userInitiated)
 
     init(store: NoteStore) {
         self.store = store
@@ -270,15 +275,20 @@ final class LibraryConverter {
     // MARK: Converting
 
     func convert(to target: Target) async throws -> Result {
+        let dataDir = dataDir
         switch target {
         case .markdown(let folder):
-            if Self.overlapsLibrary(folder, dataDir: dataDir) { throw LibraryConversionError.destinationOverlapsLibrary }
+            if try await io({ Self.overlapsLibrary(folder, dataDir: dataDir) }) {
+                throw LibraryConversionError.destinationOverlapsLibrary
+            }
             guard store.bodyStorage.kind == .rtfd else { throw LibraryConversionError.alreadyInFormat }
         case .rtfd:
             guard let storage = store.markdownStorage else { throw LibraryConversionError.alreadyInFormat }
-            guard storage.contentRootExists else { throw LibraryConversionError.folderMissing }
+            guard !store.markdownFolderUnavailable else { throw LibraryConversionError.folderNotResponding }
+            let root = storage.contentRootURL, check = storage.rootCheck
+            guard try await io({ check(root) }) else { throw LibraryConversionError.folderMissing }
         }
-        flush(store)
+        await flush(store)
         store.libraryConversionInProgress = true
         await pauseSync()
         do {
@@ -292,11 +302,29 @@ final class LibraryConverter {
             throw interrupted
         } catch {
             if !store.isClosedForLibrarySwitch {
-                Self.finishInterrupted(dataDir: dataDir, trash: trash)
+                // Queued behind any work the folder hasn't answered yet; the next launch finishes it if it never runs.
+                let trash = trash
+                try? await io { Self.finishInterrupted(dataDir: dataDir, trash: trash) }
                 store.libraryConversionInProgress = false
                 resumeSync()
             }
             throw error
+        }
+    }
+
+    /// Runs file work on the converter's serial queue, off the main thread. Throws `.folderNotResponding` when it
+    /// takes longer than `ioTimeout`; the work then runs on, and later work waits for it.
+    private func io<T>(_ work: @escaping () throws -> T) async throws -> T {
+        let timeout = ioTimeout, queue = ioQueue
+        return try await withCheckedThrowingContinuation { continuation in
+            let once = ConversionOnce()
+            queue.async {
+                let result = Swift.Result { try work() }
+                if once.claim() { continuation.resume(with: result) }
+            }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + timeout) {
+                if once.claim() { continuation.resume(throwing: LibraryConversionError.folderNotResponding) }
+            }
         }
     }
 
@@ -321,13 +349,15 @@ final class LibraryConverter {
     /// Called before moving and again right before the commit.
     private func requireUnchanged(since before: Snapshot) async throws {
         // Edits saved by other apps reach the store through the watcher's debounce, which can't run in between.
-        guard await store.rescanMarkdownFolder() else { throw LibraryConversionError.folderMissing }
-        flush(store)
+        guard await store.rescanMarkdownFolder() else {
+            throw store.markdownFolderUnavailable ? LibraryConversionError.folderNotResponding : LibraryConversionError.folderMissing
+        }
+        await flush(store)
         guard snapshot == before, !store.hasUnsavedChanges else { throw LibraryConversionError.libraryChangedDuringConversion }
     }
 
-    private func requireSpace(_ needed: Int64, at url: URL) throws {
-        guard let available = availableSpace(url) else { return }
+    private func requireSpace(_ needed: Int64, available: Int64?) throws {
+        guard let available else { return }
         if available < needed { throw LibraryConversionError.notEnoughSpace(needed: needed, available: available) }
     }
 
@@ -336,14 +366,39 @@ final class LibraryConverter {
         if done % 25 == 0 { await Task.yield() }
     }
 
+    /// The store's body and sidecar for `id`, read on the IO queue; notices are reported on the main thread.
+    private func readSource(_ id: UUID, then stage: @escaping (StoredBody) throws -> Void) async throws -> StoredBody? {
+        let storage = store.bodyStorage, extrasURL = store.bodyExtrasFileURL(id)
+        let (read, notices) = try await io { () -> (StoredBody?, [(BodyExtrasNotice, String)]) in
+            var notices: [(BodyExtrasNotice, String)] = []
+            let source: StoredBody
+            do {
+                source = try NoteStore.readStoredBody(id, from: storage, extrasURL: extrasURL, notices: &notices)
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile && storage.kind == .rtfd {
+                source = StoredBody(text: NSAttributedString())
+            } catch {
+                return (nil, notices)
+            }
+            guard source.readOnlyReason == nil else { return (nil, notices) }
+            try stage(source)
+            return (source, notices)
+        }
+        store.reportBodyExtrasNotices(id, notices)
+        return read
+    }
+
     // MARK: RTFD → Markdown
 
+    private enum PlannedFile { case same, move(String), replace(String) }
+
     private func convertToMarkdown(_ folder: URL) async throws -> Result {
-        let fm = FileManager.default
-        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
-        let inspection = Self.inspect(folder, dataDir: dataDir)
-        let rtfdSize = Self.size(of: dataDir.appendingPathComponent("notes", isDirectory: true))
-        try requireSpace(rtfdSize * 2 + 10_000_000, at: folder)
+        let dataDir = dataDir, availableSpace = availableSpace
+        let (inspection, rtfdSize, available) = try await io { () -> (FolderInspection, Int64, Int64?) in
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            return (Self.inspect(folder, dataDir: dataDir), Self.size(of: dataDir.appendingPathComponent("notes", isDirectory: true)),
+                    availableSpace(folder))
+        }
+        try requireSpace(rtfdSize * 2 + 10_000_000, available: available)
         let before = snapshot
         let libraryID = inspection.libraryID ?? Self.currentLibraryID(dataDir: dataDir) ?? UUID()
 
@@ -354,21 +409,28 @@ final class LibraryConverter {
         var journal = LibraryConversionJournal(direction: .toMarkdown, libraryID: libraryID, contentRoot: folder.path,
                                                contentStaging: contentStaging.path, dataStaging: dataStaging.path)
         journal.locationFileExisted = Self.exists(LibraryLocationFile.url(dataDir: dataDir))
-        if !fm.fileExists(atPath: privateFolder.path) { journal.createdFolders.append(MarkdownBodyStorage.privateFolder) }
-        try journal.save(dataDir: dataDir)
-        try fm.createDirectory(at: contentStaging, withIntermediateDirectories: true)
-        try fm.createDirectory(at: dataStaging, withIntermediateDirectories: true)
+        let notebooks = store.notebooks
+        let started = journal
+        let prepared = try await io { () -> (LibraryConversionJournal, [String], MarkdownBodyStorage, (notes: [LibraryFile], notebooks: [LibraryFile])) in
+            let fm = FileManager.default
+            var journal = started
+            if !fm.fileExists(atPath: privateFolder.path) { journal.createdFolders.append(MarkdownBodyStorage.privateFolder) }
+            try journal.save(dataDir: dataDir)
+            try fm.createDirectory(at: contentStaging, withIntermediateDirectories: true)
+            try fm.createDirectory(at: dataStaging, withIntermediateDirectories: true)
+            // Placeholders for the folder's own files keep staged names clear of them.
+            let placeholders = try Self.mirrorNames(of: folder, into: contentStaging)
+            let staging = MarkdownBodyStorage(contentRoot: contentStaging, dataDir: dataStaging, renameFilesOnTitleChange: false)
+            staging.trash = { _ in }
+            staging.setNotebooks(notebooks)
+            return (journal, placeholders, staging, Self.libraryFiles(in: folder))
+        }
+        journal = prepared.0
+        var placeholders = prepared.1
+        let staging = prepared.2, earlier = prepared.3
 
-        // 3. Stage. Placeholders for the folder's own files keep staged names clear of them; files and notebook
-        // folders this library wrote there before keep their places.
-        var placeholders = try mirrorNames(of: folder, into: contentStaging)
-        let staging = MarkdownBodyStorage(contentRoot: contentStaging, dataDir: dataStaging, renameFilesOnTitleChange: false)
-        staging.trash = { _ in }
-        staging.setNotebooks(store.notebooks)
-        let earlier = Self.libraryFiles(in: folder)
-        let reusedFolders = Self.reusableNotebookFolders(earlier.notebooks, tree: store.notebooks)
-        for (id, path) in reusedFolders { staging.index.setNotebookFolder(path, for: id) }
-        try staging.reconcileNotebooks()
+        // 3. Stage. Files and notebook folders this library wrote there before keep their places.
+        let reusedFolders = Self.reusableNotebookFolders(earlier.notebooks, tree: notebooks)
         var setAside = Set(earlier.notebooks.filter { reusedFolders[$0.id] == nil && store.notebook(with: $0.id) != nil }
             .map { $0.path + "/" + NotebookFolders.fileName })
         let written = EarlierMarkdownFiles.load(dataDir: dataDir)
@@ -376,55 +438,63 @@ final class LibraryConverter {
         for (id, files) in Dictionary(grouping: earlier.notes, by: \.id) where store.note(with: id) != nil {
             reusedFiles[id] = (files.first { $0.path == written[id]?.path } ?? files[0]).path
         }
+        var reusedEntries: [(id: UUID, entry: MarkdownFileEntry)] = []
         for file in earlier.notes {
             if let note = store.note(with: file.id), reusedFiles[file.id] == file.path {
                 var entry = MarkdownFileEntry(path: file.path)
                 entry.nameTitle = note.title
-                staging.index.set(entry, for: file.id)
-                staging.allowRecreatingMissingFile(file.id)
-                try? fm.removeItem(at: contentStaging.appendingPathComponent(file.path))
+                reusedEntries.append((file.id, entry))
                 placeholders.removeAll { $0 == file.path }
             } else if store.note(with: file.id) != nil || store.isTombstoned(file.id) {
                 setAside.insert(file.path)
+            }
+        }
+        try await io {
+            for (id, path) in reusedFolders { staging.index.setNotebookFolder(path, for: id) }
+            try staging.reconcileNotebooks()
+            for (id, entry) in reusedEntries {
+                staging.index.set(entry, for: id)
+                staging.allowRecreatingMissingFile(id)
+                try? FileManager.default.removeItem(at: contentStaging.appendingPathComponent(entry.path))
             }
         }
         var failed: [UUID] = []
         var sources: [UUID: StoredBody] = [:]
         let notes = store.notes
         for (offset, note) in notes.enumerated() {
-            let source: StoredBody
-            do {
-                source = try store.readStoredBody(note.id)
-            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-                source = StoredBody(text: NSAttributedString())
-            } catch {
-                failed.append(note.id)
-                continue
-            }
-            guard source.readOnlyReason == nil else {
+            let notebook = store.notebook(with: note.notebookID)
+            guard let source = try await readSource(note.id, then: { source in
+                try staging.write(source.text, extras: source.extras, for: note, notebook: notebook)
+            }) else {
                 failed.append(note.id)
                 continue
             }
             sources[note.id] = source
-            try staging.write(source.text, extras: source.extras, for: note, notebook: store.notebook(with: note.notebookID))
             await reportProgress(offset + 1, of: notes.count)
         }
         // Links to notes staged later were written as noteit:// links; now they can be written by name.
         for note in notes {
-            guard let source = sources[note.id],
-                  let data = try? Data(contentsOf: staging.fileURL(for: note.id)),
-                  data.range(of: Data("noteit://note".utf8)) != nil else { continue }
-            try staging.write(source.text, extras: source.extras, for: note, notebook: store.notebook(with: note.notebookID))
+            guard let source = sources[note.id] else { continue }
+            let notebook = store.notebook(with: note.notebookID)
+            try await io {
+                guard let data = try? Data(contentsOf: staging.fileURL(for: note.id)),
+                      data.range(of: Data("noteit://note".utf8)) != nil else { return }
+                try staging.write(source.text, extras: source.extras, for: note, notebook: notebook)
+            }
         }
-        for (id, path) in reusedFiles where staging.index.entry(id)?.path != path { setAside.insert(path) }
-        try staging.index.save()
-        try removePlaceholders(placeholders, in: contentStaging)
+        let remaining = placeholders
+        setAside.formUnion(try await io { () -> [String] in
+            let moved = reusedFiles.filter { staging.index.entry($0.key)?.path != $0.value }.map(\.value)
+            try staging.index.save()
+            try Self.removePlaceholders(remaining, in: contentStaging)
+            return moved
+        })
         try stop(after: .staged)
 
         // 4. Verify.
         for note in notes {
             guard let source = sources[note.id] else { continue }
-            guard let staged = try? staging.read(note.id), staged.readOnlyReason == nil,
+            guard let staged = try await io({ try? staging.read(note.id) }), staged.readOnlyReason == nil,
                   staged.extras == source.extras, verify(note.id, source.text, staged.text) else {
                 failed.append(note.id)
                 continue
@@ -436,47 +506,60 @@ final class LibraryConverter {
 
         // 5. Move into place. This library's earlier files that differ go aside first; one that holds what neither
         // NoteIt wrote there nor would write now is kept beside it as a copy with a new id.
-        let files = Self.stagedFiles(in: contentStaging)
+        let files = try await io { Self.stagedFiles(in: contentStaging) }
         var planned: [LibraryConversionJournal.Move] = []
         var replacing = setAside
+        let replaceable = setAside
         for path in files {
-            let staged = contentStaging.appendingPathComponent(path)
-            let target = folder.appendingPathComponent(path)
-            let sha = AttachmentStore.sha256(try Data(contentsOf: staged))
-            if Self.exists(target) {
+            let plan = try await io { () -> PlannedFile in
+                let staged = contentStaging.appendingPathComponent(path)
+                let target = folder.appendingPathComponent(path)
+                let sha = AttachmentStore.sha256(try Data(contentsOf: staged))
+                guard Self.exists(target) else { return .move(sha) }
                 guard !Self.isDirectory(target), let existing = try? Data(contentsOf: target) else {
                     throw LibraryConversionError.fileInTheWay(path)
                 }
-                if AttachmentStore.sha256(existing) == sha {
-                    replacing.remove(path)
-                    continue
-                }
-                guard Self.isReplaceable(path, existing: existing, staged: staged, setAside: setAside) else {
+                if AttachmentStore.sha256(existing) == sha { return .same }
+                guard Self.isReplaceable(path, existing: existing, staged: staged, setAside: replaceable) else {
                     throw LibraryConversionError.fileInTheWay(path)
                 }
-                replacing.insert(path)
+                return .replace(sha)
             }
-            planned.append(.init(path: path, sha256: sha))
+            switch plan {
+            case .same:
+                replacing.remove(path)
+            case .move(let sha):
+                planned.append(.init(path: path, sha256: sha))
+            case .replace(let sha):
+                replacing.insert(path)
+                planned.append(.init(path: path, sha256: sha))
+            }
         }
-        var replaced: [LibraryConversionJournal.Move] = []
-        var conflictCopies: [String] = []
-        var taken = Set(files.map { $0.lowercased() })
-        for path in replacing.sorted() {
-            guard let data = try? Data(contentsOf: folder.appendingPathComponent(path)) else { continue }
-            let sha = AttachmentStore.sha256(data)
-            replaced.append(.init(path: path, sha256: sha))
-            guard FolderScanner.isMarkdown(path), let id = FolderScanner.frontMatterID(data),
-                  sha != written[id]?.sha256,
-                  sha != (try? Data(contentsOf: staging.fileURL(for: id))).map(AttachmentStore.sha256) else { continue }
-            let copy = Self.conflictCopyPath(for: path, in: folder, staging: contentStaging, taken: taken)
-            taken.insert(copy.lowercased())
-            let copyData = Self.withNewID(data)
-            let stagedCopy = contentStaging.appendingPathComponent(copy)
-            try fm.createDirectory(at: stagedCopy.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try copyData.write(to: stagedCopy)
-            planned.append(.init(path: copy, sha256: AttachmentStore.sha256(copyData)))
-            conflictCopies.append(copy)
+        let toReplace = replacing.sorted()
+        let (replaced, copies, copyMoves) = try await io { () -> ([LibraryConversionJournal.Move], [String], [LibraryConversionJournal.Move]) in
+            var replaced: [LibraryConversionJournal.Move] = []
+            var conflictCopies: [String] = []
+            var copyMoves: [LibraryConversionJournal.Move] = []
+            var taken = Set(files.map { $0.lowercased() })
+            for path in toReplace {
+                guard let data = try? Data(contentsOf: folder.appendingPathComponent(path)) else { continue }
+                let sha = AttachmentStore.sha256(data)
+                replaced.append(.init(path: path, sha256: sha))
+                guard FolderScanner.isMarkdown(path), let id = FolderScanner.frontMatterID(data),
+                      sha != written[id]?.sha256,
+                      sha != (try? Data(contentsOf: staging.fileURL(for: id))).map(AttachmentStore.sha256) else { continue }
+                let copy = Self.conflictCopyPath(for: path, in: folder, staging: contentStaging, taken: taken)
+                taken.insert(copy.lowercased())
+                let copyData = Self.withNewID(data)
+                let stagedCopy = contentStaging.appendingPathComponent(copy)
+                try FileManager.default.createDirectory(at: stagedCopy.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try copyData.write(to: stagedCopy)
+                copyMoves.append(.init(path: copy, sha256: AttachmentStore.sha256(copyData)))
+                conflictCopies.append(copy)
+            }
+            return (replaced, conflictCopies, copyMoves)
         }
+        planned += copyMoves
         let replacedFolder = MarkdownBodyStorage.privateFolder + "/replaced-\(stamp)"
         if !replaced.isEmpty {
             journal.replaced = replaced
@@ -485,26 +568,39 @@ final class LibraryConverter {
         journal.moves = planned
         try journal.save(dataDir: dataDir)
         for move in replaced {
-            let aside = folder.appendingPathComponent(replacedFolder).appendingPathComponent(move.path)
-            try fm.createDirectory(at: aside.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.moveItem(at: folder.appendingPathComponent(move.path), to: aside)
+            try await io {
+                let aside = folder.appendingPathComponent(replacedFolder).appendingPathComponent(move.path)
+                try FileManager.default.createDirectory(at: aside.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try FileManager.default.moveItem(at: folder.appendingPathComponent(move.path), to: aside)
+            }
         }
         for move in planned {
-            let target = folder.appendingPathComponent(move.path)
-            try createFolders(for: move.path, in: folder, journal: &journal)
-            try fm.moveItem(at: contentStaging.appendingPathComponent(move.path), to: target)
+            let current = journal
+            journal = try await io {
+                var journal = current
+                try Self.createFolders(for: move.path, in: folder, journal: &journal, dataDir: dataDir)
+                try FileManager.default.moveItem(at: contentStaging.appendingPathComponent(move.path),
+                                                 to: folder.appendingPathComponent(move.path))
+                return journal
+            }
         }
-        let libraryFile = Self.libraryFileURL(in: folder)
-        let libraryData = Self.libraryFileData(libraryID: libraryID)
-        if (try? Data(contentsOf: libraryFile)) != libraryData {
-            journal.wroteLibraryFile = true
-            try journal.save(dataDir: dataDir)
-            try libraryData.write(to: libraryFile, options: .atomic)
+        let current = journal
+        journal = try await io {
+            var journal = current
+            let libraryFile = Self.libraryFileURL(in: folder)
+            let libraryData = Self.libraryFileData(libraryID: libraryID)
+            if (try? Data(contentsOf: libraryFile)) != libraryData {
+                journal.wroteLibraryFile = true
+                try journal.save(dataDir: dataDir)
+                try libraryData.write(to: libraryFile, options: .atomic)
+            }
+            return journal
         }
         try stop(after: .moved)
 
         // 6. Commit.
         try await requireUnchanged(since: before)
+        let fm = FileManager.default
         let index = dataDir.appendingPathComponent(MarkdownPathIndex.fileName)
         journal.installedIndex = true
         try journal.save(dataDir: dataDir)
@@ -513,8 +609,9 @@ final class LibraryConverter {
         } else {
             try fm.moveItem(at: dataStaging.appendingPathComponent(MarkdownPathIndex.fileName), to: index)
         }
+        let bookmark = try await io { try? folder.bookmarkData() }
         let location = LibraryLocationFile(format: .markdown, path: LibraryLocationFile.displayPath(folder),
-                                           bookmark: try? folder.bookmarkData(), libraryID: libraryID,
+                                           bookmark: bookmark, libraryID: libraryID,
                                            renameFilesOnTitleChange: !inspection.adopts)
         try location.write(dataDir: dataDir)
         journal.committed = true
@@ -523,14 +620,15 @@ final class LibraryConverter {
         try stop(after: .committed)
 
         // 7. Keep the RTFD bodies as the previous library.
-        let previous = Self.finishCommitted(journal, dataDir: dataDir, now: now(), trash: trash)
+        let committed = journal, now = now(), trash = trash
+        let previous = (try? await io { Self.finishCommitted(committed, dataDir: dataDir, now: now, trash: trash) }) ?? nil
         return Result(location: LibraryLocation(url: dataDir, seedsFreshLibrary: false, format: .markdown, contentRootURL: folder,
                                                 renameFilesOnTitleChange: !inspection.adopts),
-                      previousLibrary: previous, conflictCopies: conflictCopies)
+                      previousLibrary: previous, conflictCopies: copies)
     }
 
     /// Empty files and folders in `staging` for every name in `folder`, so staged names don't clash with them.
-    private func mirrorNames(of folder: URL, into staging: URL, relative: String = "") throws -> [String] {
+    nonisolated private static func mirrorNames(of folder: URL, into staging: URL, relative: String = "") throws -> [String] {
         let fm = FileManager.default
         var created: [String] = []
         let names = (try? fm.contentsOfDirectory(atPath: folder.path)) ?? []
@@ -553,7 +651,7 @@ final class LibraryConverter {
         return created
     }
 
-    private func removePlaceholders(_ paths: [String], in staging: URL) throws {
+    nonisolated private static func removePlaceholders(_ paths: [String], in staging: URL) throws {
         for path in paths {
             let url = staging.appendingPathComponent(path)
             guard let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,
@@ -579,12 +677,13 @@ final class LibraryConverter {
         return files
     }
 
-    private func createFolders(for path: String, in root: URL, journal: inout LibraryConversionJournal) throws {
+    nonisolated private static func createFolders(for path: String, in root: URL, journal: inout LibraryConversionJournal,
+                                                  dataDir: URL) throws {
         var relative = ""
         for component in path.split(separator: "/").dropLast() {
             relative = relative.isEmpty ? String(component) : relative + "/" + component
             let url = root.appendingPathComponent(relative, isDirectory: true)
-            guard !Self.exists(url) else { continue }
+            guard !exists(url) else { continue }
             journal.createdFolders.append(relative)
             try journal.save(dataDir: dataDir)
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
@@ -614,9 +713,13 @@ final class LibraryConverter {
         let fm = FileManager.default
         guard let storage = store.markdownStorage else { throw LibraryConversionError.alreadyInFormat }
         let folder = storage.contentRootURL
-        try requireSpace(Self.size(of: folder, skippingPrivateFolder: true) * 3 + 10_000_000, at: dataDir)
+        let dataDir = dataDir, availableSpace = availableSpace
+        let (size, available, folderLibraryID) = try await io {
+            (Self.size(of: folder, skippingPrivateFolder: true), availableSpace(dataDir), Self.libraryFileID(in: folder))
+        }
+        try requireSpace(size * 3 + 10_000_000, available: available)
         let before = snapshot
-        let libraryID = Self.currentLibraryID(dataDir: dataDir) ?? Self.libraryFileID(in: folder) ?? UUID()
+        let libraryID = Self.currentLibraryID(dataDir: dataDir) ?? folderLibraryID ?? UUID()
         let dataStaging = dataDir.appendingPathComponent("backups/staging-convert-\(timestamp)", isDirectory: true)
         var journal = LibraryConversionJournal(direction: .toRTFD, libraryID: libraryID, contentRoot: folder.path,
                                                contentStaging: nil, dataStaging: dataStaging.path)
@@ -627,23 +730,24 @@ final class LibraryConverter {
         try fm.createDirectory(at: staging.contentRootURL, withIntermediateDirectories: true)
         try fm.createDirectory(at: extrasFolder, withIntermediateDirectories: true)
 
-        // 3. Stage.
+        // 3. Stage. Bodies are read from the folder on the IO queue.
         var failed: [UUID] = []
         var sources: [UUID: StoredBody] = [:]
         let notes = store.notes
         for (offset, note) in notes.enumerated() {
-            guard let source = try? store.readStoredBody(note.id), source.readOnlyReason == nil else {
+            guard let source = try await readSource(note.id, then: { source in
+                try staging.write(source.text, extras: source.extras, for: note, notebook: nil)
+                let entry = BodyExtrasEntry(bodySHA256: try RTFDBodyStorage.packageDigest(at: staging.fileURL(for: note.id)),
+                                            extras: source.extras, codeLanguageIDs: NoteStore.codeLanguageIDs(of: source.text))
+                if !entry.isEmpty {
+                    try BodyExtrasSidecar(current: entry, previous: nil).encoded()
+                        .write(to: extrasFolder.appendingPathComponent("\(note.id.uuidString).json"), options: .atomic)
+                }
+            }) else {
                 failed.append(note.id)
                 continue
             }
             sources[note.id] = source
-            try staging.write(source.text, extras: source.extras, for: note, notebook: nil)
-            let entry = BodyExtrasEntry(bodySHA256: try RTFDBodyStorage.packageDigest(at: staging.fileURL(for: note.id)),
-                                        extras: source.extras, codeLanguageIDs: NoteStore.codeLanguageIDs(of: source.text))
-            if !entry.isEmpty {
-                try BodyExtrasSidecar(current: entry, previous: nil).encoded()
-                    .write(to: extrasFolder.appendingPathComponent("\(note.id.uuidString).json"), options: .atomic)
-            }
             await reportProgress(offset + 1, of: notes.count)
         }
         try stop(after: .staged)
@@ -708,7 +812,8 @@ final class LibraryConverter {
         try stop(after: .committed)
 
         // 7. NoteIt's own files go; the Markdown files stay as they are.
-        _ = Self.finishCommitted(journal, dataDir: dataDir, now: now(), trash: trash)
+        let committed = journal, now = now(), trash = trash
+        _ = try? await io { Self.finishCommitted(committed, dataDir: dataDir, now: now, trash: trash) }
         return Result(location: LibraryLocation(url: dataDir, seedsFreshLibrary: false), previousLibrary: nil)
     }
 
@@ -971,6 +1076,18 @@ final class LibraryConverter {
 
 /// What NoteIt last wrote to each note's Markdown file (path and SHA-256), kept in the data folder when a library
 /// goes back to RTFD, so converting into that folder again can tell NoteIt's own files from ones edited outside it.
+private final class ConversionOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            defer { claimed = true }
+            return !claimed
+        }
+    }
+}
+
 struct EarlierMarkdownFiles {
     struct File: Codable, Equatable {
         var path: String
