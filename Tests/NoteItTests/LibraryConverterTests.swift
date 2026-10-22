@@ -412,6 +412,63 @@ final class LibraryConverterTests: XCTestCase {
         assertSameTree(tree(content), contentBefore)
     }
 
+    /// An RTFD library converted to Markdown and back, stopped after the RTFD bodies moved into the data folder.
+    private func interruptedConversionToRTFD() async throws {
+        _ = try await converter(try makeRTFDLibrary()).convert(to: .markdown(content))
+        let converter = converter(openMarkdown())
+        converter.interruption = .moved
+        do {
+            _ = try await converter.convert(to: .rtfd)
+            XCTFail("not interrupted")
+        } catch is LibraryConverter.Interrupted {}
+    }
+
+    private func launcher() -> LibraryLauncher {
+        LibraryLauncher(dataDirectoryOverride: { [data] in data.path }, baseDirectory: { [root] in root! },
+                        isLegacyAppRunning: { false }, quitLegacyApp: { false }, log: { _ in })
+    }
+
+    func testADamagedLocationFileDuringAnInterruptedConversionIsNeverRolledBack() async throws {
+        try await interruptedConversionToRTFD()
+        try Data("{ damaged".utf8).write(to: LibraryLocationFile.url(dataDir: data))
+        let dataBefore = tree(data)
+        let contentBefore = tree(content)
+
+        for _ in 0..<2 {
+            guard case .open(let location) = launcher().decide() else { return XCTFail("not opened") }
+            XCTAssertFalse(location.seedsFreshLibrary)
+        }
+        assertSameTree(tree(data), dataBefore, "nothing is set aside, rolled back or seeded")
+        assertSameTree(tree(content), contentBefore)
+        XCTAssertNotNil(LibraryConversionJournal.load(dataDir: data))
+    }
+
+    func testAMissingLocationFileThatExistedBeforeTheConversionLeavesItAlone() async throws {
+        try await interruptedConversionToRTFD()
+        try fm.removeItem(at: LibraryLocationFile.url(dataDir: data))
+        let dataBefore = tree(data)
+
+        LibraryConverter.finishInterrupted(dataDir: data)
+        guard case .open(let location) = launcher().decide() else { return XCTFail("not opened") }
+        XCTAssertFalse(location.seedsFreshLibrary)
+        assertSameTree(tree(data), dataBefore)
+    }
+
+    func testRollingBackAConversionToRTFDKeepsBodiesChangedSince() async throws {
+        try await interruptedConversionToRTFD()
+        let notes = data.appendingPathComponent("notes", isDirectory: true)
+        let packages = try fm.contentsOfDirectory(atPath: notes.path).filter { $0.hasSuffix(".rtfd") }.sorted()
+        XCTAssertGreaterThan(packages.count, 1)
+        let edited = notes.appendingPathComponent(packages[0]).appendingPathComponent("TXT.rtf")
+        try Data("{\\rtf1 edited since}".utf8).write(to: edited)
+
+        LibraryConverter.finishInterrupted(dataDir: data)
+        XCTAssertNil(LibraryConversionJournal.load(dataDir: data))
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: notes.path).filter { $0.hasSuffix(".rtfd") }, [packages[0]],
+                       "only bodies that still hold what the conversion wrote are removed")
+        XCTAssertEqual(try String(contentsOf: edited, encoding: .utf8), "{\\rtf1 edited since}")
+    }
+
     func testAnEditInAnotherAppDuringTheConversionStopsIt() async throws {
         _ = try await converter(try makeRTFDLibrary()).convert(to: .markdown(content))
         let markdown = openMarkdown()

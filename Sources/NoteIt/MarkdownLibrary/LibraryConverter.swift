@@ -72,6 +72,12 @@ struct LibraryConversionJournal: Codable, Equatable {
     var installedIndex = false
     /// Folders moved into the data folder (`notes`, `body-extras`).
     var movedIntoData: [String] = []
+    /// What was moved into those folders, relative to the data folder, with `RTFDBodyStorage.packageDigest`, so a
+    /// rollback removes only items that still hold it. Nil in journals written before it was kept: nothing goes.
+    var dataMoves: [Move]?
+    /// Whether `library-location.json` existed before the conversion. When it did, a missing file is never taken
+    /// as "not committed": something else removed it. Nil in older journals, which are treated as true.
+    var locationFileExisted: Bool?
     /// Set right after the location file is written; from then on the conversion is only ever finished.
     var committed = false
 
@@ -332,6 +338,7 @@ final class LibraryConverter {
         let dataStaging = dataDir.appendingPathComponent("backups/staging-\(stamp)", isDirectory: true)
         var journal = LibraryConversionJournal(direction: .toMarkdown, libraryID: libraryID, contentRoot: folder.path,
                                                contentStaging: contentStaging.path, dataStaging: dataStaging.path)
+        journal.locationFileExisted = Self.exists(LibraryLocationFile.url(dataDir: dataDir))
         if !fm.fileExists(atPath: privateFolder.path) { journal.createdFolders.append(MarkdownBodyStorage.privateFolder) }
         try journal.save(dataDir: dataDir)
         try fm.createDirectory(at: contentStaging, withIntermediateDirectories: true)
@@ -519,7 +526,9 @@ final class LibraryConverter {
     }
 
     nonisolated static func currentLibraryID(dataDir: URL) -> UUID? {
-        if case .loaded(let file) = LibraryLocationFile.load(dataDir: dataDir, log: { _ in }) { return file.libraryID }
+        if case .loaded(let file) = LibraryLocationFile.load(dataDir: dataDir, setsAsideDamaged: false, log: { _ in }) {
+            return file.libraryID
+        }
         return nil
     }
 
@@ -535,6 +544,7 @@ final class LibraryConverter {
         let dataStaging = dataDir.appendingPathComponent("backups/staging-convert-\(timestamp)", isDirectory: true)
         var journal = LibraryConversionJournal(direction: .toRTFD, libraryID: libraryID, contentRoot: folder.path,
                                                contentStaging: nil, dataStaging: dataStaging.path)
+        journal.locationFileExisted = Self.exists(LibraryLocationFile.url(dataDir: dataDir))
         try journal.save(dataDir: dataDir)
         let staging = RTFDBodyStorage(rootURL: dataStaging)
         let extrasFolder = dataStaging.appendingPathComponent("body-extras", isDirectory: true)
@@ -595,6 +605,15 @@ final class LibraryConverter {
             guard contents.isEmpty else { throw LibraryConversionError.fileInTheWay(name) }
         }
         journal.movedIntoData = names
+        var dataMoves: [LibraryConversionJournal.Move] = []
+        for name in names {
+            let folder = dataStaging.appendingPathComponent(name, isDirectory: true)
+            for item in ((try? fm.contentsOfDirectory(atPath: folder.path)) ?? []).sorted() {
+                dataMoves.append(.init(path: name + "/" + item,
+                                       sha256: try RTFDBodyStorage.packageDigest(at: folder.appendingPathComponent(item))))
+            }
+        }
+        journal.dataMoves = dataMoves
         try journal.save(dataDir: dataDir)
         for name in names {
             let target = dataDir.appendingPathComponent(name, isDirectory: true)
@@ -634,13 +653,13 @@ final class LibraryConverter {
 
     private enum JournalState { case committed, notCommitted, unknown }
 
-    /// Rolls back only when the location file still shows the library as it was before; anything it can't
-    /// read leaves every file where it is.
+    /// Rolls back only when the location file still shows the library as it was before, or is missing and was
+    /// missing before; anything it can't read leaves every file where it is. Reads without changing anything.
     nonisolated private static func state(of journal: LibraryConversionJournal, dataDir: URL) -> JournalState {
         if journal.committed { return .committed }
-        switch LibraryLocationFile.load(dataDir: dataDir, log: { _ in }) {
+        switch LibraryLocationFile.load(dataDir: dataDir, setsAsideDamaged: false, log: { _ in }) {
         case .missing:
-            return .notCommitted
+            return journal.locationFileExisted == false ? .notCommitted : .unknown
         case .loaded(let file):
             switch (journal.direction, file.format) {
             case (.toMarkdown, .markdown): return file.libraryID == journal.libraryID ? .committed : .unknown
@@ -653,8 +672,8 @@ final class LibraryConverter {
         }
     }
 
-    /// Removes only what the conversion added: moved files that still have the staged bytes, folders it created
-    /// that are empty again, and its staging folders. The old library was never changed.
+    /// Removes only what the conversion added: moved files and RTFD bodies that still have the staged bytes, folders
+    /// it created that are empty again, and its staging folders. The old library was never changed.
     nonisolated private static func rollBack(_ journal: LibraryConversionJournal, dataDir: URL) {
         let fm = FileManager.default
         let root = URL(fileURLWithPath: journal.contentRoot, isDirectory: true)
@@ -669,8 +688,13 @@ final class LibraryConverter {
         if journal.installedIndex {
             try? fm.removeItem(at: dataDir.appendingPathComponent(MarkdownPathIndex.fileName))
         }
+        for move in journal.dataMoves ?? [] {
+            let url = dataDir.appendingPathComponent(move.path)
+            guard (try? RTFDBodyStorage.packageDigest(at: url)) == move.sha256 else { continue }
+            try? fm.removeItem(at: url)
+        }
         for name in journal.movedIntoData {
-            try? fm.removeItem(at: dataDir.appendingPathComponent(name, isDirectory: true))
+            removeIfEmpty(dataDir.appendingPathComponent(name, isDirectory: true))
         }
         removeStaging(journal)
         for folder in journal.createdFolders.reversed() {

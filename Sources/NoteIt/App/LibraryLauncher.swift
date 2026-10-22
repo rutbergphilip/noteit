@@ -105,9 +105,12 @@ struct LibraryLauncher {
     /// A Markdown library is never seeded, and neither is a data folder whose location file is damaged.
     private func applyingLocationFile(to location: LibraryLocation) -> Decision {
         LibraryConverter.finishInterrupted(dataDir: location.url)
+        // A conversion that couldn't be finished or undone: nothing is set aside or seeded until it is.
+        let conversionPending = fileManager.fileExists(atPath: LibraryConversionJournal.url(dataDir: location.url).path)
         var file: LibraryLocationFile
-        switch LibraryLocationFile.load(dataDir: location.url, fileManager: fileManager, log: log) {
+        switch LibraryLocationFile.load(dataDir: location.url, fileManager: fileManager, setsAsideDamaged: !conversionPending, log: log) {
         case .missing:
+            if conversionPending { return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false)) }
             return .open(location)
         case .corrupt:
             return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false))
@@ -205,7 +208,8 @@ struct LibraryLauncher {
         if LibraryConverter.overlapsLibrary(folder, dataDir: dataDir) {
             return "This folder holds NoteIt’s own library files. Choose a folder outside them."
         }
-        guard case .loaded(var file) = LibraryLocationFile.load(dataDir: dataDir, fileManager: fileManager), file.format == .markdown else {
+        guard case .loaded(var file) = LibraryLocationFile.load(dataDir: dataDir, fileManager: fileManager, setsAsideDamaged: false),
+              file.format == .markdown else {
             return "NoteIt can’t read its library settings."
         }
         let known = MarkdownPathIndex(dataDir: dataDir).allEntries.values.map(\.path)
