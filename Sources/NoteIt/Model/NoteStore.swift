@@ -1168,7 +1168,7 @@ final class NoteStore: ObservableObject {
         isLoading = true
         defer { isLoading = false }
         let fm = FileManager.default
-        if bodyStorage.kind == .rtfd { try? fm.createDirectory(at: notesURL, withIntermediateDirectories: true) }
+        try? fm.createDirectory(at: bodyStorage.kind == .rtfd ? notesURL : rootURL, withIntermediateDirectories: true)
         // Tombstoned notes are filtered from the library below; their bodies are trashed by flush()
         // only after a library save (or the library just read) confirms they're gone.
         loadTombstones()

@@ -56,6 +56,11 @@ enum SyncSelfTest {
         try? FileManager.default.createDirectory(at: content, withIntermediateDirectories: true)
         let store = NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false, format: .markdown, contentRootURL: content))
         store.markdownFlushWait = 10
+        let deadline = Date().addingTimeInterval(20)
+        while store.markdownFolderChecking, Date() < deadline {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        check(!store.markdownFolderChecking, "\(name): launch scan of the Markdown folder finished")
         return store
     }
 

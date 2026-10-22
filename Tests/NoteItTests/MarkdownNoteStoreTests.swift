@@ -59,6 +59,14 @@ final class MarkdownNoteStoreTests: XCTestCase {
         try XCTUnwrap(store.notes.first { $0.title == title }, "no note titled \(title)")
     }
 
+    func testANewLibraryIsSavedAtOnceEvenBeforeItsDataFolderExistsAndTheScanEnds() throws {
+        XCTAssertFalse(fm.fileExists(atPath: data.path))
+        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content),
+                              bodyStorage: MarkdownBodyStorageTests.make(root))
+        XCTAssertTrue(fm.fileExists(atPath: data.appendingPathComponent("library.json").path))
+        store.waitForLaunchScan()
+    }
+
     func testLoadsNotebooksAndNotesFromTheFolderWithoutALibraryFile() throws {
         try put("Inbox note.md", "# Loose\n\nNo notebook #idea\n")
         try put("Work/Plan.md", "---\npinned: true\n---\n# Plan\n\nQuarter goals\n")
