@@ -304,6 +304,36 @@ final class MarkdownNoteStoreTests: XCTestCase {
         XCTAssertEqual(try recoveredNotes(), [])
     }
 
+    func testAnEditAfterAnOversizedOneIsSavedEvenWhenItTakesTheFreedSnapshotsAddress() throws {
+        let store = open()
+        let id = store.createNote(in: nil, initial: body("Small\nfine")).id
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        store.updateBody(id, OversizedAttachment.body("Small", attachmentNamed: "huge.mov"))
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertNotNil(store.bodySaveNotice(for: id))
+        let failed = ObjectIdentifier(try XCTUnwrap(store.cachedBody(id)))
+
+        store.updateBody(id, OversizedAttachment.body("Small", attachmentNamed: "huge.mov", bytes: 10))
+        let edited = body("Small\nwithout it")
+        var held: [NSAttributedString] = []
+        var reused: NSAttributedString?
+        for _ in 0..<200_000 {
+            let candidate = NSAttributedString(attributedString: edited)
+            if ObjectIdentifier(candidate) == failed { reused = candidate; break }
+            held.append(candidate)
+        }
+        held.removeAll()
+        let newer = try XCTUnwrap(reused, "no allocation took the freed snapshot's address")
+        store.updateBody(id, newer)
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertNil(store.bodySaveNotice(for: id))
+        XCTAssertFalse(store.isBodyDirty(id))
+        XCTAssertTrue(try read("Small.md").hasSuffix("without it\n"))
+    }
+
     func testARemoteNoteWithAnAttachmentOver25MBIsRefusedForSync() async throws {
         let rtfd = NoteStore(rootURL: root.appendingPathComponent("rtfd", isDirectory: true))
         let id = rtfd.createNote(in: nil, initial: OversizedAttachment.body("Remote", attachmentNamed: "huge.mov")).id

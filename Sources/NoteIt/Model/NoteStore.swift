@@ -113,7 +113,7 @@ final class NoteStore: ObservableObject {
     /// Set once the app is terminating: failed bodies are then written to `recovery/` as a last resort.
     private var isTerminating = false
     /// Snapshots already written to `recovery/` (avoids duplicate copies across terminate-time flushes).
-    private var recoveredSnapshots: [UUID: ObjectIdentifier] = [:]
+    private var recoveredSnapshots: [UUID: WeakSnapshot] = [:]
     /// Bodies whose unreadable original could not be backed up, or whose body-extras sidecar is unreadable:
     /// never overwrite them.
     private var bodyWriteBlocked: Set<UUID> = []
@@ -191,7 +191,7 @@ final class NoteStore: ObservableObject {
     private var bodyReadOnlyReasons: [UUID: String] = [:]
     private var bodySaveNotices: [UUID: String] = [:]
     /// Bodies that failed to save because of an attachment over 25 MB; not tried again until the body changes.
-    private var oversizedBodies: [UUID: ObjectIdentifier] = [:]
+    private var oversizedBodies: [UUID: WeakSnapshot] = [:]
     /// The extras of each loaded body, keyed by note ID (Task 4.1). Set from every body read (on an RTFD store from
     /// the body-extras sidecar) and from sync apply once its body is installed; passed to every body write; dropped
     /// when the note is purged. Written only via `setBodyExtras(_:for:)` and by NoteStore+BodyEdits.swift.
@@ -1509,7 +1509,7 @@ final class NoteStore: ObservableObject {
     /// Keeps a copy of an edit that waits for an unavailable folder in `recovery/`, replacing the copy kept
     /// earlier for the same note.
     private func keepWaitingCopy(_ id: UUID) {
-        guard let text = bodyCache[id], recoveredSnapshots[id] != ObjectIdentifier(text) else { return }
+        guard let text = bodyCache[id], recoveredSnapshots[id]?.text !== text else { return }
         let earlier = markdownWaitingCopies[id]
         guard let url = writeRecoveryCopy(id, text) else { return }
         markdownWaitingCopies[id] = url
@@ -1555,7 +1555,7 @@ final class NoteStore: ObservableObject {
 
     private func isWaitingForSmallerAttachment(_ id: UUID) -> Bool {
         guard let failed = oversizedBodies[id], let text = bodyCache[id] else { return false }
-        return failed == ObjectIdentifier(text)
+        return failed.text === text
     }
 
     private func clearOversizedBody(_ id: UUID) {
@@ -1588,7 +1588,7 @@ final class NoteStore: ObservableObject {
             blockBodyWrites(id, reason: StoredBody.bodyExtrasUnreadable)
         }
         if case AttachmentStore.StoreError.tooLarge(let name) = error {
-            if bodyCache[id] === text { oversizedBodies[id] = ObjectIdentifier(text) }
+            if bodyCache[id] === text { oversizedBodies[id] = WeakSnapshot(text) }
             bodySaveNotices[id] = Self.attachmentTooLargeToSave(name)
             objectWillChange.send()
             keepWaitingCopy(id)
@@ -1663,10 +1663,10 @@ final class NoteStore: ObservableObject {
     /// Writes `text` to `recovery/<id>-<timestamp>.rtfd` unless this exact snapshot was already copied.
     @discardableResult
     private func writeRecoveryCopy(_ id: UUID, _ text: NSAttributedString) -> URL? {
-        guard recoveredSnapshots[id] != ObjectIdentifier(text) else { return nil }
+        guard recoveredSnapshots[id]?.text !== text else { return nil }
         do {
             let url = try bodyStorage.recoveryCopy(text, for: id, in: recoveryURL)
-            recoveredSnapshots[id] = ObjectIdentifier(text)
+            recoveredSnapshots[id] = WeakSnapshot(text)
             NSLog("NoteIt: note \(id) couldn’t be saved; wrote a recovery copy to \(url.path)")
             return url
         } catch {
@@ -2235,4 +2235,10 @@ extension NoteStore {
             guard saveLibrary() else { throw PersistNowError.libraryNotSaved }
         }
     }
+}
+
+/// A body snapshot compared by identity. Weak, so a freed snapshot never matches a newer one at the same address.
+final class WeakSnapshot {
+    weak var text: NSAttributedString?
+    init(_ text: NSAttributedString) { self.text = text }
 }
