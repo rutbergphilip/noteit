@@ -1562,7 +1562,10 @@ final class NoteStore: ObservableObject {
     func applyPreparedRemoteNote(_ prepared: PreparedRemoteNote) throws {
         var prepared = prepared
         let id = prepared.meta.id
-        if bodyWriteBlocked.contains(id) {
+        let restoresHeldFile = heldMarkdownDeletions.contains(id) && bodyReadOnlyReasons[id] == Self.missingFileReason
+        if restoresHeldFile {
+            markdownStorage?.allowRecreatingMissingFile(id)
+        } else if bodyWriteBlocked.contains(id) {
             prepared.discard()
             throw SyncApplyError.bodyWriteBlocked(id)
         }
@@ -1599,6 +1602,7 @@ final class NoteStore: ObservableObject {
             prepared.discard()
             throw error
         }
+        if restoresHeldFile { releaseHeldDeletion(id) }
         setBodyExtras(extras, for: id)
         if prepared.replacesDifferentBody { unversionedLocalBodies.remove(id) }
         let wasTombstoned = pendingTrash.remove(id) != nil

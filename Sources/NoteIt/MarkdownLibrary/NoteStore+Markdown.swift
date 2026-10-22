@@ -523,6 +523,13 @@ extension NoteStore {
         MassDeletionGuard.save(heldMarkdownDeletions, dataDir: rootURL)
     }
 
+    /// A held note whose file NoteIt wrote again (a sync apply) leaves the batch.
+    func releaseHeldDeletion(_ id: UUID) {
+        guard heldMarkdownDeletions.remove(id) != nil else { return }
+        unblockMarkdownBodyWrites(id, reason: Self.missingFileReason)
+        MassDeletionGuard.save(heldMarkdownDeletions, dataDir: rootURL)
+    }
+
     /// Asks about a batch still held from an earlier session; the app calls this after launch.
     func askAboutHeldDeletions() {
         guard !heldMarkdownDeletions.isEmpty else { return }

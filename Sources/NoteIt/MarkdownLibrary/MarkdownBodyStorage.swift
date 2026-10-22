@@ -51,6 +51,13 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     private var skipped: [URL] = []
     /// Notes whose file was adopted from outside and not written by NoteIt since.
     private var acceptedExternal: Set<UUID> = []
+    /// Notes whose missing file the next write may create again (a sync apply to a note the mass-deletion guard
+    /// holds).
+    private var recreatable: Set<UUID> = []
+
+    func allowRecreatingMissingFile(_ id: UUID) {
+        lock.withLock { _ = recreatable.insert(id) }
+    }
 
     init(contentRoot: URL, dataDir: URL, renameFilesOnTitleChange: Bool = true, ledger: WriteLedger = WriteLedger()) {
         contentRootURL = contentRoot.standardizedFileURL
@@ -355,7 +362,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         let entry = index.entry(meta.id)
         var currentPath = entry?.path
         if let old = currentPath, old != path {
-            try Self.move(url(of: old), to: url(of: path))
+            if existing != nil { try Self.move(url(of: old), to: url(of: path)) }
             index.move(meta.id, to: path)
             currentPath = path
         }
@@ -366,7 +373,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         let sha = AttachmentStore.sha256(data)
         if currentPath == nil || existing.map(AttachmentStore.sha256) != sha {
             ledger.record(path: path, sha256: sha)
-            try Self.writeAtomically(data, to: url(of: path), replacing: currentPath != nil)
+            try Self.writeAtomically(data, to: url(of: path), replacing: existing != nil)
         }
         let read = readFile(data, notePath: path)
         let stat = MarkdownFileStat.of(url(of: path))
@@ -382,6 +389,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         if entry == nil || nameTitle != nil { updated.nameTitle = nameTitle ?? meta.title }
         index.set(updated, for: meta.id)
         previous[meta.id] = read.parsed
+        recreatable.remove(meta.id)
     }
 
     /// The bytes of the note's file when it still matches `markdown-files.json` (size, mtime and inode, else its
@@ -391,6 +399,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         guard let entry = index.entry(id) else { return nil }
         let fileURL = url(of: entry.path)
         guard let stat = MarkdownFileStat.of(fileURL), let data = try? Data(contentsOf: fileURL) else {
+            if recreatable.remove(id) != nil, MarkdownFileStat.of(fileURL) == nil { return nil }
             throw MarkdownStorageError.externallyChanged(id)
         }
         if !stat.matches(entry) {
@@ -427,7 +436,27 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         }
         let path = plannedPath(for: meta)
         try FileManager.default.createDirectory(at: url(of: path).deletingLastPathComponent(), withIntermediateDirectories: true)
+        if meta.deletedAt == nil, let id = meta.notebookID { restoreNotebookFiles(from: id) }
         return path
+    }
+
+    /// A notebook folder that a write brought back (while a held batch keeps missing folders as they are) gets its
+    /// `.noteit-notebook.json` again, so a scan sees the same notebook rather than a new one.
+    private func restoreNotebookFiles(from id: UUID) {
+        var current: UUID? = id
+        var seen: Set<UUID> = []
+        while let notebookID = current, seen.insert(notebookID).inserted, let notebook = notebooks[notebookID] {
+            if depth(of: notebookID) <= NotebookFolders.maxDepth, let folder = index.notebookFolder(notebookID) {
+                let folderURL = url(of: folder)
+                if FileManager.default.fileExists(atPath: folderURL.path),
+                   !FileManager.default.fileExists(atPath: folderURL.appendingPathComponent(NotebookFolders.fileName).path) {
+                    do { try NotebookFolders.write(notebook, raw: [:], to: folderURL) } catch {
+                        NSLog("NoteIt: couldn't write the notebook file of \(folder): \(error)")
+                    }
+                }
+            }
+            current = notebook.parent
+        }
     }
 
     private func targetFolder(for meta: NoteMeta) -> String {

@@ -128,6 +128,29 @@ final class MassDeletionGuardTests: XCTestCase {
         XCTAssertEqual(reopened.loadError(for: held[0]), NoteStore.missingFileReason)
     }
 
+    func testASyncApplyToAHeldNoteWritesItsFileBackAndReleasesIt() throws {
+        let store = try library(6, others: 10)
+        let held = ids(store, prefix: "Note ")
+        let work = try XCTUnwrap(store.notebooks.first { $0.name == "Work" }).id
+        try fm.removeItem(at: content.appendingPathComponent("Work"))
+        store.rescanMarkdownFolder()
+        XCTAssertEqual(store.heldMarkdownDeletions, Set(held))
+
+        let id = held[0]
+        try store.applyRemote(RawMetaSupport.notePayload(id, revision: UUID(), text: "From sync\nnew text", notebookID: work))
+        XCTAssertEqual(store.heldMarkdownDeletions, Set(held.dropFirst()))
+        XCTAssertNil(store.loadError(for: id))
+        let file = try XCTUnwrap(store.markdownStorage).fileURL(for: id)
+        XCTAssertTrue(try String(contentsOf: file, encoding: .utf8).contains("new text"))
+
+        store.rescanMarkdownFolder()
+        store.flush()
+        XCTAssertEqual(store.heldMarkdownDeletions, Set(held.dropFirst()))
+        XCTAssertNil(store.note(with: id)?.deletedAt)
+        XCTAssertEqual(store.notebooks.filter { $0.name.hasPrefix("Work") }.map(\.id), [work], "the folder it brought back is the same notebook")
+        XCTAssertTrue(held.dropFirst().allSatisfy { store.note(with: $0)?.deletedAt == nil })
+    }
+
     func testASmallDeletionAppliesRightAway() throws {
         let store = try library(4, others: 6)
         var asked: [Int] = []
