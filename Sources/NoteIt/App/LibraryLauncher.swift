@@ -205,12 +205,10 @@ struct LibraryLauncher {
     /// needs `confirmUnverified`. Returns why it was refused, or nil. Nothing else is written, so a wrong choice
     /// changes nothing.
     nonisolated static func relocate(to folder: URL, dataDir: URL, fileManager: FileManager = .default,
+                                     timeout: TimeInterval = contentRootTimeout,
+                                     readFile: @escaping @Sendable (URL) -> Data? = { try? Data(contentsOf: $0) },
                                      confirmUnverified: (URL) -> Bool = { _ in false }) -> String? {
         let folder = folder.standardizedFileURL
-        var isDirectory: ObjCBool = false
-        guard fileManager.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            return "Choose a folder."
-        }
         if LibraryConverter.overlapsLibrary(folder, dataDir: dataDir) {
             return "This folder holds NoteIt’s own library files. Choose a folder outside them."
         }
@@ -220,11 +218,19 @@ struct LibraryLauncher {
         }
         let known = Set(MarkdownPathIndex(dataDir: dataDir).allEntries.filter { !FolderScanner.isTrash($0.value.path) }.keys)
         let name = LibraryLocationFile.displayPath(folder)
-        guard let evidence = BoundedFileAccess.shared.runBlocking(key: "locate:\(folder.path)", timeout: contentRootTimeout, {
-            LibraryEvidence.collect(in: folder, knownIDs: known)
+        // Each try has its own key, so a retry doesn't wait for a walk still stuck on the volume; that walk stops at
+        // its next file.
+        let stop = LibraryEvidence.Cancellation()
+        defer { stop.cancel() }
+        guard let checked = BoundedFileAccess.shared.runBlocking(key: "locate:\(folder.path):\(UUID().uuidString)", timeout: timeout, {
+            () -> LibraryEvidence? in
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+            return LibraryEvidence.collect(in: folder, knownIDs: known, readFile: readFile, isCancelled: stop.isCancelled)
         }) else {
             return "\(name) didn’t respond. If it’s on a disk or NAS, check that it’s connected and try again."
         }
+        guard let evidence = checked else { return "Choose a folder." }
         if let other = evidence.libraryID, other != file.libraryID {
             return "\(name) holds another NoteIt library. Choose the folder that holds this library’s notes."
         }
@@ -352,16 +358,26 @@ struct LibraryEvidence: Sendable {
     /// How many of the known note ids its Markdown files carry.
     var foundIDs = 0
 
-    /// Reads front matter until more than half of `knownIDs` are found; skips hidden folders, links and large files.
-    nonisolated static func collect(in folder: URL, knownIDs: Set<UUID>) -> LibraryEvidence {
+    final class Cancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        func cancel() { lock.withLock { cancelled = true } }
+        func isCancelled() -> Bool { lock.withLock { cancelled } }
+    }
+
+    /// A folder with a library id is decided by it alone; otherwise reads front matter until more than half of
+    /// `knownIDs` are found, or `isCancelled`. Skips hidden folders, links and large files.
+    nonisolated static func collect(in folder: URL, knownIDs: Set<UUID>,
+                                    readFile: (URL) -> Data? = { try? Data(contentsOf: $0) },
+                                    isCancelled: () -> Bool = { false }) -> LibraryEvidence {
         var evidence = LibraryEvidence(libraryID: LibraryConverter.libraryFileID(in: folder))
-        guard !knownIDs.isEmpty else { return evidence }
+        guard evidence.libraryID == nil, !knownIDs.isEmpty else { return evidence }
         var found = Set<UUID>()
         func walk(_ url: URL, depth: Int) {
-            guard depth <= NotebookFolders.maxDepth + 1, found.count * 2 <= knownIDs.count,
+            guard depth <= NotebookFolders.maxDepth + 1, found.count * 2 <= knownIDs.count, !isCancelled(),
                   let names = try? FileManager.default.contentsOfDirectory(atPath: url.path) else { return }
             for name in names.sorted() where !name.hasPrefix(".") {
-                guard found.count * 2 <= knownIDs.count else { return }
+                guard found.count * 2 <= knownIDs.count, !isCancelled() else { return }
                 let item = url.appendingPathComponent(name)
                 var info = stat()
                 guard lstat(item.path, &info) == 0 else { continue }
@@ -369,7 +385,7 @@ struct LibraryEvidence: Sendable {
                 case S_IFDIR:
                     walk(item, depth: depth + 1)
                 case S_IFREG where FolderScanner.isMarkdown(name) && Int64(info.st_size) <= FolderScanner.maxFileSize:
-                    if let data = try? Data(contentsOf: item), let id = FolderScanner.frontMatterID(data), knownIDs.contains(id) {
+                    if let data = readFile(item), let id = FolderScanner.frontMatterID(data), knownIDs.contains(id) {
                         found.insert(id)
                     }
                 default:

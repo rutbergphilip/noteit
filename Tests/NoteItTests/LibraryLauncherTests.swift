@@ -383,6 +383,40 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertNil(LibraryLauncher.relocate(to: marked, dataDir: dataDir, confirmUnverified: { _ in XCTFail("asked"); return false }))
     }
 
+    func testLocateStopsReadingOnceTheLibraryIDMatches() throws {
+        let ids = (0..<6).map { _ in UUID() }
+        let file = try lostLibrary(Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, "Note \($0).md") }))
+        let large = base.appendingPathComponent("Large", isDirectory: true)
+        for (number, id) in ids.enumerated() { try note(id, "Note \(number).md", in: large) }
+        try libraryFile(file.libraryID, in: large)
+        let reads = Counter()
+        let slowNAS: @Sendable (URL) -> Data? = { url in
+            reads.add()
+            Thread.sleep(forTimeInterval: 0.2)
+            return try? Data(contentsOf: url)
+        }
+
+        XCTAssertNil(LibraryLauncher.relocate(to: large, dataDir: dataDir, timeout: 0.5, readFile: slowNAS))
+        XCTAssertEqual(reads.value, 0, "the library id decides; no note is read")
+    }
+
+    func testLocateCanBeRetriedWhileAnEarlierCheckIsStillStuck() throws {
+        let plan = UUID(), ideas = UUID()
+        _ = try lostLibrary([plan: "Plan.md", ideas: "Ideas.md"])
+        let mine = base.appendingPathComponent("Mine", isDirectory: true)
+        try note(plan, "Plan.md", in: mine)
+        try note(ideas, "Ideas.md", in: mine)
+        let stuck = DispatchSemaphore(value: 0)
+        defer { stuck.signal() }
+
+        let first = LibraryLauncher.relocate(to: mine, dataDir: dataDir, timeout: 0.2, readFile: { url in
+            _ = stuck.wait(timeout: .now() + 5)
+            return try? Data(contentsOf: url)
+        })
+        XCTAssertTrue(first?.contains("didn’t respond") == true)
+        XCTAssertNil(LibraryLauncher.relocate(to: mine, dataDir: dataDir, timeout: 2), "a retry doesn't wait for the stuck check")
+    }
+
     func testUnresponsiveContentFolderIsReportedWithoutHangingLaunch() throws {
         let content = base.appendingPathComponent("NAS Notes", isDirectory: true)
         try fm.createDirectory(at: content, withIntermediateDirectories: true)
@@ -537,4 +571,11 @@ final class LegacyAppMonitorTests: XCTestCase {
         let deadline = Date().addingTimeInterval(0.5)
         while Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
     }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func add() { lock.withLock { count += 1 } }
 }
