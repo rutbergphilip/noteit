@@ -2,10 +2,11 @@ import Foundation
 import NoteItCore
 
 /// What a background scan read of the files and folders it reported, so that applying the scan on the main thread
-/// touches nothing in the content folder.
-struct MarkdownScanReads: Sendable {
-    struct File: Sendable {
+/// touches nothing in the content folder. Files are parsed here too, since that reads the attachments they show.
+struct MarkdownScanReads: @unchecked Sendable {
+    struct File {
         var data: Data
+        var read: MarkdownBodyStorage.FileRead
         var stat: MarkdownFileStat?
         var created: Date?
         var modified: Date?
@@ -26,8 +27,10 @@ struct MarkdownScanReads: Sendable {
     /// Paths of removed notes, held notes and notebook folders that were looked for and are there.
     var existing: Set<String> = []
 
-    static func read(_ result: FolderScanResult, root: URL, index: MarkdownPathIndex, known: Known) -> MarkdownScanReads {
+    static func read(_ result: FolderScanResult, storage: MarkdownBodyStorage, known: Known) -> MarkdownScanReads {
         var reads = MarkdownScanReads()
+        let root = storage.contentRootURL
+        let index = storage.index
         let entries = index.allEntries
         var paths = Set(result.changed.values).union(result.moved.values).union(result.added).union(result.duplicateIDs)
         for (id, entry) in entries where !known.noteIDs.contains(id) && !result.removed.contains(id) {
@@ -37,8 +40,8 @@ struct MarkdownScanReads: Sendable {
             let url = root.appendingPathComponent(path, isDirectory: false)
             guard let data = try? Data(contentsOf: url) else { continue }
             let values = try? url.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
-            reads.files[path] = File(data: data, stat: MarkdownFileStat.of(url), created: values?.creationDate,
-                                     modified: values?.contentModificationDate)
+            reads.files[path] = File(data: data, read: storage.readFile(data, notePath: path), stat: MarkdownFileStat.of(url),
+                                     created: values?.creationDate, modified: values?.contentModificationDate)
         }
 
         var seenIDs = Set<UUID>()

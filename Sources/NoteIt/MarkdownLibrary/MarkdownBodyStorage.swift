@@ -48,6 +48,8 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         lock.withLock { keepsMissingFolders = keeps }
     }
     private var previous: [UUID: ParsedMarkdown] = [:]
+    /// The body of each file in `previous`, so a note whose file is gone still shows its text without a read.
+    private var previousBodies: [UUID: StoredBody] = [:]
     private var pendingTemps: [String: String] = [:]
     private var skipped: [URL] = []
     /// Notes whose file was adopted from outside and not written by NoteIt since.
@@ -305,7 +307,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         let data = try Data(contentsOf: fileURL)
         let result = readFile(data, notePath: entry.path)
         lock.withLock {
-            previous[id] = result.parsed
+            remember(id, result)
             if let names = result.attachmentNames, names != entry.attachments {
                 index.update(id) { $0.attachments = names }
             }
@@ -427,7 +429,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         updated.placement = placement(of: meta, folder: MarkdownPathIndex.folder(of: path), extra: updated.frontMatterExtra)
         if entry == nil || nameTitle != nil { updated.nameTitle = nameTitle ?? meta.title }
         index.set(updated, for: meta.id)
-        previous[meta.id] = read.parsed
+        remember(meta.id, read)
         recreatable.remove(meta.id)
     }
 
@@ -612,7 +614,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
             if let entry = index.entry(id), entry.path != path {
                 index.move(id, to: path)
             }
-            let read = readFile(data, notePath: path)
+            let read = file.read
             var entry = index.entry(id) ?? MarkdownFileEntry(path: path)
             entry.path = path
             entry.sha256 = sha
@@ -622,7 +624,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
             entry.frontMatterExtra = read.parsed.flatMap { $0.frontMatter.extra.isEmpty ? nil : $0.frontMatter.extra }
             entry.attachments = read.attachmentNames ?? entry.attachments
             index.set(entry, for: id)
-            previous[id] = read.parsed
+            remember(id, read)
             acceptedExternal.insert(id)
             return (Adopted(body: read.body, frontMatter: read.parsed?.frontMatter, modified: file.modified, created: file.created),
                     idWrite)
@@ -665,13 +667,19 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
 
     /// The body as NoteIt last read or wrote it, for a file that is gone.
     func lastKnownBody(_ id: UUID) -> StoredBody? {
-        lock.withLock {
-            guard let parsed = previous[id], let entry = index.entry(id),
-                  var result = try? BodyCodec.libraryBody(from: parsed, notePath: entry.path, contentRoot: contentRootURL)
-            else { return nil }
-            result.body.extras.frontMatter = parsed.frontMatter.extra.isEmpty ? nil : parsed.frontMatter.extra
-            return result.body
-        }
+        lock.withLock { index.entry(id) == nil ? nil : previousBodies[id] }
+    }
+
+    private func remember(_ id: UUID, _ read: FileRead) {
+        previous[id] = read.parsed
+        var body = read.body
+        body.readOnlyReason = nil
+        previousBodies[id] = read.parsed == nil ? nil : body
+    }
+
+    private func forgetPrevious(_ id: UUID) {
+        previous[id] = nil
+        previousBodies[id] = nil
     }
 
     /// For a note whose file was deleted outside NoteIt: writes `text` as a new file in `.trash/` for `meta` (in
@@ -682,7 +690,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
             guard let entry = index.entry(meta.id) else { return }
             guard let text else {
                 index.remove(meta.id)
-                previous[meta.id] = nil
+                forgetPrevious(meta.id)
                 return
             }
             let path = index.uniquePath(stem: entry.stem, inFolder: Self.trashFolder, contentRoot: contentRootURL, keeping: meta.id)
@@ -702,7 +710,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
                 stored.attachments = read.attachmentNames ?? []
                 stored.placement = placement(of: meta, folder: Self.trashFolder, extra: stored.frontMatterExtra)
             }
-            previous[meta.id] = read.parsed
+            remember(meta.id, read)
         }
     }
 
@@ -710,7 +718,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     func forget(_ id: UUID) {
         lock.withLock {
             index.remove(id)
-            previous[id] = nil
+            forgetPrevious(id)
             acceptedExternal.remove(id)
         }
     }
@@ -757,7 +765,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
             let file = url(of: entry.path)
             guard FileManager.default.fileExists(atPath: file.path) else {
                 index.remove(id)
-                previous[id] = nil
+                forgetPrevious(id)
                 return
             }
             var path = entry.path
@@ -775,7 +783,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
                 try Self.writeAtomically(patched, to: trashed, replacing: true)
             }
             index.remove(id)
-            previous[id] = nil
+            forgetPrevious(id)
         }
     }
 
@@ -803,7 +811,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
             let file = url(of: entry.path)
             if FileManager.default.fileExists(atPath: file.path) { try trash(file) }
             index.remove(id)
-            previous[id] = nil
+            forgetPrevious(id)
         }
     }
 

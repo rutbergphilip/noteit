@@ -180,6 +180,33 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertFalse(store.markdownFolderUnavailable, "applying the scan touched nothing in the folder")
     }
 
+    func testTheAttachmentsAScannedNoteShowsAreReadOffTheMainThread() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let store = open()
+        let storage = try XCTUnwrap(store.markdownStorage)
+        let content = content
+        let realCheck = storage.rootCheck
+        let checks = Counter()
+        storage.rootCheck = { url in
+            if !Thread.isMainThread, checks.increment() == 2 {
+                try? FileManager.default.removeItem(at: content.appendingPathComponent("_attachments/photo.png"))
+            }
+            return realCheck(url)
+        }
+
+        try put("_attachments/photo.png", "png bytes")
+        try put("Pic.md", "# Pic\n\n![photo](_attachments/photo.png)\n")
+        store.markdownFolderNeedsScan()
+        try await waitUntil({ store.notes.contains { $0.title == "Pic" } }, "the new note is imported")
+        let pic = try note(store, titled: "Pic").id
+        let body = try XCTUnwrap(storage.lastKnownBody(pic))
+        var attachments = 0
+        body.text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: body.text.length)) { value, _, _ in
+            if value != nil { attachments += 1 }
+        }
+        XCTAssertEqual(attachments, 1, "the picture was read by the scan, before it went away")
+    }
+
     func testEditsMadeWhileNoteItWasClosedReachSpotlightAtTheNextLaunch() async throws {
         try put("Kept.md", "# Kept\n\nfirst\n")
         try put("Gone.md", "# Gone\n\nsoon\n")

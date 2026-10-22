@@ -137,7 +137,7 @@ extension NoteStore {
         return {
             guard check(root) else { return .missing }
             let result = scan(root, index, ledger)
-            let reads = MarkdownScanReads.read(result, root: root, index: index, known: known)
+            let reads = MarkdownScanReads.read(result, storage: storage, known: known)
             return check(root) ? .scanned(result, reads) : .missing
         }
     }
