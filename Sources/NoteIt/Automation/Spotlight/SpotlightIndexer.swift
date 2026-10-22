@@ -137,7 +137,8 @@ final class SpotlightIndexer: DerivedIndex {
     }
 
     /// Registers with the store's derived-index registry (once per store open) and rebuilds when the stored index
-    /// version is out of date or the last run left changes Spotlight may not have.
+    /// version is out of date, the last run left changes Spotlight may not have, or the launch scan found files
+    /// changed while NoteIt was closed.
     func start() {
         guard let store, store.canRegisterDerivedIndex(indexID) else { return }
         store.registerDerivedIndex(self)
@@ -147,6 +148,7 @@ final class SpotlightIndexer: DerivedIndex {
                                                           queue: nil) { [weak self] _ in
             Task { @MainActor [weak self] in self?.preferencesChanged() }
         }
+        if store.notesChangedBeforeDerivedIndexes { health.markDirty() }
         let dirty = defaults.bool(forKey: PrefKey.spotlightIndexDirty)
         if isEnabled, dirty || defaults.integer(forKey: PrefKey.spotlightIndexVersion) != Self.indexVersion {
             rebuildNow()

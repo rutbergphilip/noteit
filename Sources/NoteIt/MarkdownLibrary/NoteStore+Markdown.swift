@@ -128,6 +128,8 @@ extension NoteStore {
         heldMarkdownDeletions = MassDeletionGuard.load(dataDir: rootURL)
         storage.setNotebooks(notebooks)
         guard storage.contentRootExists else { return }
+        let before = notes
+        let notebooksBefore = notebooks
         let result = FolderScanner.scan(contentRoot: storage.contentRootURL, index: storage.index)
         applyExternalChanges(result, atLaunch: true)
         let tombstones = Set(syncDeletions().keys)
@@ -135,6 +137,9 @@ extension NoteStore {
         if !orphans.isEmpty {
             importFiles(orphans.compactMap { id in storage.index.entry(id).map { NewFile(id: id, path: $0.path, assign: false) } },
                         atLaunch: true)
+        }
+        if result.hasNoteChanges || notes != before || notebooks != notebooksBefore {
+            notesChangedBeforeDerivedIndexes = true
         }
     }
 

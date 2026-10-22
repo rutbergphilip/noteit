@@ -127,6 +127,9 @@ final class NoteStore: ObservableObject {
     /// Called once when the content folder goes away while the library is open; the app asks the user to locate it.
     var onMarkdownFolderMissing: ((URL) -> Void)?
     var markdownFolderReportedMissing = false
+    /// The launch scan changed notes before any derived index was registered; persistent indexes (Spotlight) must
+    /// rebuild rather than trust what they kept from the last run.
+    var notesChangedBeforeDerivedIndexes = false
     /// Called when the mass-deletion guard holds a batch, with the number of held notes.
     var onManyNotesDisappeared: ((Int) -> Void)?
     /// New files wait until they have been unchanged this long before they become notes (spec §3.5).

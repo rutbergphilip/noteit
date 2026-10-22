@@ -48,6 +48,36 @@ final class ExternalChangeTests: XCTestCase {
         try XCTUnwrap(store.notes.first { $0.title == title }, "no note titled \(title)")
     }
 
+    func testEditsMadeWhileNoteItWasClosedReachSpotlightAtTheNextLaunch() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        try put("Gone.md", "# Gone\n\nsoon\n")
+        let suite = "noteit-external-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(SpotlightIndexer.indexVersion, forKey: PrefKey.spotlightIndexVersion)
+        var store: NoteStore? = open()
+        let kept = try note(store!, titled: "Kept").id
+        let gone = try note(store!, titled: "Gone").id
+        store?.flush()
+        store = nil
+
+        try edit("Kept.md", "first", "edited while closed")
+        try fm.removeItem(at: content.appendingPathComponent("Gone.md"))
+        try put("Added.md", "# Added\n\nnew\n")
+        let reopened = open()
+        let added = try note(reopened, titled: "Added").id
+        let fake = FakeSpotlightIndex()
+        let indexer = SpotlightIndexer(store: reopened, defaults: defaults, index: fake, isSupported: true, flushDelay: 60)
+        indexer.start()
+        let deadline = Date().addingTimeInterval(5)
+        while fake.items[added.uuidString] == nil, Date() < deadline { try await Task.sleep(nanoseconds: 5_000_000) }
+        await indexer.settle()
+
+        XCTAssertNotNil(fake.items[added.uuidString], "a file added while closed is indexed")
+        XCTAssertTrue(fake.items[kept.uuidString]?.textContent?.contains("edited while closed") == true)
+        XCTAssertTrue(fake.calls.contains(.deleteAll) || fake.items[gone.uuidString] == nil)
+    }
+
     func testACleanNoteReloadsAndKeepsItsPreviousTextInHistory() throws {
         try put("Note.md", "# Note\n\nfirst\n")
         let store = open()
