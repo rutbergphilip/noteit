@@ -136,6 +136,9 @@ final class NoteStore: ObservableObject {
     /// nothing is read from or written to the folder.
     @Published var markdownFolderUnavailable = false
     var markdownWatcher: MarkdownFolderWatcher?
+    /// The app asked for the watcher; it starts after the first scan that succeeds.
+    var markdownWatchWanted = false
+    var markdownWatcherStarting: MarkdownFolderWatcher?
     var attachmentSweepTimer: Timer?
     /// Called once when the content folder goes away while the library is open; the app asks the user to locate it.
     var onMarkdownFolderMissing: ((URL) -> Void)?

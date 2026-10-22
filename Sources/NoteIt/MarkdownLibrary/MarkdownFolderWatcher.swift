@@ -14,20 +14,32 @@ final class MarkdownFolderWatcher: @unchecked Sendable {
     static let maxDelay: TimeInterval = 2
     static let networkPollInterval: TimeInterval = 15
 
-    private let core: Core
+    private let root: URL
+    private let onChange: @MainActor () -> Void
+    private let onRootChanged: @MainActor () -> Void
+    private let lock = NSLock()
+    private var core: Core?
+    private var stopped = false
     private var stream: FSEventStreamRef?
     private var poll: DispatchSourceTimer?
 
     init(root: URL, onChange: @escaping @MainActor () -> Void,
          onRootChanged: @escaping @MainActor () -> Void) {
-        core = Core(root: root.resolvingSymlinksInPath().standardizedFileURL, onChange: onChange, onRootChanged: onRootChanged)
+        self.root = root
+        self.onChange = onChange
+        self.onRootChanged = onRootChanged
     }
 
     deinit { stop() }
 
+    /// Resolves the folder and asks whether it's on a network volume, both of which can hang on a dead mount:
+    /// call it off the main thread. A `stop()` meanwhile wins: the stream is then torn down again.
     @discardableResult
     func start() -> Bool {
-        guard stream == nil else { return true }
+        guard lock.withLock({ self.core == nil && !stopped }) else { return lock.withLock { stream != nil } }
+        let resolved = root.resolvingSymlinksInPath().standardizedFileURL
+        let isNetwork = (try? resolved.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal) == false
+        let core = Core(root: resolved, onChange: onChange, onRootChanged: onRootChanged)
         let info = Unmanaged.passRetained(core).toOpaque()
         var context = FSEventStreamContext(version: 0, info: info, retain: nil,
                                            release: { Unmanaged<Core>.fromOpaque($0!).release() }, copyDescription: nil)
@@ -40,7 +52,7 @@ final class MarkdownFolderWatcher: @unchecked Sendable {
             let flags = (0..<count).map { eventFlags[$0] }
             core.handle(Array(zip(list, flags)))
         }
-        guard let created = FSEventStreamCreate(nil, callback, &context, [core.root.path] as CFArray,
+        guard let created = FSEventStreamCreate(nil, callback, &context, [resolved.path] as CFArray,
                                                 FSEventStreamEventId(kFSEventStreamEventIdSinceNow), Self.latency, flags)
         else {
             Unmanaged<Core>.fromOpaque(info).release()
@@ -52,26 +64,47 @@ final class MarkdownFolderWatcher: @unchecked Sendable {
             FSEventStreamRelease(created)
             return false
         }
-        stream = created
-        if (try? core.root.resourceValues(forKeys: [.volumeIsLocalKey]).volumeIsLocal) == false {
-            let timer = DispatchSource.makeTimerSource(queue: core.queue)
-            timer.schedule(deadline: .now() + Self.networkPollInterval, repeating: Self.networkPollInterval)
-            timer.setEventHandler { [core] in core.requestRescan() }
-            timer.resume()
-            poll = timer
+        var timer: DispatchSourceTimer?
+        if isNetwork {
+            let source = DispatchSource.makeTimerSource(queue: core.queue)
+            source.schedule(deadline: .now() + Self.networkPollInterval, repeating: Self.networkPollInterval)
+            source.setEventHandler { [core] in core.requestRescan() }
+            source.resume()
+            timer = source
         }
-        return true
+        let installed = lock.withLock { () -> Bool in
+            guard !stopped, self.core == nil else { return false }
+            self.core = core
+            stream = created
+            poll = timer
+            return true
+        }
+        if !installed {
+            timer?.cancel()
+            core.stop()
+            Self.tearDown(created, on: core.queue)
+        }
+        return installed
     }
 
     /// Never waits: the stream is torn down on the watcher's queue, and nothing it still had pending is reported.
     func stop() {
+        let (stream, core, poll) = lock.withLock { () -> (FSEventStreamRef?, Core?, DispatchSourceTimer?) in
+            stopped = true
+            defer {
+                self.stream = nil
+                self.poll = nil
+            }
+            return (self.stream, self.core, self.poll)
+        }
         poll?.cancel()
-        poll = nil
-        core.stop()
-        guard let stream else { return }
-        self.stream = nil
+        core?.stop()
+        if let stream, let core { Self.tearDown(stream, on: core.queue) }
+    }
+
+    private static func tearDown(_ stream: FSEventStreamRef, on queue: DispatchQueue) {
         let box = StreamBox(stream)
-        core.queue.async {
+        queue.async {
             FSEventStreamStop(box.stream)
             FSEventStreamInvalidate(box.stream)
             FSEventStreamRelease(box.stream)

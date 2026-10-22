@@ -165,6 +165,7 @@ extension NoteStore {
             }
             applyExternalChanges(result, atLaunch: false)
             if wasUnavailable { scheduleSave() }
+            startMarkdownWatcherIfReady()
         }
     }
 
@@ -187,23 +188,58 @@ extension NoteStore {
         }
     }
 
-    /// Starts the FSEvents watcher; the app calls this once the library is loaded.
+    /// Starts the FSEvents watcher; the app calls this once the library is loaded. While the folder doesn't
+    /// respond the watcher waits for the first scan that succeeds; starting it touches the folder, so that runs
+    /// off the main thread too.
     func startWatchingMarkdownFolder() {
-        guard let storage = markdownStorage, markdownWatcher == nil else { return }
+        guard markdownStorage != nil else { return }
+        markdownWatchWanted = true
+        startMarkdownWatcherIfReady()
+        markdownFolderNeedsScan()
+    }
+
+    func startMarkdownWatcherIfReady() {
+        guard let storage = markdownStorage, markdownWatchWanted, markdownWatcher == nil, markdownWatcherStarting == nil,
+              !markdownFolderUnavailable, !isClosedForLibrarySwitch else { return }
         let watcher = MarkdownFolderWatcher(root: storage.contentRootURL,
                                             onChange: { [weak self] in self?.markdownFolderNeedsScan() },
                                             onRootChanged: { [weak self] in self?.markdownFolderNeedsScan() })
-        guard watcher.start() else { return NSLog("NoteIt: couldn't watch \(storage.contentRootURL.path) for changes") }
-        markdownWatcher = watcher
+        markdownWatcherStarting = watcher
+        // A start that finishes after the timeout finds the watcher stopped and tears its stream down again.
+        BoundedFileAccess.shared.run(key: "markdown-watch:" + storage.contentRootURL.path, timeout: storage.rootTimeout,
+                                     { watcher.start() }) { started in
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.markdownWatcherStarting === watcher else { return watcher.stop() }
+                    self.markdownWatcherStarting = nil
+                    guard let started else {
+                        watcher.stop()
+                        return self.markdownFolderBecameUnavailable()
+                    }
+                    guard started, self.markdownStorage === storage, self.markdownWatchWanted, !self.isClosedForLibrarySwitch else {
+                        watcher.stop()
+                        if !started { NSLog("NoteIt: couldn't watch \(storage.contentRootURL.path) for changes") }
+                        return
+                    }
+                    self.markdownWatcher = watcher
+                    self.startAttachmentSweepTimer(storage)
+                }
+            }
+        }
+    }
+
+    private func startAttachmentSweepTimer(_ storage: MarkdownBodyStorage) {
+        guard attachmentSweepTimer == nil else { return }
         let attachments = storage.attachments
         let timer = Timer(timeInterval: Self.attachmentSweepInterval, repeats: true) { _ in attachments.scheduleSweep() }
         timer.tolerance = 5 * 60
         RunLoop.main.add(timer, forMode: .common)
         attachmentSweepTimer = timer
-        markdownFolderNeedsScan()
     }
 
     func stopWatchingMarkdownFolder() {
+        markdownWatchWanted = false
+        markdownWatcherStarting = nil
         markdownWatcher?.stop()
         markdownWatcher = nil
         attachmentSweepTimer?.invalidate()

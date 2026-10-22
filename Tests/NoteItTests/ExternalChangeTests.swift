@@ -115,6 +115,33 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertTrue(try read("Kept.md").contains("edited while away"), "the edit kept in memory is written once it answers")
     }
 
+    func testTheWatcherStartsOnlyOnceTheFolderAnswers() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let store = open()
+        defer { store.stopWatchingMarkdownFolder() }
+        store.markdownScanTimeout = 0.2
+        store.markdownUnavailableRetryInterval = 0.2
+        let realScan = store.markdownFolderScan
+        let hung = DispatchSemaphore(value: 0)
+        store.markdownFolderScan = { root, index, ledger in
+            _ = hung.wait(timeout: .now() + 3)
+            return realScan(root, index, ledger)
+        }
+        store.markdownFolderNeedsScan()
+        try await waitUntil({ store.markdownFolderUnavailable }, "the hung folder is reported unavailable")
+
+        let started = Date()
+        store.startWatchingMarkdownFolder()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1)
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(store.markdownWatcher, "nothing touches a folder that doesn't answer")
+
+        store.markdownFolderScan = realScan
+        hung.signal()
+        try await waitUntil({ !store.markdownFolderUnavailable }, "the folder is available again once it answers")
+        try await waitUntil({ store.markdownWatcher != nil }, "the watcher starts after the first scan that succeeds")
+    }
+
     func testEditsMadeWhileNoteItWasClosedReachSpotlightAtTheNextLaunch() async throws {
         try put("Kept.md", "# Kept\n\nfirst\n")
         try put("Gone.md", "# Gone\n\nsoon\n")
@@ -343,9 +370,11 @@ final class ExternalChangeTests: XCTestCase {
         store.flush()
         store.startWatchingMarkdownFolder()
         defer { store.stopWatchingMarkdownFolder() }
+        var deadline = Date().addingTimeInterval(5)
+        while store.markdownWatcher == nil, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
         XCTAssertNotNil(store.markdownWatcher)
         try put("Dropped.md", "# Dropped\n\nfrom another app\n")
-        let deadline = Date().addingTimeInterval(5)
+        deadline = Date().addingTimeInterval(5)
         while store.notes.first(where: { $0.title == "Dropped" }) == nil, Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
