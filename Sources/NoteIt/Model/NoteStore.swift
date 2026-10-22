@@ -427,6 +427,19 @@ final class NoteStore: ObservableObject {
         return unreadMarkdownFolder(of: id) == nil ? text : nil
     }
 
+    /// `bodyForOutput`, but while a read of the folder is still running (this note's or another's) it waits for it,
+    /// suspended rather than blocking, and tries again: nil only once the read failed to answer or the folder is
+    /// unavailable.
+    func bodyForOutputWhenRead(_ id: UUID) async -> NSAttributedString? {
+        let deadline = Date().addingTimeInterval(2 * markdownBlockingTimeout)
+        while true {
+            if let body = bodyForOutput(id) { return body }
+            guard markdownStorage != nil, !markdownFolderUnavailable, Date() < deadline,
+                  markdownReads[id] != nil || markdownReads.values.contains(where: { !$0.isFinished }) else { return nil }
+            try? await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
     func plainText(for id: UUID) -> String {
         BodyCodec.plainText(of: body(for: id))
     }

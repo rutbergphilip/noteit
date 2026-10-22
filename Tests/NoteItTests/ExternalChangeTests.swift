@@ -738,6 +738,57 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(written, ["Here.md"])
     }
 
+    func testAnExportWaitsForASlowReadInsteadOfSkippingTheNotesAfterIt() async throws {
+        let (store, storage) = try openWithUncachedNotes(20)
+        let lock = NSLock()
+        var first = true
+        storage.readFileData = { url in
+            if lock.withLock({ defer { first = false }; return first }) { Thread.sleep(forTimeInterval: 2) }
+            return try Data(contentsOf: url)
+        }
+        let export = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
+                                                 to: exportFolder(), body: store.bodyForOutput)
+        export.bodyWhenRead = { await store.bodyForOutputWhenRead($0) }
+        let result = try await export.write { _ in true }
+        XCTAssertEqual(result.noteCount, 20)
+        XCTAssertEqual(result.skipped, [])
+    }
+
+    func testAnExportOnAHungFolderSkipsAndListsTheNotesPromptly() async throws {
+        let (store, storage) = try openWithUncachedNotes(20)
+        store.markdownBlockingTimeout = 1
+        store.markdownUnavailableRetryInterval = 600
+        let gate = DispatchGroup()
+        gate.enter()
+        defer { gate.leave() }
+        storage.readFileData = { url in
+            _ = gate.wait(timeout: .now() + 20)
+            return try Data(contentsOf: url)
+        }
+        let export = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
+                                                 to: exportFolder(), body: store.bodyForOutput)
+        export.bodyWhenRead = { await store.bodyForOutputWhenRead($0) }
+        let started = Date()
+        let result = try await export.write { _ in true }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        XCTAssertEqual(result.noteCount, 0)
+        XCTAssertEqual(result.skipped.count, 20)
+    }
+
+    private func openWithUncachedNotes(_ count: Int) throws -> (NoteStore, MarkdownBodyStorage) {
+        for index in 0..<count { try put("Note \(index).md", "# Note \(index)\n\ntext \(index)\n") }
+        let store = open()
+        let storage = try XCTUnwrap(store.markdownStorage)
+        for meta in store.notes { store.dropCachedBody(meta.id) }
+        return (store, storage)
+    }
+
+    private func exportFolder() throws -> URL {
+        let folder = root.appendingPathComponent("export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }
+
     func testTheAPIRefusesAttachmentsOfANoteWhoseFileWasntRead() throws {
         let (store, ids, gates) = try openWithGatedReads(["Far"], gated: ["Far"])
         defer { gates.values.forEach { $0.leave() } }

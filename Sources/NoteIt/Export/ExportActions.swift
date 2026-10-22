@@ -203,7 +203,12 @@ enum ExportActions {
             let format = picker.format
             lastFormat = format
             do {
-                run(try export(folder, format), title: title)
+                let notes = try export(folder, format)
+                notes.bodyWhenRead = { [store] id in
+                    NotificationCenter.default.post(name: .noteItWillExportNote, object: id)
+                    return await store.bodyForOutputWhenRead(id)
+                }
+                run(notes, title: title)
             } catch {
                 showError(error, message: "Couldn’t export the notes")
             }

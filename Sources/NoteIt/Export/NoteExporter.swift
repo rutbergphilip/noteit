@@ -341,6 +341,8 @@ final class NotesExport {
     let format: ExportFormat
     private let files: [File]
     private let body: (UUID) -> NSAttributedString?
+    /// Used by `write(slice:progress:)` instead of `body`: may wait (suspended) for a read still running.
+    var bodyWhenRead: ((UUID) async -> NSAttributedString?)?
     private let links: ExportLinkContext
     private(set) var written = 0
     private(set) var skipped: [String] = []
@@ -362,8 +364,12 @@ final class NotesExport {
 
     func writeNext() throws {
         guard !isFinished else { return }
+        try write(body(files[next].note.id))
+    }
+
+    private func write(_ text: NSAttributedString?) throws {
         let file = files[next]
-        guard let text = body(file.note.id) else {
+        guard let text else {
             skipped.append(file.note.displayTitle)
             next += 1
             return
@@ -385,7 +391,9 @@ final class NotesExport {
         let clock = ContinuousClock()
         while !isFinished {
             let start = clock.now
-            repeat { try writeNext() } while !isFinished && clock.now - start < slice
+            repeat {
+                if let bodyWhenRead { try write(await bodyWhenRead(files[next].note.id)) } else { try writeNext() }
+            } while !isFinished && clock.now - start < slice
             guard progress(self), !isFinished else { break }
             try? await Task.sleep(for: .milliseconds(1))
         }
