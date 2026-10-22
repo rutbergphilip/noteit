@@ -54,7 +54,9 @@ enum SyncSelfTest {
         guard markdown, markdownDevices.contains(name) else { return NoteStore(rootURL: root) }
         let content = base.appendingPathComponent(name + "-md", isDirectory: true)
         try? FileManager.default.createDirectory(at: content, withIntermediateDirectories: true)
-        return NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false, format: .markdown, contentRootURL: content))
+        let store = NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false, format: .markdown, contentRootURL: content))
+        store.markdownFlushWait = 10
+        return store
     }
 
     // MARK: Cases

@@ -141,7 +141,7 @@ final class LibraryConverter {
     var dataDir: URL { store.rootURL }
     var pauseSync: () async -> Void = { await SyncController.shared.suspendForLibraryConversion() }
     var resumeSync: () -> Void = { SyncController.shared.resumeAfterLibraryConversion() }
-    var flush: (NoteStore) -> Void = { $0.flush() }
+    var flush: (NoteStore) -> Void = { $0.flushWaitingForWrites(upTo: $0.markdownBlockingTimeout) }
     var availableSpace: (URL) -> Int64? = LibraryConverter.availableSpace
     /// Whether a staged body reads back as the source; `BodyCodec.semanticallyEqual` by default.
     var verify: (UUID, NSAttributedString, NSAttributedString) -> Bool = { _, a, b in BodyCodec.semanticallyEqual(a, b) }

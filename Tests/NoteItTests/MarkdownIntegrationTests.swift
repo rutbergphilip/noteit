@@ -36,6 +36,8 @@ final class MarkdownIntegrationTests: XCTestCase {
                               bodyStorage: MarkdownBodyStorageTests.make(root, renames: false))
         store.preferences = defaults
         store.markdownClock = { Date().addingTimeInterval(10) }
+        store.markdownFlushWait = 10
+        store.waitForMarkdownWrites(upTo: 10)
         if links { store.installLinkIndex() }
         stores.append(store)
         return store

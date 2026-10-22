@@ -136,7 +136,9 @@ extension NoteStore {
         if let extras = bodyExtras[id] { return extras.frontMatter }
         switch bodyStorage.kind {
         case .rtfd: return (try? readBodyExtrasSidecar(id))??.current.extras.frontMatter
-        case .markdown: return (try? BodyCodec.markdownFrontMatterExtra(at: bodyStorage.fileURL(for: id))) ?? nil
+        case .markdown:
+            if let markdownStorage { return markdownStorage.index.entry(id)?.frontMatterExtra }
+            return (try? BodyCodec.markdownFrontMatterExtra(at: bodyStorage.fileURL(for: id))) ?? nil
         }
     }
 

@@ -88,8 +88,11 @@ final class LibraryConverterTests: XCTestCase {
     }
 
     private func openMarkdown(renames: Bool = true) -> NoteStore {
-        NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
-                                            renameFilesOnTitleChange: renames))
+        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+                                                        renameFilesOnTitleChange: renames))
+        store.markdownFlushWait = 10
+        store.waitForMarkdownWrites(upTo: 10)
+        return store
     }
 
     private func openRTFD() -> NoteStore {

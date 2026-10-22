@@ -17,43 +17,29 @@ extension NoteStore {
 
     // MARK: Layout
 
-    /// Folders and front matter follow notebooks and note metadata; files follow titles once idle. Called by
-    /// `flush()` after the body writes.
-    func syncMarkdownLayout() {
-        guard let storage = markdownStorage, storage.contentRootExists else { return }
+    /// Folders and front matter follow notebooks and note metadata; files follow titles once idle. Planned by
+    /// `flush()` after the body writes and run with them on the IO queue.
+    func planMarkdownLayout(_ pass: inout MarkdownWritePass) {
+        guard let storage = markdownStorage else { return }
         storage.setNotebooks(notebooks)
-        do { try storage.reconcileNotebooks() } catch { NSLog("NoteIt: couldn't update notebook folders: \(error)") }
+        pass.layout = true
+        pass.notebookIDs = Set(notebooks.map(\.id))
         if libraryDirty {
             for meta in notes where !isBodyDirty(meta.id) && !isBodyWriteBlocked(meta.id) && storage.needsMetadataWrite(meta) {
-                do {
-                    try storage.writeMetadataOnly(for: meta, notebook: notebook(with: meta.notebookID))
-                } catch {
-                    handleMarkdownWriteError(error, for: meta.id)
-                }
+                pass.metadata.append((meta, notebook(with: meta.notebookID)))
             }
         }
-        // Deepest first, so a parent's folder is empty by the time it goes; a folder that couldn't go keeps its
-        // record and is tried again on the next flush.
-        let gone = storage.index.allNotebookFolders.filter { notebook(with: $0.key) == nil }
-            .sorted { MarkdownBodyStorage.depth(of: $0.value) > MarkdownBodyStorage.depth(of: $1.value) }
-        for (id, _) in gone {
-            do { try storage.removeNotebook(id: id) } catch { NSLog("NoteIt: couldn't remove a notebook folder: \(error)") }
-        }
-        renameIdleMarkdownFiles()
-        try? storage.index.save()
-    }
-
-    private func renameIdleMarkdownFiles() {
-        guard let storage = markdownStorage else { return }
         let now = markdownClock()
         var waiting: TimeInterval?
-        for meta in notes where storage.wantsRename(meta) && !isBodyDirty(meta.id) && !isBodyWriteBlocked(meta.id) {
+        let writing = Set(pass.bodies.map(\.meta.id))
+        for meta in notes where storage.wantsRename(meta) && (writing.contains(meta.id) || !isBodyDirty(meta.id))
+            && !isBodyWriteBlocked(meta.id) {
             let idle = now.timeIntervalSince(meta.updatedAt)
             if meta.id == selectedNoteID, idle < Self.idleRenameDelay {
                 waiting = min(waiting ?? .infinity, Self.idleRenameDelay - idle)
                 continue
             }
-            do { try storage.renameForTitle(meta) } catch { handleMarkdownWriteError(error, for: meta.id) }
+            pass.renames.append(meta)
         }
         hasPendingMarkdownRenames = waiting != nil
         if let waiting { scheduleSave(after: max(waiting, 0.5)) }
@@ -65,12 +51,12 @@ extension NoteStore {
         scheduleSave()
     }
 
-    private func handleMarkdownWriteError(_ error: Error, for id: UUID) {
+    func handleMarkdownWriteError(_ error: Error, for id: UUID) {
         NSLog("NoteIt: couldn't update the file of note \(id): \(error)")
         switch error as? MarkdownStorageError {
         case .unreadable: blockMarkdownBodyWrites(id, reason: MarkdownBodyStorage.unreadableReason)
         case .externallyChanged: markdownFolderNeedsScan()
-        case .folderMissing, nil: break
+        case .folderMissing, .unresponsive, nil: break
         }
     }
 
@@ -110,6 +96,8 @@ extension NoteStore {
     @discardableResult
     func rescanMarkdownFolder() -> Bool {
         guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return true }
+        waitForMarkdownWrites(upTo: markdownBlockingTimeout)
+        guard markdownIOJobs.isEmpty else { return false }
         let outcome = scanMarkdownFolderNow(storage)
         finishMarkdownScan(outcome, since: nil)
         if case .scanned = outcome { return true }
@@ -154,6 +142,12 @@ extension NoteStore {
             markdownFolderUnavailable = false
             markdownFolderWentMissing()
         case .scanned(var result, let reads):
+            // Writes still on the IO queue may be half recorded; the scan is applied once they finish.
+            if before != nil, !markdownIOJobs.isEmpty {
+                markdownScanAfterWrites = true
+                if markdownFolderUnavailable { markdownFolderBecameUnavailable() }
+                return
+            }
             let wasUnavailable = markdownFolderUnavailable
             markdownFolderUnavailable = false
             markdownFolderReportedMissing = false
@@ -167,7 +161,14 @@ extension NoteStore {
                 result.leaveOut(written)
             }
             applyExternalChanges(result, reads: reads, atLaunch: false)
-            if wasUnavailable { scheduleSave() }
+            if wasUnavailable {
+                scheduleSave()
+                let unread = markdownBodiesNotRead
+                markdownBodiesNotRead = []
+                if let selected = selectedNoteID, unread.contains(selected), cachedBody(selected) == nil {
+                    externallyUpdatedNoteID = selected
+                }
+            }
             startMarkdownWatcherIfReady()
         }
     }
@@ -590,9 +591,12 @@ extension NoteStore {
             }
             let (adopted, idWrite) = storage.adopt(id, at: file.path, file: read, assignID: assign)
             if let idWrite {
-                do { try storage.writeAssignedID(idWrite, for: id) } catch {
-                    NSLog("NoteIt: couldn't write the id of \(file.path): \(error)")
-                }
+                let path = file.path
+                _ = enqueueMarkdownIO(storage, { storage -> Error? in
+                    do { try storage.writeAssignedID(idWrite, for: id); return nil } catch { return error }
+                }, then: { error in
+                    if let error { NSLog("NoteIt: couldn't write the id of \(path): \(error)") }
+                })
             }
             let meta = importedMeta(id, path: file.path, adopted: adopted)
             metas.append(meta)
@@ -713,6 +717,7 @@ extension NoteStore {
         guard let storage = markdownStorage else { return false }
         let date = Date()
         var moved: [UUID] = []
+        var copies: [DeletedCopy] = []
         for id in removed.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard let meta = note(with: id) else {
                 storage.forget(id)
@@ -727,14 +732,10 @@ extension NoteStore {
                 text = loaded.text
             }
             let extras = bodyExtras[id] ?? lastKnown?.extras ?? .empty
-            do {
-                try storage.writeDeletedCopy(text ?? NSAttributedString(string: meta.title), extras: extras, for: deleted)
-            } catch {
-                NSLog("NoteIt: couldn't keep the text of note \(id), whose file was deleted: \(error)")
-                continue
-            }
+            copies.append(DeletedCopy(meta: deleted, text: text ?? NSAttributedString(string: meta.title), extras: extras))
             if meta.deletedAt == nil { moved.append(id) }
         }
+        keepDeletedCopies(copies, in: storage)
         guard !moved.isEmpty else { return false }
         for id in moved {
             if selectedNoteID == id, !atLaunch { selectNeighbor(of: id) }
@@ -745,5 +746,35 @@ extension NoteStore {
             if !atLaunch { postLocalNoteChange(id, .deleted) }
         }
         return true
+    }
+
+    private struct DeletedCopy {
+        let meta: NoteMeta
+        let text: NSAttributedString
+        let extras: ContainerExtras
+    }
+
+    /// Writes the `.trash/` copies on the IO queue. A copy that can't be written stays as an unsaved body, which
+    /// the next write puts in `.trash/` once the folder responds.
+    private func keepDeletedCopies(_ copies: [DeletedCopy], in storage: MarkdownBodyStorage) {
+        guard !copies.isEmpty else { return }
+        nonisolated(unsafe) let pending = copies
+        _ = enqueueMarkdownIO(storage, { storage -> [UUID] in
+            pending.compactMap { copy in
+                do {
+                    try storage.writeDeletedCopy(copy.text, extras: copy.extras, for: copy.meta)
+                    return nil
+                } catch {
+                    NSLog("NoteIt: couldn't keep the text of note \(copy.meta.id), whose file was deleted: \(error)")
+                    return copy.meta.id
+                }
+            }
+        }, then: { [weak self] failed in
+            guard let self, !failed.isEmpty, self.markdownStorage === storage else { return }
+            for copy in pending where failed.contains(copy.meta.id) && self.note(with: copy.meta.id) != nil {
+                storage.allowRecreatingMissingFile(copy.meta.id)
+                self.keepUnsavedBody(copy.meta.id, copy.text)
+            }
+        })
     }
 }

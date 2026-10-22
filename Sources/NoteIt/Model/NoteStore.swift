@@ -143,6 +143,26 @@ final class NoteStore: ObservableObject {
     /// Called once when the content folder goes away while the library is open; the app asks the user to locate it.
     var onMarkdownFolderMissing: ((URL) -> Void)?
     var markdownFolderReportedMissing = false
+    /// Every write, folder change, listing and deletion in a Markdown library's content folder runs here, in order;
+    /// the main thread only queues work and applies results (`MarkdownIOJob`).
+    let markdownIO = DispatchQueue(label: "NoteIt.markdown-io", qos: .userInitiated)
+    var markdownIOJobs: [MarkdownIOJob] = []
+    /// A flush came while a write pass was queued; it runs again once that pass is applied.
+    var markdownFlushAgain = false
+    /// A background scan came back while writes were queued; it runs again once they are applied.
+    var markdownScanAfterWrites = false
+    /// IO queued this long without finishing makes the folder unavailable.
+    var markdownWriteTimeout: TimeInterval = 20
+    /// How long a caller that needs the folder right now (a sync apply, a capture's `persistNow`, a read) waits.
+    var markdownBlockingTimeout: TimeInterval = 5
+    /// How long `flush()` waits for its Markdown writes. 0 in the app, where the main thread never waits for the
+    /// folder; tests and the self-test wait. A flush at quit waits `markdownQuitWait` either way.
+    var markdownFlushWait: TimeInterval = 0
+    var markdownQuitWait: TimeInterval = 5
+    /// Recovery copies of edits waiting for an unavailable folder, one per note, removed once the edit is written.
+    var markdownWaitingCopies: [UUID: URL] = [:]
+    /// Notes whose body couldn't be read because the folder didn't answer; they are read again once it does.
+    var markdownBodiesNotRead: Set<UUID> = []
     /// The launch scan changed notes before any derived index was registered; persistent indexes (Spotlight) must
     /// rebuild rather than trust what they kept from the last run.
     var notesChangedBeforeDerivedIndexes = false
@@ -234,9 +254,7 @@ final class NoteStore: ObservableObject {
             forName: NSApplication.willTerminateNotification, object: nil, queue: nil
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self else { return }
-                self.isTerminating = true
-                self.flush()
+                self?.flushBeforeQuit()
             }
         }
     }
@@ -328,7 +346,24 @@ final class NoteStore: ObservableObject {
         }
         let url = bodyURL(for: id)
         var loaded = NSAttributedString()
-        if FileManager.default.fileExists(atPath: url.path) {
+        if let markdownStorage {
+            switch readMarkdownBody(id, from: markdownStorage) {
+            case .read(let stored):
+                loaded = stored.text
+                setBodyExtras(stored.extras, for: id)
+                if let reason = stored.readOnlyReason { blockBodyWrites(id, reason: reason) }
+            case .missing:
+                if let held = heldMarkdownBody(id) {
+                    loaded = held.text
+                    setBodyExtras(held.extras, for: id)
+                }
+            case .failed(let error):
+                handleUnreadableMarkdownBody(id, at: url, error: error)
+            case .unanswered:
+                // Shown as last known and read again once the folder answers; never cached, so never written.
+                return markdownStorage.lastKnownBody(id)?.text ?? heldMarkdownBody(id)?.text ?? NSAttributedString()
+            }
+        } else if FileManager.default.fileExists(atPath: url.path) {
             do {
                 let stored = try readStoredBody(id)
                 loaded = stored.text
@@ -480,6 +515,49 @@ final class NoteStore: ObservableObject {
         DispatchQueue.main.async { [weak self] in self?.objectWillChange.send() }
     }
 
+    enum MarkdownBodyRead {
+        case read(StoredBody)
+        case missing
+        case failed(Error)
+        /// The folder didn't answer within `markdownBlockingTimeout`, or is known not to.
+        case unanswered
+    }
+
+    /// Reads a note's file off the main thread, waiting at most `markdownBlockingTimeout`.
+    func readMarkdownBody(_ id: UUID, from storage: MarkdownBodyStorage) -> MarkdownBodyRead {
+        guard storage.index.entry(id) != nil else { return .missing }
+        guard !markdownFolderUnavailable else {
+            markdownBodiesNotRead.insert(id)
+            return .unanswered
+        }
+        let outcome = BoundedFileAccess.shared.runBlocking(key: "markdown-read:" + storage.contentRootURL.path,
+                                                           timeout: markdownBlockingTimeout) {
+            () -> MarkdownBodyRead in
+            guard let url = storage.revisionInputURL(for: id), FileManager.default.fileExists(atPath: url.path) else {
+                return .missing
+            }
+            do { return .read(try storage.read(id)) } catch { return .failed(error) }
+        }
+        guard let outcome else {
+            markdownBodiesNotRead.insert(id)
+            // A read can run during a view update; publish on the next turn.
+            DispatchQueue.main.async { [weak self] in self?.markdownFolderBecameUnavailable() }
+            return .unanswered
+        }
+        markdownBodiesNotRead.remove(id)
+        return outcome
+    }
+
+    /// A Markdown file that exists but can't be read: shown empty and never written, so it needs no backup.
+    private func handleUnreadableMarkdownBody(_ id: UUID, at url: URL, error: Error) {
+        guard loadErrors[id] == nil else { return }
+        bodyWriteBlocked.insert(id)
+        loadErrorFiles[id] = url
+        loadErrors[id] = "This note couldn’t be read (\(error.localizedDescription)); edits to it won’t be saved."
+        NSLog("NoteIt: failed to read note \(id) (\(error)); writes disabled")
+        DispatchQueue.main.async { [weak self] in self?.objectWillChange.send() }
+    }
+
     /// A body that must not be overwritten, shown read-only with `reason`.
     func blockMarkdownBodyWrites(_ id: UUID, reason: String) {
         blockBodyWrites(id, reason: reason)
@@ -508,6 +586,13 @@ final class NoteStore: ObservableObject {
         guard bodyCache[id] == nil else { return }
         bodyCache[id] = text
         touchBody(id)
+    }
+
+    /// Keeps `text` as an unsaved body when nothing newer is cached, so the next write stores it.
+    func keepUnsavedBody(_ id: UUID, _ text: NSAttributedString) {
+        seedCachedBody(id, text)
+        dirtyBodies.insert(id)
+        scheduleSave()
     }
 
     /// Drops a clean cached body so the next read loads the file.
@@ -541,10 +626,8 @@ final class NoteStore: ObservableObject {
         if bodyStorage.kind == .rtfd {
             history.recordSavedBody(at: bodyURL(for: id), extras: savedBodyVersionEntry(id), of: id, force: force)
         } else {
-            history.recordSavedBody(reading: { [bodyStorage] in
-                guard let url = bodyStorage.revisionInputURL(for: id), FileManager.default.fileExists(atPath: url.path) else { return nil }
-                return try bodyStorage.read(id)
-            }, of: id, force: force)
+            // The body as NoteIt last read or wrote the file; nothing is read from the content folder here.
+            history.recordSavedBody(reading: { [markdownStorage] in markdownStorage?.lastKnownBody(id) }, of: id, force: force)
         }
     }
 
@@ -1168,35 +1251,47 @@ final class NoteStore: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
-    /// Synchronously writes all pending changes to disk. Failed body writes stay dirty and are retried;
-    /// meanwhile the library keeps their last persisted title/preview/date. At termination, bodies that
-    /// still can't be saved are written to `recovery/` instead.
+    /// Writes all pending changes to disk. On an RTFD store synchronously; on a Markdown store the content folder's
+    /// writes go to the IO queue and their results come back later (`markdownFlushWait`). Failed body writes stay
+    /// dirty and are retried; meanwhile the library keeps their last persisted title/preview/date. At termination,
+    /// bodies that still can't be saved are written to `recovery/` instead.
     func flush() {
         guard !isClosedForLibrarySwitch else { return }
         for id in Array(stagedEditorBodies.keys) { commitStagedEditorBody(id) }
         saveWorkItem?.cancel()
         saveWorkItem = nil
         let fm = FileManager.default
-        if bodyStorage.kind == .rtfd { try? fm.createDirectory(at: notesURL, withIntermediateDirectories: true) }
-
-        for id in dirtyBodies {
-            if bodyWriteBlocked.contains(id) {
-                NSLog("NoteIt: not saving note \(id): its files on disk couldn’t be read and are kept as they are")
-                continue
-            }
-            writePendingBody(id)
-        }
-
+        var markdownPass: MarkdownWritePass?
+        let wait = isTerminating ? markdownQuitWait : markdownFlushWait
+        let waitDeadline = wait > 0 ? Date().addingTimeInterval(wait) : nil
         if let markdownStorage {
-            syncMarkdownLayout()
-            markdownStorage.attachments.scheduleSweep()
+            markdownPass = planMarkdownWrites(markdownStorage, waitingUntil: waitDeadline)
+        } else {
+            try? fm.createDirectory(at: notesURL, withIntermediateDirectories: true)
+            for id in dirtyBodies {
+                if bodyWriteBlocked.contains(id) {
+                    NSLog("NoteIt: not saving note \(id): its files on disk couldn’t be read and are kept as they are")
+                    continue
+                }
+                writePendingBody(id)
+            }
         }
         if libraryDirty || !fm.fileExists(atPath: libraryURL.path) {
             saveLibrary()
         }
         if smartFolderState.dirty { saveSmartFolders() }
         // Bodies (and raw meta files) of deleted records go only once their removal is persisted.
-        if !libraryDirty, hasPendingAuxDeletions { trashPendingBodies() }
+        if !libraryDirty, hasPendingAuxDeletions {
+            if markdownPass != nil {
+                markdownPass?.trash = Array(pendingTrash)
+                drainRawMetaDeletionQueue()
+            } else if markdownStorage == nil {
+                trashPendingBodies()
+            }
+        }
+        if let markdownStorage, let markdownPass {
+            startMarkdownWritePass(markdownPass, on: markdownStorage, waitingUntil: waitDeadline)
+        }
         indexSaveWorkItem?.cancel()
         indexSaveWorkItem = nil
         if isTerminating { writeRecoveryCopies() }
@@ -1206,11 +1301,174 @@ final class NoteStore: ObservableObject {
             hasUnannouncedLocalChange = false
             NotificationCenter.default.post(name: .noteItLocalChange, object: self)
         }
+        scheduleRetryIfNeeded()
+    }
 
+    private func scheduleRetryIfNeeded() {
+        guard !markdownWritePassQueued || !markdownFlushAgain else { return }
         let retryable = dirtyBodies.subtracting(bodyWriteBlocked)
         if !retryable.isEmpty || libraryDirty || smartFolderState.dirty || hasPendingAuxDeletions || hasPendingMarkdownRenames {
             scheduleSave(after: 5)
         }
+    }
+
+    // MARK: Markdown writes
+
+    /// The writes a flush hands to the IO queue, or nil when none may start now: while the folder doesn't answer
+    /// edits wait in memory (with a copy in `recovery/`), and while an earlier pass is queued the flush runs again
+    /// after it.
+    private func planMarkdownWrites(_ storage: MarkdownBodyStorage, waitingUntil deadline: Date?) -> MarkdownWritePass? {
+        if let deadline {
+            for job in markdownIOJobs { _ = job.wait(upTo: deadline.timeIntervalSinceNow) }
+        }
+        if markdownFolderUnavailable {
+            for id in dirtyBodies.subtracting(bodyWriteBlocked) { keepWaitingCopy(id) }
+            return nil
+        }
+        guard !markdownWritePassQueued else {
+            markdownFlushAgain = true
+            return nil
+        }
+        markdownFlushAgain = false
+        var pass = MarkdownWritePass()
+        for id in dirtyBodies {
+            if bodyWriteBlocked.contains(id) {
+                NSLog("NoteIt: not saving note \(id): its files on disk couldn’t be read and are kept as they are")
+                continue
+            }
+            guard let text = bodyCache[id], let meta = note(with: id) else {
+                dirtyBodies.remove(id)
+                recoveredSnapshots[id] = nil
+                continue
+            }
+            recordSavedBodyVersion(id)
+            pass.bodies.append(.init(meta: meta, text: text, extras: bodyExtras[id] ?? .empty, notebook: notebook(with: meta.notebookID)))
+        }
+        planMarkdownLayout(&pass)
+        return pass
+    }
+
+    private func startMarkdownWritePass(_ pass: MarkdownWritePass, on storage: MarkdownBodyStorage, waitingUntil deadline: Date? = nil) {
+        let job = enqueueMarkdownIO(storage, { pass.run(on: $0) }) { [weak self] result in
+            self?.finishMarkdownWritePass(pass, result)
+        }
+        job.isWritePass = true
+        if let deadline, job.wait(upTo: deadline.timeIntervalSinceNow), libraryDirty { saveLibrary() }
+    }
+
+    /// A flush that waits up to `seconds` for its Markdown writes, for callers that need them on disk.
+    func flushWaitingForWrites(upTo seconds: TimeInterval) {
+        let saved = markdownFlushWait
+        markdownFlushWait = max(saved, seconds)
+        defer { markdownFlushWait = saved }
+        flush()
+    }
+
+    /// Waits up to `seconds` for the queued Markdown writes and applies their results.
+    func waitForMarkdownWrites(upTo seconds: TimeInterval) {
+        let deadline = Date() + seconds
+        while let job = markdownIOJobs.first, job.wait(upTo: deadline.timeIntervalSinceNow), markdownIOJobs.first !== job {}
+    }
+
+    /// The app's last flush: waits at most `markdownQuitWait` for the content folder, then keeps whatever is still
+    /// unsaved in `recovery/`.
+    func flushBeforeQuit() {
+        guard !isTerminating else { return }
+        isTerminating = true
+        flush()
+    }
+
+    /// Queues `work` on the IO queue; `apply` gets its result on the main thread. Work that doesn't finish within
+    /// `markdownWriteTimeout` makes the folder unavailable, and its result is still applied when it comes.
+    @discardableResult
+    func enqueueMarkdownIO<T>(_ storage: MarkdownBodyStorage, _ work: @escaping (MarkdownBodyStorage) -> T,
+                              then apply: @escaping (T) -> Void) -> MarkdownIOJob {
+        let job = MarkdownIOJob()
+        markdownIOJobs.append(job)
+        nonisolated(unsafe) let work = work
+        nonisolated(unsafe) let apply = apply
+        markdownIO.async { [weak self] in
+            let value = work(storage)
+            job.finished {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.markdownIOJobs.removeAll { $0 === job }
+                    apply(value)
+                    self.markdownIOFinished()
+                }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + markdownWriteTimeout) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, !job.isApplied, self.markdownStorage === storage else { return }
+                self.markdownFolderBecameUnavailable()
+            }
+        }
+        return job
+    }
+
+    /// Runs `work` on the IO queue and waits at most `markdownBlockingTimeout` for it, for callers that need the
+    /// folder before they return. Throws `.unresponsive` at once while the folder doesn't answer.
+    func runMarkdownIONow<T>(_ storage: MarkdownBodyStorage, _ work: @escaping (MarkdownBodyStorage) throws -> T) throws -> T {
+        guard !markdownFolderUnavailable else { throw MarkdownStorageError.unresponsive }
+        var outcome: Swift.Result<T, Error>?
+        let job = enqueueMarkdownIO(storage, { storage in Swift.Result { try work(storage) } }) { outcome = $0 }
+        guard job.wait(upTo: markdownBlockingTimeout), let outcome else {
+            markdownFolderBecameUnavailable()
+            throw MarkdownStorageError.unresponsive
+        }
+        return try outcome.get()
+    }
+
+    /// A flush's writes are queued; the next flush waits for them instead of queuing the same bodies again.
+    private var markdownWritePassQueued: Bool { markdownIOJobs.contains { $0.isWritePass } }
+
+    private func markdownIOFinished() {
+        guard markdownIOJobs.isEmpty else { return }
+        if markdownScanAfterWrites {
+            markdownScanAfterWrites = false
+            markdownFolderNeedsScan()
+        }
+        if markdownFlushAgain {
+            markdownFlushAgain = false
+            scheduleSave(after: 0.05)
+        }
+    }
+
+    private func finishMarkdownWritePass(_ pass: MarkdownWritePass, _ result: MarkdownWritePass.Result) {
+        guard !isClosedForLibrarySwitch else { return }
+        for body in pass.bodies {
+            if let error = result.failedBodies[body.meta.id] {
+                bodyWriteFailed(body.meta.id, text: body.text, error: error)
+            } else {
+                bodyWritten(body.meta.id, text: body.text, extras: body.extras)
+            }
+        }
+        for (id, error) in result.failedUpdates { handleMarkdownWriteError(error, for: id) }
+        if !pass.trash.isEmpty {
+            let before = pendingTrash
+            for id in result.trashed { finishTrashing(id) }
+            debugCrashPoint("after-trash")
+            if pendingTrash != before { saveTombstones() }
+        }
+        markdownStorage?.attachments.scheduleSweep()
+        if libraryDirty { scheduleSave() } else { scheduleRetryIfNeeded() }
+    }
+
+    /// Keeps a copy of an edit that waits for an unavailable folder in `recovery/`, replacing the copy kept
+    /// earlier for the same note.
+    private func keepWaitingCopy(_ id: UUID) {
+        guard let text = bodyCache[id], recoveredSnapshots[id] != ObjectIdentifier(text) else { return }
+        let earlier = markdownWaitingCopies[id]
+        guard let url = writeRecoveryCopy(id, text) else { return }
+        markdownWaitingCopies[id] = url
+        if let earlier, earlier != url { try? FileManager.default.removeItem(at: earlier) }
+    }
+
+    /// Whether the note's body is stored: a file in the RTFD store, an entry in `markdown-files.json`.
+    private func hasStoredBody(_ id: UUID) -> Bool {
+        if let markdownStorage { return markdownStorage.index.entry(id) != nil }
+        return FileManager.default.fileExists(atPath: bodyURL(for: id).path)
     }
 
     /// flush's and persistNow's per-note body write: keeps a version of the saved body, then writes the cached text
@@ -1223,39 +1481,60 @@ final class NoteStore: ObservableObject {
             recoveredSnapshots[id] = nil
             return true
         }
+        recordSavedBodyVersion(id)
+        let extras = bodyExtras[id] ?? .empty
         do {
-            recordSavedBodyVersion(id)
-            let extras = bodyExtras[id] ?? .empty
-            let temp = try bodyStorage.prepareTemp(text, extras: extras, meta: meta)
-            try installPreparedBody(temp, text: text, extras: extras, for: meta)
+            if let markdownStorage {
+                let notebook = notebook(with: meta.notebookID)
+                try runMarkdownIONow(markdownStorage) { storage in
+                    let temp = try storage.prepareTemp(text, extras: extras, meta: meta)
+                    try storage.installTemp(temp, for: meta, notebook: notebook)
+                }
+            } else {
+                let temp = try bodyStorage.prepareTemp(text, extras: extras, meta: meta)
+                try installPreparedBody(temp, text: text, extras: extras, for: meta)
+            }
+        } catch {
+            bodyWriteFailed(id, text: text, error: error)
+            return false
+        }
+        bodyWritten(id, text: text, extras: extras)
+        return true
+    }
+
+    /// A body write of `text` succeeded; an edit made while it ran keeps the note dirty.
+    private func bodyWritten(_ id: UUID, text: NSAttributedString, extras: ContainerExtras) {
+        if bodyCache[id] == nil || (bodyCache[id] === text && (bodyExtras[id] ?? .empty) == extras) {
             dirtyBodies.remove(id)
             recoveredSnapshots[id] = nil
-            unversionedLocalBodies.insert(id)
-            if failedBodies.remove(id) != nil {
-                // The library and index held back this note's new metadata/text; persist them now.
-                libraryDirty = true
-                searchIndexer.markDirty()
-            }
-            // A library save while the body was dirty wrote this note's old metadata.
-            if persistedMeta[id] != meta { libraryDirty = true }
-            return true
-        } catch {
-            let episodeStart = failedBodies.insert(id).inserted
-            NSLog("NoteIt: failed to save note \(id): \(error)")
-            if case BodyExtrasError.unreadableSidecar = error {
-                blockBodyWrites(id, reason: StoredBody.bodyExtrasUnreadable)
-            }
-            switch error as? MarkdownStorageError {
-            case .unreadable: blockBodyWrites(id, reason: MarkdownBodyStorage.unreadableReason)
-            case .externallyChanged: markdownFolderNeedsScan()
-            case .folderMissing, nil: break
-            }
-            // A note with no body on disk has nothing to fall back on: keep a copy right away
-            // (once per failure episode) instead of only at quit.
-            if episodeStart, !FileManager.default.fileExists(atPath: bodyURL(for: id).path) {
-                writeRecoveryCopy(id, text)
-            }
-            return false
+        }
+        if let copy = markdownWaitingCopies.removeValue(forKey: id) { try? FileManager.default.removeItem(at: copy) }
+        unversionedLocalBodies.insert(id)
+        if failedBodies.remove(id) != nil {
+            // The library and index held back this note's new metadata/text; persist them now.
+            libraryDirty = true
+            searchIndexer.markDirty()
+        }
+        // A library save while the body was dirty wrote this note's old metadata.
+        if let meta = note(with: id), persistedMeta[id] != meta { libraryDirty = true }
+    }
+
+    private func bodyWriteFailed(_ id: UUID, text: NSAttributedString, error: Error) {
+        let episodeStart = failedBodies.insert(id).inserted
+        NSLog("NoteIt: failed to save note \(id): \(error)")
+        if case BodyExtrasError.unreadableSidecar = error {
+            blockBodyWrites(id, reason: StoredBody.bodyExtrasUnreadable)
+        }
+        switch error as? MarkdownStorageError {
+        case .unreadable: blockBodyWrites(id, reason: MarkdownBodyStorage.unreadableReason)
+        case .externallyChanged: markdownFolderNeedsScan()
+        case .unresponsive: keepWaitingCopy(id)
+        case .folderMissing, nil: break
+        }
+        // A note with no body on disk has nothing to fall back on: keep a copy right away
+        // (once per failure episode) instead of only at quit.
+        if episodeStart, !hasStoredBody(id) {
+            writeRecoveryCopy(id, text)
         }
     }
 
@@ -1272,8 +1551,7 @@ final class NoteStore: ObservableObject {
         let unsaved = dirtyBodies
         let persisted: [NoteMeta] = notes.map { meta in
             guard unsaved.contains(meta.id) else { return meta }
-            guard let old = persistedMeta[meta.id],
-                  fm.fileExists(atPath: bodyURL(for: meta.id).path) else { return meta }
+            guard let old = persistedMeta[meta.id], hasStoredBody(meta.id) else { return meta }
             var copy = meta
             copy.title = old.title
             copy.preview = old.preview
@@ -1314,14 +1592,17 @@ final class NoteStore: ObservableObject {
     }
 
     /// Writes `text` to `recovery/<id>-<timestamp>.rtfd` unless this exact snapshot was already copied.
-    private func writeRecoveryCopy(_ id: UUID, _ text: NSAttributedString) {
-        guard recoveredSnapshots[id] != ObjectIdentifier(text) else { return }
+    @discardableResult
+    private func writeRecoveryCopy(_ id: UUID, _ text: NSAttributedString) -> URL? {
+        guard recoveredSnapshots[id] != ObjectIdentifier(text) else { return nil }
         do {
             let url = try bodyStorage.recoveryCopy(text, for: id, in: recoveryURL)
             recoveredSnapshots[id] = ObjectIdentifier(text)
             NSLog("NoteIt: note \(id) couldn’t be saved; wrote a recovery copy to \(url.path)")
+            return url
         } catch {
             NSLog("NoteIt: note \(id) couldn’t be saved, and writing a recovery copy failed too: \(error)")
+            return nil
         }
     }
 
@@ -1337,30 +1618,32 @@ final class NoteStore: ObservableObject {
                 NSLog("NoteIt: failed to move deleted note \(id) to trash: \(error)")
                 continue
             }
-            guard let listed = libraryNoteIDsOnDisk, !listed.contains(id) else { continue }
-            do {
-                try removeRawMetaFile(id, kind: .notes)
-            } catch {
-                NSLog("NoteIt: failed to delete the sync meta copy of deleted note \(id): \(error)")
-                continue
-            }
-            do {
-                try removeBodyExtrasFile(id)
-            } catch {
-                NSLog("NoteIt: failed to delete the body-extras file of deleted note \(id): \(error)")
-                continue
-            }
-            do {
-                try history.deleteHistory(of: id)
-            } catch {
-                NSLog("NoteIt: failed to delete the version history of deleted note \(id): \(error)")
-                continue
-            }
-            pendingTrash.remove(id)
+            finishTrashing(id)
         }
         debugCrashPoint("after-trash")
         if pendingTrash != before { saveTombstones() }
         drainRawMetaDeletionQueue()
+    }
+
+    /// After a deleted note's body went: its raw meta, body-extras file and Version History, then its tombstone.
+    private func finishTrashing(_ id: UUID) {
+        guard let listed = libraryNoteIDsOnDisk, !listed.contains(id) else { return }
+        do {
+            try removeRawMetaFile(id, kind: .notes)
+        } catch {
+            return NSLog("NoteIt: failed to delete the sync meta copy of deleted note \(id): \(error)")
+        }
+        do {
+            try removeBodyExtrasFile(id)
+        } catch {
+            return NSLog("NoteIt: failed to delete the body-extras file of deleted note \(id): \(error)")
+        }
+        do {
+            try history.deleteHistory(of: id)
+        } catch {
+            return NSLog("NoteIt: failed to delete the version history of deleted note \(id): \(error)")
+        }
+        pendingTrash.remove(id)
     }
 
     /// Records that still owe a deletion on disk after their removal is saved.
@@ -1547,9 +1830,13 @@ final class NoteStore: ObservableObject {
         var rawMeta: RawMeta
         /// The body on disk differs from the incoming one, so it may be kept as a version before being replaced.
         var replacesDifferentBody = false
+        /// The temp lies in the content folder, which may stop responding.
+        var discardsInBackground = false
 
         func discard() {
-            try? FileManager.default.removeItem(at: tempBody)
+            let temp = tempBody
+            guard discardsInBackground else { try? FileManager.default.removeItem(at: temp); return }
+            DispatchQueue.global(qos: .utility).async { try? FileManager.default.removeItem(at: temp) }
         }
     }
 
@@ -1575,7 +1862,7 @@ final class NoteStore: ObservableObject {
         return PreparedRemoteNote(meta: meta, body: body, searchEntry: OrganiseIndexer.makeEntry(body, updatedAt: meta.updatedAt), tempBody: temp, extras: extras,
                                   bodyIsRTFD: bodyIsRTFD, tempExtras: tempExtras,
                                   rawMeta: RawMeta(sourceRevision: payload.revision, meta: payload.meta),
-                                  replacesDifferentBody: replaces)
+                                  replacesDifferentBody: replaces, discardsInBackground: storage is MarkdownBodyStorage)
     }
 
     /// Inserts or replaces a note from sync, keeping its revision. The prepared body package is swapped in
@@ -1600,7 +1887,10 @@ final class NoteStore: ObservableObject {
         }
         if bodyStorage.kind != .rtfd, extras != prepared.tempExtras {
             do {
-                let temp = try bodyStorage.prepareTemp(prepared.body, extras: extras, meta: prepared.meta)
+                let body = prepared.body, meta = prepared.meta
+                let temp = try markdownStorage.map { storage in
+                    try runMarkdownIONow(storage) { try $0.prepareTemp(body, extras: extras, meta: meta) }
+                } ?? bodyStorage.prepareTemp(body, extras: extras, meta: meta)
                 prepared.discard()
                 prepared.tempBody = temp
             } catch {
@@ -1619,7 +1909,13 @@ final class NoteStore: ObservableObject {
             recordSavedBodyVersion(id, force: unversionedLocalBodies.contains(id))
         }
         do {
-            try installPreparedBody(prepared.tempBody, text: prepared.body, extras: extras, for: prepared.meta)
+            if let markdownStorage {
+                let temp = prepared.tempBody, meta = prepared.meta
+                let notebook = notebook(with: meta.notebookID)
+                try runMarkdownIONow(markdownStorage) { try $0.installTemp(temp, for: meta, notebook: notebook) }
+            } else {
+                try installPreparedBody(prepared.tempBody, text: prepared.body, extras: extras, for: prepared.meta)
+            }
         } catch {
             prepared.discard()
             throw error
@@ -1711,9 +2007,24 @@ final class NoteStore: ObservableObject {
     private func persistRemoteApply() {
         guard !isClosedForLibrarySwitch else { return }
         // Notes arrive at their path; only a notebook change moves folders and other notes' files.
-        if let storage = markdownStorage, libraryDirty, Set(storage.knownNotebooks) != Set(notebooks) { syncMarkdownLayout() }
+        var pass = MarkdownWritePass()
+        if let storage = markdownStorage, libraryDirty, Set(storage.knownNotebooks) != Set(notebooks) { planMarkdownLayout(&pass) }
         if libraryDirty || !FileManager.default.fileExists(atPath: libraryURL.path) { saveLibrary() }
-        if !libraryDirty, hasPendingAuxDeletions { trashPendingBodies() }
+        if !libraryDirty, hasPendingAuxDeletions {
+            if markdownStorage == nil {
+                trashPendingBodies()
+            } else {
+                pass.trash = Array(pendingTrash)
+                drainRawMetaDeletionQueue()
+            }
+        }
+        if let storage = markdownStorage, !pass.isEmpty {
+            if markdownWritePassQueued {
+                markdownFlushAgain = true
+            } else if !markdownFolderUnavailable {
+                startMarkdownWritePass(pass, on: storage, waitingUntil: markdownFlushWait > 0 ? Date() + markdownFlushWait : nil)
+            }
+        }
         if searchIndexer.isDirty { scheduleIndexSave() }
         trimBodyCache()
         if libraryDirty, saveWorkItem == nil { scheduleSave(after: 5) }
@@ -1732,12 +2043,11 @@ final class NoteStore: ObservableObject {
             return .text(cached.copy() as? NSAttributedString ?? NSAttributedString(attributedString: cached))
         }
         guard bodyStorage.kind != .rtfd else { return .file(bodyStorage.fileURL(for: id)) }
-        guard bodyStorage.revisionInputURL(for: id) != nil else { return .text(NSAttributedString()) }
-        do {
-            return .text(try bodyStorage.read(id).text)
-        } catch {
+        guard let markdownStorage, markdownStorage.revisionInputURL(for: id) != nil else { return .text(NSAttributedString()) }
+        guard case .read(let stored) = readMarkdownBody(id, from: markdownStorage) else {
             throw NoteStoreSyncError.unreadableBody(id)
         }
+        return .text(stored.text)
     }
 
     /// Adjusts metadata of a note just created by sync (e.g. a conflict copy); counts as a local change.
@@ -1848,7 +2158,7 @@ extension NoteStore {
         guard note(with: id) != nil else { throw PersistNowError.noteMissing }
         if dirtyBodies.contains(id) {
             if bodyWriteBlocked.contains(id) { throw PersistNowError.writeBlocked }
-            try? FileManager.default.createDirectory(at: notesURL, withIntermediateDirectories: true)
+            if markdownStorage == nil { try? FileManager.default.createDirectory(at: notesURL, withIntermediateDirectories: true) }
             guard writePendingBody(id) else { throw PersistNowError.bodyNotSaved }
         }
         if libraryDirty || !FileManager.default.fileExists(atPath: libraryURL.path) {

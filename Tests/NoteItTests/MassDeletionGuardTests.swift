@@ -25,6 +25,8 @@ final class MassDeletionGuardTests: XCTestCase {
                                                         renameFilesOnTitleChange: false),
                               bodyStorage: MarkdownBodyStorageTests.make(root, renames: false))
         store.markdownClock = { Date().addingTimeInterval(10) }
+        store.markdownFlushWait = 10
+        store.waitForMarkdownWrites(upTo: 10)
         return store
     }
 

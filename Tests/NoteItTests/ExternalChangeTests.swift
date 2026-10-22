@@ -26,6 +26,8 @@ final class ExternalChangeTests: XCTestCase {
                                                         renameFilesOnTitleChange: false),
                               bodyStorage: MarkdownBodyStorageTests.make(root, renames: false))
         store.markdownClock = { Date().addingTimeInterval(10) }
+        store.markdownFlushWait = 10
+        store.waitForMarkdownWrites(upTo: 10)
         return store
     }
 
@@ -113,6 +115,55 @@ final class ExternalChangeTests: XCTestCase {
         try await waitUntil({ !store.markdownFolderUnavailable }, "the folder is available again once it answers")
         store.flush()
         XCTAssertTrue(try read("Kept.md").contains("edited while away"), "the edit kept in memory is written once it answers")
+    }
+
+    func testAWriteThatHangsNeverHoldsUpTheMainThread() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        try put("Other.md", "# Other\n\nother text\n")
+        let store = open()
+        store.markdownFlushWait = 0
+        store.markdownWriteTimeout = 0.3
+        store.markdownBlockingTimeout = 0.3
+        store.markdownUnavailableRetryInterval = 0.2
+        let kept = try note(store, titled: "Kept").id
+        let other = try note(store, titled: "Other").id
+        let storage = try XCTUnwrap(store.markdownStorage)
+        storage.rootTimeout = 30
+        let hung = DispatchSemaphore(value: 0)
+        let realCheck = storage.rootCheck
+        storage.rootCheck = { url in
+            _ = hung.wait(timeout: .now() + 4)
+            return realCheck(url)
+        }
+
+        store.updateBody(kept, NSAttributedString(string: "Kept\n\nfirst edit"))
+        var started = Date()
+        store.flush()
+        store.dropCachedBody(other)
+        XCTAssertTrue(store.body(for: other).string.contains("other text"))
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5, "the main thread doesn't wait for the folder")
+        XCTAssertTrue(store.isBodyDirty(kept))
+        try await waitUntil({ store.markdownFolderUnavailable }, "a write that doesn't finish makes the folder unavailable")
+
+        store.updateBody(kept, NSAttributedString(string: "Kept\n\nsecond edit"))
+        started = Date()
+        store.flush()
+        store.flush()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
+        let recovery = { (try? self.fm.contentsOfDirectory(atPath: store.recoveryURL.path)) ?? [] }
+        XCTAssertEqual(recovery().count, 1, "the waiting edit is kept in recovery/, once")
+
+        storage.rootCheck = realCheck
+        for _ in 0..<4 { hung.signal() }
+        try await waitUntil({
+            store.flush()
+            return !store.isBodyDirty(kept)
+        }, "the queued edit is written once the folder answers")
+        XCTAssertTrue(try read("Kept.md").contains("second edit"))
+        XCTAssertFalse(store.markdownFolderUnavailable)
+        XCTAssertEqual(recovery(), [], "the waiting copy goes once the edit is written")
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: content.path).filter { $0.hasSuffix(".md") }.sorted(),
+                       ["Kept.md", "Other.md"], "NoteIt's own write isn't taken for an outside change")
     }
 
     func testTheWatcherStartsOnlyOnceTheFolderAnswers() async throws {

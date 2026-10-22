@@ -22,9 +22,13 @@ final class MarkdownNoteStoreTests: XCTestCase {
     }
 
     private func open(renames: Bool = true) -> NoteStore {
-        NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
-                                            renameFilesOnTitleChange: renames),
-                  bodyStorage: MarkdownBodyStorageTests.make(root, renames: renames))
+        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+                                                        renameFilesOnTitleChange: renames),
+                              bodyStorage: MarkdownBodyStorageTests.make(root, renames: renames))
+        store.markdownFlushWait = 10
+        store.waitForMarkdownWrites(upTo: 10)
+        store.flush()
+        return store
     }
 
     private func put(_ path: String, _ text: String) throws {

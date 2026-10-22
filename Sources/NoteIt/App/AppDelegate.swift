@@ -132,7 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         NoteStore.shared.stopWatchingMarkdownFolder()
-        NoteStore.shared.flush()
+        NoteStore.shared.flushBeforeQuit()
         SpotlightIndexer.shared.finishBeforeQuit()
         AutomationService.shared.staged.removeAll()
         LocalAPIController.shared.shutDown()

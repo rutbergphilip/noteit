@@ -110,7 +110,12 @@ extension NoteStore {
             try setLastRemoteMeta(RawMeta(sourceRevision: payload.revision, meta: payload.meta), for: folder.id, kind: .smartFolders)
             applyRemoteSmartFolder(folder)
         case .note:
-            try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, storage: bodyStorage))
+            if let markdownStorage {
+                let prepared = try runMarkdownIONow(markdownStorage) { try Self.prepareRemoteNote(payload, storage: $0) }
+                try applyPreparedRemoteNote(prepared)
+            } else {
+                try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, storage: bodyStorage))
+            }
         }
     }
 

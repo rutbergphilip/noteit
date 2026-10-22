@@ -13,6 +13,8 @@ enum MarkdownStorageError: Error, Equatable {
     case unreadable(UUID)
     /// The content folder isn't there.
     case folderMissing
+    /// The content folder doesn't answer in time (a network volume that hangs).
+    case unresponsive
 }
 
 /// A Markdown library: one `.md` file per note in the content folder, notebooks as folders, attachments in
@@ -37,29 +39,31 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     var trash: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }
     var now: () -> Date = Date.init
     /// Files over 10 MB, from the last scan.
-    var skippedFiles: [URL] { lock.withLock { skipped } }
+    var skippedFiles: [URL] { skipped }
 
+    /// Serializes the methods that touch the content folder. The main thread never takes it: the state below has
+    /// locks of its own that are never held across IO, so a write stuck on a hung volume blocks no reader.
     private let lock = NSRecursiveLock()
-    private var notebooks: [UUID: Notebook] = [:]
-    private var keepsMissingFolders = false
+    @Guarded private var notebooks: [UUID: Notebook] = [:]
+    @Guarded private var keepsMissingFolders = false
 
     /// While the mass-deletion guard holds a batch, notebook folders that went missing aren't recreated.
     func setKeepsMissingFolders(_ keeps: Bool) {
-        lock.withLock { keepsMissingFolders = keeps }
+        keepsMissingFolders = keeps
     }
-    private var previous: [UUID: ParsedMarkdown] = [:]
+    @Guarded private var previous: [UUID: ParsedMarkdown] = [:]
     /// The body of each file in `previous`, so a note whose file is gone still shows its text without a read.
-    private var previousBodies: [UUID: StoredBody] = [:]
-    private var pendingTemps: [String: String] = [:]
-    private var skipped: [URL] = []
+    @Guarded private var previousBodies: [UUID: StoredBody] = [:]
+    @Guarded private var pendingTemps: [String: String] = [:]
+    @Guarded private var skipped: [URL] = []
     /// Notes whose file was adopted from outside and not written by NoteIt since.
-    private var acceptedExternal: Set<UUID> = []
+    @Guarded private var acceptedExternal: Set<UUID> = []
     /// Notes whose missing file the next write may create again (a sync apply to a note the mass-deletion guard
     /// holds).
-    private var recreatable: Set<UUID> = []
+    @Guarded private var recreatable: Set<UUID> = []
 
     func allowRecreatingMissingFile(_ id: UUID) {
-        lock.withLock { _ = recreatable.insert(id) }
+        recreatable.insert(id)
     }
 
     init(contentRoot: URL, dataDir: URL, renameFilesOnTitleChange: Bool = true, ledger: WriteLedger = WriteLedger()) {
@@ -117,26 +121,25 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     }
 
     func setSkippedFiles(_ urls: [URL]) {
-        lock.withLock { skipped = urls }
+        skipped = urls
     }
 
     // MARK: Notebooks
 
     /// The whole notebook tree; folders follow it on the next `reconcileNotebooks()`.
     func setNotebooks(_ list: [Notebook]) {
-        lock.withLock { notebooks = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }) }
+        notebooks = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     var knownNotebooks: [Notebook] {
-        lock.withLock { Array(notebooks.values) }
+        Array(notebooks.values)
     }
 
     func folderOfNotebook(_ id: UUID) -> String? {
-        lock.withLock {
-            if let recorded = index.notebookFolder(id) { return recorded }
-            guard notebooks[id] != nil else { return nil }
-            return NotebookFolders.layout(Array(notebooks.values), existing: index.allNotebookFolders)[id]
-        }
+        if let recorded = index.notebookFolder(id) { return recorded }
+        let tree = notebooks
+        guard tree[id] != nil else { return nil }
+        return NotebookFolders.layout(Array(tree.values), existing: index.allNotebookFolders)[id]
     }
 
     /// Creates, renames and moves notebook folders to match the tree, parents first, and writes each folder's
@@ -306,11 +309,9 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         }
         let data = try Data(contentsOf: fileURL)
         let result = readFile(data, notePath: entry.path)
-        lock.withLock {
-            remember(id, result)
-            if let names = result.attachmentNames, names != entry.attachments {
-                index.update(id) { $0.attachments = names }
-            }
+        remember(id, result)
+        if let names = result.attachmentNames, names != entry.attachments {
+            index.update(id) { $0.attachments = names }
         }
         return result.body
     }
@@ -364,14 +365,14 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         try FileManager.default.createDirectory(at: stagingURL, withIntermediateDirectories: true)
         let temp = stagingURL.appendingPathComponent("\(UUID().uuidString).md")
         try Self.writeSynced(Data(rendered.text.utf8), to: temp)
-        lock.withLock { pendingTemps[temp.lastPathComponent] = path }
+        pendingTemps[temp.lastPathComponent] = path
         return temp
     }
 
     func installTemp(_ temp: URL, for note: NoteMeta, notebook: Notebook?) throws {
         defer {
             try? FileManager.default.removeItem(at: temp)
-            lock.withLock { pendingTemps[temp.lastPathComponent] = nil }
+            pendingTemps[temp.lastPathComponent] = nil
         }
         try lock.withLock {
             try requireContentRoot()
@@ -504,8 +505,9 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         if meta.deletedAt != nil { return Self.trashFolder }
         guard let id = meta.notebookID else { return "" }
         if let recorded = index.notebookFolder(id) { return recorded }
-        guard notebooks[id] != nil else { return "" }
-        return NotebookFolders.layout(Array(notebooks.values), existing: index.allNotebookFolders)[id] ?? ""
+        let tree = notebooks
+        guard tree[id] != nil else { return "" }
+        return NotebookFolders.layout(Array(tree.values), existing: index.allNotebookFolders)[id] ?? ""
     }
 
     /// What the note's file was last written for: its folder and front matter.
@@ -515,10 +517,8 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
 
     /// True when the note's file is in another folder or its front matter differs from `meta`.
     func needsMetadataWrite(_ meta: NoteMeta) -> Bool {
-        lock.withLock {
-            guard let entry = index.entry(meta.id) else { return false }
-            return entry.placement != placement(of: meta, folder: targetFolder(for: meta), extra: entry.frontMatterExtra)
-        }
+        guard let entry = index.entry(meta.id) else { return false }
+        return entry.placement != placement(of: meta, folder: targetFolder(for: meta), extra: entry.frontMatterExtra)
     }
 
     /// Moves the file to the note's folder and rewrites its front matter, leaving the body's bytes as they are
@@ -602,7 +602,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     /// in `idWrite` for `writeAssignedID`, and until then the entry records the file as it is.
     @discardableResult
     func adopt(_ id: UUID, at path: String, file: MarkdownScanReads.File, assignID: Bool) -> (Adopted, IDWrite?) {
-        lock.withLock {
+        do {
             var data = file.data
             let sha = AttachmentStore.sha256(file.data)
             var idWrite: IDWrite?
@@ -657,17 +657,16 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
     /// After `adopt`: the note's file is taken as written for `meta` (its folder and front matter are not
     /// rewritten until something else changes), and its name as given for `meta.title`.
     func markPlaced(_ meta: NoteMeta) {
-        lock.withLock {
-            index.update(meta.id) { entry in
-                entry.placement = placement(of: meta, folder: targetFolder(for: meta), extra: entry.frontMatterExtra)
-                entry.nameTitle = meta.title
-            }
+        let folder = targetFolder(for: meta)
+        index.update(meta.id) { entry in
+            entry.placement = placement(of: meta, folder: folder, extra: entry.frontMatterExtra)
+            entry.nameTitle = meta.title
         }
     }
 
     /// The body as NoteIt last read or wrote it, for a file that is gone.
     func lastKnownBody(_ id: UUID) -> StoredBody? {
-        lock.withLock { index.entry(id) == nil ? nil : previousBodies[id] }
+        index.entry(id) == nil ? nil : previousBodies[id]
     }
 
     private func remember(_ id: UUID, _ read: FileRead) {
@@ -716,11 +715,9 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
 
     /// Forgets a note whose file is gone, keeping nothing.
     func forget(_ id: UUID) {
-        lock.withLock {
-            index.remove(id)
-            forgetPrevious(id)
-            acceptedExternal.remove(id)
-        }
+        index.remove(id)
+        forgetPrevious(id)
+        acceptedExternal.remove(id)
     }
 
     /// Whether a body write would change only `created` or `updated` in the front matter of a file adopted from
@@ -886,5 +883,25 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         let caseOnly = from.standardizedFileURL.path.lowercased() == to.standardizedFileURL.path.lowercased()
         let result = caseOnly ? rename(from.path, to.path) : renamex_np(from.path, to.path, UInt32(RENAME_EXCL))
         if result != 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+    }
+}
+
+/// A value whose every access takes its own lock, held only for the access itself.
+@propertyWrapper
+final class Guarded<Value>: @unchecked Sendable {
+    private let lock = NSRecursiveLock()
+    private var value: Value
+
+    init(wrappedValue: Value) {
+        value = wrappedValue
+    }
+
+    var wrappedValue: Value {
+        get { lock.withLock { value } }
+        _modify {
+            lock.lock()
+            defer { lock.unlock() }
+            yield &value
+        }
     }
 }
