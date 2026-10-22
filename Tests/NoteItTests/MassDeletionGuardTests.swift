@@ -185,6 +185,26 @@ final class MassDeletionGuardTests: XCTestCase {
         XCTAssertEqual(reopened.loadError(for: held[0]), NoteStore.missingFileReason)
     }
 
+    func testFilesRemovedWhileNoteItWasClosedAreAnnouncedWhenTheLaunchScanHoldsThem() throws {
+        var store: NoteStore? = try library(6, others: 10)
+        let held = try XCTUnwrap(store.map { ids($0, prefix: "Note ") })
+        store?.flush()
+        store = nil
+        try fm.removeItem(at: content.appendingPathComponent("Work"))
+
+        let reopened = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("data", isDirectory: true),
+                                                           seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+                                                           renameFilesOnTitleChange: false),
+                                 bodyStorage: MarkdownBodyStorageTests.make(root, renames: false))
+        var asked: [Int] = []
+        reopened.onManyNotesDisappeared = { asked.append($0) }
+        reopened.askAboutHeldDeletions()
+        XCTAssertEqual(asked, [], "nothing is held before the launch scan")
+        reopened.waitForLaunchScan(timeout: 10)
+        XCTAssertEqual(reopened.heldMarkdownDeletions, Set(held))
+        XCTAssertEqual(asked, [6])
+    }
+
     func testASyncApplyToAHeldNoteWritesItsFileBackAndReleasesIt() throws {
         let store = try library(6, others: 10)
         let held = ids(store, prefix: "Note ")

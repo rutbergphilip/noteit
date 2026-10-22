@@ -704,7 +704,8 @@ extension NoteStore {
         MassDeletionGuard.save(heldMarkdownDeletions, dataDir: rootURL)
         if !added.isEmpty {
             NSLog("NoteIt: \(removed.count) note files disappeared from the folder; waiting for the user before deleting them")
-            if !atLaunch { onManyNotesDisappeared?(heldMarkdownDeletions.count) }
+            // The launch scan applies after the app is set up, so it asks like any other scan.
+            onManyNotesDisappeared?(heldMarkdownDeletions.count)
         }
         return true
     }
