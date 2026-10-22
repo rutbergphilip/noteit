@@ -108,12 +108,57 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         super.writablePasteboardTypes + [Self.ownCopyType]
     }
 
+    /// Shows why an attachment wasn't added; an alert by default.
+    var onAttachmentRefused: ((String) -> Void)?
+
     override func paste(_ sender: Any?) {
         if !pasteMarkdown(from: .general) { super.paste(sender) }
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
         if !pastePlainText(from: .general) { super.pasteAsPlainText(sender) }
+    }
+
+    /// Pastes and drops end here; attachments over `AttachmentLimit` are refused instead of added.
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if let name = Self.oversizedAttachmentName(in: pboard, type: type) {
+            refuseAttachment(named: name)
+            return false
+        }
+        return super.readSelection(from: pboard, type: type)
+    }
+
+    func refuseAttachment(named name: String) {
+        let message = AttachmentLimit.tooLargeMessage(name: name)
+        if let onAttachmentRefused { return onAttachmentRefused(message) }
+        NSSound.beep()
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.beginSheetModal(for: window)
+    }
+
+    static func isOversized(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+              values.isRegularFile == true, let size = values.fileSize else { return false }
+        return !AttachmentLimit.allows(byteCount: size)
+    }
+
+    static func oversizedAttachmentName(in pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> String? {
+        switch type {
+        case .string, .rtf, .html, .URL, ownCopyType:
+            return nil
+        case .fileURL, NSPasteboard.PasteboardType("NSFilenamesPboardType"):
+            let urls = pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+            return urls.first(where: isOversized)?.lastPathComponent
+        case .rtfd:
+            guard let data = pboard.data(forType: type), !AttachmentLimit.allows(byteCount: data.count),
+                  let text = NSAttributedString(rtfd: data, documentAttributes: nil) else { return nil }
+            return NoteStore.oversizedAttachmentName(in: text)
+        default:
+            guard let data = pboard.data(forType: type), !AttachmentLimit.allows(byteCount: data.count) else { return nil }
+            return "Pasted image"
+        }
     }
 
     // MARK: Layout

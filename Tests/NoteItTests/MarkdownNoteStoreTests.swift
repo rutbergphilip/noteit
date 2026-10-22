@@ -3,6 +3,8 @@ import XCTest
 @testable import NoteIt
 import NoteItCore
 import NoteItMarkdown
+import NoteItDoc
+import NoteItSync
 
 /// markdown-storage Task 3.3: a `NoteStore` on a Markdown library.
 @MainActor
@@ -258,6 +260,62 @@ final class MarkdownNoteStoreTests: XCTestCase {
         store.applyRemoteDeletion(work.id, kind: .notebook)
         XCTAssertTrue(exists("Remote.md"), "a note of a notebook deleted elsewhere moves to the top")
         XCTAssertFalse(exists("Office"))
+    }
+
+    func testANoteWithAnAttachmentOver25MBSaysWhyItIsUnsavedAndWaitsForAChangeInsteadOfRetrying() throws {
+        let store = open()
+        let id = store.createNote(in: nil, initial: body("Small\nfine")).id
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        let saved = try read("Small.md")
+
+        store.updateBody(id, OversizedAttachment.body("Small", attachmentNamed: "huge.mov"))
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        let notice = try XCTUnwrap(store.bodySaveNotice(for: id))
+        XCTAssertTrue(notice.contains("huge.mov") && notice.contains("25 MB"), notice)
+        XCTAssertTrue(store.isBodyDirty(id))
+        XCTAssertFalse(store.isBodyWriteBlocked(id), "the note stays editable so the attachment can be removed")
+        XCTAssertEqual(try read("Small.md"), saved)
+        func recoveredNotes() throws -> [URL] {
+            try fm.contentsOfDirectory(at: store.recoveryURL, includingPropertiesForKeys: nil).filter { $0.pathExtension == "md" }
+        }
+        XCTAssertEqual(try recoveredNotes().count, 1, "the unsaved body is kept outside memory too")
+
+        let attempts = store.markdownBodyWritesStarted
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertEqual(store.markdownBodyWritesStarted, attempts, "the same body isn't tried again")
+
+        store.updateBody(id, body("Small\nwithout it"))
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertNil(store.bodySaveNotice(for: id))
+        XCTAssertFalse(store.isBodyDirty(id))
+        XCTAssertTrue(try read("Small.md").hasSuffix("without it\n"))
+        XCTAssertEqual(try recoveredNotes(), [])
+    }
+
+    func testARemoteNoteWithAnAttachmentOver25MBIsRefusedForSync() async throws {
+        let rtfd = NoteStore(rootURL: root.appendingPathComponent("rtfd", isDirectory: true))
+        let id = rtfd.createNote(in: nil, initial: OversizedAttachment.body("Remote", attachmentNamed: "huge.mov")).id
+        rtfd.flush()
+        let payload = try rtfd.exportPayload(id: id, kind: .note, deviceID: "a")
+
+        let store = open()
+        let adapter = NoteStoreSyncAdapter(store: store, deviceID: "b")
+        do {
+            try await adapter.apply(payload)
+            XCTFail("applied")
+        } catch let refusal as SyncRecordRefused {
+            XCTAssertTrue(refusal.reason.contains("huge.mov") && refusal.reason.contains("25 MB"), refusal.reason)
+        }
+        do {
+            try await adapter.importConflictCopy(payload, fromDevice: "a")
+            XCTFail("copied")
+        } catch is SyncRecordRefused {}
+        XCTAssertNil(store.note(with: id))
+        XCTAssertFalse(exists("Remote.md"))
     }
 
     func testAdoptedFolderKeepsFileNames() throws {

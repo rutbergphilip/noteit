@@ -131,6 +131,57 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertFalse(keys.contains(RemoteLayout.body(nb)))
     }
 
+    func testARemoteNoteTheStoreRefusesIsNotFetchedAgainUntilItChanges() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "Big")
+        try await sync(a)
+        await b.store.refuse(["Big"])
+
+        let first = try await sync(b)[0]
+        XCTAssertEqual(first.pulled, 0)
+        XCTAssertTrue(first.errors.contains { $0.contains("“Big” is too large") }, "\(first.errors)")
+        let fetchesAfterFirst = await faulty.gotKeys.filter { $0.contains(id.uuidString) }.count
+
+        let again = try await sync(b)[0]
+        let fetchesAfterAgain = await faulty.gotKeys.filter { $0.contains(id.uuidString) }.count
+        XCTAssertEqual(fetchesAfterAgain, fetchesAfterFirst, "an unchanged refused note must not be downloaded again")
+        XCTAssertTrue(again.errors.contains { $0.contains("“Big” is too large") }, "the reason stays visible")
+        let attempts = await b.store.refusedCount
+        XCTAssertEqual(attempts, 1)
+        let onB = await b.store.title(id)
+        XCTAssertNil(onB)
+
+        await a.store.edit(id, title: "Small")
+        try await sync(a)
+        let report = try await sync(b)[0]
+        XCTAssertEqual(report.pulled, 1)
+        XCTAssertTrue(report.errors.isEmpty, "\(report.errors)")
+        let title = await b.store.title(id)
+        XCTAssertEqual(title, "Small")
+    }
+
+    func testAConflictWhoseRemoteCopyIsRefusedKeepsTheLocalEditAndIsNotRetriedUntilTheRemoteChanges() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "Big")
+        try await sync(a)
+        await b.store.edit(id, title: "local edit")
+        await b.store.refuse(["Big"])
+
+        let first = try await sync(b)[0]
+        XCTAssertTrue(first.errors.contains { $0.contains("“Big” is too large") }, "\(first.errors)")
+        let fetches = await faulty.gotKeys.filter { $0.contains(id.uuidString) }.count
+        try await sync(b)
+        let fetchesAgain = await faulty.gotKeys.filter { $0.contains(id.uuidString) }.count
+        XCTAssertEqual(fetchesAgain, fetches)
+        let onB = await b.store.title(id)
+        XCTAssertEqual(onB, "local edit")
+        let remote = try await sealedEnvelope(id)
+        let remoteTitle = try JSONDecoder().decode(FakeLocalStore.Meta.self, from: remote.meta).title
+        XCTAssertEqual(remoteTitle, "Big", "the refused remote version is never overwritten")
+    }
+
     // MARK: Conflicts
 
     func testConcurrentEditKeepsBothAndConverges() async throws {

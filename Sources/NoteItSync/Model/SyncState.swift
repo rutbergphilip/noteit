@@ -48,11 +48,23 @@ public struct SyncState: Codable, Sendable, Equatable {
     public var keyID: String?
     /// The one uncommitted or in-doubt doc-body version per note; a separate map keeps old state files decodable.
     public var pendingBodyVersions: [UUID: PendingBody] = [:]
+    /// Remote versions the local store refused, by the meta etag it refused; not fetched again until the etag changes.
+    public var refusedRemotes: [UUID: RefusedRemote] = [:]
+
+    public struct RefusedRemote: Codable, Sendable, Equatable {
+        public var metaETag: String
+        public var reason: String
+
+        public init(metaETag: String, reason: String) {
+            self.metaETag = metaETag
+            self.reason = reason
+        }
+    }
 
     public init(
         bases: [UUID: Base] = [:], knownTombstones: Set<UUID> = [], lastDeviceWrite: Date? = nil,
         tombstoneDates: [UUID: Date] = [:], pendingPushes: [UUID: UUID] = [:], sidecarFirstSeen: [String: Date] = [:],
-        keyID: String? = nil, pendingBodyVersions: [UUID: PendingBody] = [:]
+        keyID: String? = nil, pendingBodyVersions: [UUID: PendingBody] = [:], refusedRemotes: [UUID: RefusedRemote] = [:]
     ) {
         self.bases = bases
         self.knownTombstones = knownTombstones
@@ -62,10 +74,11 @@ public struct SyncState: Codable, Sendable, Equatable {
         self.sidecarFirstSeen = sidecarFirstSeen
         self.keyID = keyID
         self.pendingBodyVersions = pendingBodyVersions
+        self.refusedRemotes = refusedRemotes
     }
 
     private enum CodingKeys: String, CodingKey {
-        case bases, knownTombstones, lastDeviceWrite, tombstoneDates, pendingPushes, sidecarFirstSeen, keyID, pendingBodyVersions
+        case bases, knownTombstones, lastDeviceWrite, tombstoneDates, pendingPushes, sidecarFirstSeen, keyID, pendingBodyVersions, refusedRemotes
     }
 
     // Every key is optional so state files written by older builds keep their bases.
@@ -79,6 +92,7 @@ public struct SyncState: Codable, Sendable, Equatable {
         sidecarFirstSeen = try c.decodeIfPresent([String: Date].self, forKey: .sidecarFirstSeen) ?? [:]
         keyID = try c.decodeIfPresent(String.self, forKey: .keyID)
         pendingBodyVersions = try c.decodeIfPresent([UUID: PendingBody].self, forKey: .pendingBodyVersions) ?? [:]
+        refusedRemotes = try c.decodeIfPresent([UUID: RefusedRemote].self, forKey: .refusedRemotes) ?? [:]
     }
 
     /// Missing or corrupt files yield an empty state.

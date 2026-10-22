@@ -1,4 +1,5 @@
 import AppKit
+import NoteItDoc
 import XCTest
 @testable import NoteIt
 
@@ -253,6 +254,19 @@ final class AppleNotesHTMLTests: XCTestCase {
             XCTAssertTrue(error.localizedDescription.contains("System Settings › Privacy & Security › Automation"))
         }
         try? FileManager.default.removeItem(at: store.rootURL)
+    }
+
+    func testImagesOver25MBAreLeftOutAndCountedAsSkipped() {
+        let big = Data(count: AttachmentLimit.maxBytes + 1).base64EncodedString()
+        let small = Data(count: 10).base64EncodedString()
+        let html = "<div>Photos</div><div><img src=\"data:image/png;base64,\(big)\"></div><div><img src=\"data:image/png;base64,\(small)\"></div>"
+        let result = AppleNotesImporter.convert(html: html, title: "Photos")
+        XCTAssertEqual(result.images, 1)
+        var attachments = 0
+        result.body.enumerateAttribute(.attachment, in: NSRange(location: 0, length: result.body.length)) { value, _, _ in
+            if value != nil { attachments += 1 }
+        }
+        XCTAssertEqual(attachments, 1)
     }
 }
 

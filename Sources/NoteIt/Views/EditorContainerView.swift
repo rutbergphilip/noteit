@@ -58,6 +58,9 @@ struct EditorContainerView: View {
                 if let message = store.loadError(for: id) {
                     LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked)
                 }
+                if let notice = store.bodySaveNotice(for: id) {
+                    LoadErrorBanner(message: notice, file: nil, readOnly: false, title: "This note isn’t saved")
+                }
                 FormattingToolbar(controller: editor)
                     .disabled(readOnly)
                 Divider().opacity(0.5)
@@ -265,6 +268,7 @@ struct LoadErrorBanner: View {
     let message: String
     let file: URL?
     let readOnly: Bool
+    var title: String? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -273,7 +277,7 @@ struct LoadErrorBanner: View {
                 .foregroundStyle(.orange)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
-                Text(readOnly ? "This note is read-only" : "This note couldn’t be opened")
+                Text(title ?? (readOnly ? "This note is read-only" : "This note couldn’t be opened"))
                     .font(.system(size: 12, weight: .semibold))
                 Text(message)
                     .font(.system(size: 11))

@@ -385,4 +385,11 @@ final class MarkdownReaderTests: XCTestCase {
                                                  colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
         return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
     }
+
+    func testAnImageOver25MBIsNeverReadIntoAnAttachment() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("noteit-reader-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        XCTAssertNil(MarkdownReader.attachment(for: try OversizedAttachment.file(named: "big.png", in: folder)))
+        XCTAssertNotNil(MarkdownReader.attachment(for: try OversizedAttachment.file(named: "small.png", in: folder, bytes: 10)))
+    }
 }

@@ -1,4 +1,5 @@
-import Foundation
+import AppKit
+import NoteItDoc
 @testable import NoteIt
 
 @MainActor
@@ -37,5 +38,30 @@ extension NoteStore {
     static func spin(until condition: () -> Bool, timeout: TimeInterval) {
         let deadline = Date() + timeout
         while !condition(), Date() < deadline { RunLoop.main.run(until: Date() + 0.01) }
+    }
+}
+
+/// Attachment fixtures around the 25 MB limit; sparse files, so they cost no disk space.
+enum OversizedAttachment {
+    static let bytes = AttachmentLimit.maxBytes + 1
+
+    static func file(named name: String, in folder: URL, bytes: Int = bytes) throws -> URL {
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appendingPathComponent(name)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.truncate(atOffset: UInt64(bytes))
+        try handle.close()
+        return url
+    }
+
+    @MainActor
+    static func body(_ title: String, attachmentNamed name: String, bytes: Int = bytes) -> NSAttributedString {
+        let wrapper = FileWrapper(regularFileWithContents: Data(count: bytes))
+        wrapper.preferredFilename = name
+        let result = NSMutableAttributedString(attributedString: EditorStyle.paragraph(title, kind: .title))
+        result.append(NSAttributedString(attachment: NSTextAttachment(fileWrapper: wrapper)))
+        result.append(EditorStyle.paragraph("", kind: .body))
+        return result
     }
 }

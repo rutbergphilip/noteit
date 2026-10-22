@@ -81,7 +81,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
             }
             return
         }
-        let prepared = try NoteStore.prepareRemoteNote(payload, storage: bodyStorage)
+        let prepared = try Self.refusingOversized { try NoteStore.prepareRemoteNote(payload, storage: bodyStorage) }
         do {
             try await onMain {
                 try requireActive()
@@ -109,7 +109,17 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
     func importConflictCopy(_ payload: RecordPayload, fromDevice name: String) async throws {
         _ = try await MainActor.run {
             try requireActive()
-            return try store.importConflictCopy(payload, fromDevice: name)
+            return try Self.refusingOversized { try store.importConflictCopy(payload, fromDevice: name) }
+        }
+    }
+
+    /// A note with an attachment over 25 MB can't be written to a Markdown library; the engine then stops fetching
+    /// that remote version instead of downloading and failing on every pass.
+    private static func refusingOversized<T>(_ work: () throws -> T) throws -> T {
+        do {
+            return try work()
+        } catch AttachmentStore.StoreError.tooLarge(let name) {
+            throw SyncRecordRefused(reason: NoteStore.attachmentTooLargeToSync(name))
         }
     }
 

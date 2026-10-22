@@ -189,6 +189,9 @@ final class NoteStore: ObservableObject {
     }
     /// Why a readable body is read-only (`StoredBody.readOnlyReason`); shown like a load error.
     private var bodyReadOnlyReasons: [UUID: String] = [:]
+    private var bodySaveNotices: [UUID: String] = [:]
+    /// Bodies that failed to save because of an attachment over 25 MB; not tried again until the body changes.
+    private var oversizedBodies: [UUID: ObjectIdentifier] = [:]
     /// The extras of each loaded body, keyed by note ID (Task 4.1). Set from every body read (on an RTFD store from
     /// the body-extras sidecar) and from sync apply once its body is installed; passed to every body write; dropped
     /// when the note is purged. Written only via `setBodyExtras(_:for:)` and by NoteStore+BodyEdits.swift.
@@ -404,6 +407,19 @@ final class NoteStore: ObservableObject {
 
     /// Non-nil when the note's body file exists but could not be read. The original was backed up
     /// (unless the message says otherwise) and the note opens empty.
+    /// Why the note's edits can't be saved yet, while it stays editable (an attachment over 25 MB).
+    func bodySaveNotice(for id: UUID) -> String? { bodySaveNotices[id] }
+    /// Bodies handed to the Markdown IO queue so far.
+    private(set) var markdownBodyWritesStarted = 0
+
+    static func attachmentTooLargeToSave(_ name: String) -> String {
+        "“\(name)” is over 25 MB, so this note can’t be saved to its Markdown file. Remove it to save your changes; until then they’re kept in NoteIt’s recovery folder."
+    }
+
+    nonisolated static func attachmentTooLargeToSync(_ name: String) -> String {
+        "“\(name)” is over 25 MB, so this note can’t be kept in this Markdown library. It syncs again once the attachment is removed on the other device."
+    }
+
     func loadError(for id: UUID) -> String? {
         loadErrors[id] ?? bodyReadOnlyReasons[id]
     }
@@ -809,6 +825,7 @@ final class NoteStore: ObservableObject {
             unversionedLocalBodies.remove(id)
             setBodyExtras(nil, for: id)
             bodyReadOnlyReasons[id] = nil
+            clearOversizedBody(id)
             appliedRemoteRevisions.notes[id.uuidString] = nil
             pendingTrash.insert(id)
             dispatchDerivedIndexes(.removed(id))
@@ -1339,7 +1356,7 @@ final class NoteStore: ObservableObject {
 
     private func scheduleRetryIfNeeded() {
         guard !markdownWritePassQueued || !markdownFlushAgain else { return }
-        let retryable = dirtyBodies.subtracting(bodyWriteBlocked)
+        let retryable = dirtyBodies.subtracting(bodyWriteBlocked).filter { !isWaitingForSmallerAttachment($0) }
         if !retryable.isEmpty || libraryDirty || smartFolderState.dirty || hasPendingAuxDeletions || hasPendingMarkdownRenames {
             scheduleSave(after: 5)
         }
@@ -1374,7 +1391,9 @@ final class NoteStore: ObservableObject {
                 recoveredSnapshots[id] = nil
                 continue
             }
+            if isWaitingForSmallerAttachment(id) { continue }
             recordSavedBodyVersion(id)
+            markdownBodyWritesStarted += 1
             pass.bodies.append(.init(meta: meta, text: text, extras: bodyExtras[id] ?? .empty, notebook: notebook(with: meta.notebookID)))
         }
         planMarkdownLayout(&pass)
@@ -1534,8 +1553,19 @@ final class NoteStore: ObservableObject {
         return true
     }
 
+    private func isWaitingForSmallerAttachment(_ id: UUID) -> Bool {
+        guard let failed = oversizedBodies[id], let text = bodyCache[id] else { return false }
+        return failed == ObjectIdentifier(text)
+    }
+
+    private func clearOversizedBody(_ id: UUID) {
+        oversizedBodies[id] = nil
+        if bodySaveNotices.removeValue(forKey: id) != nil { objectWillChange.send() }
+    }
+
     /// A body write of `text` succeeded; an edit made while it ran keeps the note dirty.
     private func bodyWritten(_ id: UUID, text: NSAttributedString, extras: ContainerExtras) {
+        clearOversizedBody(id)
         if bodyCache[id] == nil || (bodyCache[id] === text && (bodyExtras[id] ?? .empty) == extras) {
             dirtyBodies.remove(id)
             recoveredSnapshots[id] = nil
@@ -1556,6 +1586,13 @@ final class NoteStore: ObservableObject {
         NSLog("NoteIt: failed to save note \(id): \(error)")
         if case BodyExtrasError.unreadableSidecar = error {
             blockBodyWrites(id, reason: StoredBody.bodyExtrasUnreadable)
+        }
+        if case AttachmentStore.StoreError.tooLarge(let name) = error {
+            if bodyCache[id] === text { oversizedBodies[id] = ObjectIdentifier(text) }
+            bodySaveNotices[id] = Self.attachmentTooLargeToSave(name)
+            objectWillChange.send()
+            keepWaitingCopy(id)
+            return
         }
         switch error as? MarkdownStorageError {
         case .unreadable: blockBodyWrites(id, reason: MarkdownBodyStorage.unreadableReason)
@@ -1968,6 +2005,7 @@ final class NoteStore: ObservableObject {
         loadErrors[id] = nil
         loadErrorFiles[id] = nil
         bodyReadOnlyReasons[id] = nil
+        clearOversizedBody(id)
         if let index = noteIndex(id) {
             notes[index] = prepared.meta
         } else {

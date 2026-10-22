@@ -140,6 +140,9 @@ extension NoteStore {
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
         let suffix = " (conflict — \(name), \(Self.conflictDateFormatter.string(from: payload.modifiedAt)))"
         let body = Self.appendingToTitleLine(try Self.deserializeBody(data), suffix)
+        if markdownStorage != nil, let name = Self.oversizedAttachmentName(in: body) {
+            throw AttachmentStore.StoreError.tooLarge(name)
+        }
         let created = createNote(in: remote.notebookID, initial: body, postsLocalChange: false)
         updateSyncCreatedNote(created.id) { meta in
             meta.isPinned = remote.isPinned
@@ -149,6 +152,18 @@ extension NoteStore {
             meta.conflictOriginalID = payload.id
         }
         return note(with: created.id) ?? created
+    }
+
+    /// The first attachment over `AttachmentLimit`, which a Markdown library can't store.
+    nonisolated static func oversizedAttachmentName(in text: NSAttributedString) -> String? {
+        var name: String?
+        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, stop in
+            guard let wrapper = (value as? NSTextAttachment)?.fileWrapper, wrapper.isRegularFile,
+                  let contents = wrapper.regularFileContents, !AttachmentLimit.allows(byteCount: contents.count) else { return }
+            name = wrapper.preferredFilename ?? wrapper.filename ?? "Attachment"
+            stop.pointee = true
+        }
+        return name
     }
 
     // MARK: Body transport

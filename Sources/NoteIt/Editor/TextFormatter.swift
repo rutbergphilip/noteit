@@ -769,7 +769,8 @@ extension NoteItTextView {
         let s = NSMutableAttributedString()
         var attrs = typingAttributes
         attrs[.link] = nil
-        for (i, url) in urls.enumerated() {
+        let refused = urls.filter(NoteItTextView.isOversized)
+        for (i, url) in urls.filter({ !refused.contains($0) }).enumerated() {
             guard let wrapper = try? FileWrapper(url: url, options: .immediate) else { continue }
             wrapper.preferredFilename = url.lastPathComponent
             let attachment = NSTextAttachment(fileWrapper: wrapper)
@@ -778,6 +779,7 @@ extension NoteItTextView {
             piece.addAttributes(attrs, range: NSRange(location: 0, length: piece.length))
             s.append(piece)
         }
+        if let first = refused.first { refuseAttachment(named: first.lastPathComponent) }
         guard s.length > 0 else { return }
         window?.makeFirstResponder(self)
         breakUndoCoalescing()

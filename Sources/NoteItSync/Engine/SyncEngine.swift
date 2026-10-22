@@ -32,6 +32,16 @@ public struct LocalDeletion: Sendable, Equatable {
     }
 }
 
+/// Thrown by `SyncLocalStore.apply` or `importConflictCopy` for a remote record this device can't keep. The engine
+/// reports `reason` and doesn't fetch that remote version again; the record syncs again once the remote changes.
+public struct SyncRecordRefused: Error, Sendable, Equatable {
+    public var reason: String
+
+    public init(reason: String) {
+        self.reason = reason
+    }
+}
+
 public struct SyncReport: Sendable, Equatable {
     public var pushed = 0, pulled = 0, deleted = 0, conflicts = 0, skipped = 0
     public var errors: [String] = []
@@ -391,6 +401,17 @@ public actor SyncEngine {
             base: base
         )
 
+        if let refused = state.refusedRemotes[id] {
+            if refused.metaETag != metaETag {
+                state.refusedRemotes[id] = nil
+                try saveState()
+            } else if action == .pull || action == .conflict {
+                pass.report.skipped += 1
+                pass.report.errors.append("\(id.uuidString): \(refused.reason)")
+                return
+            }
+        }
+
         switch action {
         case .none:
             if let base, let localRecord, kind == .note, base.bodyETag != nil, base.bodyETag != pass.index.bodies[id],
@@ -480,9 +501,21 @@ public actor SyncEngine {
             pass.report.skipped += 1
             return false
         }
-        try await adopt(payload, etag: remote.etag)
+        do {
+            try await adopt(payload, etag: remote.etag)
+        } catch let refusal as SyncRecordRefused {
+            try refuse(id, metaETag: remote.etag, refusal, pass)
+            return false
+        }
         pass.report.pulled += 1
         return true
+    }
+
+    private func refuse(_ id: UUID, metaETag: String, _ refusal: SyncRecordRefused, _ pass: Pass) throws {
+        state.refusedRemotes[id] = .init(metaETag: metaETag, reason: refusal.reason)
+        try saveState()
+        pass.report.skipped += 1
+        pass.report.errors.append("\(id.uuidString): \(refusal.reason)")
     }
 
     private func adopt(_ payload: RecordPayload, etag: String) async throws {
@@ -542,7 +575,12 @@ public actor SyncEngine {
                     pass.report.skipped += 1
                     return
                 }
-                try await adopt(payload, etag: remote.etag)
+                do {
+                    try await adopt(payload, etag: remote.etag)
+                } catch let refusal as SyncRecordRefused {
+                    try refuse(id, metaETag: remote.etag, refusal, pass)
+                    return
+                }
                 pass.report.pulled += 1
             } else {
                 try await push(id, kind: kind, remoteETag: remote.etag, pass)
@@ -554,7 +592,12 @@ public actor SyncEngine {
             pass.report.skipped += 1
             return
         }
-        try await local.importConflictCopy(payload, fromDevice: envelope.deviceName)
+        do {
+            try await local.importConflictCopy(payload, fromDevice: envelope.deviceName)
+        } catch let refusal as SyncRecordRefused {
+            try refuse(id, metaETag: remote.etag, refusal, pass)
+            return
+        }
         // Base becomes the remote version we just preserved, so the next pass sees a plain push
         // (ΔL, !ΔR) and never copies this remote revision again.
         state.bases[id] = .init(revision: envelope.revision, remoteMetaETag: remote.etag)

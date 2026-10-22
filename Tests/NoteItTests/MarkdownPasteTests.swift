@@ -1,4 +1,5 @@
 import AppKit
+import NoteItDoc
 import XCTest
 @testable import NoteIt
 
@@ -548,5 +549,33 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertFalse(PasteAndMatchStyleShortcut.holdsShiftCommandV)
         PasteAndMatchStyleShortcut.update(overrides: [:], globalBindings: [:])
         XCTAssertTrue(PasteAndMatchStyleShortcut.holdsShiftCommandV)
+    }
+
+    // MARK: Attachment limit
+
+    func testPastingOrDroppingAnAttachmentOver25MBIsRefusedWithTheLimitMessage() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("noteit-paste-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let big = try OversizedAttachment.file(named: "big.png", in: folder)
+        let small = try OversizedAttachment.file(named: "small.png", in: folder, bytes: 1000)
+        let view = editor(body("Note"))
+        var refused: [String] = []
+        view.onAttachmentRefused = { refused.append($0) }
+
+        let files = pasteboard()
+        files.writeObjects([big as NSURL])
+        XCTAssertFalse(view.readSelection(from: files, type: .fileURL))
+        let image = pasteboard()
+        image.setData(Data(count: OversizedAttachment.bytes), forType: .tiff)
+        XCTAssertFalse(view.readSelection(from: image, type: .tiff))
+        view.insertImages([big])
+        XCTAssertEqual(view.string, "Note")
+        XCTAssertEqual(refused, [AttachmentLimit.tooLargeMessage(name: "big.png"),
+                                 AttachmentLimit.tooLargeMessage(name: "Pasted image"),
+                                 AttachmentLimit.tooLargeMessage(name: "big.png")])
+
+        view.insertImages([small])
+        XCTAssertEqual(refused.count, 3)
+        XCTAssertTrue(view.storage.containsAttachments)
     }
 }

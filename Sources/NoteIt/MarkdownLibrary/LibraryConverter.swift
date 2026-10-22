@@ -380,7 +380,11 @@ final class LibraryConverter {
                 return (nil, notices)
             }
             guard source.readOnlyReason == nil else { return (nil, notices) }
-            try stage(source)
+            do {
+                try stage(source)
+            } catch is AttachmentStore.StoreError {
+                return (nil, notices)
+            }
             return (source, notices)
         }
         store.reportBodyExtrasNotices(id, notices)

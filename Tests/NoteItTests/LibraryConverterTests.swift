@@ -288,6 +288,21 @@ final class LibraryConverterTests: XCTestCase {
         XCTAssertEqual(resumes, 1)
     }
 
+    func testANoteWithAnAttachmentOver25MBIsReportedAsNotRoundTripping() async throws {
+        let store = try makeRTFDLibrary()
+        let big = store.createNote(in: nil, initial: OversizedAttachment.body("Big", attachmentNamed: "huge.mov"))
+        store.flush()
+        let dataBefore = tree(data)
+        do {
+            _ = try await converter(store).convert(to: .markdown(content))
+            XCTFail("converted")
+        } catch let error as LibraryConversionError {
+            XCTAssertEqual(error, .notRoundTripping([big.id]))
+        }
+        assertSameTree(tree(data), dataBefore)
+        XCTAssertFalse(store.isClosedForLibrarySwitch)
+    }
+
     func testNotEnoughSpace() async throws {
         let store = try makeRTFDLibrary()
         let dataBefore = tree(data)
