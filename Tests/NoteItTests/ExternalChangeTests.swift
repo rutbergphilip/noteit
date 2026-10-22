@@ -578,6 +578,81 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertFalse(store.markdownFolderUnavailable)
     }
 
+    func testReadingManyNotesOnAHungFolderWaitsOnceAndHoldsAtMostTwoReaders() async throws {
+        for index in 0..<20 { try put("Far \(index).md", "# Far \(index)\n\nfar text \(index)\n") }
+        let store = open()
+        let ids = store.notes.map(\.id)
+        XCTAssertEqual(ids.count, 20)
+        let storage = try XCTUnwrap(store.markdownStorage)
+        for id in ids { store.dropCachedBody(id) }
+        let gate = DispatchGroup()
+        gate.enter()
+        var released = false
+        defer { if !released { gate.leave() } }
+        let lock = NSLock()
+        var readers = 0
+        storage.readFileData = { url in
+            lock.withLock { readers += 1 }
+            _ = gate.wait(timeout: .now() + 10)
+            return try Data(contentsOf: url)
+        }
+
+        let started = Date()
+        for id in ids { _ = store.plainText(for: id) }
+        XCTAssertLessThanOrEqual(Date().timeIntervalSince(started), 1.5, "one wait, not one per note")
+        XCTAssertLessThanOrEqual(lock.withLock { readers }, 2)
+
+        released = true
+        gate.leave()
+        storage.readFileData = { try Data(contentsOf: $0) }
+        try await waitUntil({ !store.isMarkdownBodyLoading(ids[0]) && store.cachedBody(ids[0]) != nil }, "the first read ends")
+        for id in ids { XCTAssertTrue(store.plainText(for: id).contains("far text"), "read once the folder answers") }
+    }
+
+    func testReadsPastTheWholeTimeoutMarkTheFolderUnavailableWithoutYielding() throws {
+        for index in 0..<3 { try put("Far \(index).md", "# Far \(index)\n\nfar text \(index)\n") }
+        let store = open()
+        store.markdownBlockingTimeout = 0.5
+        store.markdownBodyMainWait = 0.1
+        let ids = store.notes.map(\.id)
+        let storage = try XCTUnwrap(store.markdownStorage)
+        for id in ids { store.dropCachedBody(id) }
+        let gate = DispatchGroup()
+        gate.enter()
+        defer { gate.leave() }
+        storage.readFileData = { url in
+            _ = gate.wait(timeout: .now() + 5)
+            return try Data(contentsOf: url)
+        }
+
+        _ = store.plainText(for: ids[0])
+        Thread.sleep(forTimeInterval: 0.7)
+        _ = store.plainText(for: ids[1])
+        XCTAssertTrue(store.markdownFolderUnavailable, "seen on the next call, not only after the main thread yields")
+    }
+
+    func testSearchingManyNotesOnAHungFolderReturnsPromptly() async throws {
+        for index in 0..<40 { try put("Plan \(index).md", "# Plan \(index)\n\nplan text \(index)\n") }
+        let store = open()
+        let storage = try XCTUnwrap(store.markdownStorage)
+        for meta in store.notes { store.dropCachedBody(meta.id) }
+        let gate = DispatchGroup()
+        gate.enter()
+        defer { gate.leave() }
+        storage.readFileData = { url in
+            _ = gate.wait(timeout: .now() + 10)
+            return try Data(contentsOf: url)
+        }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "hung-search-\(UUID().uuidString)"))
+        let service = AutomationService(store: store, defaults: defaults,
+                                        staged: StagedUploads(directory: root.appendingPathComponent("staged")))
+
+        let started = Date()
+        let hits = try service.search("Plan", notebook: nil, tag: nil, limit: 500)
+        XCTAssertLessThanOrEqual(Date().timeIntervalSince(started), 1.5)
+        XCTAssertEqual(hits.count, 40)
+    }
+
     func testASpotlightRebuildNeverWaitsOnTheMainThreadForAMarkdownFolder() async throws {
         for index in 0..<3 { try put("Note \(index).md", "# Note \(index)\n\ntext \(index)\n") }
         let store = open()
