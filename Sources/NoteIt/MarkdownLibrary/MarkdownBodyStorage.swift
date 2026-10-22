@@ -94,6 +94,8 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
     }
     var rootTimeout: TimeInterval = 3
+    /// How `read` loads a note file; injected by tests.
+    var readFileData: @Sendable (URL) throws -> Data = { try Data(contentsOf: $0) }
     /// Called on the checking thread when a check of the content folder times out.
     var onRootUnresponsive: (() -> Void)?
     private let probeLock = NSLock()
@@ -307,7 +309,7 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             throw CocoaError(.fileReadNoSuchFile, userInfo: [NSFilePathErrorKey: fileURL.path])
         }
-        let data = try Data(contentsOf: fileURL)
+        let data = try readFileData(fileURL)
         let result = readFile(data, notePath: entry.path)
         remember(id, result)
         if let names = result.attachmentNames, names != entry.attachments {

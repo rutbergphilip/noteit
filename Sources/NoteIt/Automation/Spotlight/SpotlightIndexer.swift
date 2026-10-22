@@ -113,6 +113,11 @@ final class SpotlightIndexer: DerivedIndex {
     private var isRebuilding = false
     /// Items a running rebuild has read but not handed over; a hook for one of them drops it from here.
     private var rebuildBatch: [SpotlightItem] = []
+    /// Bumped by every staged change to a note; a text read that finished after a newer change is dropped.
+    private var stagedVersions: [String: Int] = [:]
+    /// Notes whose text is read off the main thread before they are staged, in order.
+    private var textReads: [UUID] = []
+    private var textReader: Task<Void, Never>?
     private var lastEnabled = false
     private var lastIncludesText = true
     private var observer: NSObjectProtocol?
@@ -137,8 +142,8 @@ final class SpotlightIndexer: DerivedIndex {
     }
 
     /// Registers with the store's derived-index registry (once per store open) and rebuilds when the stored index
-    /// version is out of date, the last run left changes Spotlight may not have, or the launch scan found files
-    /// changed while NoteIt was closed.
+    /// version is out of date or the last run left changes Spotlight may not have. Notes the launch scan found
+    /// changed while NoteIt was closed are updated one by one.
     func start() {
         guard let store, store.canRegisterDerivedIndex(indexID) else { return }
         store.registerDerivedIndex(self)
@@ -148,12 +153,15 @@ final class SpotlightIndexer: DerivedIndex {
                                                           queue: nil) { [weak self] _ in
             Task { @MainActor [weak self] in self?.preferencesChanged() }
         }
-        if store.notesChangedBeforeDerivedIndexes { health.markDirty() }
         let dirty = defaults.bool(forKey: PrefKey.spotlightIndexDirty)
         if isEnabled, dirty || defaults.integer(forKey: PrefKey.spotlightIndexVersion) != Self.indexVersion {
             rebuildNow()
         } else if isSupported, !isEnabled, dirty {
             removeAll()
+        } else if isEnabled {
+            for id in store.notesChangedBeforeDerivedIndexes.sorted(by: { $0.uuidString < $1.uuidString }) {
+                if let meta = store.note(with: id) { metadataChanged(meta) } else { noteRemoved(id) }
+            }
         }
     }
 
@@ -178,6 +186,7 @@ final class SpotlightIndexer: DerivedIndex {
         rebuildBatch.removeAll()
         pendingItems.removeAll()
         pendingDeletes.removeAll()
+        textReads.removeAll()
         health.markDirty()
         defaults.removeObject(forKey: PrefKey.spotlightIndexVersion)
         enqueue { try await $0.deleteAll() }
@@ -189,7 +198,7 @@ final class SpotlightIndexer: DerivedIndex {
         guard isEnabled, let store else { return }
         let notes = store.notes
         Task { @MainActor [weak self] in
-            await self?.performRebuild(notes: notes) { [weak store] id in store?.plainText(for: id) }
+            await self?.performRebuild(notes: notes) { [weak store] id in await store?.indexText(id) ?? .text(nil) }
         }
     }
 
@@ -231,19 +240,53 @@ final class SpotlightIndexer: DerivedIndex {
         stageDelete(noteID)
     }
 
+    /// A note whose body isn't cached gets its text read off the main thread first.
     func metadataChanged(_ note: NoteMeta) {
         guard isEnabled else { return }
-        if SpotlightItemBuilder.shouldIndex(note) {
-            let text = includesText ? store?.plainText(for: note.id) : nil
-            stage(SpotlightItemBuilder.item(for: note, text: text, includeText: includesText))
-        } else {
-            stageDelete(note.id)
+        guard SpotlightItemBuilder.shouldIndex(note) else { return stageDelete(note.id) }
+        guard includesText, store?.cachedBody(note.id) == nil else {
+            let text = includesText ? store?.cachedBody(note.id).map(BodyCodec.plainText(of:)) : nil
+            return stage(SpotlightItemBuilder.item(for: note, text: text, includeText: includesText))
+        }
+        health.markDirty()
+        textReads.removeAll { $0 == note.id }
+        textReads.append(note.id)
+        readTexts()
+    }
+
+    /// Reads the queued notes' text one after another; a note changed again meanwhile is left to that change.
+    private func readTexts() {
+        guard textReader == nil else { return }
+        textReader = Task { @MainActor [weak self] in
+            while let self, let id = self.textReads.first {
+                self.textReads.removeFirst()
+                let version = self.stagedVersions[id.uuidString, default: 0]
+                let read = await self.store?.indexText(id) ?? .text(nil)
+                guard self.isEnabled, self.stagedVersions[id.uuidString, default: 0] == version,
+                      let meta = self.store?.note(with: id) else { continue }
+                guard SpotlightItemBuilder.shouldIndex(meta) else {
+                    self.stageDelete(id)
+                    continue
+                }
+                let text: String?
+                switch read {
+                case .text(let read): text = read
+                case .unavailable:
+                    // Kept by title until a rebuild once the folder answers again.
+                    self.health.recordFailure()
+                    text = nil
+                }
+                self.stage(SpotlightItemBuilder.item(for: meta, text: text, includeText: self.includesText))
+            }
+            self?.textReader = nil
         }
     }
 
     func rebuild(notes: [NoteMeta], body: @escaping (UUID) -> NSAttributedString?) async {
         guard isEnabled else { return }
-        await performRebuild(notes: notes) { id in body(id).map(BodyCodec.plainText(of:)) }
+        await performRebuild(notes: notes) { id in
+            .text(await Task.detached(priority: .utility) { body(id).map(BodyCodec.plainText(of:)) }.value)
+        }
     }
 
     func flush() {
@@ -252,9 +295,9 @@ final class SpotlightIndexer: DerivedIndex {
 
     // MARK: Batches
 
-    /// Removes every item, then re-adds every note in batches. Text is read on the main actor one note at a time,
-    /// yielding between notes. The index version is written once Core Spotlight has taken every batch.
-    private func performRebuild(notes: [NoteMeta], text: @MainActor (UUID) -> String?) async {
+    /// Removes every item, then re-adds every note in batches. Text is read one note at a time, off the main
+    /// thread unless it is cached. The index version is written once Core Spotlight has taken every batch.
+    private func performRebuild(notes: [NoteMeta], text: @MainActor (UUID) async -> NoteStore.IndexText) async {
         rebuildGeneration += 1
         let generation = rebuildGeneration
         isRebuilding = true
@@ -276,8 +319,21 @@ final class SpotlightIndexer: DerivedIndex {
                 meta = live
             }
             guard SpotlightItemBuilder.shouldIndex(meta) else { continue }
-            rebuildBatch.append(SpotlightItemBuilder.item(for: meta, text: includeText ? text(meta.id) : nil,
-                                                          includeText: includeText))
+            var read: String?
+            if includeText {
+                let version = stagedVersions[meta.id.uuidString, default: 0]
+                switch await text(meta.id) {
+                case .text(let text): read = text
+                case .unavailable: health.recordFailure()
+                }
+                guard generation == rebuildGeneration, isEnabled else { return }
+                // A hook for the note while its text was read already staged a newer item.
+                if stagedVersions[meta.id.uuidString, default: 0] != version { continue }
+                guard let live = store?.note(with: meta.id) ?? (store == nil ? meta : nil),
+                      SpotlightItemBuilder.shouldIndex(live) else { continue }
+                meta = live
+            }
+            rebuildBatch.append(SpotlightItemBuilder.item(for: meta, text: read, includeText: includeText))
             await Task.yield()
             guard generation == rebuildGeneration else { return }
             if rebuildBatch.count >= Self.batchSize { handOverRebuildBatch() }
@@ -299,6 +355,7 @@ final class SpotlightIndexer: DerivedIndex {
 
     private func stage(_ item: SpotlightItem) {
         health.markDirty()
+        stagedVersions[item.id, default: 0] += 1
         rebuildBatch.removeAll { $0.id == item.id }
         pendingDeletes.remove(item.id)
         pendingItems[item.id] = item
@@ -307,6 +364,7 @@ final class SpotlightIndexer: DerivedIndex {
 
     private func stageDelete(_ id: UUID) {
         health.markDirty()
+        stagedVersions[id.uuidString, default: 0] += 1
         rebuildBatch.removeAll { $0.id == id.uuidString }
         pendingItems[id.uuidString] = nil
         pendingDeletes.insert(id.uuidString)

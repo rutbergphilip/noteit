@@ -317,6 +317,7 @@ final class ExternalChangeTests: XCTestCase {
     func testEditsMadeWhileNoteItWasClosedReachSpotlightAtTheNextLaunch() async throws {
         try put("Kept.md", "# Kept\n\nfirst\n")
         try put("Gone.md", "# Gone\n\nsoon\n")
+        try put("Untouched.md", "# Untouched\n\nsame\n")
         let suite = "noteit-external-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -336,12 +337,48 @@ final class ExternalChangeTests: XCTestCase {
         let indexer = SpotlightIndexer(store: reopened, defaults: defaults, index: fake, isSupported: true, flushDelay: 60)
         indexer.start()
         let deadline = Date().addingTimeInterval(5)
-        while fake.items[added.uuidString] == nil, Date() < deadline { try await Task.sleep(nanoseconds: 5_000_000) }
-        await indexer.settle()
+        while fake.items[added.uuidString] == nil || fake.items[kept.uuidString] == nil, Date() < deadline {
+            indexer.flush()
+            await indexer.settle()
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
 
         XCTAssertNotNil(fake.items[added.uuidString], "a file added while closed is indexed")
         XCTAssertTrue(fake.items[kept.uuidString]?.textContent?.contains("edited while closed") == true)
-        XCTAssertTrue(fake.calls.contains(.deleteAll) || fake.items[gone.uuidString] == nil)
+        XCTAssertTrue(fake.calls.contains(.delete([gone.uuidString])), "a file deleted while closed leaves Spotlight")
+        XCTAssertFalse(fake.calls.contains(.deleteAll), "only what changed is indexed again, not the whole library")
+        let untouched = try note(reopened, titled: "Untouched").id
+        XCTAssertNil(fake.items[untouched.uuidString])
+    }
+
+    func testASpotlightRebuildNeverWaitsOnTheMainThreadForAMarkdownFolder() async throws {
+        for index in 0..<3 { try put("Note \(index).md", "# Note \(index)\n\ntext \(index)\n") }
+        let store = open()
+        store.markdownBlockingTimeout = 3
+        store.markdownScanTimeout = 30
+        let storage = try XCTUnwrap(store.markdownStorage)
+        for meta in store.notes { store.dropCachedBody(meta.id) }
+        let gate = DispatchSemaphore(value: 0)
+        storage.readFileData = { url in
+            _ = gate.wait(timeout: .now() + 2)
+            return try Data(contentsOf: url)
+        }
+        let suite = "noteit-external-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let fake = FakeSpotlightIndex()
+        let indexer = SpotlightIndexer(store: store, defaults: defaults, index: fake, isSupported: true, flushDelay: 60)
+
+        indexer.rebuildNow()
+        let started = Date()
+        try await Task.sleep(nanoseconds: 100_000_000)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "the main thread runs while note files are read")
+        for _ in 0..<3 { gate.signal() }
+        storage.readFileData = { try Data(contentsOf: $0) }
+        let deadline = Date().addingTimeInterval(10)
+        while fake.items.count < 3, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
+        await indexer.settle()
+        XCTAssertEqual(fake.items.values.filter { $0.textContent?.contains("text") == true }.count, 3)
     }
 
     func testAnAttachmentNoNoteRefersToGoesToTheTrashADayLaterWithoutAnyCallFromTheTest() async throws {

@@ -308,7 +308,6 @@ extension NoteStore {
         }
         guard storage.contentRootExists else { return }
         let before = notes
-        let notebooksBefore = notebooks
         guard case .scanned(let result, let reads) = scanMarkdownFolderNow(storage, timeout: Self.launchScanTimeout) else {
             return markdownFolderBecameUnavailable()
         }
@@ -319,9 +318,12 @@ extension NoteStore {
             importFiles(orphans.compactMap { id in storage.index.entry(id).map { NewFile(id: id, path: $0.path, assign: false) } },
                         reads: reads, atLaunch: true)
         }
-        if result.hasNoteChanges || notes != before || notebooks != notebooksBefore {
-            notesChangedBeforeDerivedIndexes = true
-        }
+        let beforeByID = Dictionary(before.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        var changed = Set(notes.filter { beforeByID[$0.id] != $0 }.map(\.id))
+        changed.formUnion(Set(beforeByID.keys).subtracting(notes.map(\.id)))
+        changed.formUnion(result.changed.keys)
+        changed.formUnion(result.moved.keys)
+        notesChangedBeforeDerivedIndexes.formUnion(changed)
         storage.attachments.scheduleSweep()
     }
 

@@ -167,9 +167,9 @@ final class NoteStore: ObservableObject {
     var markdownWaitingCopies: [UUID: URL] = [:]
     /// Notes whose body couldn't be read because the folder didn't answer; they are read again once it does.
     var markdownBodiesNotRead: Set<UUID> = []
-    /// The launch scan changed notes before any derived index was registered; persistent indexes (Spotlight) must
-    /// rebuild rather than trust what they kept from the last run.
-    var notesChangedBeforeDerivedIndexes = false
+    /// Notes the launch scan changed, added or removed before any derived index was registered; persistent indexes
+    /// (Spotlight) update these rather than trust what they kept from the last run.
+    var notesChangedBeforeDerivedIndexes: Set<UUID> = []
     /// Called when the mass-deletion guard holds a batch, with the number of held notes.
     var onManyNotesDisappeared: ((Int) -> Void)?
     /// New files wait until they have been unchanged this long before they become notes (spec §3.5).
@@ -583,6 +583,26 @@ final class NoteStore: ObservableObject {
 
     func cachedBody(_ id: UUID) -> NSAttributedString? {
         bodyCache[id]
+    }
+
+    enum IndexText {
+        case text(String?)
+        /// The content folder didn't answer.
+        case unavailable
+    }
+
+    /// A note's plain text for an index, read off the main thread when it isn't cached: never waits for the
+    /// content folder on the main thread.
+    func indexText(_ id: UUID) async -> IndexText {
+        if let cached = cachedBody(id) { return .text(BodyCodec.plainText(of: cached)) }
+        guard let meta = note(with: id), !meta.isLocked else { return .text(nil) }
+        let storage = bodyStorage
+        let read = { (try? storage.read(id)).map { BodyCodec.plainText(of: $0.text) } }
+        guard let markdownStorage else { return .text(await Task.detached(priority: .utility) { read() }.value) }
+        guard !markdownFolderUnavailable else { return .unavailable }
+        guard let text = await BoundedFileAccess.shared.run(key: "markdown-index-read:" + markdownStorage.contentRootURL.path,
+                                                            timeout: markdownScanTimeout, read) else { return .unavailable }
+        return .text(text)
     }
 
     /// Puts `text` in the body cache as the saved body, when nothing is cached.
