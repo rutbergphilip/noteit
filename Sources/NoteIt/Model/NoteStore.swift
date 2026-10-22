@@ -193,6 +193,8 @@ final class NoteStore: ObservableObject {
     var notesChangedBeforeDerivedIndexes: Set<UUID> = []
     /// Called when the mass-deletion guard holds a batch, with the number of held notes.
     var onManyNotesDisappeared: ((Int) -> Void)?
+    /// Called with a message when a template couldn't be used because its file wasn't read; nothing was created.
+    var onTemplateNotRead: ((String) -> Void)?
     /// New files wait until they have been unchanged this long before they become notes (spec §3.5).
     var newFileSettleDelay: TimeInterval = 2
     /// Notes whose files disappeared in a batch the mass-deletion guard holds.
@@ -950,12 +952,19 @@ final class NoteStore: ObservableObject {
     }
 
     /// Creates a note in the notebook implied by the current sidebar selection and selects it.
+    /// Nil, and nothing created, when the notebook's template hasn't been read from its folder yet.
     @discardableResult
-    func createNoteInCurrentContext(initial: NSAttributedString? = nil) -> NoteMeta {
+    func createNoteInCurrentContext(initial: NSAttributedString? = nil) -> NoteMeta? {
         let notebookID = prepareCurrentContextForNewNote()
         let template = initial == nil ? defaultTemplateID(for: notebookID) : nil
-        let meta = template.map { createNote(fromTemplate: $0, title: "", in: notebookID) }
-            ?? createNote(in: notebookID, initial: initial)
+        let meta: NoteMeta
+        do {
+            meta = try template.map { template throws(BodyEditError) in try createNote(fromTemplate: template, title: "", in: notebookID) }
+                ?? createNote(in: notebookID, initial: initial)
+        } catch {
+            reportTemplateNotRead(error)
+            return nil
+        }
         selectedNoteID = meta.id
         return meta
     }

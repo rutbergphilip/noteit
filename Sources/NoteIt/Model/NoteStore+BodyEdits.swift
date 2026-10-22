@@ -38,6 +38,10 @@ enum BodyEditError: Error, Equatable, LocalizedError {
     static func folderNotAvailableMessage(_ folder: String) -> String {
         "“\(folder)” isn't answering yet, so NoteIt can't read or change this note. Try again when the folder is back."
     }
+
+    static func templateNotReadMessage(_ folder: String) -> String {
+        "“\(folder)” isn't answering yet, so NoteIt can't read the template. Nothing was created; try again when the folder is back."
+    }
 }
 
 /// recordCurrent: editBody records the note's current body in Version History exactly once before a change; if that

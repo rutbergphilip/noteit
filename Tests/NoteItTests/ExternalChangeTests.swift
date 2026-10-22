@@ -789,6 +789,87 @@ final class ExternalChangeTests: XCTestCase {
         return folder
     }
 
+    func testANoteFromATemplateThatWasntReadIsntCreated() throws {
+        let (store, template, _) = try openWithUnreadTemplate()
+        let count = store.notes.count
+        XCTAssertThrowsError(try store.createNote(fromTemplate: template, title: "Trip", in: nil)) {
+            XCTAssertEqual($0 as? BodyEditError, .folderNotAvailable("content"))
+        }
+        XCTAssertThrowsError(try store.createNoteFromTemplateInCurrentContext(template, title: "Trip"))
+        XCTAssertThrowsError(try store.expandedTemplate(template, title: "Here", date: Date()), "Insert Template inserts nothing")
+        XCTAssertEqual(store.notes.count, count)
+    }
+
+    func testANewNoteInANotebookWhoseTemplateWasntReadIsntCreated() throws {
+        let (store, template, _) = try openWithUnreadTemplate()
+        var notebook = store.createNotebook(name: "Trips", symbol: "folder", colorHex: NotebookPalette.colors[0])
+        notebook.defaultTemplateID = template
+        store.updateNotebook(notebook)
+        store.selection = .notebook(notebook.id)
+        var told: [String] = []
+        store.onTemplateNotRead = { told.append($0) }
+        let source = store.createNote(in: notebook.id).id
+        let count = store.notes.count
+
+        XCTAssertNil(store.createNoteInCurrentContext())
+        XCTAssertNil(store.createNoteForLink(title: "Paris", from: source))
+        XCTAssertEqual(store.notes.count, count)
+        XCTAssertEqual(told.count, 2)
+        XCTAssertTrue(told.first?.contains("“content”") == true, told.first ?? "")
+
+        let captured = store.captureNote(title: "Idea", body: "keep this", in: notebook.id)
+        XCTAssertTrue(store.body(for: try XCTUnwrap(captured).id).string.contains("keep this"), "a capture is never lost")
+    }
+
+    func testADailyNoteWhoseTemplateWasntReadIsntCreated() async throws {
+        let (store, template, defaults) = try openWithUnreadTemplate()
+        defaults.set(template.uuidString, forKey: PrefKey.dailyNoteTemplateID)
+        var told: [String] = []
+        store.onTemplateNotRead = { told.append($0) }
+        let count = store.notes.count
+        XCTAssertThrowsError(try store.dailyNote(for: Date(), createIfMissing: true)) {
+            XCTAssertEqual($0 as? BodyEditError, .folderNotAvailable("content"))
+        }
+        store.openDailyNote(for: Date())
+        XCTAssertEqual(told.count, 1)
+        let service = AutomationService(store: store, defaults: defaults,
+                                        staged: StagedUploads(directory: root.appendingPathComponent("staged")),
+                                        dailyNotesAvailable: { true })
+        XCTAssertThrowsError(try service.daily(date: Date(), create: true)) {
+            XCTAssertEqual($0 as? AutomationError, .folderNotAvailable("content"))
+        }
+        XCTAssertThrowsError(try service.appendToDaily(text: "note", format: .plain, timestamp: false, date: Date())) {
+            XCTAssertEqual($0 as? AutomationError, .folderNotAvailable("content"))
+        }
+        XCTAssertEqual(store.notes.count, count)
+    }
+
+    func testTheAPIDoesntCreateANoteFromATemplateThatWasntRead() throws {
+        let (store, template, _) = try openWithUnreadTemplate()
+        let count = store.notes.count
+        let spec = try XCTUnwrap(LinkingAPIRoutes.routes.first { $0.id == "linking.createFromTemplate" })
+        let request = HTTPRequest(method: spec.method.rawValue, path: spec.pattern, body: Data(#"{"title":"Trip"}"#.utf8))
+        let context = LocalAPIContext(request: request, route: RouteMatch(spec: spec, params: ["id": template.uuidString]),
+                                      client: nil, origin: .native)
+        let response = LinkingAPIRoutes.respond("linking.createFromTemplate", context, store: store)
+        XCTAssertEqual((try? APIJSON.decoder().decode(APIErrorBody.self, from: response.body))?.error.code, .notReady)
+        XCTAssertEqual(store.notes.count, count)
+    }
+
+    /// A Markdown library in its launch "checking" window, with a template whose body isn't cached.
+    private func openWithUnreadTemplate() throws -> (NoteStore, UUID, UserDefaults) {
+        let store = open()
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "unread-template-\(UUID().uuidString)"))
+        store.preferences = defaults
+        let template = store.createTemplate().id
+        store.updateBody(template, NSAttributedString(string: "Plan\nGoals: {{cursor}}", attributes: EditorStyle.bodyAttributes))
+        store.flush()
+        store.dropCachedBody(template)
+        store.markdownFolderUnavailable = true
+        XCTAssertNil(store.cachedBody(template))
+        return (store, template, defaults)
+    }
+
     func testTheAPIRefusesAttachmentsOfANoteWhoseFileWasntRead() throws {
         let (store, ids, gates) = try openWithGatedReads(["Far"], gated: ["Far"])
         defer { gates.values.forEach { $0.leave() } }

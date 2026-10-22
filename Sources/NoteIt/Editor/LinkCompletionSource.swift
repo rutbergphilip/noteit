@@ -73,7 +73,7 @@ final class LinkCompletionSource: InlineCompletionSource {
             shown = query.alias ?? presetText ?? (id == noteID && LinkQuery(textView.nsString.substring(with: range)).title.isEmpty
                 ? text : "\(title) › \(text)")
         case let .create(title):
-            let meta = store.createNoteForLink(title: title, from: noteID)
+            guard let meta = store.createNoteForLink(title: title, from: noteID) else { return }
             link = .note(id: meta.id, heading: nil)
             shown = query.alias ?? presetText ?? meta.title
         }

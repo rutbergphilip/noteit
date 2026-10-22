@@ -148,7 +148,13 @@ enum LinkingAPIRoutes {
             let fallback = store.defaultNotebookIDForNewNotes
             notebookID = fallback == store.templatesNotebookIDIfSet ? nil : fallback
         }
-        let meta = store.createNote(fromTemplate: templateID, title: request.title ?? "", in: notebookID, readsClipboard: false)
+        let meta: NoteMeta
+        do {
+            meta = try store.createNote(fromTemplate: templateID, title: request.title ?? "", in: notebookID, readsClipboard: false)
+        } catch {
+            guard case .folderNotAvailable(let folder) = error else { throw Failure(code: .notReady, message: error.localizedDescription) }
+            throw Failure(code: .notReady, message: BodyEditError.templateNotReadMessage(folder))
+        }
         RichTextEditor.pendingCaret[meta.id] = nil
         let created = store.note(with: meta.id) ?? meta
         return .json(NoteSummaryDTO(id: created.id, title: created.title, notebookID: created.notebookID,

@@ -77,7 +77,7 @@ final class NoteStoreTemplatesTests: XCTestCase {
         XCTAssertEqual(NoteStore.templateName(try XCTUnwrap(store.note(with: templateID))), "Meeting")
 
         let inbox = store.createNotebook(name: "Inbox", symbol: "tray", colorHex: Tokens.Hex.notebookBlue)
-        let meta = store.createNote(fromTemplate: templateID, title: "Budget", in: inbox.id)
+        let meta = try store.createNote(fromTemplate: templateID, title: "Budget", in: inbox.id)
         XCTAssertEqual(meta.title, "Meeting Budget")
         XCTAssertEqual(meta.tags, ["meeting"])
         XCTAssertEqual(meta.notebookID, inbox.id)
@@ -94,21 +94,21 @@ final class NoteStoreTemplatesTests: XCTestCase {
         store.updateNotebook(work)
 
         store.selection = .notebook(work.id)
-        let meta = store.createNoteInCurrentContext()
+        let meta = try XCTUnwrap(store.createNoteInCurrentContext())
         XCTAssertEqual(store.body(for: meta.id).string, "Daily standup\nYesterday:")
         XCTAssertEqual(meta.notebookID, work.id)
 
         let captured = try XCTUnwrap(store.captureNote(title: "", body: "Shipped", in: work.id))
         XCTAssertEqual(store.body(for: captured.id).string, "Daily standup\nYesterday:\nShipped")
 
-        let linked = store.createNoteForLink(title: "Retro", from: meta.id)
+        let linked = try XCTUnwrap(store.createNoteForLink(title: "Retro", from: meta.id))
         XCTAssertEqual(store.body(for: linked.id).string, "Daily standup\nYesterday:")
 
         store.selection = .allNotes
-        XCTAssertEqual(store.body(for: store.createNoteInCurrentContext().id).string, "")
+        XCTAssertEqual(store.body(for: try XCTUnwrap(store.createNoteInCurrentContext()).id).string, "")
     }
 
-    func testMissingDefaultTemplateIsNone() {
+    func testMissingDefaultTemplateIsNone() throws {
         let store = makeStore()
         let templateID = template(store, "Standup")
         var work = store.createNotebook(name: "Work", symbol: "briefcase", colorHex: Tokens.Hex.notebookBlue)
@@ -119,7 +119,7 @@ final class NoteStoreTemplatesTests: XCTestCase {
         store.moveToRecentlyDeleted([templateID])
         XCTAssertNil(store.defaultTemplateID(for: work.id))
         store.selection = .notebook(work.id)
-        XCTAssertEqual(store.body(for: store.createNoteInCurrentContext().id).string, "")
+        XCTAssertEqual(store.body(for: try XCTUnwrap(store.createNoteInCurrentContext()).id).string, "")
 
         work.defaultTemplateID = UUID()
         store.updateNotebook(work)

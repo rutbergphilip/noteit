@@ -291,6 +291,8 @@ final class AutomationService {
         guard dailyNotesAvailable() else { throw .dailyNotesUnavailable }
         do {
             return try store.dailyNote(for: date, createIfMissing: create).map(visible)
+        } catch BodyEditError.folderNotAvailable(let folder) {
+            throw .folderNotAvailable(folder)
         } catch {
             throw .noteUnreadable
         }

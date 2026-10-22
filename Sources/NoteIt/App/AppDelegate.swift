@@ -55,6 +55,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NoteStore.shared.onManyNotesDisappeared = { _ in
             DispatchQueue.main.async { MassDeletionGuard.askIfNeeded(NoteStore.shared) }
         }
+        NoteStore.shared.onTemplateNotRead = { message in
+            let alert = NSAlert()
+            alert.messageText = "The template couldn't be read"
+            alert.informativeText = message
+            if let window = NSApp.keyWindow { alert.beginSheetModal(for: window) } else { alert.runModal() }
+        }
         NoteStore.shared.startWatchingMarkdownFolder()
         NoteStore.shared.askAboutHeldDeletions()
         DispatchQueue.main.async { PreviousLibrary.askIfDue(dataDir: NoteStore.shared.rootURL) }

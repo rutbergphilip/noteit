@@ -170,7 +170,7 @@ extension NoteStore {
             if case .unresolved = link, let source { rewriteLinks(in: source, matching: link, to: id) }
             navigate(to: id, heading: heading)
         case .unresolved(let title):
-            let meta = createNoteForLink(title: title, from: source)
+            guard let meta = createNoteForLink(title: title, from: source) else { return }
             if let source { rewriteLinks(in: source, matching: link, to: meta.id) }
             navigate(to: meta.id, heading: nil)
         case .deleted(let id):
@@ -232,8 +232,9 @@ extension NoteStore {
     }
 
     /// Creates the note an unresolved link names, in the notebook the Links setting picks. Not selected.
+    /// Nil, and nothing created, when the notebook's template hasn't been read from its folder yet.
     @discardableResult
-    func createNoteForLink(title: String, from source: UUID?) -> NoteMeta {
+    func createNoteForLink(title: String, from source: UUID?) -> NoteMeta? {
         let title = String(title.trimmingCharacters(in: .whitespacesAndNewlines).prefix(NoteLink.maxTextLength))
         let notebookID: UUID?
         if preferences.string(forKey: PrefKey.linkNewNoteNotebook) == "default" {
@@ -244,7 +245,12 @@ extension NoteStore {
             notebookID = defaultNotebookIDForNewNotes
         }
         if let template = defaultTemplateID(for: notebookID) {
-            return createNote(fromTemplate: template, title: title, in: notebookID)
+            do {
+                return try createNote(fromTemplate: template, title: title, in: notebookID)
+            } catch {
+                reportTemplateNotRead(error)
+                return nil
+            }
         }
         return createNote(in: notebookID, initial: Self.linkedNoteBody(title: title))
     }

@@ -58,12 +58,20 @@ extension NoteStore {
     }
 
     /// `readsClipboard` false leaves `{{clipboard}}` empty (the Local API never reads the clipboard).
-    func expandedTemplate(_ id: UUID, title: String, date: Date, readsClipboard: Bool = true) -> TemplateExpansion? {
+    /// Throws `folderNotAvailable` while the template's Markdown file hasn't been read, rather than expand a placeholder.
+    func expandedTemplate(_ id: UUID, title: String, date: Date, readsClipboard: Bool = true) throws(BodyEditError) -> TemplateExpansion? {
         guard usableTemplate(id) != nil else { return nil }
+        guard let body = bodyForOutput(id) else { throw .folderNotAvailable(unreadMarkdownFolder(of: id) ?? "") }
         let context = TemplateContext(title: title, date: date, clipboard: {
             readsClipboard ? NoteStore.clipboardString() : nil
         })
-        return TemplateExpander.expand(body(for: id), context: context)
+        return TemplateExpander.expand(body, context: context)
+    }
+
+    /// Tells the user (through `onTemplateNotRead`) that `error` kept a template from being used.
+    func reportTemplateNotRead(_ error: BodyEditError) {
+        guard case .folderNotAvailable(let folder) = error else { return }
+        onTemplateNotRead?(BodyEditError.templateNotReadMessage(folder))
     }
 
     /// The notebook's template for new notes, while it is still a usable template.
@@ -74,8 +82,8 @@ extension NoteStore {
     /// A note from the expanded template, or a plain note (a title paragraph when `title` isn't empty) without one.
     @discardableResult
     func createNote(fromTemplate templateID: UUID?, title: String, in notebookID: UUID?, date: Date = Date(),
-                    readsClipboard: Bool = true) -> NoteMeta {
-        if let templateID, let expansion = expandedTemplate(templateID, title: title, date: date, readsClipboard: readsClipboard) {
+                    readsClipboard: Bool = true) throws(BodyEditError) -> NoteMeta {
+        if let templateID, let expansion = try expandedTemplate(templateID, title: title, date: date, readsClipboard: readsClipboard) {
             let meta = createNote(in: notebookID, initial: expansion.text)
             if let caret = expansion.caret { RichTextEditor.pendingCaret[meta.id] = caret }
             return meta
@@ -86,17 +94,18 @@ extension NoteStore {
 
     /// File › New Note from Template…: in the selected notebook, as ⌘N does, and selected.
     @discardableResult
-    func createNoteFromTemplateInCurrentContext(_ templateID: UUID, title: String) -> NoteMeta {
+    func createNoteFromTemplateInCurrentContext(_ templateID: UUID, title: String) throws(BodyEditError) -> NoteMeta {
         let notebookID = prepareCurrentContextForNewNote()
-        let meta = createNote(fromTemplate: templateID, title: title, in: notebookID)
+        let meta = try createNote(fromTemplate: templateID, title: title, in: notebookID)
         selectedNoteID = meta.id
         return meta
     }
 
     /// `content` placed in the notebook's template at its `{{cursor}}`, else after it on a new line.
-    func templatedBody(for notebookID: UUID?, title: String, content: NSAttributedString, date: Date = Date()) -> NSAttributedString? {
+    func templatedBody(for notebookID: UUID?, title: String, content: NSAttributedString,
+                       date: Date = Date()) throws(BodyEditError) -> NSAttributedString? {
         guard let templateID = defaultTemplateID(for: notebookID),
-              let expansion = expandedTemplate(templateID, title: title, date: date) else { return nil }
+              let expansion = try expandedTemplate(templateID, title: title, date: date) else { return nil }
         let text = NSMutableAttributedString(attributedString: expansion.text)
         guard content.length > 0 else { return text }
         if let caret = expansion.caret {
