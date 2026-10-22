@@ -588,40 +588,67 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         var created: Date?
     }
 
+    /// The id write `adopt` leaves to the caller: `data` replaces the file when it is still as the scan read it.
+    struct IDWrite: Sendable {
+        var path: String
+        var data: Data
+        var readStat: MarkdownFileStat?
+        var readSHA256: String
+    }
+
+    /// `file` is the file as a scan read it; nothing is read here. With `assignID`, the patched bytes are returned
+    /// in `idWrite` for `writeAssignedID`, and until then the entry records the file as it is.
     @discardableResult
-    func adopt(_ id: UUID, at path: String, assignID: Bool) throws -> Adopted {
-        try lock.withLock {
-            try requireContentRoot()
-            let fileURL = url(of: path)
-            let before = MarkdownFileStat.of(fileURL)
-            var data = try Data(contentsOf: fileURL)
+    func adopt(_ id: UUID, at path: String, file: MarkdownScanReads.File, assignID: Bool) -> (Adopted, IDWrite?) {
+        lock.withLock {
+            var data = file.data
+            let sha = AttachmentStore.sha256(file.data)
+            var idWrite: IDWrite?
             if assignID, let text = String(data: data, encoding: .utf8), var frontMatter = try? FrontMatter.read(text).0 {
                 frontMatter.id = id
-                let patched = Self.patchingFrontMatter(data, with: frontMatter)
-                guard MarkdownFileStat.of(fileURL) == before else { throw MarkdownStorageError.externallyChanged(id) }
-                ledger.record(path: path, sha256: AttachmentStore.sha256(patched))
-                try Self.writeAtomically(patched, to: fileURL, replacing: true)
-                data = patched
+                data = Self.patchingFrontMatter(data, with: frontMatter)
+                idWrite = IDWrite(path: path, data: data, readStat: file.stat, readSHA256: sha)
             }
             if let entry = index.entry(id), entry.path != path {
                 index.move(id, to: path)
             }
             let read = readFile(data, notePath: path)
-            let stat = MarkdownFileStat.of(fileURL)
             var entry = index.entry(id) ?? MarkdownFileEntry(path: path)
             entry.path = path
-            entry.sha256 = AttachmentStore.sha256(data)
-            entry.size = stat?.size ?? Int64(data.count)
-            entry.mtimeNs = stat?.mtimeNs ?? 0
-            entry.inode = stat?.inode ?? 0
+            entry.sha256 = sha
+            entry.size = file.stat?.size ?? Int64(file.data.count)
+            entry.mtimeNs = file.stat?.mtimeNs ?? 0
+            entry.inode = file.stat?.inode ?? 0
             entry.frontMatterExtra = read.parsed.flatMap { $0.frontMatter.extra.isEmpty ? nil : $0.frontMatter.extra }
             entry.attachments = read.attachmentNames ?? entry.attachments
             index.set(entry, for: id)
             previous[id] = read.parsed
             acceptedExternal.insert(id)
-            let values = try? fileURL.resourceValues(forKeys: [.creationDateKey, .contentModificationDateKey])
-            return Adopted(body: read.body, frontMatter: read.parsed?.frontMatter,
-                           modified: values?.contentModificationDate, created: values?.creationDate)
+            return (Adopted(body: read.body, frontMatter: read.parsed?.frontMatter, modified: file.modified, created: file.created),
+                    idWrite)
+        }
+    }
+
+    /// Writes the id `adopt` assigned into the file, unless the file changed since the scan read it (the next scan
+    /// adopts it again then).
+    func writeAssignedID(_ write: IDWrite, for id: UUID) throws {
+        try lock.withLock {
+            try requireContentRoot()
+            let fileURL = url(of: write.path)
+            guard MarkdownFileStat.of(fileURL) == write.readStat,
+                  let entry = index.entry(id), entry.path == write.path, entry.sha256 == write.readSHA256 else {
+                throw MarkdownStorageError.externallyChanged(id)
+            }
+            let sha = AttachmentStore.sha256(write.data)
+            ledger.record(path: write.path, sha256: sha)
+            try Self.writeAtomically(write.data, to: fileURL, replacing: true)
+            let stat = MarkdownFileStat.of(fileURL)
+            index.update(id) { entry in
+                entry.sha256 = sha
+                entry.size = stat?.size ?? Int64(write.data.count)
+                entry.mtimeNs = stat?.mtimeNs ?? 0
+                entry.inode = stat?.inode ?? 0
+            }
         }
     }
 

@@ -118,7 +118,7 @@ extension NoteStore {
 
     enum MarkdownScanOutcome {
         case missing
-        case scanned(FolderScanResult)
+        case scanned(FolderScanResult, MarkdownScanReads)
     }
 
     private func scanMarkdownFolderNow(_ storage: MarkdownBodyStorage, timeout: TimeInterval? = nil) -> MarkdownScanOutcome? {
@@ -132,10 +132,13 @@ extension NoteStore {
         let check = storage.rootCheck
         let ledger = storage.ledger
         let scan = markdownFolderScan
+        let known = MarkdownScanReads.Known(noteIDs: Set(notes.map(\.id)), notebookIDs: Set(notebooks.map(\.id)),
+                                            held: heldMarkdownDeletions)
         return {
             guard check(root) else { return .missing }
             let result = scan(root, index, ledger)
-            return check(root) ? .scanned(result) : .missing
+            let reads = MarkdownScanReads.read(result, root: root, index: index, known: known)
+            return check(root) ? .scanned(result, reads) : .missing
         }
     }
 
@@ -150,7 +153,7 @@ extension NoteStore {
         case .missing:
             markdownFolderUnavailable = false
             markdownFolderWentMissing()
-        case .scanned(var result):
+        case .scanned(var result, let reads):
             let wasUnavailable = markdownFolderUnavailable
             markdownFolderUnavailable = false
             markdownFolderReportedMissing = false
@@ -163,7 +166,7 @@ extension NoteStore {
                     }.keys)
                 result.leaveOut(written)
             }
-            applyExternalChanges(result, atLaunch: false)
+            applyExternalChanges(result, reads: reads, atLaunch: false)
             if wasUnavailable { scheduleSave() }
             startMarkdownWatcherIfReady()
         }
@@ -271,15 +274,15 @@ extension NoteStore {
         guard storage.contentRootExists else { return }
         let before = notes
         let notebooksBefore = notebooks
-        guard case .scanned(let result) = scanMarkdownFolderNow(storage, timeout: Self.launchScanTimeout) else {
+        guard case .scanned(let result, let reads) = scanMarkdownFolderNow(storage, timeout: Self.launchScanTimeout) else {
             return markdownFolderBecameUnavailable()
         }
-        applyExternalChanges(result, atLaunch: true)
+        applyExternalChanges(result, reads: reads, atLaunch: true)
         let tombstones = Set(syncDeletions().keys)
         let orphans = storage.index.ids.filter { note(with: $0) == nil && !tombstones.contains($0) && !isTombstoned($0) }
         if !orphans.isEmpty {
             importFiles(orphans.compactMap { id in storage.index.entry(id).map { NewFile(id: id, path: $0.path, assign: false) } },
-                        atLaunch: true)
+                        reads: reads, atLaunch: true)
         }
         if result.hasNoteChanges || notes != before || notebooks != notebooksBefore {
             notesChangedBeforeDerivedIndexes = true
@@ -289,31 +292,33 @@ extension NoteStore {
 
     /// Applies one scan: notebook folders first, so new files land in their notebooks, then files, then
     /// notebook folders that are gone. At launch nothing is versioned or flushed; the load saves the result.
-    func applyExternalChanges(_ result: FolderScanResult, atLaunch: Bool, confirmsMassDeletion: Bool = false) {
-        guard let storage = markdownStorage, storage.contentRootExists else { return }
+    func applyExternalChanges(_ result: FolderScanResult, reads: MarkdownScanReads, atLaunch: Bool,
+                              confirmsMassDeletion: Bool = false) {
+        guard let storage = markdownStorage else { return }
         storage.setSkippedFiles(result.skipped.map(storage.url(of:)))
-        var metadataChanged = applyNotebookFolders(result.notebookFolders)
+        var metadataChanged = applyNotebookFolders(result.notebookFolders, reads: reads)
         storage.setNotebooks(notebooks)
 
         for (id, path) in result.moved.sorted(by: { $0.value < $1.value }) {
-            metadataChanged = applyMove(id, to: path, changed: result.changed[id] != nil, atLaunch: atLaunch) || metadataChanged
+            metadataChanged = applyMove(id, to: path, changed: result.changed[id] != nil, reads: reads, atLaunch: atLaunch)
+                || metadataChanged
         }
         for (id, path) in result.changed.sorted(by: { $0.value < $1.value }) where result.moved[id] == nil {
-            applyContentChange(id, at: path, atLaunch: atLaunch)
+            applyContentChange(id, at: path, reads: reads, atLaunch: atLaunch)
         }
         var newFiles: [NewFile] = result.added.sorted().map { NewFile(id: nil, path: $0, assign: true) }
         newFiles += result.duplicateIDs.sorted().map { NewFile(id: nil, path: $0, assign: true) }
-        importFiles(atLaunch ? newFiles : settledFiles(newFiles), atLaunch: atLaunch)
-        releaseReturnedDeletions()
+        importFiles(atLaunch ? newFiles : settledFiles(newFiles, reads: reads), reads: reads, atLaunch: atLaunch)
+        releaseReturnedDeletions(reads: reads)
 
         let removed = result.removed.filter { id in
             guard let entry = storage.index.entry(id) else { return false }
-            return !FileManager.default.fileExists(atPath: storage.url(of: entry.path).path)
+            return !reads.existing.contains(entry.path)
         }
         if !removed.isEmpty, !holdRemovals(removed, atLaunch: atLaunch, confirmed: confirmsMassDeletion) {
             metadataChanged = applyRemovals(removed, atLaunch: atLaunch) || metadataChanged
         }
-        metadataChanged = removeNotebooksWithoutFolders(result.notebookFolders) || metadataChanged
+        metadataChanged = removeNotebooksWithoutFolders(result.notebookFolders, reads: reads) || metadataChanged
         try? storage.index.save()
         if metadataChanged { commitOutsideMetadataChange() }
         storage.attachments.scheduleSweep()
@@ -322,7 +327,7 @@ extension NoteStore {
     // MARK: Notebook folders
 
     /// New folders become notebooks; renamed and moved folders rename and move theirs.
-    private func applyNotebookFolders(_ folders: [String: NotebookFolderInfo]) -> Bool {
+    private func applyNotebookFolders(_ folders: [String: NotebookFolderInfo], reads: MarkdownScanReads) -> Bool {
         guard let storage = markdownStorage else { return false }
         var changed = false
         var idByFolder: [String: UUID] = [:]
@@ -353,8 +358,7 @@ extension NoteStore {
                 storage.index.setNotebookFolder(path, for: id)
                 continue
             }
-            let folderURL = storage.url(of: path)
-            guard var found = try? NotebookFolders.read(folderURL).notebook else { continue }
+            guard var found = reads.notebookFiles[path] else { continue }
             if info.id == nil || notebook(with: found.id) != nil || journaled.contains(found.id) || claimed.contains(found.id) {
                 found.id = UUID()
             }
@@ -373,14 +377,14 @@ extension NoteStore {
 
     /// Notebooks whose own folder is gone are deleted as in NoteIt (their notes go to Recently Deleted), unless
     /// a held batch of deletions is waiting for the user.
-    private func removeNotebooksWithoutFolders(_ folders: [String: NotebookFolderInfo]) -> Bool {
+    private func removeNotebooksWithoutFolders(_ folders: [String: NotebookFolderInfo], reads: MarkdownScanReads) -> Bool {
         guard let storage = markdownStorage, heldMarkdownDeletions.isEmpty else { return false }
         let present = Set(folders.compactMap(\.value.id))
         var removed = false
         let tree = notebookTree
         for (id, path) in storage.index.allNotebookFolders where notebook(with: id) != nil && !present.contains(id) {
             guard tree.depth(of: id) <= NotebookFolders.maxDepth,
-                  !FileManager.default.fileExists(atPath: storage.url(of: path).path) else { continue }
+                  folders[path] == nil, !reads.existing.contains(path) else { continue }
             guard notebook(with: id) != nil else { continue }
             storage.index.setNotebookFolder(nil, for: id)
             deleteNotebook(id)
@@ -408,13 +412,14 @@ extension NoteStore {
 
     /// A file moved or renamed outside NoteIt: the note keeps its id; another folder means another notebook, and
     /// a move into or out of `.trash/` deletes or recovers it.
-    private func applyMove(_ id: UUID, to path: String, changed: Bool, atLaunch: Bool) -> Bool {
+    private func applyMove(_ id: UUID, to path: String, changed: Bool, reads: MarkdownScanReads, atLaunch: Bool) -> Bool {
         guard let storage = markdownStorage, noteIndex(id) != nil else { return false }
         if changed {
             storage.index.move(id, to: path)
-            applyContentChange(id, at: path, atLaunch: atLaunch)
+            applyContentChange(id, at: path, reads: reads, atLaunch: atLaunch)
         } else {
-            do { try storage.adopt(id, at: path, assignID: false) } catch { return false }
+            guard let file = reads.files[path] else { return false }
+            storage.adopt(id, at: path, file: file, assignID: false)
         }
         guard let current = noteIndex(id) else { return false }
         var meta = notes[current]
@@ -445,20 +450,16 @@ extension NoteStore {
     /// A file whose content changed outside NoteIt. A clean note reloads through `editBody` (its previous body is
     /// kept in Version History); a note with unsaved edits keeps them and the file's text becomes a conflict
     /// copy "<title> (Outside NoteIt)".
-    private func applyContentChange(_ id: UUID, at path: String, atLaunch: Bool) {
+    private func applyContentChange(_ id: UUID, at path: String, reads: MarkdownScanReads, atLaunch: Bool) {
         guard let storage = markdownStorage, let meta = note(with: id) else { return }
-        if let entry = storage.index.entry(id), entry.path == path,
-           MarkdownFileStat.of(storage.url(of: path))?.matches(entry) == true { return }
+        guard let file = reads.files[path] else {
+            return NSLog("NoteIt: couldn't read the changed file of note \(id)")
+        }
+        if let entry = storage.index.entry(id), entry.path == path, file.stat?.matches(entry) == true { return }
         if !atLaunch { handOverPendingEdits(id) }
         let unsaved = hasUnsavedBody(id)
         let old = cachedBody(id) ?? storage.lastKnownBody(id)?.text
-        let adopted: MarkdownBodyStorage.Adopted
-        do {
-            adopted = try storage.adopt(id, at: path, assignID: false)
-        } catch {
-            NSLog("NoteIt: couldn't read the changed file of note \(id): \(error)")
-            return
-        }
+        let adopted = storage.adopt(id, at: path, file: file, assignID: false).0
         let body = adopted.body
         if unsaved {
             if body.readOnlyReason == nil || body.readOnlyReason == MarkdownBodyStorage.missingAttachmentsReason {
@@ -545,12 +546,11 @@ extension NoteStore {
 
     /// The files unchanged for `newFileSettleDelay`; a scan is scheduled for the others, which an app may still be
     /// writing.
-    private func settledFiles(_ files: [NewFile]) -> [NewFile] {
-        guard let storage = markdownStorage else { return [] }
+    private func settledFiles(_ files: [NewFile], reads: MarkdownScanReads) -> [NewFile] {
         let now = markdownClock()
         var wait: TimeInterval?
         let settled = files.filter { file in
-            guard let stat = MarkdownFileStat.of(storage.url(of: file.path)) else { return true }
+            guard let stat = reads.files[file.path]?.stat else { return true }
             let age = now.timeIntervalSince(Date(timeIntervalSince1970: Double(stat.mtimeNs) / 1e9))
             guard age < newFileSettleDelay else { return true }
             wait = min(wait ?? .infinity, newFileSettleDelay - max(age, 0))
@@ -564,7 +564,7 @@ extension NoteStore {
         return settled
     }
 
-    private func importFiles(_ files: [NewFile], atLaunch: Bool) {
+    private func importFiles(_ files: [NewFile], reads: MarkdownScanReads, atLaunch: Bool) {
         guard let storage = markdownStorage, !files.isEmpty else { return }
         var metas: [NoteMeta] = []
         var bodies: [UUID: NSAttributedString] = [:]
@@ -572,14 +572,13 @@ extension NoteStore {
         var relinked = false
         for file in files {
             if file.id == nil, storage.index.id(forPath: file.path) != nil { continue }
-            let url = storage.url(of: file.path)
-            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            guard let read = reads.files[file.path] else { continue }
             var id = file.id ?? UUID()
             var assign = file.assign
-            if file.id == nil, let data = try? Data(contentsOf: url), let named = FolderScanner.frontMatterID(data) {
+            if file.id == nil, let named = FolderScanner.frontMatterID(read.data) {
                 if let existing = note(with: named), storage.index.entry(named) == nil, !metas.contains(where: { $0.id == named }) {
-                    do { try storage.adopt(named, at: file.path, assignID: false) } catch { continue }
-                    applyContentChangeAfterRelink(existing.id, atLaunch: atLaunch)
+                    let adopted = storage.adopt(named, at: file.path, file: read, assignID: false).0
+                    applyContentChangeAfterRelink(existing.id, body: adopted.body, atLaunch: atLaunch)
                     relinked = true
                     continue
                 }
@@ -589,12 +588,11 @@ extension NoteStore {
                     assign = false
                 }
             }
-            let adopted: MarkdownBodyStorage.Adopted
-            do {
-                adopted = try storage.adopt(id, at: file.path, assignID: assign)
-            } catch {
-                NSLog("NoteIt: couldn't add \(file.path): \(error)")
-                continue
+            let (adopted, idWrite) = storage.adopt(id, at: file.path, file: read, assignID: assign)
+            if let idWrite {
+                do { try storage.writeAssignedID(idWrite, for: id) } catch {
+                    NSLog("NoteIt: couldn't write the id of \(file.path): \(error)")
+                }
             }
             let meta = importedMeta(id, path: file.path, adopted: adopted)
             metas.append(meta)
@@ -609,8 +607,8 @@ extension NoteStore {
         if !metas.isEmpty || relinked { commitOutsideMetadataChange() }
     }
 
-    private func applyContentChangeAfterRelink(_ id: UUID, atLaunch: Bool) {
-        guard let storage = markdownStorage, let index = noteIndex(id), let body = try? storage.read(id) else { return }
+    private func applyContentChangeAfterRelink(_ id: UUID, body: StoredBody, atLaunch: Bool) {
+        guard let storage = markdownStorage, let index = noteIndex(id) else { return }
         var meta = notes[index]
         Self.applyDerivedFields(to: &meta, from: body.text)
         notes[index] = meta
@@ -659,11 +657,11 @@ extension NoteStore {
     }
 
     /// Held notes whose files are back (or which are gone from the library) leave the batch.
-    private func releaseReturnedDeletions() {
+    private func releaseReturnedDeletions(reads: MarkdownScanReads) {
         guard let storage = markdownStorage, !heldMarkdownDeletions.isEmpty else { return }
         let returned = heldMarkdownDeletions.filter { id in
             guard note(with: id) != nil, let entry = storage.index.entry(id) else { return true }
-            return FileManager.default.fileExists(atPath: storage.url(of: entry.path).path)
+            return reads.existing.contains(entry.path)
         }
         guard !returned.isEmpty else { return }
         heldMarkdownDeletions.subtract(returned)
@@ -695,7 +693,7 @@ extension NoteStore {
         MassDeletionGuard.save([], dataDir: rootURL)
         for id in held { unblockMarkdownBodyWrites(id, reason: Self.missingFileReason) }
         switch scanMarkdownFolderNow(storage) {
-        case .scanned(let result): applyExternalChanges(result, atLaunch: false, confirmsMassDeletion: true)
+        case .scanned(let result, let reads): applyExternalChanges(result, reads: reads, atLaunch: false, confirmsMassDeletion: true)
         case .missing: markdownFolderWentMissing()
         case nil: markdownFolderBecameUnavailable()
         }

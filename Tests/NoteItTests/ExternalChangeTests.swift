@@ -142,6 +142,44 @@ final class ExternalChangeTests: XCTestCase {
         try await waitUntil({ store.markdownWatcher != nil }, "the watcher starts after the first scan that succeeds")
     }
 
+    func testWhatAScanFoundIsReadBeforeItReachesTheMainThread() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let store = open()
+        let kept = try note(store, titled: "Kept").id
+        let storage = try XCTUnwrap(store.markdownStorage)
+        storage.rootTimeout = 0.2
+        let content = content
+        let realCheck = storage.rootCheck
+        let hung = DispatchSemaphore(value: 0)
+        defer { hung.signal() }
+        let checks = Counter()
+        storage.rootCheck = { url in
+            guard !Thread.isMainThread else {
+                _ = hung.wait(timeout: .now() + 3)
+                return realCheck(url)
+            }
+            if checks.increment() == 2 {
+                for path in ["Kept.md", "New.md", "Folder/Inside.md"] {
+                    try? Data("# Spoiled\n".utf8).write(to: content.appendingPathComponent(path))
+                }
+                try? Data(#"{"name":"Spoiled"}"#.utf8).write(to: content.appendingPathComponent("Folder/.noteit-notebook.json"))
+            }
+            return realCheck(url)
+        }
+
+        try edit("Kept.md", "first", "edited outside")
+        try put("New.md", "# New\n\nadded\n")
+        try put("Folder/Inside.md", "# Inside\n\nin a folder\n")
+        store.markdownFolderNeedsScan()
+        try await waitUntil({ store.note(with: kept)?.preview.contains("edited outside") == true },
+                            "the edit is applied as the scan read it")
+        XCTAssertNotNil(store.notes.first { $0.title == "New" })
+        let folder = try XCTUnwrap(store.notebooks.first { $0.name == "Folder" })
+        XCTAssertEqual(store.notes.first { $0.title == "Inside" }?.notebookID, folder.id)
+        XCTAssertFalse(store.notes.contains { $0.title == "Spoiled" })
+        XCTAssertFalse(store.markdownFolderUnavailable, "applying the scan touched nothing in the folder")
+    }
+
     func testEditsMadeWhileNoteItWasClosedReachSpotlightAtTheNextLaunch() async throws {
         try put("Kept.md", "# Kept\n\nfirst\n")
         try put("Gone.md", "# Gone\n\nsoon\n")
@@ -499,4 +537,10 @@ private final class LockedNames: @unchecked Sendable {
     private var stored: [String] = []
     var names: [String] { lock.withLock { stored } }
     func append(_ name: String) { lock.withLock { stored.append(name) } }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func increment() -> Int { lock.withLock { count += 1; return count } }
 }
