@@ -420,6 +420,13 @@ final class NoteStore: ObservableObject {
         return markdownStorage.contentRootURL.lastPathComponent
     }
 
+    /// The note's body for export, print, copy, share or the API; nil while it's a placeholder for a file that
+    /// wasn't read, which is never output as the note's content.
+    func bodyForOutput(_ id: UUID) -> NSAttributedString? {
+        let text = body(for: id)
+        return unreadMarkdownFolder(of: id) == nil ? text : nil
+    }
+
     func plainText(for id: UUID) -> String {
         BodyCodec.plainText(of: body(for: id))
     }

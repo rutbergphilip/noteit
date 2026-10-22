@@ -99,7 +99,11 @@ enum LinkingAPIRoutes {
                 return .json(Items(items: store.outgoingLinks(from: meta.id).map { linkDTO($0, from: meta.id, store: store) }))
             case "linking.outline":
                 let meta = try readableNote(context, store: store)
-                let items = OutlineExtractor.items(in: store.body(for: meta.id)).map { item in
+                guard let body = store.bodyForOutput(meta.id) else {
+                    throw Failure(code: .notReady,
+                                  message: BodyEditError.folderNotAvailableMessage(store.unreadMarkdownFolder(of: meta.id) ?? ""))
+                }
+                let items = OutlineExtractor.items(in: body).map { item in
                     OutlineItemDTO(level: item.level, text: item.text,
                                    url: NoteLink.note(id: meta.id, heading: item.level == 0 ? nil : item.text).clamped.url.absoluteString)
                 }

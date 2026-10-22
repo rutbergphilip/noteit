@@ -720,6 +720,35 @@ final class ExternalChangeTests: XCTestCase {
         return (store, ids, gates)
     }
 
+    func testExportingNotesWhoseFilesWerentReadSkipsAndListsThem() throws {
+        let (store, ids, gates) = try openWithGatedReads(["Here", "Far"], gated: ["Far"])
+        defer { gates.values.forEach { $0.leave() } }
+        XCTAssertNotNil(store.bodyForOutput(ids["Here"]!))
+        XCTAssertNil(store.bodyForOutput(ids["Far"]!), "a placeholder is never output")
+        let folder = root.appendingPathComponent("export", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let result = try NoteExporter.exportAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
+                                                to: folder, body: store.bodyForOutput)
+        XCTAssertEqual(result.noteCount, 1)
+        XCTAssertEqual(result.totalCount, 2)
+        XCTAssertEqual(result.skipped, ["Far"])
+        let written = FileManager.default.enumerator(at: result.folder, includingPropertiesForKeys: nil)?
+            .compactMap { ($0 as? URL)?.lastPathComponent }.filter { $0.hasSuffix(".md") } ?? []
+        XCTAssertEqual(written, ["Here.md"])
+    }
+
+    func testTheAPIRefusesAttachmentsOfANoteWhoseFileWasntRead() throws {
+        let (store, ids, gates) = try openWithGatedReads(["Far"], gated: ["Far"])
+        defer { gates.values.forEach { $0.leave() } }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: "unread-output-\(UUID().uuidString)"))
+        let service = AutomationService(store: store, defaults: defaults,
+                                        staged: StagedUploads(directory: root.appendingPathComponent("staged")))
+        XCTAssertThrowsError(try service.attachments(of: ids["Far"]!)) {
+            XCTAssertEqual($0 as? AutomationError, .folderNotAvailable("content"))
+        }
+    }
+
     func testReadsStuckOnBothReadersKeepTheFolderUnavailableAndTheNoteReadOnly() async throws {
         try await readsStuckOnBothReaders(hanging: ["Hang A", "Hang B"])
     }
