@@ -46,8 +46,7 @@ extension AutomationService {
     func bodyString(of id: UUID, format: BodyFormatDTO) throws(AutomationError) -> String {
         let meta = try existing(id)
         if meta.isLocked { throw .noteLocked }
-        let text = store.body(for: id)
-        if let folder = store.unreadMarkdownFolder(of: id) { throw .folderNotAvailable(folder) }
+        let text = try outputBody(of: id)
         switch format {
         case .text:
             return store.plainText(for: id)
@@ -206,8 +205,15 @@ extension AutomationService {
         UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream"
     }
 
+    /// The note's body, or why it's only a placeholder: its file wasn't read yet, or couldn't be read.
+    private func outputBody(of id: UUID) throws(AutomationError) -> NSAttributedString {
+        if let text = store.bodyForOutput(id) { return text }
+        if let folder = store.unreadMarkdownFolder(of: id) { throw .folderNotAvailable(folder) }
+        throw .noteUnreadable
+    }
+
     private func attachmentFiles(of id: UUID) throws(AutomationError) -> [(name: String, data: Data)] {
-        guard let text = store.bodyForOutput(id) else { throw .folderNotAvailable(store.unreadMarkdownFolder(of: id) ?? "") }
+        let text = try outputBody(of: id)
         var files: [(name: String, data: Data)] = []
         text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
             guard let wrapper = (value as? NSTextAttachment)?.fileWrapper, wrapper.isRegularFile,

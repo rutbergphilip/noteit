@@ -100,8 +100,10 @@ enum LinkingAPIRoutes {
             case "linking.outline":
                 let meta = try readableNote(context, store: store)
                 guard let body = store.bodyForOutput(meta.id) else {
-                    throw Failure(code: .notReady,
-                                  message: BodyEditError.folderNotAvailableMessage(store.unreadMarkdownFolder(of: meta.id) ?? ""))
+                    guard let folder = store.unreadMarkdownFolder(of: meta.id) else {
+                        throw Failure(code: .noteUnreadable, message: AutomationError.noteUnreadable.message)
+                    }
+                    throw Failure(code: .notReady, message: BodyEditError.folderNotAvailableMessage(folder))
                 }
                 let items = OutlineExtractor.items(in: body).map { item in
                     OutlineItemDTO(level: item.level, text: item.text,
@@ -152,7 +154,9 @@ enum LinkingAPIRoutes {
         do {
             meta = try store.createNote(fromTemplate: templateID, title: request.title ?? "", in: notebookID, readsClipboard: false)
         } catch {
-            guard case .folderNotAvailable(let folder) = error else { throw Failure(code: .notReady, message: error.localizedDescription) }
+            guard case .folderNotAvailable(let folder) = error else {
+                throw Failure(code: .noteUnreadable, message: BodyEditError.templateUnreadableMessage)
+            }
             throw Failure(code: .notReady, message: BodyEditError.templateNotReadMessage(folder))
         }
         RichTextEditor.pendingCaret[meta.id] = nil

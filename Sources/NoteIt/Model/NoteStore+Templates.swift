@@ -61,7 +61,7 @@ extension NoteStore {
     /// Throws `folderNotAvailable` while the template's Markdown file hasn't been read, rather than expand a placeholder.
     func expandedTemplate(_ id: UUID, title: String, date: Date, readsClipboard: Bool = true) throws(BodyEditError) -> TemplateExpansion? {
         guard usableTemplate(id) != nil else { return nil }
-        guard let body = bodyForOutput(id) else { throw .folderNotAvailable(unreadMarkdownFolder(of: id) ?? "") }
+        guard let body = bodyForOutput(id) else { throw bodyNotReadError(id) ?? .writeBlocked }
         let context = TemplateContext(title: title, date: date, clipboard: {
             readsClipboard ? NoteStore.clipboardString() : nil
         })
@@ -70,8 +70,11 @@ extension NoteStore {
 
     /// Tells the user (through `onTemplateNotRead`) that `error` kept a template from being used.
     func reportTemplateNotRead(_ error: BodyEditError) {
-        guard case .folderNotAvailable(let folder) = error else { return }
-        onTemplateNotRead?(BodyEditError.templateNotReadMessage(folder))
+        switch error {
+        case .folderNotAvailable(let folder): onTemplateNotRead?(BodyEditError.templateNotReadMessage(folder))
+        case .writeBlocked: onTemplateNotRead?(BodyEditError.templateUnreadableMessage)
+        default: break
+        }
     }
 
     /// The notebook's template for new notes, while it is still a usable template.

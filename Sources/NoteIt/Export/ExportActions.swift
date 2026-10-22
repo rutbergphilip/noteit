@@ -64,7 +64,7 @@ enum ExportActions {
         let shown = titles.prefix(10).map { "“\($0)”" }.joined(separator: ", ")
         let more = titles.count > 10 ? " and \(titles.count - 10) more" : ""
         let subject = titles.count == 1 ? "Its file" : "Their files"
-        return "\(shown)\(more): \(subject) in “\(folder)” didn’t answer, so nothing was output for \(titles.count == 1 ? "it" : "them"). Try again once the folder responds."
+        return "\(shown)\(more): \(subject) in “\(folder)” didn’t answer or couldn’t be read, so nothing was output for \(titles.count == 1 ? "it" : "them"). Try again once the folder responds."
     }
 
     /// Note links written with the linked notes' current titles.

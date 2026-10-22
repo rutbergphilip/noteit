@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import os
 @testable import NoteIt
 import NoteItCore
 import NoteItMarkdown
@@ -888,6 +889,87 @@ final class ExternalChangeTests: XCTestCase {
         let response = LinkingAPIRoutes.respond("linking.createFromTemplate", context, store: store)
         XCTAssertEqual((try? APIJSON.decoder().decode(APIErrorBody.self, from: response.body))?.error.code, .notReady)
         XCTAssertEqual(store.notes.count, count)
+    }
+
+    func testANoteWhoseFileFailedToReadIsNeverOutputAsEmpty() async throws {
+        let (store, ids, failing) = try openWithFailingRead(["Plan", "Other"], failing: "Plan")
+        let plan = try XCTUnwrap(ids["Plan"])
+        XCTAssertEqual(store.body(for: plan).string, "")
+        XCTAssertNotNil(store.loadError(for: plan))
+        XCTAssertTrue(store.isBodyWriteBlocked(plan), "the editor stays read-only")
+        XCTAssertNil(store.bodyForOutput(plan))
+
+        let export = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
+                                                 to: exportFolder(), body: store.bodyForOutput)
+        let folder = export.folder
+        let result = try export.writeAll()
+        XCTAssertEqual(result.skipped, ["Plan"])
+        XCTAssertEqual(result.noteCount, 1)
+        let async = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
+                                                to: exportFolder(), body: store.bodyForOutput)
+        async.bodyWhenRead = { await store.bodyForOutputWhenRead($0, isCancelled: $1) }
+        let asyncResult = try await async.write { _ in true }
+        XCTAssertEqual(asyncResult.skipped, ["Plan"])
+        let written = try FileManager.default.subpathsOfDirectory(atPath: folder.path)
+        XCTAssertFalse(written.contains { $0.hasSuffix("Plan.md") }, "\(written)")
+
+        let service = AutomationService(store: store, defaults: UserDefaults(suiteName: "failed-read-\(UUID().uuidString)")!,
+                                        staged: StagedUploads(directory: root.appendingPathComponent("staged")),
+                                        dailyNotesAvailable: { true })
+        XCTAssertThrowsError(try service.bodyString(of: plan, format: .markdown)) {
+            XCTAssertEqual($0 as? AutomationError, .noteUnreadable)
+        }
+        let spec = try XCTUnwrap(LinkingAPIRoutes.routes.first { $0.id == "linking.outline" })
+        let context = LocalAPIContext(request: HTTPRequest(method: spec.method.rawValue, path: spec.pattern, body: Data()),
+                                      route: RouteMatch(spec: spec, params: ["id": plan.uuidString]), client: nil, origin: .native)
+        let response = LinkingAPIRoutes.respond("linking.outline", context, store: store)
+        XCTAssertEqual((try? APIJSON.decoder().decode(APIErrorBody.self, from: response.body))?.error.code, .noteUnreadable)
+
+        failing.withLock { $0 = false }
+        XCTAssertEqual(store.body(for: plan).string, "Plan\nPlan text", "a later read that succeeds is used")
+        XCTAssertNil(store.loadError(for: plan))
+        XCTAssertFalse(store.isBodyWriteBlocked(plan))
+        XCTAssertNotNil(store.bodyForOutput(plan))
+    }
+
+    func testATemplateWhoseFileFailedToReadCreatesNothing() throws {
+        let (store, ids, _) = try openWithFailingRead(["Plan"], failing: "Plan")
+        let template = try XCTUnwrap(ids["Plan"])
+        store.moveNote(template, to: store.templatesNotebookID(createIfMissing: true))
+        store.flush()
+        store.dropCachedBody(template)
+        XCTAssertTrue(store.isTemplate(template))
+        var told: [String] = []
+        store.onTemplateNotRead = { told.append($0) }
+        let count = store.notes.count
+        XCTAssertThrowsError(try store.createNote(fromTemplate: template, title: "Trip", in: nil))
+        XCTAssertThrowsError(try store.expandedTemplate(template, title: "Here", date: Date()))
+        var notebook = store.createNotebook(name: "Trips", symbol: "folder", colorHex: NotebookPalette.colors[0])
+        notebook.defaultTemplateID = template
+        store.updateNotebook(notebook)
+        store.selection = .notebook(notebook.id)
+        XCTAssertNil(store.createNoteInCurrentContext())
+        XCTAssertEqual(store.notes.count, count)
+        XCTAssertEqual(told.count, 1)
+        XCTAssertTrue(told.first?.contains("couldn’t be read") == true, told.first ?? "")
+    }
+
+    /// Markdown notes whose files are read again (uncached); reading `failing` throws EIO while the flag is set.
+    private func openWithFailingRead(_ titles: [String], failing title: String)
+        throws -> (NoteStore, [String: UUID], OSAllocatedUnfairLock<Bool>) {
+        for title in titles { try put("\(title).md", "# \(title)\n\n\(title) text\n") }
+        let store = open()
+        store.preferences = try XCTUnwrap(UserDefaults(suiteName: "failing-read-\(UUID().uuidString)"))
+        let storage = try XCTUnwrap(store.markdownStorage)
+        var ids: [String: UUID] = [:]
+        for title in titles { ids[title] = try note(store, titled: title).id }
+        for id in ids.values { store.dropCachedBody(id) }
+        let failing = OSAllocatedUnfairLock(initialState: true)
+        storage.readFileData = { url in
+            if url.lastPathComponent == "\(title).md", failing.withLock({ $0 }) { throw POSIXError(.EIO) }
+            return try Data(contentsOf: url)
+        }
+        return (store, ids, failing)
     }
 
     /// A Markdown library in its launch "checking" window, with a template whose body isn't cached.

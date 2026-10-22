@@ -39,6 +39,8 @@ enum BodyEditError: Error, Equatable, LocalizedError {
         "“\(folder)” isn't answering yet, so NoteIt can't read or change this note. Try again when the folder is back."
     }
 
+    static let templateUnreadableMessage = "The template’s file couldn’t be read, so nothing was created."
+
     static func templateNotReadMessage(_ folder: String) -> String {
         "“\(folder)” isn't answering yet, so NoteIt can't read the template. Nothing was created; try again when the folder is back."
     }

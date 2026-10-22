@@ -384,16 +384,20 @@ final class NoteStore: ObservableObject {
         if let markdownStorage {
             switch readMarkdownBody(id, from: markdownStorage, wait: wait) {
             case .read(let stored):
+                clearUnreadableMarkdownBody(id)
                 loaded = stored.text
                 setBodyExtras(stored.extras, for: id)
                 if let reason = stored.readOnlyReason { blockBodyWrites(id, reason: reason) }
             case .missing:
+                clearUnreadableMarkdownBody(id)
                 if let held = heldMarkdownBody(id) {
                     loaded = held.text
                     setBodyExtras(held.extras, for: id)
                 }
             case .failed(let error):
+                // Never cached: shown empty and read-only, never output or built on, and read again next time.
                 handleUnreadableMarkdownBody(id, at: url, error: error)
+                return NSAttributedString()
             case .unanswered:
                 // Shown as last known and read again once the folder answers; never cached, so never written.
                 return markdownStorage.lastKnownBody(id)?.text ?? heldMarkdownBody(id)?.text ?? NSAttributedString()
@@ -423,7 +427,7 @@ final class NoteStore: ObservableObject {
     /// The content folder's name while the note's Markdown file hasn't been read (the folder is being checked or
     /// doesn't answer), so `body(for:)` only gave a placeholder that nothing may be built on; nil once it's read.
     func unreadMarkdownFolder(of id: UUID) -> String? {
-        guard let markdownStorage, bodyCache[id] == nil else { return nil }
+        guard let markdownStorage, bodyCache[id] == nil, loadErrors[id] == nil else { return nil }
         return markdownStorage.contentRootURL.lastPathComponent
     }
 
@@ -435,7 +439,15 @@ final class NoteStore: ObservableObject {
 
     func bodyForOutput(_ id: UUID, wait: TimeInterval?) -> NSAttributedString? {
         let text = body(for: id, wait: wait)
-        return unreadMarkdownFolder(of: id) == nil ? text : nil
+        return bodyNotReadError(id) == nil ? text : nil
+    }
+
+    /// Why the note's body is only a placeholder: its Markdown file wasn't read yet (`folderNotAvailable`) or reading
+    /// it failed (`writeBlocked`); nil when it's the note's content.
+    func bodyNotReadError(_ id: UUID) -> BodyEditError? {
+        if let folder = unreadMarkdownFolder(of: id) { return .folderNotAvailable(folder) }
+        if markdownStorage != nil, loadErrors[id] != nil { return .writeBlocked }
+        return nil
     }
 
     /// `bodyForOutput`, but while a read of the folder is still running (this note's or another's) it waits for it,
@@ -508,8 +520,8 @@ final class NoteStore: ObservableObject {
         // Notes in Recently Deleted are read-only.
         guard let index = noteIndex(id), notes[index].deletedAt == nil else { return }
         let textUnchanged = body(for: id).isEqual(to: text)
-        if unreadMarkdownFolder(of: id) != nil {
-            NSLog("NoteIt: not changing note \(id): its Markdown file hasn't been read yet")
+        if bodyNotReadError(id) != nil {
+            NSLog("NoteIt: not changing note \(id): its Markdown file hasn't been read")
             return
         }
         let extrasChanged = extras.map { $0 != (bodyExtras[id] ?? .empty) } ?? false
@@ -787,6 +799,19 @@ final class NoteStore: ObservableObject {
     /// A body that must not be overwritten, shown read-only with `reason`.
     func blockMarkdownBodyWrites(_ id: UUID, reason: String) {
         blockBodyWrites(id, reason: reason)
+    }
+
+    /// A Markdown file that failed to read and has now been read (or is gone): the note is usable again.
+    private func clearUnreadableMarkdownBody(_ id: UUID) {
+        guard loadErrors[id] != nil else { return }
+        loadErrors[id] = nil
+        loadErrorFiles[id] = nil
+        if bodyReadOnlyReasons[id] == nil { bodyWriteBlocked.remove(id) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.objectWillChange.send()
+            if self.selectedNoteID == id, self.cachedBody(id) != nil { self.externallyUpdatedNoteID = id }
+        }
     }
 
     /// Lets a note whose file came back be edited again.
