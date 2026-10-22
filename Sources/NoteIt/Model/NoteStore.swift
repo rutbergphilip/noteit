@@ -122,7 +122,17 @@ final class NoteStore: ObservableObject {
     /// The idle rename's clock; tests inject one.
     var markdownClock: () -> Date = Date.init
     var hasPendingMarkdownRenames = false
-    var markdownScanScheduled = false
+    var markdownScanRunning = false
+    var markdownScanAgain = false
+    /// How a rescan reads the content folder; tests inject one that hangs like a dead network volume.
+    var markdownFolderScan: @Sendable (URL, MarkdownPathIndex) -> FolderScanResult = { FolderScanner.scan(contentRoot: $0, index: $1) }
+    /// A rescan that takes longer means the folder is unavailable; notes are then read-only until it responds.
+    var markdownScanTimeout: TimeInterval = 20
+    var markdownUnavailableRetryInterval: TimeInterval = 15
+    var markdownUnavailableRetryScheduled = false
+    /// Set while the content folder doesn't respond (a network volume that hangs): the editor is read-only and
+    /// nothing is read from or written to the folder.
+    @Published var markdownFolderUnavailable = false
     var markdownWatcher: MarkdownFolderWatcher?
     var attachmentSweepTimer: Timer?
     /// Called once when the content folder goes away while the library is open; the app asks the user to locate it.

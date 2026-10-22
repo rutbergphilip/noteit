@@ -26,6 +26,14 @@ struct FolderScanResult: Equatable, Sendable {
     /// Files left alone: too large, symbolic links, and files iCloud hasn't downloaded.
     var skipped: [String] = []
 
+    /// Drops what the scan saw of these notes; the next scan sees it again.
+    mutating func leaveOut(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        changed = changed.filter { !ids.contains($0.key) }
+        moved = moved.filter { !ids.contains($0.key) }
+        removed.subtract(ids)
+    }
+
     var hasNoteChanges: Bool {
         !changed.isEmpty || !added.isEmpty || !moved.isEmpty || !removed.isEmpty || !duplicateIDs.isEmpty
     }
@@ -115,6 +123,7 @@ enum FolderScanner {
         guard let data = try? readData(contentRoot.appendingPathComponent(file.path)) else { return }
         if AttachmentStore.sha256(data) == entry.sha256 {
             index.update(id) { stored in
+                guard stored.sha256 == entry.sha256 else { return }
                 stored.size = file.stat.size
                 stored.mtimeNs = file.stat.mtimeNs
                 stored.inode = file.stat.inode

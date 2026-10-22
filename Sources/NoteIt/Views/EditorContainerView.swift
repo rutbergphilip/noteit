@@ -24,6 +24,7 @@ struct EditorContainerView: View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
             let writeBlocked = store.isBodyWriteBlocked(id)
             let readOnly = writeBlocked || note.deletedAt != nil || store.libraryConversionInProgress
+                || store.markdownFolderUnavailable
             VStack(spacing: 0) {
                 EditorHeader(note: note)
                 LinkRenameBanner(tracker: renames)
@@ -40,6 +41,13 @@ struct EditorContainerView: View {
                 }
                 if store.libraryConversionInProgress {
                     Text("Converting your library…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.markdownFolderUnavailable, let folder = store.markdownStorage?.contentRootURL {
+                    Text("“\(folder.lastPathComponent)” isn’t responding. Notes are read-only until it’s back.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)

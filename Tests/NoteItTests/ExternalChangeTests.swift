@@ -48,6 +48,73 @@ final class ExternalChangeTests: XCTestCase {
         try XCTUnwrap(store.notes.first { $0.title == title }, "no note titled \(title)")
     }
 
+    private func waitUntil(_ condition: @MainActor () -> Bool, _ message: String) async throws {
+        let deadline = Date().addingTimeInterval(5)
+        while !condition() {
+            guard Date() < deadline else { return XCTFail(message) }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    func testAFolderThatStopsRespondingIsUnavailableNotEmptyAndNeverBlocksTheMainThread() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let store = open()
+        let kept = try note(store, titled: "Kept").id
+        var reportedMissing = false
+        store.onMarkdownFolderMissing = { _ in reportedMissing = true }
+        store.markdownScanTimeout = 0.2
+        store.markdownUnavailableRetryInterval = 0.2
+        let realScan = store.markdownFolderScan
+        let hung = DispatchSemaphore(value: 0)
+        store.markdownFolderScan = { _, _ in
+            _ = hung.wait(timeout: .now() + 3)
+            var result = FolderScanResult()
+            result.removed = [kept]
+            return result
+        }
+
+        let started = Date()
+        store.markdownFolderNeedsScan()
+        try await waitUntil({ store.markdownFolderUnavailable }, "the hung folder is reported unavailable")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5, "the main thread kept running while the scan hung")
+        XCTAssertEqual(store.note(with: kept)?.deletedAt, nil)
+        XCTAssertFalse(reportedMissing, "a folder that doesn't answer isn't a missing folder")
+
+        store.markdownFolderScan = realScan
+        hung.signal()
+        try await waitUntil({ !store.markdownFolderUnavailable }, "the folder is available again once it answers")
+        XCTAssertEqual(store.note(with: kept)?.deletedAt, nil, "the hung scan's late result is never applied")
+        XCTAssertFalse(reportedMissing)
+    }
+
+    func testWritesToAFolderThatStopsRespondingWaitInsteadOfFreezing() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let store = open()
+        let kept = try note(store, titled: "Kept").id
+        let storage = try XCTUnwrap(store.markdownStorage)
+        storage.rootTimeout = 0.2
+        store.markdownUnavailableRetryInterval = 0.2
+        let hung = DispatchSemaphore(value: 0)
+        let realCheck = storage.rootCheck
+        storage.rootCheck = { url in
+            _ = hung.wait(timeout: .now() + 3)
+            return realCheck(url)
+        }
+
+        store.updateBody(kept, NSAttributedString(string: "Kept\n\nedited while away"))
+        let started = Date()
+        store.flush()
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5)
+        XCTAssertFalse(try read("Kept.md").contains("edited while away"))
+        try await waitUntil({ store.markdownFolderUnavailable }, "the hung folder is reported unavailable")
+
+        storage.rootCheck = realCheck
+        hung.signal()
+        try await waitUntil({ !store.markdownFolderUnavailable }, "the folder is available again once it answers")
+        store.flush()
+        XCTAssertTrue(try read("Kept.md").contains("edited while away"), "the edit kept in memory is written once it answers")
+    }
+
     func testEditsMadeWhileNoteItWasClosedReachSpotlightAtTheNextLaunch() async throws {
         try put("Kept.md", "# Kept\n\nfirst\n")
         try put("Gone.md", "# Gone\n\nsoon\n")

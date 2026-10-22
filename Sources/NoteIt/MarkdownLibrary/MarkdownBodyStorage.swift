@@ -4,6 +4,7 @@ import Foundation
 import NoteItCore
 import NoteItDoc
 import NoteItMarkdown
+import NoteItSync
 
 enum MarkdownStorageError: Error, Equatable {
     /// The file changed on disk since NoteIt last read or wrote it; the external change is handled first.
@@ -75,10 +76,37 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         contentRootURL.appendingPathComponent(path, isDirectory: false)
     }
 
-    var contentRootExists: Bool {
-        var isDirectory: ObjCBool = false
-        return FileManager.default.fileExists(atPath: contentRootURL.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    enum ContentRootState: Equatable {
+        case present, missing
+        /// The check didn't come back within `rootTimeout`: a network volume that hangs.
+        case unresponsive
     }
+
+    /// Whether the content folder is there; injected by tests.
+    var rootCheck: @Sendable (URL) -> Bool = { url in
+        var isDirectory: ObjCBool = false
+        return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) && isDirectory.boolValue
+    }
+    var rootTimeout: TimeInterval = 3
+    /// Called on the checking thread when a check of the content folder times out.
+    var onRootUnresponsive: (() -> Void)?
+    private let probeLock = NSLock()
+
+    /// Never blocks longer than `rootTimeout`; while an earlier check is still stuck, answers `.unresponsive` at once.
+    var contentRootState: ContentRootState {
+        let check = rootCheck
+        let root = contentRootURL
+        let result = probeLock.withLock {
+            BoundedFileAccess.shared.runBlocking(key: "markdown-root:" + root.path, timeout: rootTimeout) { check(root) }
+        }
+        guard let result else {
+            onRootUnresponsive?()
+            return .unresponsive
+        }
+        return result ? .present : .missing
+    }
+
+    var contentRootExists: Bool { contentRootState == .present }
 
     /// Nothing is written while the content folder is gone (an unmounted disk): creating it again would put notes
     /// on the wrong volume.

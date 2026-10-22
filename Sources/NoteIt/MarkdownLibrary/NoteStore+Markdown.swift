@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import NoteItCore
 import NoteItMarkdown
+import NoteItSync
 
 /// A Markdown library in `NoteStore`: folders follow notebooks on every flush, files are renamed after their
 /// title when the note is left alone, and changes made outside NoteIt are applied from folder scans
@@ -75,35 +76,122 @@ extension NoteStore {
 
     // MARK: Scans
 
-    /// Rescans the content folder on the next turn of the main queue; repeated calls before then scan once.
+    /// Rescans the content folder off the main thread and applies the result on it; calls while a scan runs ask
+    /// for one more after it. A scan that doesn't finish within `markdownScanTimeout` makes the folder unavailable.
     func markdownFolderNeedsScan() {
-        guard markdownStorage != nil, !markdownScanScheduled else { return }
-        markdownScanScheduled = true
-        DispatchQueue.main.async { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.markdownScanScheduled = false
-                self.rescanMarkdownFolder()
+        guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return }
+        guard !markdownScanRunning else {
+            markdownScanAgain = true
+            return
+        }
+        markdownScanRunning = true
+        let entries = storage.index.allEntries
+        let folders = storage.index.allNotebookFolders
+        BoundedFileAccess.shared.run(key: "markdown-scan:" + storage.contentRootURL.path, timeout: markdownScanTimeout,
+                                     markdownScanWork(storage)) { outcome in
+            DispatchQueue.main.async { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.markdownScanRunning = false
+                    guard self.markdownStorage === storage else { return }
+                    self.finishMarkdownScan(outcome, since: (entries, folders))
+                    if self.markdownScanAgain {
+                        self.markdownScanAgain = false
+                        self.markdownFolderNeedsScan()
+                    }
+                }
             }
         }
     }
 
-    /// Scans the content folder and applies what changed outside NoteIt. Nothing happens while it is missing.
-    func rescanMarkdownFolder() {
+    /// Scans and applies before returning, waiting at most `markdownScanTimeout`: for a caller that needs the
+    /// library caught up with the folder before it goes on (a conversion).
+    /// False when the folder is missing or doesn't answer.
+    @discardableResult
+    func rescanMarkdownFolder() -> Bool {
+        guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return true }
+        let outcome = scanMarkdownFolderNow(storage)
+        finishMarkdownScan(outcome, since: nil)
+        if case .scanned = outcome { return true }
+        return false
+    }
+
+    enum MarkdownScanOutcome {
+        case missing
+        case scanned(FolderScanResult)
+    }
+
+    private func scanMarkdownFolderNow(_ storage: MarkdownBodyStorage, timeout: TimeInterval? = nil) -> MarkdownScanOutcome? {
+        BoundedFileAccess.shared.runBlocking(key: "markdown-scan-now:" + storage.contentRootURL.path,
+                                             timeout: timeout ?? markdownScanTimeout, markdownScanWork(storage))
+    }
+
+    private func markdownScanWork(_ storage: MarkdownBodyStorage) -> () -> MarkdownScanOutcome {
+        let root = storage.contentRootURL
+        let index = storage.index
+        let check = storage.rootCheck
+        let scan = markdownFolderScan
+        return {
+            guard check(root) else { return .missing }
+            let result = scan(root, index)
+            return check(root) ? .scanned(result) : .missing
+        }
+    }
+
+    /// `since`: the index when a background scan started. Notes NoteIt wrote meanwhile are left to the next scan,
+    /// and a notebook folder NoteIt renamed meanwhile makes the whole result stale.
+    private func finishMarkdownScan(_ outcome: MarkdownScanOutcome?,
+                                    since before: (entries: [UUID: MarkdownFileEntry], folders: [UUID: String])?) {
         guard let storage = markdownStorage, !isClosedForLibrarySwitch else { return }
-        guard storage.contentRootExists else { return markdownFolderWentMissing() }
-        markdownFolderReportedMissing = false
-        let result = FolderScanner.scan(contentRoot: storage.contentRootURL, index: storage.index)
-        guard storage.contentRootExists else { return markdownFolderWentMissing() }
-        applyExternalChanges(result, atLaunch: false)
+        switch outcome {
+        case nil:
+            markdownFolderBecameUnavailable()
+        case .missing:
+            markdownFolderUnavailable = false
+            markdownFolderWentMissing()
+        case .scanned(var result):
+            let wasUnavailable = markdownFolderUnavailable
+            markdownFolderUnavailable = false
+            markdownFolderReportedMissing = false
+            if let before {
+                guard storage.index.allNotebookFolders == before.folders else { return markdownFolderNeedsScan() }
+                let now = storage.index.allEntries
+                let written = Set(before.entries.keys).symmetricDifference(now.keys)
+                    .union(now.filter { id, entry in
+                        before.entries[id].map { $0.path != entry.path || $0.sha256 != entry.sha256 } ?? false
+                    }.keys)
+                result.leaveOut(written)
+            }
+            applyExternalChanges(result, atLaunch: false)
+            if wasUnavailable { scheduleSave() }
+        }
+    }
+
+    /// The folder doesn't answer (a network volume that hangs): notes stay as they are and read-only, nothing is
+    /// treated as removed, and the folder is tried again every `markdownUnavailableRetryInterval`.
+    func markdownFolderBecameUnavailable() {
+        guard let storage = markdownStorage else { return }
+        if !markdownFolderUnavailable {
+            markdownFolderUnavailable = true
+            NSLog("NoteIt: the library folder \(storage.contentRootURL.path) doesn't respond; nothing is written until it does")
+        }
+        guard !markdownUnavailableRetryScheduled else { return }
+        markdownUnavailableRetryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + markdownUnavailableRetryInterval) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.markdownUnavailableRetryScheduled = false
+                if self.markdownFolderUnavailable { self.markdownFolderNeedsScan() }
+            }
+        }
     }
 
     /// Starts the FSEvents watcher; the app calls this once the library is loaded.
     func startWatchingMarkdownFolder() {
         guard let storage = markdownStorage, markdownWatcher == nil else { return }
         let watcher = MarkdownFolderWatcher(root: storage.contentRootURL, ledger: storage.ledger,
-                                            onChange: { [weak self] in self?.rescanMarkdownFolder() },
-                                            onRootChanged: { [weak self] in self?.rescanMarkdownFolder() })
+                                            onChange: { [weak self] in self?.markdownFolderNeedsScan() },
+                                            onRootChanged: { [weak self] in self?.markdownFolderNeedsScan() })
         guard watcher.start() else { return NSLog("NoteIt: couldn't watch \(storage.contentRootURL.path) for changes") }
         markdownWatcher = watcher
         let attachments = storage.attachments
@@ -111,7 +199,7 @@ extension NoteStore {
         timer.tolerance = 5 * 60
         RunLoop.main.add(timer, forMode: .common)
         attachmentSweepTimer = timer
-        rescanMarkdownFolder()
+        markdownFolderNeedsScan()
     }
 
     func stopWatchingMarkdownFolder() {
@@ -120,6 +208,9 @@ extension NoteStore {
         attachmentSweepTimer?.invalidate()
         attachmentSweepTimer = nil
     }
+
+    /// The launch scan reads every changed file, so it may take longer than a rescan.
+    static let launchScanTimeout: TimeInterval = 60
 
     /// How often unused attachments are looked for when nothing else is written.
     static let attachmentSweepInterval: TimeInterval = 60 * 60
@@ -137,10 +228,15 @@ extension NoteStore {
         guard let storage = markdownStorage else { return }
         heldMarkdownDeletions = MassDeletionGuard.load(dataDir: rootURL)
         storage.setNotebooks(notebooks)
+        storage.onRootUnresponsive = { [weak self] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.markdownFolderBecameUnavailable() } }
+        }
         guard storage.contentRootExists else { return }
         let before = notes
         let notebooksBefore = notebooks
-        let result = FolderScanner.scan(contentRoot: storage.contentRootURL, index: storage.index)
+        guard case .scanned(let result) = scanMarkdownFolderNow(storage, timeout: Self.launchScanTimeout) else {
+            return markdownFolderBecameUnavailable()
+        }
         applyExternalChanges(result, atLaunch: true)
         let tombstones = Set(syncDeletions().keys)
         let orphans = storage.index.ids.filter { note(with: $0) == nil && !tombstones.contains($0) && !isTombstoned($0) }
@@ -560,9 +656,11 @@ extension NoteStore {
         heldMarkdownDeletions = []
         MassDeletionGuard.save([], dataDir: rootURL)
         for id in held { unblockMarkdownBodyWrites(id, reason: Self.missingFileReason) }
-        let result = FolderScanner.scan(contentRoot: storage.contentRootURL, index: storage.index)
-        guard storage.contentRootExists else { return markdownFolderWentMissing() }
-        applyExternalChanges(result, atLaunch: false, confirmsMassDeletion: true)
+        switch scanMarkdownFolderNow(storage) {
+        case .scanned(let result): applyExternalChanges(result, atLaunch: false, confirmsMassDeletion: true)
+        case .missing: markdownFolderWentMissing()
+        case nil: markdownFolderBecameUnavailable()
+        }
     }
 
     /// What a held note shows: its last known text, since its file is missing.

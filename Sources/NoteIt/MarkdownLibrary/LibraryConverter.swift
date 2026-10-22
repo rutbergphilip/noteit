@@ -311,7 +311,7 @@ final class LibraryConverter {
     /// Called before moving and again right before the commit.
     private func requireUnchanged(since before: Snapshot) throws {
         // Edits saved by other apps reach the store through the watcher's debounce, which can't run in between.
-        store.rescanMarkdownFolder()
+        guard store.rescanMarkdownFolder() else { throw LibraryConversionError.folderMissing }
         flush(store)
         guard snapshot == before, !store.hasUnsavedChanges else { throw LibraryConversionError.libraryChangedDuringConversion }
     }
