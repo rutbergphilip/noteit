@@ -85,7 +85,8 @@ enum NotionImporter {
     /// `temporary` lists the unzipped folders, for the caller to remove; `failed` names the part ZIPs that
     /// couldn't be opened; `renamed` counts files and folders unzipped under another name because theirs was taken.
     /// Archives that together unpack past `limits` throw `ImportError.archiveTooLarge`; an outer archive or part
-    /// holding symbolic links, encrypted entries or unknown compression methods throws `.unsupportedArchive`.
+    /// holding symbolic links, encrypted entries, unknown compression methods or names too deep or too long to
+    /// unpack throws `.unsupportedArchive`.
     nonisolated static func contentRoots(for url: URL, limits: ZipLimits = .standard) throws
         -> (roots: [URL], temporary: [URL], failed: [String], renamed: Int) {
         let fm = FileManager.default

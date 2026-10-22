@@ -347,6 +347,55 @@ final class ZipDirectoryTests: XCTestCase {
         }
     }
 
+    func testTooDeepOrTooLongNamesAreRefusedWithAReason() throws {
+        let deep = String(repeating: "d/", count: 299) + "x.md"
+        let long = String(repeating: "é", count: 128) + ".md"
+        let part = String(repeating: "e", count: 255)
+        let cases = [[deep], [long], [String(repeating: "d/", count: 30_000) + "x.md"],
+                     [[part, part, part, part].joined(separator: "/")], [part, part], [part, part + "/x.md"]]
+        for names in cases {
+            let start = Date()
+            let error = try assertRefused(ZipFixture(files: [page()] + names.map { .init(name: Array($0.utf8), data: Data()) }))
+            XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+            let message = (error as? LocalizedError)?.errorDescription ?? ""
+            XCTAssertTrue(message.contains("too deeply nested or too long"), message)
+        }
+    }
+
+    func testPathsAreLimitedByTheirRealLengthOnDisk() throws {
+        let temporary = try XCTUnwrap(realpath(fm.temporaryDirectory.path, nil))
+        defer { free(temporary) }
+        let base = strlen(temporary) + "/noteit-import-".utf8.count + UUID().uuidString.utf8.count
+        func name(_ bytes: Int) -> String {
+            var characters = Array(repeating: Character("p"), count: bytes)
+            for slash in stride(from: 200, to: bytes - 1, by: 201) { characters[slash] = "/" }
+            return String(characters)
+        }
+        let longest = name(Int(PATH_MAX) - 1 - base - 1)
+        XCTAssertEqual(longest.utf8.count, Int(PATH_MAX) - 2 - base)
+        let error = try assertRefused(ZipFixture(files: [page(), .init(name: Array((longest + "x").utf8), data: Data())]))
+        XCTAssertTrue(((error as? LocalizedError)?.errorDescription ?? "").contains("too long"), "\(String(describing: error))")
+        let url = try save(ZipFixture(files: [.init(name: Array(longest.utf8), data: Data())]), as: "Longest.zip")
+        var limits = ZipLimits.standard
+        let folder = try XCTUnwrap(try MarkdownImporter.unzip(url, within: &limits))
+        XCTAssertNoThrow(try fm.removeItem(at: folder))
+    }
+
+    func testDeepPathsUnpackQuickly() throws {
+        let folder = (0..<99).map { "f\($0)/" }.joined()
+        let longest = String(repeating: "d/", count: 255) + String(repeating: "e", count: 255)
+        let url = try save(ZipFixture(files: (0..<500).map { .init(name: Array("\(folder)\($0).md".utf8), data: Data()) }
+                                        + [.init(name: Array(longest.utf8), data: Data())]),
+                           as: "Deep.zip")
+        var limits = ZipLimits.standard
+        let start = Date()
+        let result = try XCTUnwrap(try MarkdownImporter.unpack(url, within: &limits))
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertEqual(result.fileSizes.count, 501)
+        XCTAssertNotNil(result.fileSizes[longest])
+        XCTAssertNoThrow(try fm.removeItem(at: result.folder))
+    }
+
     func testCancelledUnpackLeavesNothing() async throws {
         let url = try save(ZipFixture(files: [page(), .init(name: Array("big.bin".utf8), data: Data(count: 5_000_000), deflate: true)]),
                            as: "Cancel.zip")

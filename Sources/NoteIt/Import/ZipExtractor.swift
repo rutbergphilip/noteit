@@ -24,6 +24,9 @@ enum ZipExtractor {
         case symlink(String)
         case encrypted(String)
         case unsupportedMethod(String, UInt16)
+        /// A name nested more than `maxDepth` folders deep, with a part longer than `maxComponentBytes`, or whose
+        /// path on disk would pass `maxPathBytes` (which file APIs taking paths can't reach, not even to delete it).
+        case nameTooLong(String)
 
         var errorDescription: String? {
             switch self {
@@ -34,6 +37,8 @@ enum ZipExtractor {
             case .symlink(let name): "“\(name)” in it is a symbolic link"
             case .encrypted(let name): "“\(name)” in it is encrypted"
             case .unsupportedMethod(let name, let method): "“\(name)” in it uses a compression method NoteIt can't read (\(method))"
+            case .nameTooLong(let name):
+                "“\(name.count > 80 ? name.prefix(80) + "…" : name)” in it is too deeply nested or too long to unpack"
             }
         }
     }
@@ -50,6 +55,9 @@ enum ZipExtractor {
     }
 
     static let chunkSize = 64 * 1024
+    static let maxDepth = 256
+    static let maxComponentBytes = 255
+    static let maxPathBytes = Int(PATH_MAX) - 1
 
     /// Unpacks `archive` into `destination`, which must not exist yet.
     static func extract(_ archive: URL, to destination: URL, maxEntries: Int, maxBytes: Int64) throws -> Result {
@@ -61,24 +69,43 @@ enum ZipExtractor {
         guard directory.entries.count <= maxEntries, directory.totalUncompressedSize <= UInt64(max(maxBytes, 0)) else {
             throw Failure.tooLarge
         }
-        let plans = try directory.entries.map(plan)
+        let base = realLength(of: destination)
+        let plans = try directory.entries.map { entry in
+            try Task.checkCancellation()
+            return try plan(entry, under: base)
+        }
+        var naming = try Naming(plans: plans)
         guard mkdir(destination.path, 0o700) == 0 else { throw Failure.unreadable }
         do {
-            return try unpack(directory, plans: plans, from: handle.fileDescriptor, fileSize: fileSize,
-                              into: destination, maxBytes: maxBytes)
+            return try unpack(directory, plans: plans, naming: &naming, from: handle.fileDescriptor, fileSize: fileSize,
+                              into: destination, at: base, maxBytes: maxBytes)
         } catch {
             try? FileManager.default.removeItem(at: destination)
             throw error
         }
     }
 
+    /// The length of `destination`'s path with its folder's symbolic links resolved ("/var" is "/private/var"), as
+    /// the system counts it against `PATH_MAX`.
+    private static func realLength(of destination: URL) -> Int {
+        let folder = destination.deletingLastPathComponent().path
+        guard let real = realpath(folder, nil) else { return destination.path.utf8.count }
+        defer { free(real) }
+        return max(strlen(real) + 1 + destination.lastPathComponent.utf8.count, destination.path.utf8.count)
+    }
+
     private struct Plan {
+        /// The name's parts, in NFC.
         var components: [String]
+        /// `components` case-folded, as `Naming` compares them.
+        var folded: [String]
         var isDirectory: Bool
+        /// How many of `components` are folders.
+        var folderCount: Int { isDirectory ? components.count : components.count - 1 }
     }
 
     /// Checks an entry before anything is written: its name, type, encryption and method.
-    private static func plan(_ entry: ZipDirectory.Entry) throws -> Plan {
+    private static func plan(_ entry: ZipDirectory.Entry, under base: Int) throws -> Plan {
         let name = entry.name
         var parts = name.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         let isDirectory = name.hasSuffix("/")
@@ -87,16 +114,22 @@ enum ZipExtractor {
               parts.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\0") }) else {
             throw Failure.unsafeName(name)
         }
+        guard parts.count <= maxDepth else { throw Failure.nameTooLong(name) }
+        let components = parts.map(\.precomposedStringWithCanonicalMapping)
+        guard components.allSatisfy({ $0.utf8.count <= maxComponentBytes }),
+              components.reduce(base, { $0 + 1 + $1.utf8.count }) <= maxPathBytes else {
+            throw Failure.nameTooLong(name)
+        }
         if (entry.externalAttributes >> 16) & UInt32(S_IFMT) == UInt32(S_IFLNK) { throw Failure.symlink(name) }
         if entry.flags & 0x0041 != 0 || entry.method == 99 { throw Failure.encrypted(name) }
         guard entry.method == 0 || entry.method == 8 else { throw Failure.unsupportedMethod(name, entry.method) }
         if entry.method == 0, entry.compressedSize != entry.uncompressedSize { throw Failure.damaged(name) }
         if isDirectory, entry.uncompressedSize != 0 { throw Failure.damaged(name) }
-        return Plan(components: parts.map(\.precomposedStringWithCanonicalMapping), isDirectory: isDirectory)
+        return Plan(components: components, folded: components.map(Naming.fold), isDirectory: isDirectory)
     }
 
-    private static func unpack(_ directory: ZipDirectory, plans: [Plan], from fd: Int32, fileSize: UInt64,
-                               into destination: URL, maxBytes: Int64) throws -> Result {
+    private static func unpack(_ directory: ZipDirectory, plans: [Plan], naming: inout Naming, from fd: Int32,
+                               fileSize: UInt64, into destination: URL, at base: Int, maxBytes: Int64) throws -> Result {
         let root = open(destination.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard root >= 0 else { throw Failure.unreadable }
         defer { close(root) }
@@ -105,21 +138,40 @@ enum ZipExtractor {
         defer { input.deallocate(); output.deallocate() }
         var total: Int64 = 0
         var sizes: [String: Int64] = [:]
-        var naming = Naming(plans: plans)
-        for (entry, plan) in zip(directory.entries, plans) {
+        // The folder the last entry was in, kept open as entries of a folder usually follow each other.
+        var last: (id: Int, fd: Int32, path: [String])?
+        defer { if let last { close(last.fd) } }
+        for (index, (entry, plan)) in zip(directory.entries, plans).enumerated() {
             try Task.checkCancellation()
-            let folders = plan.isDirectory ? plan.components : Array(plan.components.dropLast())
-            let (parent, path) = try openFolder(folders, under: root, entry: entry.name, naming: &naming)
+            let folderIDs = naming.folderIDs[index]
+            let folderID = folderIDs.last ?? 0
+            let (parent, path): (Int32, [String])
+            if let last, last.id == folderID {
+                (parent, path) = (dup(last.fd), last.path)
+                guard parent >= 0 else { throw Failure.damaged(entry.name) }
+            } else {
+                (parent, path) = try openFolder(plan, ids: folderIDs, under: root, at: base, entry: entry.name,
+                                                naming: &naming)
+                if let last { close(last.fd) }
+                let kept = dup(parent)
+                last = kept >= 0 ? (folderID, kept, path) : nil
+            }
             defer { close(parent) }
             if plan.isDirectory { continue }
             let dataStart = try locateData(entry, in: fd, fileSize: fileSize, directoryOffset: directory.directoryOffset)
             let wanted = plan.components.last!
             var file: Int32 = -1
-            let created = try naming.firstFree(wanted, in: folders, onDisk: path, resume: true) { name in
+            var tooLong = false
+            let folderBytes = path.reduce(base, { $0 + 1 + $1.utf8.count })
+            let created = try naming.firstFree(wanted, folded: plan.folded.last!, in: folderID,
+                                               resume: true) { name in
+                guard fits(name, after: folderBytes) else { tooLong = true; return nil }
                 file = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
                 return file >= 0 ? true : errno == EEXIST ? false : nil
             }
-            guard let name = created, file >= 0 else { throw Failure.damaged(entry.name) }
+            guard let name = created, file >= 0 else {
+                throw tooLong ? Failure.nameTooLong(entry.name) : Failure.damaged(entry.name)
+            }
             defer { close(file) }
             if name != wanted { naming.renamed += 1 }
             var written: UInt64 = 0
@@ -152,24 +204,47 @@ enum ZipExtractor {
     }
 
     /// How names that are taken on disk are replaced, for one archive. Names are compared case-folded and in NFC,
-    /// as a case-insensitive volume compares them ("Straße" and "STRASSE" are one name).
+    /// as a case-insensitive volume compares them ("Straße" and "STRASSE" are one name). Each folder of the archive
+    /// gets a number (the archive's root is 0), so its case variants are one folder.
     private struct Naming {
-        /// The case-folded names entries of the archive have in each folder (by its case-folded archive path), which
-        /// a numbered name never takes.
-        var reserved: [String: Set<String>] = [:]
-        /// Where each folder (by its case-folded archive path) was created on disk, so its case variants share it.
-        var folders: [String: String] = [:]
-        /// Where the numbered search for a file name in a folder on disk resumes.
-        var nextNumbers: [String: Int] = [:]
+        struct Key: Hashable {
+            var folder: Int
+            var name: String
+        }
+
+        /// For each entry, the numbers of the folders it lies in, outermost first.
+        let folderIDs: [[Int]]
+        /// The case-folded names entries of the archive have in each folder, which a numbered name never takes.
+        let reserved: [Int: Set<String>]
+        /// The name each folder was given on disk.
+        var folders: [Int: String] = [:]
+        /// Where the numbered search for a file name in a folder resumes.
+        var nextNumbers: [Key: Int] = [:]
         var renamed = 0
         let attempts: Int
 
-        init(plans: [Plan]) {
+        init(plans: [Plan]) throws {
+            var ids: [Key: Int] = [:]
+            var reserved: [Int: Set<String>] = [:]
+            var folderIDs: [[Int]] = []
+            folderIDs.reserveCapacity(plans.count)
             for plan in plans {
-                for depth in plan.components.indices {
-                    reserved[Self.key(plan.components[..<depth]), default: []].insert(Self.fold(plan.components[depth]))
+                try Task.checkCancellation()
+                var parent = 0
+                var entryIDs: [Int] = []
+                for (depth, name) in plan.folded.enumerated() {
+                    reserved[parent, default: []].insert(name)
+                    guard depth < plan.folderCount else { break }
+                    let key = Key(folder: parent, name: name)
+                    let id = ids[key] ?? ids.count + 1
+                    ids[key] = id
+                    entryIDs.append(id)
+                    parent = id
                 }
+                folderIDs.append(entryIDs)
             }
+            self.folderIDs = folderIDs
+            self.reserved = reserved
             attempts = 2 * plans.count + 2
         }
 
@@ -177,22 +252,18 @@ enum ZipExtractor {
             name.folding(options: .caseInsensitive, locale: nil).precomposedStringWithCanonicalMapping
         }
 
-        static func key<S: Sequence<String>>(_ path: S) -> String {
-            path.map(fold).joined(separator: "/")
-        }
-
         /// Tries `name`, then numbered names not reserved in `folder`, until `create` succeeds (true) or fails other
         /// than because the name is taken (nil). With `resume`, the numbered search starts where the last one for
         /// this name stopped, so a name repeated many times doesn't make each search start again at "name 2".
-        mutating func firstFree(_ name: String, in folder: [String], onDisk path: [String], resume: Bool,
+        mutating func firstFree(_ name: String, folded: String, in folder: Int, resume: Bool,
                                 create: (String) -> Bool?) throws -> String? {
             switch create(name) {
             case true?: return name
             case nil: return nil
             case false?: break
             }
-            let taken = reserved[Self.key(folder)] ?? []
-            let resumeKey = Self.key(path + [name])
+            let taken = reserved[folder] ?? []
+            let resumeKey = Key(folder: folder, name: folded)
             var number = resume ? nextNumbers[resumeKey] ?? 2 : 2
             for _ in 0..<attempts {
                 try Task.checkCancellation()
@@ -211,28 +282,36 @@ enum ZipExtractor {
         }
     }
 
-    /// Opens (creating as needed) the folders below `root`, never following a symbolic link. A folder whose name
-    /// is taken by a file gets a numbered name, remembered by its case-folded archive path so later entries in it
-    /// and its case variants land in the same place; the numbered search starts at 2 each time, so an existing
-    /// numbered folder is reused before a new one is made. Returns the folder and its path on disk.
-    private static func openFolder(_ components: [String], under root: Int32, entry: String,
+    /// Whether `name` can be created in a folder whose path takes `bytes`, numbered names included.
+    private static func fits(_ name: String, after bytes: Int) -> Bool {
+        name.utf8.count <= maxComponentBytes && bytes + 1 + name.utf8.count <= maxPathBytes
+    }
+
+    /// Opens (creating as needed) the folders `plan` lies in below `root`, never following a symbolic link. A
+    /// folder whose name is taken by a file gets a numbered name, remembered by its number in `naming` so later
+    /// entries in it and its case variants land in the same place; the numbered search starts at 2 each time, so
+    /// an existing numbered folder is reused before a new one is made. Returns the folder and its path on disk.
+    private static func openFolder(_ plan: Plan, ids: [Int], under root: Int32, at base: Int, entry: String,
                                    naming: inout Naming) throws -> (Int32, [String]) {
         var current = dup(root)
         guard current >= 0 else { throw Failure.damaged(entry) }
         var path: [String] = []
-        for (depth, component) in components.enumerated() {
-            let key = Naming.key(components[...depth])
+        var bytes = base
+        var tooLong = false
+        for (depth, id) in ids.enumerated() {
+            let component = plan.components[depth]
             var next: Int32 = -1
-            var name = naming.folders[key] ?? component
-            if naming.folders[key] != nil {
+            var name = naming.folders[id] ?? component
+            if naming.folders[id] != nil {
                 next = openat(current, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             } else {
                 // An existing folder of the plain name is merged into; a file or link there means a numbered name.
                 let parent = current
                 let found: String?
                 do {
-                    found = try naming.firstFree(component, in: Array(components[..<depth]), onDisk: path,
+                    found = try naming.firstFree(component, folded: plan.folded[depth], in: depth == 0 ? 0 : ids[depth - 1],
                                                  resume: false) { candidate in
+                        guard fits(candidate, after: bytes) else { tooLong = true; return nil }
                         if mkdirat(parent, candidate, 0o755) != 0, errno != EEXIST { return nil }
                         next = openat(parent, candidate, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
                         return next >= 0 ? true : errno == ENOTDIR || errno == ELOOP ? false : nil
@@ -243,14 +322,15 @@ enum ZipExtractor {
                 }
                 if let found, next >= 0 {
                     name = found
-                    naming.folders[key] = name
+                    naming.folders[id] = name
                     if name != component { naming.renamed += 1 }
                 }
             }
             close(current)
-            guard next >= 0 else { throw Failure.damaged(entry) }
+            guard next >= 0 else { throw tooLong ? Failure.nameTooLong(entry) : Failure.damaged(entry) }
             current = next
             path.append(name)
+            bytes += 1 + name.utf8.count
         }
         return (current, path)
     }

@@ -229,7 +229,8 @@ final class MarkdownImporter {
     }
 
     /// `unzip(_:within:)` that also returns how many bytes were written for each file. Symbolic links, encrypted
-    /// entries and unknown compression methods throw `ImportError.unsupportedArchive`; cancellation is rethrown.
+    /// entries, unknown compression methods and names nested more than 256 deep or with a part over 255 bytes
+    /// throw `ImportError.unsupportedArchive`; cancellation is rethrown.
     nonisolated static func unpack(_ url: URL, within limits: inout ZipLimits) throws -> ZipExtractor.Result? {
         let destination = FileManager.default.temporaryDirectory
             .appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
@@ -240,7 +241,7 @@ final class MarkdownImporter {
             throw ImportError.archiveTooLarge(url.lastPathComponent)
         } catch let failure as ZipExtractor.Failure {
             switch failure {
-            case .symlink, .encrypted, .unsupportedMethod:
+            case .symlink, .encrypted, .unsupportedMethod, .nameTooLong:
                 throw ImportError.unsupportedArchive(url.lastPathComponent, reason: failure.errorDescription ?? "")
             default:
                 return nil
