@@ -219,4 +219,23 @@ final class ExternalChangeTests: XCTestCase {
         }
         XCTAssertNotNil(store.notes.first { $0.title == "Dropped" })
     }
+
+    func testAFileWrittenWithoutPauseDoesNotPostponeTheRescanForever() throws {
+        var rescans: [Date] = []
+        let watcher = MarkdownFolderWatcher(root: content, ledger: WriteLedger(), onChange: { rescans.append(Date()) },
+                                            onRootChanged: {})
+        XCTAssertTrue(watcher.start())
+        defer { watcher.stop() }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let start = Date()
+        try put("Settled.md", "# Settled\n")
+        var tick = 0
+        while Date().timeIntervalSince(start) < MarkdownFolderWatcher.maxDelay + 2 {
+            tick += 1
+            try put("Log.md", "# Log\n\nline \(tick)\n")
+            RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        }
+        let first = try XCTUnwrap(rescans.first, "a file written every 0.1 s must not hold the rescan back")
+        XCTAssertLessThan(first.timeIntervalSince(start), MarkdownFolderWatcher.maxDelay + 1)
+    }
 }

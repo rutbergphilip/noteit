@@ -2,7 +2,7 @@ import CoreServices
 import Foundation
 
 /// Watches the content folder with FSEvents (spec §3.5). File-level events arrive after 0.3 s; once 0.5 s pass
-/// without another one, `onChange` asks for a rescan, which compares every file with `markdown-files.json` and so
+/// without another one, or at most `maxDelay` after the first, `onChange` asks for a rescan, which compares every file with `markdown-files.json` and so
 /// also covers editors that save through a temp file and a rename. Events for files NoteIt just wrote (still
 /// carrying a hash in the ledger) and for `.noteit/` are dropped. `onRootChanged` reports the folder itself
 /// being moved, renamed or unmounted. FSEvents doesn't see changes made by other Macs on a network volume, so there
@@ -10,6 +10,8 @@ import Foundation
 final class MarkdownFolderWatcher: @unchecked Sendable {
     static let latency: CFTimeInterval = 0.3
     static let debounce: TimeInterval = 0.5
+    /// A file that keeps changing (a log, a sync client) can't hold back the rescan longer than this.
+    static let maxDelay: TimeInterval = 2
     static let networkPollInterval: TimeInterval = 15
 
     private let root: URL
@@ -19,6 +21,8 @@ final class MarkdownFolderWatcher: @unchecked Sendable {
     private let queue = DispatchQueue(label: "NoteIt.MarkdownFolderWatcher")
     private var stream: FSEventStreamRef?
     private var pending: DispatchWorkItem?
+    /// The first event the pending rescan waits for; runs on `queue`.
+    private var firstPendingEvent: DispatchTime?
     private var poll: DispatchSourceTimer?
 
     init(root: URL, ledger: WriteLedger, onChange: @escaping @MainActor () -> Void,
@@ -93,9 +97,16 @@ final class MarkdownFolderWatcher: @unchecked Sendable {
         }
         guard relevant else { return }
         pending?.cancel()
-        let work = DispatchWorkItem { DispatchQueue.main.async { MainActor.assumeIsolated { self.onChange() } } }
+        let now = DispatchTime.now()
+        let first = firstPendingEvent ?? now
+        firstPendingEvent = first
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.firstPendingEvent = nil
+            DispatchQueue.main.async { MainActor.assumeIsolated { self.onChange() } }
+        }
         pending = work
-        queue.asyncAfter(deadline: .now() + Self.debounce, execute: work)
+        queue.asyncAfter(deadline: min(now + Self.debounce, first + Self.maxDelay), execute: work)
     }
 
     private func isRelevant(_ path: String, flags: FSEventStreamEventFlags) -> Bool {
