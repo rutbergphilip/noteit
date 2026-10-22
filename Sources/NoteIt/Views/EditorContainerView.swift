@@ -24,7 +24,7 @@ struct EditorContainerView: View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
             let writeBlocked = store.isBodyWriteBlocked(id)
             let readOnly = writeBlocked || note.deletedAt != nil || store.libraryConversionInProgress
-                || store.markdownFolderUnavailable
+                || store.markdownFolderUnavailable || store.isMarkdownBodyLoading(id)
             VStack(spacing: 0) {
                 EditorHeader(note: note)
                 LinkRenameBanner(tracker: renames)
@@ -50,6 +50,14 @@ struct EditorContainerView: View {
                     Text(store.markdownFolderChecking
                          ? "Checking “\(folder.lastPathComponent)”… Notes are read-only until it answers."
                          : "“\(folder.lastPathComponent)” isn’t responding. Notes are read-only until it’s back.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.isMarkdownBodyLoading(id), !store.markdownFolderUnavailable,
+                   let folder = store.markdownStorage?.contentRootURL {
+                    Text("Reading this note from “\(folder.lastPathComponent)”…")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)

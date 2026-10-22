@@ -545,6 +545,39 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertTrue(fake.items[plan.uuidString]?.textContent?.contains("quarter goals") == true)
     }
 
+    func testOpeningANoteWhoseFileIsSlowToReadDoesntWaitAndFillsInWhenTheReadEnds() async throws {
+        try put("Slow.md", "# Slow\n\nfar away text\n")
+        let store = open()
+        let slow = try note(store, titled: "Slow").id
+        let storage = try XCTUnwrap(store.markdownStorage)
+        store.dropCachedBody(slow)
+        let gate = DispatchGroup()
+        gate.enter()
+        var released = false
+        defer { if !released { gate.leave() } }
+        storage.readFileData = { url in
+            _ = gate.wait(timeout: .now() + 3)
+            return try Data(contentsOf: url)
+        }
+        store.selectedNoteID = slow
+        store.externallyUpdatedNoteID = nil
+
+        let started = Date()
+        _ = store.body(for: slow)
+        XCTAssertLessThanOrEqual(Date().timeIntervalSince(started), 1.3, "the main thread waits at most about a second")
+        try await waitUntil({ store.isMarkdownBodyLoading(slow) }, "the note shows as loading")
+        XCTAssertFalse(store.markdownFolderUnavailable, "a slow read isn't a folder that doesn't answer")
+        XCTAssertNil(store.cachedBody(slow))
+
+        released = true
+        gate.leave()
+        try await waitUntil({ store.cachedBody(slow) != nil }, "the read that ended is kept")
+        XCTAssertTrue(store.body(for: slow).string.contains("far away text"))
+        XCTAssertEqual(store.externallyUpdatedNoteID, slow, "the editor is told to show it")
+        XCTAssertFalse(store.isMarkdownBodyLoading(slow))
+        XCTAssertFalse(store.markdownFolderUnavailable)
+    }
+
     func testASpotlightRebuildNeverWaitsOnTheMainThreadForAMarkdownFolder() async throws {
         for index in 0..<3 { try put("Note \(index).md", "# Note \(index)\n\ntext \(index)\n") }
         let store = open()

@@ -176,6 +176,13 @@ final class NoteStore: ObservableObject {
     var markdownWaitingCopies: [UUID: URL] = [:]
     /// Notes whose body couldn't be read because the folder didn't answer; they are read again once it does.
     var markdownBodiesNotRead: Set<UUID> = []
+    /// The longest `body(for:)` waits for a note's file; a slower read goes on off the main thread and the note shows
+    /// as loading until it ends (up to `markdownBlockingTimeout`).
+    var markdownBodyMainWait: TimeInterval = 1
+    /// Reads of note files still running, or ended and not yet taken, by note.
+    private var markdownReads: [UUID: MarkdownReadJob] = [:]
+    /// Notes shown as loading: `body(for:)` stopped waiting for their file.
+    @Published private(set) var markdownBodiesLoading: Set<UUID> = []
     /// Notes the launch scan changed, added or removed; persistent indexes (Spotlight) that start after it update
     /// these rather than trust what they kept from the last run.
     var notesChangedBeforeDerivedIndexes: Set<UUID> = []
@@ -569,29 +576,78 @@ final class NoteStore: ObservableObject {
         case unanswered
     }
 
-    /// Reads a note's file off the main thread, waiting at most `markdownBlockingTimeout`.
-    func readMarkdownBody(_ id: UUID, from storage: MarkdownBodyStorage) -> MarkdownBodyRead {
-        guard storage.index.entry(id) != nil else { return .missing }
+    /// Reads a note's file off the main thread, waiting at most `wait` (default `markdownBodyMainWait`). A read
+    /// that takes longer goes on, up to `markdownBlockingTimeout`; the note is `.unanswered` and shows as loading
+    /// meanwhile, and the next call takes the ended read.
+    func readMarkdownBody(_ id: UUID, from storage: MarkdownBodyStorage, wait: TimeInterval? = nil) -> MarkdownBodyRead {
+        guard let entry = storage.index.entry(id) else { return .missing }
         guard !markdownFolderUnavailable else {
             markdownBodiesNotRead.insert(id)
             return .unanswered
         }
-        let outcome = BoundedFileAccess.shared.runBlocking(key: "markdown-read:" + storage.contentRootURL.path,
-                                                           timeout: markdownBlockingTimeout) {
-            () -> MarkdownBodyRead in
-            guard let url = storage.revisionInputURL(for: id), FileManager.default.fileExists(atPath: url.path) else {
-                return .missing
-            }
-            do { return .read(try storage.read(id)) } catch { return .failed(error) }
+        let job: MarkdownReadJob
+        if let running = markdownReads[id], running.entry == entry {
+            job = running
+        } else {
+            job = MarkdownReadJob(entry: entry)
+            markdownReads[id] = job
+            // One key per note: a slow file doesn't hold up opening another.
+            BoundedFileAccess.shared.run(key: "markdown-read:\(storage.contentRootURL.path):\(id.uuidString)",
+                                         timeout: markdownBlockingTimeout, { () -> MarkdownBodyRead in
+                guard let url = storage.revisionInputURL(for: id), FileManager.default.fileExists(atPath: url.path) else {
+                    return .missing
+                }
+                do { return .read(try storage.read(id)) } catch { return .failed(error) }
+            }, completion: { [weak self] outcome in
+                job.finish(outcome)
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.markdownReadEnded(id, job) } }
+            })
         }
-        guard let outcome else {
-            markdownBodiesNotRead.insert(id)
+        guard job.wait(upTo: min(wait ?? markdownBodyMainWait, markdownBlockingTimeout)) else {
             // A read can run during a view update; publish on the next turn.
+            if !markdownBodiesLoading.contains(id) {
+                DispatchQueue.main.async { [weak self] in
+                    MainActor.assumeIsolated {
+                        if self?.markdownReads[id] === job { self?.markdownBodiesLoading.insert(id) }
+                    }
+                }
+            }
+            return .unanswered
+        }
+        if markdownReads[id] === job { markdownReads[id] = nil }
+        if markdownBodiesLoading.contains(id) {
+            DispatchQueue.main.async { [weak self] in self?.markdownBodiesLoading.remove(id) }
+        }
+        guard let outcome = job.outcome else {
+            markdownBodiesNotRead.insert(id)
             DispatchQueue.main.async { [weak self] in self?.markdownFolderBecameUnavailable() }
             return .unanswered
         }
         markdownBodiesNotRead.remove(id)
         return outcome
+    }
+
+    func isMarkdownBodyLoading(_ id: UUID) -> Bool {
+        markdownBodiesLoading.contains(id)
+    }
+
+    /// A read `body(for:)` stopped waiting for ended: an editor showing the note gets it, a folder that didn't answer
+    /// becomes unavailable. A read of a file that changed meanwhile is dropped.
+    private func markdownReadEnded(_ id: UUID, _ job: MarkdownReadJob) {
+        let wasLoading = markdownBodiesLoading.remove(id) != nil
+        guard markdownReads[id] === job else { return }
+        markdownReads[id] = nil
+        guard let outcome = job.outcome else {
+            markdownBodiesNotRead.insert(id)
+            markdownFolderBecameUnavailable()
+            return
+        }
+        if case .unanswered = outcome { return }
+        guard wasLoading, bodyCache[id] == nil, note(with: id) != nil, !markdownFolderUnavailable,
+              let storage = markdownStorage, storage.index.entry(id) == job.entry else { return }
+        markdownReads[id] = job
+        _ = body(for: id)
+        externallyUpdatedNoteID = id
     }
 
     /// A Markdown file that exists but can't be read: shown empty and never written, so it needs no backup.
@@ -2131,7 +2187,7 @@ final class NoteStore: ObservableObject {
         }
         guard bodyStorage.kind != .rtfd else { return .file(bodyStorage.fileURL(for: id)) }
         guard let markdownStorage, markdownStorage.revisionInputURL(for: id) != nil else { return .text(NSAttributedString()) }
-        guard case .read(let stored) = readMarkdownBody(id, from: markdownStorage) else {
+        guard case .read(let stored) = readMarkdownBody(id, from: markdownStorage, wait: markdownBlockingTimeout) else {
             throw NoteStoreSyncError.unreadableBody(id)
         }
         return .text(stored.text)
@@ -2258,4 +2314,31 @@ extension NoteStore {
 final class WeakSnapshot {
     weak var text: NSAttributedString?
     init(_ text: NSAttributedString) { self.text = text }
+}
+
+/// A read of a note's Markdown file running off the main thread, for the index entry it was started with.
+final class MarkdownReadJob: @unchecked Sendable {
+    let entry: MarkdownFileEntry
+    private let lock = NSLock()
+    private let done = DispatchGroup()
+    /// nil while running; then the outcome, nil inside when the folder didn't answer.
+    private var result: NoteStore.MarkdownBodyRead??
+
+    init(entry: MarkdownFileEntry) {
+        self.entry = entry
+        done.enter()
+    }
+
+    func finish(_ outcome: NoteStore.MarkdownBodyRead?) {
+        lock.withLock { result = .some(outcome) }
+        done.leave()
+    }
+
+    func wait(upTo timeout: TimeInterval) -> Bool {
+        done.wait(timeout: .now() + timeout) == .success
+    }
+
+    var outcome: NoteStore.MarkdownBodyRead? {
+        lock.withLock { result ?? nil }
+    }
 }
