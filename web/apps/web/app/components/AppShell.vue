@@ -76,6 +76,9 @@ function home(): void {
         @keydown.enter.prevent="state.palette = true"
       >
         <template #trailing>
+          <UTooltip v-if="state.searchIssues.length" :text="state.searchIssues.join(' ')">
+            <UIcon name="i-lucide-triangle-alert" class="size-4 text-warning" aria-label="Search problem" />
+          </UTooltip>
           <UKbd value="meta" variant="outline" /><UKbd value="K" variant="outline" />
         </template>
       </UInput>
@@ -99,7 +102,8 @@ function home(): void {
 
     <UDashboardGroup storage="local" storage-key="noteit-panes" unit="px" class="relative inset-auto min-h-0 flex-1">
       <AppSidebar />
-      <NoteList />
+      <TasksView v-if="state.view.kind === 'tasks'" />
+      <NoteList v-else />
       <UDashboardPanel id="editor" :class="['min-h-0', state.pane === 'list' && 'max-md:hidden']">
         <NoteEditor v-if="state.selectedId" :key="state.selectedId" :note-id="state.selectedId" />
         <div v-else class="flex flex-1 flex-col items-center justify-center gap-3 text-muted opacity-85">

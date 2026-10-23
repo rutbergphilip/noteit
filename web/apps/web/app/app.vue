@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, watch } from 'vue';
 import { setNotifier, type Theme, useNoteit } from '~/composables/useNoteit';
+import { PALETTE_KEYS, webCommands } from '~/utils/commands';
+import { matchesCombo } from '~/utils/shortcuts';
 
-const { state, boot, client, createNote } = useNoteit();
+const { state, boot, client } = useNoteit();
 
 // Toasts: the composable's toast() lands here, in Nuxt UI's toaster.
 const toaster = useToast();
@@ -17,22 +19,22 @@ watch(
   (t) => (colorMode.preference = t),
 );
 
-// Global shortcuts. ⌥ combinations are matched on e.code: on a Mac ⌥N types "˜", so the key name never matches.
+// Global shortcuts: native's menu shortcuts (utils/commands.ts), matched on e.code so ⌥ combinations work on a Mac.
 function onKey(e: KeyboardEvent): void {
-  if (state.phase !== 'ready') return;
-  const mod = e.metaKey || e.ctrlKey;
-  if (mod && !e.altKey && e.key.toLowerCase() === 'k') {
+  if (state.phase !== 'ready' || e.repeat) return;
+  if (PALETTE_KEYS.some((k) => matchesCombo(e, k))) {
     e.preventDefault();
     state.palette = !state.palette;
-  } else if (mod && e.altKey && (e.code === 'KeyN' || e.key.toLowerCase() === 'n')) {
+    return;
+  }
+  const target = e.target as HTMLElement | null;
+  const typing = !!target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName));
+  for (const c of webCommands()) {
+    if (!c.keys?.some((k) => matchesCombo(e, k))) continue;
+    if ((typing && c.inText === false) || !c.available()) return;
     e.preventDefault();
-    void createNote();
-  } else if (mod && e.altKey && (e.code === 'KeyC' || e.key.toLowerCase() === 'c')) {
-    e.preventDefault();
-    state.capture = true;
-  } else if (mod && e.key === ',') {
-    e.preventDefault();
-    state.settings = true;
+    void c.run();
+    return;
   }
 }
 
@@ -78,6 +80,7 @@ onBeforeUnmount(() => {
         <CommandPalette />
         <QuickCapture />
         <NotebookDialog />
+        <TemplatePicker />
       </template>
     </div>
   </UApp>

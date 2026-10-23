@@ -2,15 +2,18 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import type { Editor } from '@tiptap/core';
-import { addAttachment, attachmentTooLargeMessage, type BodyContainer, isAllowedLink, MAX_ATTACHMENT_BYTES, sanitizePastedHtml } from '@noteit/doc';
+import type { DropdownMenuItem } from '@nuxt/ui';
+import { addAttachment, attachmentTooLargeMessage, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS } from '@noteit/doc';
 import { fromEditorJSON, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
+import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
 import { notebookIcon, safeHex } from '~/utils/notebooks';
+import { comboKbds } from '~/utils/shortcuts';
 import type { OpenedNote } from '~/worker/types';
 
 const props = defineProps<{ noteId: string }>();
-const { state, client, toast, refresh } = useNoteit();
+const { state, client, toast, refresh, openNote, createNote } = useNoteit();
 const confirm = useConfirm();
 
 const note = shallowRef<OpenedNote>();
@@ -21,6 +24,9 @@ const saveState = ref<'saved' | 'saving' | 'unsaved'>('saved');
 const urls = new Map<string, string>();
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let lastSaved = '';
+/** The doc as typed, for the Links and Outline panel (word count updates as you type). */
+const liveDoc = shallowRef<NoteItDoc>();
+let liveTimer: ReturnType<typeof setTimeout> | undefined;
 
 function attachmentUrl(sha: string): string | undefined {
   const cached = urls.get(sha);
@@ -50,6 +56,16 @@ const editor = useEditor({
       void insertFiles(files);
       return true;
     },
+    handleDOMEvents: {
+      // noteit://note links open the note here (or create it, for a link by title to a note that doesn't exist).
+      click: (_view, event) => {
+        const a = (event.target as HTMLElement | null)?.closest?.('a[href^="noteit:"]');
+        if (!a) return false;
+        event.preventDefault();
+        void followNoteLink(a.getAttribute('href') ?? '');
+        return true;
+      },
+    },
     handleDrop: (_view, event) => {
       const files = [...((event as DragEvent).dataTransfer?.files ?? [])];
       if (!files.length) return false;
@@ -57,8 +73,48 @@ const editor = useEditor({
       return true;
     },
   },
-  onUpdate: () => scheduleSave(),
+  onUpdate: () => {
+    scheduleSave();
+    if (liveTimer) clearTimeout(liveTimer);
+    liveTimer = setTimeout(() => editor.value && (liveDoc.value = fromEditorJSON(editor.value.getJSON())), 250);
+  },
 });
+
+async function followNoteLink(href: string): Promise<void> {
+  const link = parseNoteLink(href);
+  if (!link) return;
+  if ('id' in link) {
+    const target = state.notes.find((n) => n.id.toUpperCase() === link.id);
+    if (target) openNote(target.id);
+    else toast("That note isn't in this library (it may have been deleted).");
+    return;
+  }
+  const byTitle = state.notes.find((n) => !n.deletedAt && n.title.toLowerCase() === link.title.toLowerCase());
+  if (byTitle) return openNote(byTitle.id);
+  await createNote({ format: 'noteit-doc', version: 1, attachments: {}, doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: link.title }] }, { type: 'paragraph' }] } });
+}
+
+/** Scrolls to a top-level block (Outline). */
+function jumpTo(block: number): void {
+  const ed = editor.value;
+  if (!ed) return;
+  let pos = 0;
+  for (let i = 0; i < block && i < ed.state.doc.childCount; i++) pos += ed.state.doc.child(i).nodeSize;
+  ed.chain().focus().setTextSelection(pos + 1).scrollIntoView().run();
+}
+
+// Insert Template…: the picker leaves the expanded template here; it goes in at the caret.
+watch(
+  () => state.pendingInsert,
+  (c) => {
+    const ed = editor.value;
+    if (!c || !ed || !container.value || !editable.value) return;
+    state.pendingInsert = undefined;
+    Object.assign(container.value.attachments, c.attachments);
+    ed.chain().focus().insertContent(prepareForEditor(c).doc.content ?? []).run();
+    scheduleSave();
+  },
+);
 
 async function load(): Promise<void> {
   const opened = await client().getNote(props.noteId);
@@ -74,6 +130,7 @@ async function load(): Promise<void> {
     if (!prepared.editable) readOnlyReason.value = prepared.reason;
     ed.commands.setContent(prepared.doc, { emitUpdate: false });
     lastSaved = JSON.stringify(opened.container.doc);
+    liveDoc.value = opened.container.doc;
   } else if (opened.container) {
     const prepared = prepareForEditor(opened.container);
     editable.value = false;
@@ -242,8 +299,9 @@ function applyLink(): void {
   linkOpen.value = false;
 }
 
-const COLORS = ['#FF3B30', '#FF9500', '#34C759', '#007AFF', '#AF52DE'];
-const HIGHLIGHTS = ['#FFF3A3', '#C7F0C2', '#CDE4FF', '#FFD6E8'];
+// Native's Format menu colours, so a colour picked here is the same swatch on the Mac.
+const COLORS = TEXT_COLORS.map((c) => c.hex);
+const HIGHLIGHTS = HIGHLIGHT_COLORS.map((c) => c.hex);
 const colorMenu = ref<'text' | 'highlight'>();
 function applyColor(kind: 'textColor' | 'highlight', color: string | undefined): void {
   const chain = editor.value?.chain().focus();
@@ -300,15 +358,27 @@ async function deleteForever(): Promise<void> {
   state.selectedId = undefined;
   state.pane = 'list';
 }
-function exportNote(): void {
-  if (!container.value) return;
-  const blob = new Blob([JSON.stringify(container.value)], { type: 'application/json' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `${(row.value?.title || 'Untitled').replace(/[\\/:*?"<>|]/g, '-').slice(0, 80)}.noteitdoc`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-}
+const shareItems = computed<DropdownMenuItem[][]>(() => [
+  [
+    { label: 'Export as Markdown', icon: 'i-lucide-file-down', kbds: comboKbds('shift+mod+s'), onSelect: () => void exportNote(props.noteId, 'markdown') },
+    { label: 'Export as HTML', icon: 'i-lucide-file-code', onSelect: () => void exportNote(props.noteId, 'html') },
+    { label: 'Print or Save as PDF…', icon: 'i-lucide-printer', kbds: comboKbds('mod+p'), onSelect: () => void printNote(props.noteId) },
+    { label: 'Download NoteIt Document', icon: 'i-lucide-download', onSelect: () => void exportNote(props.noteId, 'noteitdoc') },
+  ],
+  [
+    { label: 'Copy as Markdown', icon: 'i-lucide-clipboard-copy', kbds: comboKbds('alt+shift+mod+c'), onSelect: () => void copyMarkdown(props.noteId) },
+    { label: 'Copy Note Link', icon: 'i-lucide-link', kbds: comboKbds('ctrl+mod+l'), onSelect: () => void copyNoteLink(props.noteId) },
+  ],
+]);
+
+const narrowQuery = typeof window !== 'undefined' ? window.matchMedia('(max-width: 1023px)') : undefined;
+const narrow = ref(!!narrowQuery?.matches);
+const onNarrow = (e: MediaQueryListEvent) => (narrow.value = e.matches);
+narrowQuery?.addEventListener('change', onNarrow);
+onBeforeUnmount(() => {
+  narrowQuery?.removeEventListener('change', onNarrow);
+  if (liveTimer) clearTimeout(liveTimer);
+});
 </script>
 
 <template>
@@ -347,9 +417,20 @@ function exportNote(): void {
               @click="togglePin"
             />
           </UTooltip>
-          <UTooltip text="Download note">
-            <UButton color="neutral" variant="ghost" class="text-muted" icon="i-lucide-share" aria-label="Download note" :disabled="!container" @click="exportNote" />
+          <UTooltip text="Links and Outline" :kbds="comboKbds('alt+mod+i')">
+            <UButton
+              color="neutral"
+              variant="ghost"
+              icon="i-lucide-panel-right"
+              aria-label="Links and Outline"
+              :aria-pressed="state.inspector.open"
+              :class="state.inspector.open ? 'text-(--acct)' : 'text-muted'"
+              @click="state.inspector.open = !state.inspector.open"
+            />
           </UTooltip>
+          <UDropdownMenu :items="shareItems" :content="{ align: 'end' }">
+            <UButton color="neutral" variant="ghost" class="text-muted" icon="i-lucide-share" aria-label="Export and share" :disabled="!container" />
+          </UDropdownMenu>
           <UTooltip text="Move to Recently Deleted">
             <UButton color="neutral" variant="ghost" class="text-muted" icon="i-lucide-trash-2" aria-label="Move to Recently Deleted" @click="trash" />
           </UTooltip>
@@ -458,11 +539,25 @@ function exportNote(): void {
       />
     </div>
 
-    <article class="page flex-1 overflow-y-auto">
-      <h2 v-if="row?.kind === 'legacy' || row?.kind === 'locked'" class="ro-title">{{ row.title || 'Untitled' }}</h2>
-      <p v-if="row?.kind === 'legacy' && row.preview" class="ro-preview">{{ row.preview }}</p>
-      <EditorContent v-show="row?.kind === 'doc'" :editor="editor" />
-    </article>
+    <div class="flex min-h-0 flex-1">
+      <article class="page min-w-0 flex-1 overflow-y-auto">
+        <h2 v-if="row?.kind === 'legacy' || row?.kind === 'locked'" class="ro-title">{{ row.title || 'Untitled' }}</h2>
+        <p v-if="row?.kind === 'legacy' && row.preview" class="ro-preview">{{ row.preview }}</p>
+        <EditorContent v-show="row?.kind === 'doc'" :editor="editor" />
+      </article>
+      <div v-if="state.inspector.open && !row?.deletedAt && !narrow" class="w-[280px] flex-none border-s border-default bg-(--side)">
+        <NoteInspector :note-id="noteId" :doc="liveDoc" @jump="jumpTo" />
+      </div>
+    </div>
+    <USlideover
+      :open="state.inspector.open && !row?.deletedAt && narrow"
+      side="right"
+      title="Links and Outline"
+      :ui="{ content: 'max-w-[320px] bg-(--side)' }"
+      @update:open="(v: boolean) => !v && (state.inspector.open = false)"
+    >
+      <template #content><NoteInspector :note-id="noteId" :doc="liveDoc" @jump="(b: number) => ((state.inspector.open = false), jumpTo(b))" /></template>
+    </USlideover>
   </div>
 </template>
 

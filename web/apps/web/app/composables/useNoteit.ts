@@ -1,12 +1,20 @@
 import { computed, reactive, shallowRef } from 'vue';
-import type { BodyContainer } from '@noteit/doc';
+import { type BodyContainer, dailyNotebook, dailyTitle, dayKey, DAILY_NOTEBOOK_NAME, emptyContainer, expandTemplate, findDailyNote, parseQuery, TEMPLATES_NOTEBOOK_NAME } from '@noteit/doc';
 import { serverInfo, session as sessionAction, signOut as signOutAction } from '#safe-action/actions';
 import { failureOf, type ServerInfo, type SessionInfo } from '~/utils/actions';
 import { createWorkerClient } from '~/utils/workerClient';
 import type { NoteRow, NotebookRow, SyncStatus, UnlockResult } from '~/worker/types';
 
 export type Phase = 'loading' | 'setup' | 'signin' | 'changePassword' | 'unlock' | 'createStore' | 'legacy' | 'ready' | 'serverDown';
-export type View = { kind: 'all' } | { kind: 'pinned' } | { kind: 'recent' } | { kind: 'trash' } | { kind: 'notebook'; id: string } | { kind: 'tag'; tag: string };
+export type View =
+  | { kind: 'all' }
+  | { kind: 'pinned' }
+  | { kind: 'recent' }
+  | { kind: 'trash' }
+  | { kind: 'tasks' }
+  | { kind: 'notebook'; id: string }
+  | { kind: 'tag'; tag: string };
+export type InspectorTab = 'links' | 'outline' | 'info';
 export type Theme = 'system' | 'light' | 'dark';
 
 export interface Notice {
@@ -34,6 +42,14 @@ const state = reactive({
   selectedId: undefined as string | undefined,
   query: '',
   searchHits: undefined as Set<string> | undefined,
+  /** Problems in the search query (an unknown filter is searched as a word, as on the Mac). */
+  searchIssues: [] as string[],
+  /** The Links and Outline panel (native ⌥⌘I), with its Info tab (⌃⌘I). */
+  inspector: { open: false, tab: 'links' as InspectorTab },
+  /** New Note from Template… or Insert Template…. */
+  templatePicker: undefined as undefined | 'new' | 'insert',
+  /** An expanded template for the open editor to insert at the caret. */
+  pendingInsert: undefined as BodyContainer | undefined,
   sort: 'edited' as 'edited' | 'created' | 'title',
   /** Mirrors Nuxt UI's color mode (app.vue keeps the two in step; it persists the choice). */
   theme: 'system' as Theme,
@@ -145,6 +161,7 @@ function setTheme(t: Theme): void {
 
 async function setQuery(q: string): Promise<void> {
   state.query = q;
+  state.searchIssues = q.trim() ? parseQuery(q).issues.map((i) => i.message) : [];
   state.searchHits = q.trim() ? new Set(await client().search(q)) : undefined;
 }
 
@@ -185,12 +202,77 @@ const tags = computed(() => {
 async function createNote(container?: BodyContainer, notebookID?: string): Promise<string> {
   const target = notebookID ?? (state.view.kind === 'notebook' ? state.view.id : undefined);
   const id = await client().createNote({ ...(target ? { notebookID: target } : {}), ...(container ? { container } : {}) });
-  if (state.view.kind === 'trash' || state.view.kind === 'tag') state.view = { kind: 'all' };
+  if (state.view.kind === 'trash' || state.view.kind === 'tag' || state.view.kind === 'tasks') state.view = { kind: 'all' };
   if (state.query) await setQuery('');
   await refresh();
   state.selectedId = id;
   state.pane = 'editor';
   return id;
+}
+
+function openNote(id: string): void {
+  const row = state.notes.find((n) => n.id === id);
+  if (row?.deletedAt && state.view.kind !== 'trash') state.view = { kind: 'trash' };
+  else if (row && !row.deletedAt && state.view.kind === 'tasks') state.view = { kind: 'all' };
+  state.selectedId = id;
+  state.pane = 'editor';
+}
+
+/** The notebook named "Templates" (native's fallback when its per-Mac preference isn't set). */
+const templatesNotebook = computed(() => state.notebooks.find((n) => n.name.trim().toLowerCase() === TEMPLATES_NOTEBOOK_NAME.toLowerCase()));
+const templates = computed(() => {
+  const nb = templatesNotebook.value;
+  return nb ? state.notes.filter((n) => n.notebookID === nb.id && !n.deletedAt && n.kind === 'doc') : [];
+});
+
+/** Fills a template in; `undefined` when it can't be read here. */
+async function expandedTemplate(templateId: string, title: string): Promise<BodyContainer | undefined> {
+  const opened = await client().getNote(templateId);
+  if (!opened?.container || opened.readOnly) return undefined;
+  let clipboard = '';
+  // Only a template that uses {{clipboard}} asks for it (the browser may prompt); no answer in 5 s leaves it empty,
+  // as for the Local API on the Mac.
+  if (/\{\{clipboard\}\}/i.test(JSON.stringify(opened.container.doc))) {
+    try {
+      clipboard = await Promise.race([navigator.clipboard.readText(), new Promise<string>((resolve) => setTimeout(() => resolve(''), 5000))]);
+    } catch {
+      clipboard = '';
+    }
+  }
+  const { doc } = expandTemplate(opened.container.doc, { title, date: new Date(), clipboard });
+  return { ...opened.container, doc, attachments: { ...opened.container.attachments } };
+}
+
+async function newFromTemplate(templateId: string, title = ''): Promise<void> {
+  const container = await expandedTemplate(templateId, title);
+  if (!container) return toast("This template can't be read here.", 'error');
+  const target = state.view.kind === 'notebook' && state.view.id !== templatesNotebook.value?.id ? state.view.id : undefined;
+  await createNote(container, target);
+}
+
+async function newTemplate(): Promise<void> {
+  let nb = templatesNotebook.value?.id;
+  if (!nb) {
+    nb = await client().createNotebook({ name: TEMPLATES_NOTEBOOK_NAME, colorHex: '#8E8E93', symbol: 'doc.on.doc' });
+    await refresh();
+  }
+  state.view = { kind: 'notebook', id: nb };
+  await createNote(undefined, nb);
+}
+
+/** Today's note in "Daily Notes", created (titled yyyy-MM-dd, native's default) the first time. */
+async function openToday(): Promise<void> {
+  const day = dayKey(new Date());
+  let nb = dailyNotebook(state.notebooks, state.notes);
+  const existing = nb ? findDailyNote(state.notes, nb, day) : undefined;
+  if (existing) return openNote(existing);
+  if (!nb) {
+    nb = await client().createNotebook({ name: DAILY_NOTEBOOK_NAME, colorHex: '#007AFF', symbol: 'calendar' });
+    await refresh();
+  }
+  const container = emptyContainer();
+  container.doc = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: dailyTitle(day) }] }, { type: 'paragraph' }] };
+  await createNote(container, nb);
 }
 
 export function useNoteit() {
@@ -210,5 +292,12 @@ export function useNoteit() {
     tags,
     createNote,
     descendants,
+    openNote,
+    templates,
+    templatesNotebook,
+    newFromTemplate,
+    newTemplate,
+    expandedTemplate,
+    openToday,
   };
 }

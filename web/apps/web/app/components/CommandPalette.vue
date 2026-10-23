@@ -3,10 +3,12 @@ import { computed, ref, watch } from 'vue';
 import type { CommandPaletteGroup, CommandPaletteItem } from '@nuxt/ui';
 import { searchFold } from '@noteit/doc';
 import { useNoteit } from '~/composables/useNoteit';
+import { webCommands } from '~/utils/commands';
 import { notebookIcon } from '~/utils/notebooks';
+import { comboKbds } from '~/utils/shortcuts';
 import type { NoteRow } from '~/worker/types';
 
-const { state, client, tags, createNote, setTheme, lock } = useNoteit();
+const { state, client, tags, createNote, setTheme } = useNoteit();
 const query = ref('');
 const hits = ref<NoteRow[]>([]);
 const searching = ref(false);
@@ -16,6 +18,7 @@ let seq = 0;
 async function update(): Promise<void> {
   const q = query.value.trim();
   const mine = ++seq;
+  if (q.startsWith('>')) return;
   if (!q) {
     hits.value = state.notes
       .filter((n) => !n.deletedAt)
@@ -57,6 +60,16 @@ function parts(text: string): { pre: string; hit: string; post: string } {
 }
 
 const groups = computed<CommandPaletteGroup<CommandPaletteItem>[]>(() => {
+  const q = query.value.trim();
+  if (!q.startsWith('>')) return allGroups.value;
+  // `>` lists commands only (native ⇧⌘P), filtered here since the palette would search for the `>` too.
+  const term = searchFold(q.slice(1).trim());
+  const commands = allGroups.value.find((g) => g.id === 'commands')!;
+  const items = (commands.items ?? []).filter((i) => !term || searchFold([i.label, ...((i.keywords as string[] | undefined) ?? [])].join(' ')).includes(term));
+  return [{ ...commands, ignoreFilter: true, items }];
+});
+
+const allGroups = computed<CommandPaletteGroup<CommandPaletteItem>[]>(() => {
   const q = query.value.trim();
   const notebook = (n: NoteRow) => state.notebooks.find((nb) => nb.id === n.notebookID);
   const fq = searchFold(q.replace(/^#/, ''));
@@ -113,13 +126,10 @@ const groups = computed<CommandPaletteGroup<CommandPaletteItem>[]>(() => {
       id: 'commands',
       label: 'Commands',
       items: [
-        { label: 'Open Quick Capture', icon: 'i-lucide-pen-line', kbds: ['alt', 'meta', 'C'], onSelect: () => ((state.palette = false), (state.capture = true)) },
-        { label: 'New Notebook', icon: 'i-lucide-folder-plus', onSelect: () => ((state.palette = false), (state.notebookDialog = { mode: 'create' })) },
+        ...webCommands()
+          .filter((c) => c.available())
+          .map((c) => ({ label: c.title, icon: c.icon, ...(c.keys?.[0] ? { kbds: comboKbds(c.keys[0]) } : {}), keywords: c.keywords, onSelect: () => void c.run() })),
         { label: state.theme === 'dark' ? 'Switch to Light Mode' : 'Switch to Dark Mode', icon: state.theme === 'dark' ? 'i-lucide-sun' : 'i-lucide-moon', onSelect: () => (close(), setTheme(state.theme === 'dark' ? 'light' : 'dark')) },
-        { label: 'Sync Now', icon: 'i-lucide-refresh-cw', onSelect: () => (close(), void client().syncNow()) },
-        { label: 'Show Recently Deleted', icon: 'i-lucide-trash-2', onSelect: () => (close(), (state.view = { kind: 'trash' })) },
-        { label: 'Settings', icon: 'i-lucide-sliders-horizontal', kbds: ['meta', ','], onSelect: () => (close(), (state.settings = true)) },
-        { label: 'Lock NoteIt', icon: 'i-lucide-lock', onSelect: () => (close(), void lock()) },
       ],
     },
   ];

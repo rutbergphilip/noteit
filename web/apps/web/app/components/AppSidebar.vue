@@ -6,7 +6,7 @@ import { relativeTime } from '~/utils/format';
 import { notebookIcon, safeHex } from '~/utils/notebooks';
 import type { NotebookRow } from '~/worker/types';
 
-const { state, tags, createNote } = useNoteit();
+const { state, tags, createNote, openToday } = useNoteit();
 
 const live = computed(() => state.notes.filter((n) => !n.deletedAt));
 const counts = computed(() => {
@@ -23,6 +23,7 @@ const counts = computed(() => {
 
 const library = computed(() => [
   { view: { kind: 'all' } as View, label: 'All Notes', icon: 'i-lucide-file-text', color: 'var(--acc)', count: counts.value.all },
+  { view: { kind: 'tasks' } as View, label: 'Tasks', icon: 'i-lucide-list-checks', color: 'var(--acc)', count: undefined },
   { view: { kind: 'pinned' } as View, label: 'Pinned', icon: 'i-lucide-pin', color: 'var(--pinned)', count: counts.value.pinned },
   { view: { kind: 'recent' } as View, label: 'Recent', icon: 'i-lucide-clock', color: 'var(--recent)', count: counts.value.recent },
   { view: { kind: 'trash' } as View, label: 'Recently Deleted', icon: 'i-lucide-trash-2', color: 'var(--ink2)', count: counts.value.trash },
@@ -82,6 +83,10 @@ const item = (active: boolean) => [
   >
     <nav aria-label="Library" class="flex flex-col gap-0.5">
       <div class="px-2.5 py-1.5 text-[11px] font-semibold text-muted">Library</div>
+      <UButton color="neutral" variant="ghost" :class="item(false)" @click="(state.drawerOpen = false), openToday()">
+        <UIcon name="i-lucide-calendar" class="size-[17px] shrink-0" style="color: var(--recent)" />
+        <span class="truncate">Today</span>
+      </UButton>
       <UButton
         v-for="l in library"
         :key="l.label"
