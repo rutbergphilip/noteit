@@ -177,11 +177,16 @@ public struct FrontMatter: Sendable, Equatable {
 
     /// `extra` without owned keys (and their continuation lines) and without `---`/`...` lines, which would end the
     /// front matter early.
+    /// Every character some reader may treat as a line break; synced extras may use only "\n".
+    static let otherLineBreaks = CharacterSet(charactersIn: "\r\u{0B}\u{0C}\u{85}\u{2028}\u{2029}")
+
     public static func strippingOwnedKeys(_ extra: String) -> String {
         var kept: [String] = []
         var dropping = false
-        for line in extra.components(separatedBy: "\n") {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
+        // Split on every line break, not just "\n", so none can hide a key or a delimiter from this filter.
+        let normalized = extra.replacingOccurrences(of: "\r\n", with: "\n")
+        for line in normalized.components(separatedBy: otherLineBreaks.union(CharacterSet(charactersIn: "\n"))) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
             if trimmed == "---" || trimmed == "..." { continue }
             let isContinuation = line.first.map { $0 == " " || $0 == "\t" || $0 == "-" } ?? true
             if !isContinuation, !line.hasPrefix("#"), let key = key(of: line) { dropping = ownedKeys.contains(key) }
@@ -192,9 +197,11 @@ public struct FrontMatter: Sendable, Equatable {
 
     /// Untrusted front matter extras from another device (a synced noteit-doc container): parsed with `read`, which
     /// throws when they aren't valid front matter, and returned without owned keys or delimiter lines.
+    /// Any line break other than "\n" (a lone or CRLF "\r", VT, FF, U+0085, U+2028, U+2029) is refused outright.
     public static func sanitizedExtra(_ text: String) throws -> String {
+        if text.rangeOfCharacter(from: otherLineBreaks) != nil { throw MarkdownError.invalidFrontMatter(line: 0) }
         let body = text.components(separatedBy: "\n")
-            .filter { let t = $0.trimmingCharacters(in: .whitespaces); return t != "---" && t != "..." }
+            .filter { let t = $0.trimmingCharacters(in: .whitespacesAndNewlines); return t != "---" && t != "..." }
             .joined(separator: "\n")
         guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
         let (parsed, _) = try read("---\n" + body + "\n---\n")
