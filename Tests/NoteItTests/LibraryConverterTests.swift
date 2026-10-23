@@ -79,6 +79,13 @@ final class LibraryConverterTests: XCTestCase {
         return converter
     }
 
+    /// Points `root` at a new folder under `base`. A store from an earlier round may still have a write pass queued,
+    /// which would write into a library recreated at the same path.
+    private func useFreshRoot(in base: URL) throws {
+        root = base.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
     /// Stands in for the macOS Trash: records the path relative to `root` and moves the item under `root/Trash`.
     private func moveToTestTrash(_ url: URL) throws {
         let base = root.resolvingSymlinksInPath().path
@@ -420,9 +427,10 @@ final class LibraryConverterTests: XCTestCase {
     // MARK: Crashes
 
     func testAnInterruptedConversionToMarkdownIsUndoneOrFinished() async throws {
+        let base = root!
+        defer { root = base }
         for step in LibraryConverter.Step.allCases {
-            try? fm.removeItem(at: root)
-            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            try useFreshRoot(in: base)
             let store = try makeRTFDLibrary()
             let texts = bodies(store)
             let notesBefore = tree(data.appendingPathComponent("notes"))
@@ -453,9 +461,10 @@ final class LibraryConverterTests: XCTestCase {
     }
 
     func testAnInterruptedConversionToRTFDIsUndoneOrFinished() async throws {
+        let base = root!
+        defer { root = base }
         for step in LibraryConverter.Step.allCases {
-            try? fm.removeItem(at: root)
-            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            try useFreshRoot(in: base)
             _ = try await converter(try makeRTFDLibrary()).convert(to: .markdown(content))
             let markdown = openMarkdown()
             let texts = bodies(markdown)

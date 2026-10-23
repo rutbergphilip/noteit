@@ -3,13 +3,14 @@ import XCTest
 @testable import NoteIt
 import NoteItCore
 
-/// Quick checks of the spec §14 targets on synthetic data, with 3× headroom for debug builds. The published
-/// benchmarks run in surfaces-polish's suite. `NOTEIT_PERF=1` prints the timings.
+/// Quick checks of the spec §14 targets on synthetic data, with 3× headroom for debug builds (8× on shared CI
+/// runners, still under the 10× a quadratic regression costs). The published benchmarks run in surfaces-polish's
+/// suite. `NOTEIT_PERF=1` prints the timings.
 @MainActor
 final class LinkingPerformanceTests: XCTestCase {
     private static let noteCount = 10_000
     private static let linksPerNote = 5
-    private static let headroom = 3.0
+    private static let headroom = ProcessInfo.processInfo.environment["CI"] == nil ? 3.0 : 8.0
     private static let printsTimings = ProcessInfo.processInfo.environment["NOTEIT_PERF"] == "1"
 
     private var root: URL!

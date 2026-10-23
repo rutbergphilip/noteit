@@ -313,9 +313,16 @@ final class MarkdownNoteStoreTests: XCTestCase {
         store.flush()
         store.waitForMarkdownWrites(upTo: 10)
         XCTAssertNotNil(store.bodySaveNotice(for: id))
-        let failed = ObjectIdentifier(try XCTUnwrap(store.cachedBody(id)))
+        weak var failedSnapshot: NSAttributedString?
+        let failed = try autoreleasepool {
+            failedSnapshot = store.cachedBody(id)
+            return ObjectIdentifier(try XCTUnwrap(failedSnapshot))
+        }
 
-        store.updateBody(id, OversizedAttachment.body("Small", attachmentNamed: "huge.mov", bytes: 10))
+        autoreleasepool { store.updateBody(id, OversizedAttachment.body("Small", attachmentNamed: "huge.mov", bytes: 10)) }
+        // Background indexers may still hold the old snapshot; its address can only be reused once it's freed.
+        NoteStore.spin(until: { failedSnapshot == nil }, timeout: 10)
+        XCTAssertNil(failedSnapshot, "the store doesn't keep the failed snapshot alive")
         let edited = body("Small\nwithout it")
         var held: [NSAttributedString] = []
         var reused: NSAttributedString?
@@ -325,13 +332,13 @@ final class MarkdownNoteStoreTests: XCTestCase {
             held.append(candidate)
         }
         held.removeAll()
-        let newer = try XCTUnwrap(reused, "no allocation took the freed snapshot's address")
-        store.updateBody(id, newer)
+        store.updateBody(id, reused ?? NSAttributedString(attributedString: edited))
         store.flush()
         store.waitForMarkdownWrites(upTo: 10)
         XCTAssertNil(store.bodySaveNotice(for: id))
         XCTAssertFalse(store.isBodyDirty(id))
         XCTAssertTrue(try read("Small.md").hasSuffix("without it\n"))
+        if reused == nil { throw XCTSkip("no allocation took the freed snapshot's address") }
     }
 
     func testAnEditThatCantBeSavedIsntSyncedSoARelaunchCantPushAnOlderVersionOverIt() async throws {
