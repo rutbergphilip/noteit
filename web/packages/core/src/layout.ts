@@ -26,10 +26,18 @@ export function context(key: string): string {
   return key.startsWith(ROOT) ? key.slice(ROOT.length) : key;
 }
 
+function unquotedETag(etag: string): string {
+  return etag.length >= 2 && etag.startsWith('"') && etag.endsWith('"') ? etag.slice(1, -1) : etag;
+}
+
 /** First 10 bytes of SHA-256 over the unquoted ETag, base32 without padding (16 chars). Spec §3.4.9. */
 export async function baseTag(etag: string): Promise<string> {
-  return base32((await sha256(utf8(etag))).subarray(0, 10));
+  return base32((await sha256(utf8(unquotedETag(etag)))).subarray(0, 10));
 }
+
+const UPPER_UUID = '[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}';
+/** `<ID>.<VERSION>.<TAG>.body|.locked`: uppercase UUIDs, TAG 16 base32 characters or `new` (RemoteLayout.parseDocBody). */
+const DOC_BODY_RE = new RegExp(`^(${UPPER_UUID})\\.(${UPPER_UUID})\\.([A-Z2-7]{16}|${NEW_TAG})\\.(body|locked)$`);
 
 export interface RemoteIndex {
   manifest?: RemoteObject;
@@ -81,7 +89,7 @@ export function indexRemote(objects: RemoteObject[]): RemoteIndex {
         break;
       }
       case 'bodies': {
-        const m = /^([0-9A-Fa-f-]{36})\.([0-9A-Fa-f-]{36})\.([A-Za-z0-9]+)\.(body|locked)$/.exec(name);
+        const m = DOC_BODY_RE.exec(name);
         const id = m && normalizeUuid(m[1]!);
         const version = m && normalizeUuid(m[2]!);
         if (!m || !id || !version) break;
@@ -156,7 +164,9 @@ export function isCanaryKey(key: string): boolean {
 export function isValidKey(key: string): boolean {
   if (!hasValidSegments(key)) return false;
   if (key === keys.manifest || isCanaryKey(key)) return true;
-  return prefixFor(key) !== undefined;
+  const prefix = prefixFor(key);
+  if (prefix === undefined) return false;
+  return prefix.path !== `${ROOT}bodies/` || DOC_BODY_RE.test(key.slice(prefix.path.length));
 }
 
 export function isListablePrefix(prefix: string): boolean {

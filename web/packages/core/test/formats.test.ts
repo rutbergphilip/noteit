@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AesGcmCipher,
   b64decode,
+  baseTag,
   checkOpenable,
   decodeDevice,
   decodeEnvelope,
@@ -38,6 +39,8 @@ describe('envelope vectors', () => {
         expect(JSON.parse(fromUtf8(b64decode(env.meta)))).toEqual(meta);
         // Re-encoding keeps every field.
         expect(JSON.parse(fromUtf8(encodeEnvelope(env)))).toEqual(JSON.parse(c.plaintextJSON));
+      } else if (c.context.startsWith('bodies/')) {
+        expect(JSON.parse(fromUtf8(plain))).toEqual(expected);
       } else if (c.context.startsWith('tombstones/')) {
         expect(decodeTombstone(plain)).toEqual(expected);
       } else {
@@ -101,6 +104,14 @@ describe('manifest-features vectors', () => {
 });
 
 interface LayoutKey { key: string; valid: boolean; prefix: string | null; action: string }
+
+describe('base-tags vectors', () => {
+  for (const c of golden<{ etag: string; tag: string }>('base-tags.json').cases) {
+    it(c.etag, async () => {
+      expect(await baseTag(c.etag)).toBe(c.tag);
+    });
+  }
+});
 
 describe('layout-keys vectors', () => {
   const g = golden('layout-keys.json') as unknown as { keys: LayoutKey[]; listPrefixes: { prefix: string; allowed: boolean }[] };
