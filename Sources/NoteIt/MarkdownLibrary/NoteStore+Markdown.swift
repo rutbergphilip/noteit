@@ -341,6 +341,9 @@ extension NoteStore {
         changed.formUnion(result.changed.keys)
         changed.formUnion(result.moved.keys)
         notesChangedBeforeDerivedIndexes.formUnion(changed)
+        let restoredBefore = Set(notes.map(\.id))
+        restoreMarkdownRecoveryCopies()
+        notesChangedBeforeDerivedIndexes.formUnion(Set(notes.map(\.id)).subtracting(restoredBefore))
         if note(with: selectedNoteID) == nil { selectedNoteID = notes(for: selection, search: "").first?.id }
         flush()
     }

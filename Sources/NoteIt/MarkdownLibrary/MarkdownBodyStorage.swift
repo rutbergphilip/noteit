@@ -814,6 +814,18 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         }
     }
 
+    /// A `recoveryCopy` read back; its attachments are in the recovery folder's `_attachments/`.
+    func readRecoveryCopy(_ url: URL) throws -> StoredBody {
+        let data = try Data(contentsOf: url)
+        guard let text = String(data: data, encoding: .utf8) else { throw CocoaError(.fileReadInapplicableStringEncoding) }
+        let name = url.lastPathComponent
+        let parsed = try MarkdownCodec.parse(text) { [links] in links.noteID(for: $0, fromNoteAt: name) }
+        let read = try BodyCodec.libraryBody(from: parsed, notePath: name, contentRoot: url.deletingLastPathComponent())
+        // An attachment that can't be read back (or is over the limit) would be lost by restoring the rest.
+        guard read.unresolved == 0 else { throw CocoaError(.fileReadCorruptFile) }
+        return read.body
+    }
+
     func recoveryCopy(_ text: NSAttributedString, for id: UUID, in directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let url = RTFDBodyStorage.uniqueURL(directory.appendingPathComponent("\(id.uuidString)-\(RTFDBodyStorage.timestamp()).md"))

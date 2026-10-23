@@ -188,6 +188,8 @@ final class NoteStore: ObservableObject {
     var markdownQuitWait: TimeInterval = 5
     /// Recovery copies of edits waiting for an unavailable folder, one per note, removed once the edit is written.
     var markdownWaitingCopies: [UUID: URL] = [:]
+    /// Every `recovery/` copy of a Markdown note made (or restored) this session, removed once a newer body is written.
+    private var markdownRecoveryCopies: [UUID: [URL]] = [:]
     /// Notes whose body couldn't be read because the folder didn't answer; they are read again once it does.
     var markdownBodiesNotRead: Set<UUID> = [] {
         didSet { if markdownBodiesNotRead != oldValue { publishMarkdownBodiesNotRead() } }
@@ -1945,6 +1947,9 @@ final class NoteStore: ObservableObject {
             dirtyBodies.remove(id)
             recoveredSnapshots[id] = nil
             if let copy = markdownWaitingCopies.removeValue(forKey: id) { try? FileManager.default.removeItem(at: copy) }
+            if bodyCache[id] != nil {
+                for copy in markdownRecoveryCopies.removeValue(forKey: id) ?? [] { try? FileManager.default.removeItem(at: copy) }
+            }
         }
         unversionedLocalBodies.insert(id)
         if failedBodies.remove(id) != nil {
@@ -2027,6 +2032,81 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    static let recoveredEditSource = "an unsaved edit"
+
+    /// At launch, once the folder answered: edits kept in `recovery/` because they couldn't be written before the app
+    /// quit go back into their notes. When the note's file changed after the copy was made (or can't be written, or
+    /// is gone and held), the file is left as it is and the edit becomes a note of its own beside it. Copies are
+    /// removed once their text is written; copies of notes that are deleted or locked are left in `recovery/`.
+    func restoreMarkdownRecoveryCopies() {
+        guard let storage = markdownStorage else { return }
+        let key = URLResourceKey.contentModificationDateKey
+        let files = (try? FileManager.default.contentsOfDirectory(at: recoveryURL, includingPropertiesForKeys: [key])) ?? []
+        var copies: [UUID: [(url: URL, date: Date)]] = [:]
+        for url in files where url.pathExtension == "md" {
+            guard let id = UUID(uuidString: String(url.lastPathComponent.prefix(36))),
+                  let date = try? url.resourceValues(forKeys: [key]).contentModificationDate else { continue }
+            copies[id, default: []].append((url, date))
+        }
+        for (id, found) in copies.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            guard let newest = found.max(by: { $0.date < $1.date }) else { continue }
+            guard let index = noteIndex(id), notes[index].deletedAt == nil, !notes[index].isLocked else {
+                NSLog("NoteIt: left the recovery copy \(newest.url.path): its note is deleted or locked")
+                continue
+            }
+            let restored: StoredBody
+            do {
+                restored = try storage.readRecoveryCopy(newest.url)
+            } catch {
+                NSLog("NoteIt: couldn't read the recovery copy \(newest.url.path): \(error)")
+                continue
+            }
+            let fileChanged = storage.index.entry(id).map { Double($0.mtimeNs) / 1e9 > newest.date.timeIntervalSince1970 } ?? false
+            let target: UUID
+            if fileChanged || bodyWriteBlocked.contains(id) || heldMarkdownDeletions.contains(id) {
+                let meta = notes[index]
+                let copy = createNote(in: meta.notebookID, initial: Self.appendingToTitleLine(restored.text, " (Recovered)"))
+                if let copyIndex = noteIndex(copy.id) {
+                    notes[copyIndex].conflictSource = Self.recoveredEditSource
+                    notes[copyIndex].conflictOriginalID = id
+                    notes[copyIndex].updatedAt = newest.date
+                    dispatchDerivedIndexes(.metadata(notes[copyIndex]))
+                }
+                target = copy.id
+            } else {
+                restoreRecoveredBody(id, restored.text, date: newest.date, storage: storage)
+                target = id
+            }
+            markdownRecoveryCopies[target, default: []] += found.map(\.url)
+            NSLog("NoteIt: restored note \(id) from \(newest.url.path)\(target == id ? "" : " as a note of its own")")
+        }
+    }
+
+    private func restoreRecoveredBody(_ id: UUID, _ text: NSAttributedString, date: Date, storage: MarkdownBodyStorage) {
+        guard let index = noteIndex(id) else { return }
+        // The copy holds only the text; the file's own front matter keys stay.
+        if bodyExtras[id] == nil, let extra = storage.index.entry(id)?.frontMatterExtra {
+            setBodyExtras(ContainerExtras(frontMatter: extra), for: id)
+        }
+        bodyCache[id] = text
+        touchBody(id)
+        dirtyBodies.insert(id)
+        // Its write failed before the app quit: not synced, and library.json keeps the saved metadata, until it's written.
+        failedBodies.insert(id)
+        markdownMissingRetryAt[id] = nil
+        markdownBodiesNotRead.remove(id)
+        var meta = notes[index]
+        Self.applyDerivedFields(to: &meta, from: text)
+        meta.updatedAt = max(meta.updatedAt, date)
+        meta.revision = UUID()
+        notes[index] = meta
+        libraryDirty = true
+        hasUnannouncedLocalChange = true
+        dispatchDerivedIndexes(.changed(meta, text))
+        postLocalNoteChange(id, .edited)
+        if selectedNoteID == id || OpenEditorRegistry.shared.textView(for: id) != nil { externallyUpdatedNoteID = id }
+    }
+
     /// Last resort at quit: copies bodies that couldn't be saved to `recovery/<id>-<timestamp>.rtfd`.
     private func writeRecoveryCopies() {
         for id in dirtyBodies {
@@ -2042,6 +2122,7 @@ final class NoteStore: ObservableObject {
         do {
             let url = try bodyStorage.recoveryCopy(text, for: id, in: recoveryURL)
             recoveredSnapshots[id] = WeakSnapshot(text)
+            if markdownStorage != nil { markdownRecoveryCopies[id, default: []].append(url) }
             NSLog("NoteIt: note \(id) couldn’t be saved; wrote a recovery copy to \(url.path)")
             return url
         } catch {

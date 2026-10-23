@@ -204,6 +204,79 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertTrue(copies.contains { ((try? String(contentsOf: $0, encoding: .utf8)) ?? "").contains("newer edit") })
     }
 
+    /// A store whose writes hang, as when the app quits while its folder doesn't answer. `quit` ends the hung check
+    /// as "folder missing", so the store writes nothing (root checks of one path are shared within the process).
+    private func openWithHungWrites() throws -> (store: NoteStore, quit: () -> Void) {
+        let store = open()
+        store.markdownFlushWait = 0
+        store.markdownWriteTimeout = 0.3
+        store.markdownBlockingTimeout = 0.3
+        store.markdownUnavailableRetryInterval = 600
+        let storage = try XCTUnwrap(store.markdownStorage)
+        storage.rootTimeout = 30
+        let gate = DispatchSemaphore(value: 0)
+        storage.rootCheck = { _ in
+            _ = gate.wait(timeout: .now() + 30)
+            return false
+        }
+        let quit = { for _ in 0..<16 { gate.signal() } }
+        addTeardownBlock(quit)
+        return (store, {
+            quit()
+            Thread.sleep(forTimeInterval: 0.2)
+        })
+    }
+
+    private func recoveryCopies(_ store: NoteStore) -> [URL] {
+        ((try? fm.contentsOfDirectory(at: store.recoveryURL, includingPropertiesForKeys: nil)) ?? []).filter { $0.pathExtension == "md" }
+    }
+
+    func testEditsKeptInRecoveryWhenTheAppQuitAreRestoredAtTheNextLaunch() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let (away, quit) = try openWithHungWrites()
+        let kept = try note(away, titled: "Kept").id
+        away.updateBody(kept, NSAttributedString(string: "Kept\n\nwaiting edit"))
+        away.flush()
+        try await waitUntil({ away.markdownFolderUnavailable }, "the hung write makes the folder unavailable")
+        let fresh = away.createNote(in: nil, initial: NSAttributedString(string: "Fresh\n\nnew while away")).id
+        away.flush()
+        try await waitUntil({ self.recoveryCopies(away).count == 2 }, "both edits are kept in recovery/")
+
+        quit()
+        let store = open()
+        XCTAssertEqual(store.body(for: kept).string, "Kept\n\nwaiting edit", "the waiting edit is back")
+        XCTAssertEqual(store.body(for: fresh).string, "Fresh\n\nnew while away", "so is the note created while away")
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertTrue(try read("Kept.md").contains("waiting edit"))
+        XCTAssertTrue(try read("Fresh.md").contains("new while away"))
+        XCTAssertEqual(recoveryCopies(store), [], "the copies go once their text is written")
+        XCTAssertEqual(store.notes.filter { $0.deletedAt == nil }.count, 2, "nothing is duplicated")
+    }
+
+    func testARecoveredEditWhoseFileChangedSinceIsKeptBesideIt() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let (away, quit) = try openWithHungWrites()
+        let kept = try note(away, titled: "Kept").id
+        away.updateBody(kept, NSAttributedString(string: "Kept\n\nwaiting edit"))
+        away.flush()
+        try await waitUntil({ self.recoveryCopies(away).count == 1 }, "the edit is kept in recovery/")
+        try edit("Kept.md", "first", "changed elsewhere", modified: Date().addingTimeInterval(60))
+
+        quit()
+        let store = open()
+        XCTAssertEqual(store.body(for: kept).string, "Kept\nchanged elsewhere", "the newer file isn't overwritten")
+        let copy = try XCTUnwrap(store.notes.first { $0.conflictOriginalID == kept }, "the recovered edit is its own note")
+        XCTAssertNotNil(copy.conflictSource)
+        XCTAssertTrue(store.body(for: copy.id).string.contains("waiting edit"))
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertTrue(try read("Kept.md").contains("changed elsewhere"))
+        XCTAssertEqual(recoveryCopies(store), [])
+        let reopened = open()
+        XCTAssertEqual(reopened.notes.filter { $0.conflictOriginalID == kept }.count, 1, "restored once")
+    }
+
     func testARescanNeverWaitsForTheFolderOnTheMainThread() async throws {
         try put("Kept.md", "# Kept\n\nfirst\n")
         let store = open()

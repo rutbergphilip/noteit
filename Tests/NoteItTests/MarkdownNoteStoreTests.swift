@@ -363,6 +363,8 @@ final class MarkdownNoteStoreTests: XCTestCase {
         store = nil
         let relaunched = open()
         XCTAssertEqual(relaunched.note(with: id)?.revision, saved)
+        let kept = try fm.contentsOfDirectory(atPath: root.appendingPathComponent("data/recovery").path)
+        XCTAssertTrue(kept.contains { $0.hasPrefix(id.uuidString) }, "a copy that can't be restored in full stays in recovery/")
         let afterRelaunch = try await engine(relaunched).sync()
         XCTAssertEqual(afterRelaunch.pushed, 0, "nothing older is pushed over what other devices have")
         XCTAssertEqual(afterRelaunch.errors, [])
