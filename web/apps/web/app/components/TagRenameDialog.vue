@@ -13,9 +13,16 @@ const open = computed({
 });
 const name = ref('');
 const busy = ref(false);
+// A fresh portal per opening, like useConfirm's dialogs: a Teleport mounted at startup sits before the sidebar
+// drawer (opened later) in <body>, so at tablet widths the dialog would show behind the drawer.
+const opening = ref(0);
 watch(
   () => state.tagRename,
-  (t) => t && (name.value = t),
+  (t) => {
+    if (!t) return;
+    name.value = t;
+    opening.value++;
+  },
 );
 const target = computed(() => name.value.trim().replace(/^#/, ''));
 const problem = computed(() => (state.tagRename && target.value ? tagRenameProblem(state.tagRename, target.value, tags.value.map((t) => t.tag)) : undefined));
@@ -41,7 +48,7 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="`Rename #${state.tagRename ?? ''}`" :ui="{ content: 'sm:max-w-[420px]', footer: 'justify-end gap-2' }">
+  <UModal :key="opening" v-model:open="open" :title="`Rename #${state.tagRename ?? ''}`" :ui="{ content: 'sm:max-w-[420px]', footer: 'justify-end gap-2' }">
     <template #body>
       <form id="tag-rename-form" @submit.prevent="submit">
         <UFormField label="New name" :error="problem" :help="merges ? `#${target} is already in use: the two tags are merged.` : 'Tags inside it are renamed too.'">
