@@ -74,10 +74,10 @@ async function finish(): Promise<void> {
               </p>
             </div>
             <div class="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-4">
-              <UFormField label="Setup token" name="token">
+              <UFormField label="Setup token" name="token" help=" ">
                 <UInput v-model="values.token" size="lg" autocomplete="off" spellcheck="false" autofocus />
               </UFormField>
-              <UFormField label="Username" name="username">
+              <UFormField label="Username" name="username" help=" ">
                 <UInput v-model="values.username" size="lg" autocomplete="username" autocapitalize="none" />
               </UFormField>
               <UFormField label="Password" name="password" help="This signs you in to the server. Your notes get their own passphrase in step 3.">

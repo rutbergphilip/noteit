@@ -33,7 +33,7 @@ async function submit(): Promise<void> {
 <template>
   <form class="flex flex-col gap-4" @submit.prevent="submit">
     <PassphraseField v-model="passphrase" label="Encryption passphrase" autocomplete="new-password" autofocus />
-    <PassphraseField v-model="confirm" label="Type it again" autocomplete="new-password" />
+    <PassphraseField v-model="confirm" label="Type it again" autocomplete="new-password" :hint="false" />
     <UAlert v-if="error" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="error" />
     <UAlert
       color="warning"

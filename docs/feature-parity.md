@@ -21,11 +21,11 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Create, edit and delete notes (`newNote`) | ⌘N | ⌘N where the browser allows it, ⌥⌘N | Parity |
 | Rich text: bold, italic, underline, strikethrough, inline code, colours, highlight | Format menu | Toolbar and the same shortcuts (⇧⌘E code, ⇧⌘H highlight); the same colour swatches | Parity |
 | Headings, lists, checklists, quotes, code blocks, dividers, tables | Yes | Yes, with native's ⌥⌘0–5, ⇧⌘7/8/L, ⇧⌘U, ⌥⇧⌘D, ⌘[ ⌘] | Parity |
-| Markdown as you type (`#`, `-`, `1.`, `[]`, ```` ``` ````) | Yes | Yes (`>` and `---` are a web gap) | Parity |
+| Markdown as you type (`#`, `-`, `+`, `1.`, `1)`, `[]`, `>`, ```` ``` ````, `---`, `**bold**`, `*italic*`, `` `code` ``, `~~strike~~`) | Yes | Yes, the same triggers and rules | Parity |
 | Images and file attachments (25 MB each) | Yes | Yes: paste, drop or pick | Parity |
 | Code blocks with syntax colouring | Yes | Plain code blocks | Web gap |
 | Bigger/smaller text (⌘+ ⌘−), alignment, clear formatting | Yes | Shown, not settable | Web gap |
-| Paste Markdown as formatting, Paste and Match Style | Yes | Pasted HTML is kept; Markdown text pastes as text | Web gap |
+| Paste Markdown as formatting, Paste and Match Style | Yes | Yes: the same "clearly Markdown" rules and reader (the Mac's Markdown fixtures); ⇧⌘V pastes plain text | Parity |
 | Find and replace in a note (`find`, `findReplace`) | ⌥⌘F, ⇧⌘F | The browser's own find | Web gap |
 | Pin and unpin (`togglePin`) | Yes | Yes | Parity |
 | Notebooks: create, rename, colour, symbol (`newNotebook`) | ⇧⌘N | ⌥⇧⌘B (⇧⌘N where the browser allows it) | Parity |
@@ -52,14 +52,14 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Search filters `tag:` `notebook:`/`in:` `title:` `is:` `has:` `edited:` `created:` `due:` | Yes | Yes, with a warning for a filter it can't read | Parity |
 | Search ranking, snippets and highlights in the note | Yes | Matching notes in edit order | Web gap |
 | Text in images found by search | Yes | — | Native-only by design (macOS text recognition) |
-| Smart folders (`newSmartFolder`, `saveSearchAsSmartFolder`) | Yes, synced | — (the web's sync engine doesn't read the `smart-folders/` record kind yet) | Web gap |
+| Smart folders (`newSmartFolder`, `saveSearchAsSmartFolder`) | Yes, synced | Yes: the same synced `smart-folders/` records (shared envelope vectors), in the sidebar and the palette | Parity |
 
 ## Linking, outline and note info
 
 | Feature | Mac | Web | Status |
 |---|---|---|---|
 | `noteit://note` links between notes | Yes | Yes; clicking one opens the note, or creates it for a link by title | Parity |
-| `[[` note suggestions, Link to Note… (⇧⌘K) | Yes | Add a `noteit://note/…` link in the link popover | Web gap |
+| `[[` note suggestions, `[[Title]]` as you type, Link to Note… (`linkToNote`, ⇧⌘K) | Yes | Yes: the same title resolution and link URLs; headings after `#` aren't suggested | Parity |
 | Backlinks and links in this note (`showBacklinks`) | ⌥⌘I | ⌥⌘I, Links tab | Parity |
 | Unlinked mentions, update links on rename | Yes | — | Web gap |
 | Outline of headings (`showOutline`) | Yes | Outline tab; click to jump | Parity |

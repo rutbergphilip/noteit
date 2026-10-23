@@ -7,7 +7,7 @@ import { relativeTime } from '~/utils/format';
 import { notebookIcon, safeHex } from '~/utils/notebooks';
 import type { NoteRow } from '~/worker/types';
 
-const { state, visibleNotes, client, createNote, refresh, toast } = useNoteit();
+const { state, visibleNotes, client, createNote, refresh, toast, trashNote } = useNoteit();
 const confirm = useConfirm();
 
 const heading = computed(() => {
@@ -26,6 +26,8 @@ const heading = computed(() => {
       return `#${v.tag}`;
     case 'notebook':
       return state.notebooks.find((n) => n.id === v.id)?.name || 'Notebook';
+    case 'smartFolder':
+      return state.smartFolders.find((f) => f.id === v.id)?.name || 'Smart Folder';
   }
   return '';
 });
@@ -95,7 +97,7 @@ function rowMenu(n: NoteRow): ContextMenuItem[][] {
         ],
       },
     ],
-    [{ label: 'Move to Recently Deleted', icon: 'i-lucide-trash-2', color: 'error', onSelect: () => void setMeta(n, { trashed: true }, 'Moved to Recently Deleted') }],
+    [{ label: 'Move to Recently Deleted', icon: 'i-lucide-trash-2', color: 'error', onSelect: () => void trashNote(n.id) }],
   ];
 }
 </script>

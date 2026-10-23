@@ -52,7 +52,7 @@ async function submit(): Promise<void> {
         <PassphraseField v-model="passphrase" label="Passphrase" autocomplete="current-password" autofocus />
         <UAlert v-if="error" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="error" />
         <UButton type="submit" size="xl" block :loading="busy" :disabled="!passphrase" :label="busy ? 'Unlocking…' : 'Unlock'" />
-        <p class="text-[13px] text-muted">NoteIt stays unlocked until you close this tab or lock it from the menu.</p>
+        <p class="text-[13px] text-muted">NoteIt stays unlocked in this tab until you lock it. Reloading or closing the tab locks it again.</p>
         <UAlert color="warning" variant="subtle" icon="i-lucide-triangle-alert" description="Lost passphrases can't be recovered, not even by your server admin. Keep a copy in your password manager." />
       </form>
     </UCard>

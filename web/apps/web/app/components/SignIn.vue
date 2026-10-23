@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, useTemplateRef } from 'vue';
+import { computed, ref, useTemplateRef, watch } from 'vue';
 import { redeemInvite, signIn } from '#safe-action/actions';
 import { redeemInviteInput, signInInput } from '#shared/schemas';
 import { useNoteit } from '~/composables/useNoteit';
 import { failureOf } from '~/utils/actions';
 
-const { enter } = useNoteit();
-const hashInvite = new URLSearchParams(location.hash.replace(/^#/, '')).get('invite') ?? '';
+const { enter, state } = useNoteit();
+const hashInvite = state.inviteToken;
 const mode = ref<'signin' | 'invite'>(hashInvite ? 'invite' : 'signin');
 const host = location.host;
 
@@ -14,13 +14,17 @@ const host = location.host;
 const login = useFormAction(signIn, {
   initialValues: { username: '', password: '' },
   clientSchema: signInInput,
-  onSuccess: ({ data }) => enter(data),
+  onSuccess: ({ data }) => {
+    if (data?.user.mustChangePassword) state.temporaryPassword = login.values.value.password;
+    return enter(data);
+  },
 });
 const invite = useFormAction(redeemInvite, {
   initialValues: { token: hashInvite, username: '', password: '' },
   clientSchema: redeemInviteInput,
   onSuccess: ({ data }) => {
     history.replaceState(null, '', location.pathname);
+    state.inviteToken = '';
     return enter(data);
   },
 });
@@ -28,6 +32,15 @@ useActionFormErrors(useTemplateRef('loginForm'), login.fieldErrors);
 useActionFormErrors(useTemplateRef('inviteForm'), invite.fieldErrors);
 const loginValues = login.values;
 const inviteValues = invite.values;
+// An invite link opened while this screen is showing (the hash changed, the page didn't reload).
+watch(
+  () => state.inviteToken,
+  (token) => {
+    if (!token) return;
+    inviteValues.value.token = token;
+    mode.value = 'invite';
+  },
+);
 
 const active = computed(() => (mode.value === 'invite' ? invite : login));
 /** Failures that aren't about one field: wrong credentials, rate limits, an unreachable server. */
@@ -47,25 +60,25 @@ const error = computed(() => {
       </p>
     </div>
 
-    <UForm v-if="mode === 'invite'" ref="inviteForm" :state="inviteValues" :validate-on="[]" class="flex flex-col gap-4" @submit="invite.submit()">
-      <UFormField label="Invite code" name="token">
+    <UForm v-if="mode === 'invite'" ref="inviteForm" :state="inviteValues" :validate-on="[]" class="flex flex-col gap-1.5" @submit="invite.submit()">
+      <UFormField label="Invite code" name="token" help=" ">
         <UInput v-model="inviteValues.token" size="xl" autocomplete="off" spellcheck="false" />
       </UFormField>
-      <UFormField label="Username" name="username">
+      <UFormField label="Username" name="username" help=" ">
         <UInput v-model="inviteValues.username" size="xl" autocomplete="username" autocapitalize="none" spellcheck="false" />
       </UFormField>
-      <UFormField label="Password" name="password" hint="10+ characters">
+      <UFormField label="Password" name="password" hint="10+ characters" help=" ">
         <UInput v-model="inviteValues.password" size="xl" type="password" autocomplete="new-password" />
       </UFormField>
       <UAlert v-if="error" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="error" />
       <UButton type="submit" size="xl" block label="Create Account" :loading="invite.isExecuting.value" />
     </UForm>
 
-    <UForm v-else ref="loginForm" :state="loginValues" :validate-on="[]" class="flex flex-col gap-4" @submit="login.submit()">
-      <UFormField label="Username" name="username">
+    <UForm v-else ref="loginForm" :state="loginValues" :validate-on="[]" class="flex flex-col gap-1.5" @submit="login.submit()">
+      <UFormField label="Username" name="username" help=" ">
         <UInput v-model="loginValues.username" size="xl" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus />
       </UFormField>
-      <UFormField label="Password" name="password">
+      <UFormField label="Password" name="password" help=" ">
         <UInput v-model="loginValues.password" size="xl" type="password" autocomplete="current-password" />
       </UFormField>
       <UAlert v-if="error" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="error" />

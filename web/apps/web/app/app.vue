@@ -9,7 +9,15 @@ const { state, boot, client } = useNoteit();
 // Toasts: the composable's toast() lands here, in Nuxt UI's toaster.
 const toaster = useToast();
 const TONES = { info: { color: 'neutral', icon: 'i-lucide-info' }, success: { color: 'success', icon: 'i-lucide-circle-check' }, error: { color: 'error', icon: 'i-lucide-circle-alert' } } as const;
-setNotifier(({ title, description, tone = 'info' }) => toaster.add({ title, description, ...TONES[tone], duration: tone === 'error' ? 6000 : 3500 }));
+setNotifier(({ title, description, tone = 'info', action }) =>
+  toaster.add({
+    title,
+    description,
+    ...TONES[tone],
+    duration: action ? 6000 : tone === 'error' ? 6000 : 3500,
+    ...(action ? { actions: [{ label: action.label, color: 'neutral', variant: 'outline', size: 'xs', onClick: () => void action.run() }] } : {}),
+  }),
+);
 
 // Theme: Nuxt UI's color mode owns the <html> class and persistence; the app state mirrors it.
 const colorMode = useColorMode();
@@ -45,7 +53,15 @@ const onOnline = () => {
   if (state.phase === 'ready') void client().syncNow();
 };
 
+// Closing IndexedDB as the page goes away lets a reload open it at once. The open editor saves a pending edit
+// first (noteit:flush), so that save is queued in the worker ahead of the close.
+const onPageHide = (e: PageTransitionEvent) => {
+  window.dispatchEvent(new Event('noteit:flush'));
+  if (state.phase !== 'loading' && !e.persisted) void client().close();
+};
+
 onMounted(() => {
+  window.addEventListener('pagehide', onPageHide);
   window.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('online', onOnline);
@@ -53,6 +69,7 @@ onMounted(() => {
   void boot();
 });
 onBeforeUnmount(() => {
+  window.removeEventListener('pagehide', onPageHide);
   window.removeEventListener('keydown', onKey);
   document.removeEventListener('visibilitychange', onVisibility);
   window.removeEventListener('online', onOnline);
@@ -80,6 +97,7 @@ onBeforeUnmount(() => {
         <CommandPalette />
         <QuickCapture />
         <NotebookDialog />
+        <SmartFolderDialog />
         <TemplatePicker />
       </template>
     </div>

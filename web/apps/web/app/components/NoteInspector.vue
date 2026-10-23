@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { formatDateTime } from '~/utils/format';
 import { computed, ref, watch } from 'vue';
 import { type NoteItDoc, noteStatistics, outline, readingTimeText, searchableText } from '@noteit/doc';
 import { useNoteit, type InspectorTab } from '~/composables/useNoteit';
@@ -19,7 +20,7 @@ watch(() => [props.noteId, row.value?.updatedAt, state.notes.length], () => void
 const headings = computed(() => (props.doc ? outline(props.doc) : []));
 const stats = computed(() => noteStatistics(props.doc ? searchableText(props.doc) : ''));
 const notebook = computed(() => state.notebooks.find((n) => n.id === row.value?.notebookID));
-const when = (iso?: string) => (iso ? new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—');
+const when = (iso?: string) => formatDateTime(iso);
 const number = (n: number) => n.toLocaleString();
 
 const tabs = [

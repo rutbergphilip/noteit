@@ -3,17 +3,18 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
-import { addAttachment, attachmentTooLargeMessage, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS } from '@noteit/doc';
-import { fromEditorJSON, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
+import { addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS } from '@noteit/doc';
+import { fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
+import { formatDateTime } from '~/utils/format';
 import { notebookIcon, safeHex } from '~/utils/notebooks';
 import { comboKbds } from '~/utils/shortcuts';
 import type { OpenedNote } from '~/worker/types';
 
 const props = defineProps<{ noteId: string }>();
-const { state, client, toast, refresh, openNote, createNote } = useNoteit();
+const { state, client, toast, refresh, openNote, createNote, trashNote } = useNoteit();
 const confirm = useConfirm();
 
 const note = shallowRef<OpenedNote>();
@@ -24,6 +25,8 @@ const saveState = ref<'saved' | 'saving' | 'unsaved'>('saved');
 const urls = new Map<string, string>();
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 let lastSaved = '';
+/** The revision the editor's content is based on; a save from an older base makes a conflict copy, never an overwrite. */
+let baseRevision: string | undefined;
 /** The doc as typed, for the Links and Outline panel (word count updates as you type). */
 const liveDoc = shallowRef<NoteItDoc>();
 let liveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -44,17 +47,30 @@ function attachmentUrl(sha: string): string | undefined {
 }
 
 const editor = useEditor({
-  extensions: noteItExtensions({ resolver: { url: attachmentUrl } }),
+  extensions: noteItExtensions({
+    resolver: { url: attachmentUrl },
+    wikiLink: (inner) => wikiLink(inner, { notes: state.notes, noteID: props.noteId, noteTitle: row.value?.title ?? '', ...(row.value?.notebookID ? { notebookID: row.value.notebookID } : {}) }),
+  }),
   editable: false,
   content: { type: 'doc', content: [{ type: 'paragraph' }] },
   editorProps: {
+    // The `[[` list takes ↑ ↓ (⌃P ⌃N), ↩ or Tab and Esc while it's open.
+    handleKeyDown: (_view, e) => {
+      // ⇧⌘V / ⌥⇧⌘V: Paste and Match Style, so the next paste stays plain text.
+      if (e.code === 'KeyV' && e.shiftKey && (e.metaKey || e.ctrlKey)) plainPaste = true;
+      return linkListKey(e);
+    },
     attributes: { class: 'ni-prose', 'aria-label': 'Note' },
     transformPastedHTML: (html) => sanitizePastedHtml(html),
-    handlePaste: (_view, event) => {
+    handlePaste: (view, event) => {
       const files = [...(event.clipboardData?.files ?? [])];
-      if (!files.length) return false;
-      void insertFiles(files);
-      return true;
+      if (files.length) {
+        void insertFiles(files);
+        return true;
+      }
+      const plain = plainPaste;
+      plainPaste = false;
+      return pasteMarkdown(view.state.selection.$from.parent.type.name === 'codeBlock' || plain, event.clipboardData);
     },
     handleDOMEvents: {
       // noteit://note links open the note here (or create it, for a link by title to a note that doesn't exist).
@@ -73,12 +89,105 @@ const editor = useEditor({
       return true;
     },
   },
+  onSelectionUpdate: () => updateLinkList(),
   onUpdate: () => {
+    updateLinkList();
     scheduleSave();
     if (liveTimer) clearTimeout(liveTimer);
     liveTimer = setTimeout(() => editor.value && (liveDoc.value = fromEditorJSON(editor.value.getJSON())), 250);
   },
 });
+
+// MARK: `[[` note suggestions and Link to Note… (native InlineCompletionController / LinkCompletionSource)
+
+const linkList = ref<{ from: number; typed: string; items: LinkTarget[]; index: number; x: number; y: number }>();
+function updateLinkList(): void {
+  const ed = editor.value;
+  if (!ed || !editable.value) return void (linkList.value = undefined);
+  const { $from, empty } = ed.state.selection;
+  const parent = $from.parent;
+  if (!empty || parent.type.name === 'codeBlock' || ed.isActive('code')) return void (linkList.value = undefined);
+  const prefix = parent.textBetween(0, $from.parentOffset, undefined, '\ufffc');
+  const m = WIKI_LINK_OPEN.exec(prefix);
+  if (!m) return void (linkList.value = undefined);
+  const typed = m[1]!;
+  const items = linkSuggestions(state.notes, typed, { exclude: props.noteId });
+  const from = $from.start() + m.index;
+  const at = ed.view.coordsAtPos(from);
+  const keep = linkList.value?.from === from ? Math.min(linkList.value.index, Math.max(0, items.length - 1)) : 0;
+  linkList.value = { from, typed, items, index: keep, x: at.left, y: at.bottom + 4 };
+}
+function chooseLink(target: LinkTarget): void {
+  const ed = editor.value;
+  const list = linkList.value;
+  if (!ed || !list) return;
+  const heading = list.typed.includes('#') ? list.typed.slice(list.typed.indexOf('#') + 1).split('|')[0]!.trim() : '';
+  const href = noteLinkURL({ id: target.id, ...(heading ? { heading } : {}) });
+  const text = heading ? `${target.title} › ${heading}` : target.title;
+  const to = ed.state.selection.from;
+  linkList.value = undefined;
+  ed.chain()
+    .focus()
+    .insertContentAt({ from: list.from, to }, [{ type: 'text', text, marks: [{ type: 'link', attrs: { href } }] }])
+    .unsetMark('link')
+    .run();
+}
+function linkListKey(e: KeyboardEvent): boolean {
+  const list = linkList.value;
+  if (!list) return false;
+  const move = (by: number) => {
+    if (list.items.length) list.index = (list.index + by + list.items.length) % list.items.length;
+    return true;
+  };
+  if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) return move(1);
+  if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) return move(-1);
+  if ((e.key === 'Enter' || e.key === 'Tab') && list.items[list.index]) {
+    chooseLink(list.items[list.index]!);
+    return true;
+  }
+  if (e.key === 'Escape') {
+    linkList.value = undefined;
+    return true;
+  }
+  return false;
+}
+
+/** Link to Note… (⇧⌘K): types `[[` at the caret (around the selection's text) and opens the list. */
+function linkToNote(): void {
+  const ed = editor.value;
+  if (!ed || !editable.value) return;
+  const { from, to, empty } = ed.state.selection;
+  const selected = empty ? '' : ed.state.doc.textBetween(from, to, ' ');
+  ed.chain().focus().insertContentAt({ from, to }, `[[${selected.replace(/[[\]\n]/g, ' ')}`).run();
+  updateLinkList();
+}
+watch(
+  () => state.linkToNote,
+  (n) => {
+    if (!n) return;
+    state.linkToNote = 0;
+    linkToNote();
+  },
+);
+
+// MARK: pasting Markdown (native MarkdownPaste): clearly-Markdown plain text comes in formatted; HTML from a web page
+// keeps its own formatting, and code blocks and Paste and Match Style take the text as it is.
+
+let plainPaste = false;
+function pasteMarkdown(asText: boolean, data: DataTransfer | null): boolean {
+  const ed = editor.value;
+  const text = data?.getData('text/plain') ?? '';
+  if (asText || !ed || !text || data?.types.includes('text/html')) return false;
+  const pasted = markdownForPaste(text, { resolveNoteLink: (title) => noteIDForTitle(state.notes, title, row.value?.notebookID) });
+  if (!pasted) return false;
+  const content = prepareForEditor({ format: 'noteit-doc', version: 1, attachments: {}, doc: { type: 'doc', content: pasted.blocks } }).doc.content as unknown[];
+  if (pasted.inline) {
+    const inline = (content[0] as { content?: unknown[] } | undefined)?.content ?? [];
+    return ed.chain().focus().insertContent(inline as never).run();
+  }
+  const blocks = pasted.endsWithNewline ? [...content, { type: 'paragraph' }] : content;
+  return ed.chain().focus().insertContent(blocks as never).run();
+}
 
 async function followNoteLink(href: string): Promise<void> {
   const link = parseNoteLink(href);
@@ -120,6 +229,7 @@ async function load(): Promise<void> {
   const opened = await client().getNote(props.noteId);
   note.value = opened;
   if (!opened) return;
+  baseRevision = opened.row.revision;
   container.value = opened.container;
   readOnlyReason.value = opened.readOnly;
   const ed = editor.value;
@@ -145,7 +255,7 @@ async function load(): Promise<void> {
 
 const row = computed(() => state.notes.find((n) => n.id === props.noteId) ?? note.value?.row);
 const notebook = computed(() => state.notebooks.find((n) => n.id === row.value?.notebookID));
-const edited = computed(() => (row.value ? new Date(row.value.updatedAt).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : ''));
+const edited = computed(() => (row.value ? formatDateTime(row.value.updatedAt) : ''));
 
 function scheduleSave(): void {
   if (!editable.value) return;
@@ -154,7 +264,14 @@ function scheduleSave(): void {
   saveTimer = setTimeout(() => void save(), 600);
 }
 
-async function save(): Promise<void> {
+/** Saves run one after another: two in flight from the same base would read as a conflict with ourselves. */
+let saving: Promise<void> = Promise.resolve();
+function save(): Promise<void> {
+  saving = saving.then(saveNow, saveNow);
+  return saving;
+}
+
+async function saveNow(): Promise<void> {
   saveTimer = undefined;
   const ed = editor.value;
   if (!ed || !container.value || !editable.value) return;
@@ -167,33 +284,58 @@ async function save(): Promise<void> {
   saveState.value = 'saving';
   const next: BodyContainer = { ...container.value, doc };
   try {
-    await client().saveNote(props.noteId, next);
+    const saved = await client().saveNote(props.noteId, next, baseRevision);
+    baseRevision = saved.revision;
     container.value = next;
     lastSaved = json;
     saveState.value = 'saved';
+    if (saved.conflictCopy) toast('This note was changed somewhere else while you typed. That version is kept as a conflict copy.');
   } catch (e) {
     saveState.value = 'unsaved';
     toast(e instanceof Error ? e.message : 'Could not save');
   }
 }
 
-// A pull of this note while nothing is pending reloads it in place.
+// A new revision of this note (a pull, or another tab's save) reloads it in place while nothing is pending. With an
+// edit pending, the save notices the newer base and keeps the other version as a conflict copy.
 watch(
-  () => row.value?.updatedAt,
-  async (now, before) => {
-    if (!before || now === before || saveTimer || saveState.value !== 'saved') return;
+  () => row.value?.revision,
+  async (now) => {
+    if (!now || now === baseRevision || saveTimer || saveState.value !== 'saved') return;
     const opened = await client().getNote(props.noteId);
-    if (opened?.container && JSON.stringify(opened.container.doc) !== lastSaved) await load();
+    if (!opened || saveTimer || saveState.value !== 'saved') return;
+    if (opened.container && JSON.stringify(opened.container.doc) === lastSaved) baseRevision = opened.row.revision;
+    else await load();
   },
 );
 
 watch(editor, (ed) => ed && void load(), { immediate: true });
 
+/** Saves a pending edit now instead of after the debounce. */
+function flush(): void {
+  if (!saveTimer) return;
+  clearTimeout(saveTimer);
+  void save();
+}
+
+// Leaving or hiding the page saves at once: the debounce would otherwise drop an edit typed just before a reload.
+// beforeunload also asks to stay while that save is still on its way to the library.
+function onBeforeUnload(e: BeforeUnloadEvent): void {
+  flush();
+  if (saveState.value === 'saved') return;
+  e.preventDefault();
+  e.returnValue = '';
+}
+const onHidden = () => document.visibilityState === 'hidden' && flush();
+window.addEventListener('beforeunload', onBeforeUnload);
+window.addEventListener('noteit:flush', flush);
+document.addEventListener('visibilitychange', onHidden);
+
 onBeforeUnmount(() => {
-  if (saveTimer) {
-    clearTimeout(saveTimer);
-    void save();
-  }
+  window.removeEventListener('beforeunload', onBeforeUnload);
+  window.removeEventListener('noteit:flush', flush);
+  document.removeEventListener('visibilitychange', onHidden);
+  flush();
   for (const url of urls.values()) URL.revokeObjectURL(url);
 });
 
@@ -270,12 +412,7 @@ function toggleList(kind: 'bullet' | 'ordered' | 'task'): void {
 }
 
 function insertTable(): void {
-  const cell = (type: string) => ({ type, content: [{ type: 'paragraph' }] });
-  editor.value
-    ?.chain()
-    .focus()
-    .insertContent({ type: 'table', content: [{ type: 'tableRow', content: [cell('tableHeader'), cell('tableHeader')] }, { type: 'tableRow', content: [cell('tableCell'), cell('tableCell')] }] })
-    .run();
+  if (editor.value) insertTableAt(editor.value);
 }
 
 const linkOpen = ref(false);
@@ -341,11 +478,9 @@ async function move(v: string): Promise<void> {
   await client().updateNoteMeta(props.noteId, { notebookID });
 }
 async function trash(): Promise<void> {
+  flush();
   await save();
-  await client().updateNoteMeta(props.noteId, { trashed: true });
-  state.selectedId = undefined;
-  state.pane = 'list';
-  toast('Moved to Recently Deleted');
+  await trashNote(props.noteId);
 }
 async function recover(): Promise<void> {
   await client().updateNoteMeta(props.noteId, { trashed: false });
@@ -449,7 +584,7 @@ onBeforeUnmount(() => {
       <UTooltip v-for="m in MARKS" :key="m.mark" :text="m.label" :kbds="[...m.kbds]">
         <UButton color="neutral" variant="ghost" size="sm" square class="size-[30px] justify-center" :icon="m.icon" :aria-label="m.label" :aria-pressed="active(m.mark)" :class="active(m.mark) && 'bg-(--sel) text-(--acct)'" @click="mark(m.mark)" />
       </UTooltip>
-      <UTooltip text="Inline code" :kbds="['meta', 'E']">
+      <UTooltip text="Inline code" :kbds="['shift', 'meta', 'E']">
         <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-code" aria-label="Inline code" :aria-pressed="active('code')" :class="active('code') && 'bg-(--sel) text-(--acct)'" :disabled="active('codeBlock')" @click="mark('code')" />
       </UTooltip>
       <USeparator orientation="vertical" class="mx-1.5 h-[18px]" />
@@ -544,6 +679,28 @@ onBeforeUnmount(() => {
         <h2 v-if="row?.kind === 'legacy' || row?.kind === 'locked'" class="ro-title">{{ row.title || 'Untitled' }}</h2>
         <p v-if="row?.kind === 'legacy' && row.preview" class="ro-preview">{{ row.preview }}</p>
         <EditorContent v-show="row?.kind === 'doc'" :editor="editor" />
+        <div
+          v-if="linkList"
+          class="fixed z-50 w-72 overflow-hidden rounded-lg bg-default py-1 text-sm shadow-lg ring ring-default"
+          :style="{ left: `${linkList.x}px`, top: `${linkList.y}px` }"
+          role="listbox"
+          aria-label="Link to note"
+        >
+          <p v-if="!linkList.items.length" class="px-3 py-1.5 text-muted">No matching notes. Type ]] to link by title.</p>
+          <button
+            v-for="(n, i) in linkList.items"
+            :key="n.id"
+            type="button"
+            role="option"
+            :aria-selected="i === linkList.index"
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+            :class="i === linkList.index ? 'bg-(--sel)' : 'hover:bg-(--fill)'"
+            @mousedown.prevent="chooseLink(n)"
+          >
+            <UIcon name="i-lucide-file-text" class="size-4 shrink-0 text-muted" />
+            <span class="truncate">{{ n.title }}</span>
+          </button>
+        </div>
       </article>
       <div v-if="state.inspector.open && !row?.deletedAt && !narrow" class="w-[280px] flex-none border-s border-default bg-(--side)">
         <NoteInspector :note-id="noteId" :doc="liveDoc" @jump="jumpTo" />

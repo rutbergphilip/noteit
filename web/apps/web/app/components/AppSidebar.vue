@@ -57,6 +57,7 @@ const notebookMenu = (nb: NotebookRow): ContextMenuItem[][] => [
   ],
   [{ label: 'Edit Notebook…', icon: 'i-lucide-pencil', onSelect: () => (state.notebookDialog = { mode: 'edit', id: nb.id }) }],
 ];
+const smartFolderMenu = (id: string): ContextMenuItem[][] => [[{ label: 'Edit Smart Folder…', icon: 'i-lucide-pencil', onSelect: () => (state.smartFolderDialog = { mode: 'edit', id }) }]];
 const item = (active: boolean) => [
   'w-full justify-start gap-2.5 px-2.5 min-h-[34px] text-sm font-normal text-default',
   active ? 'bg-(--sel) hover:bg-(--sel) font-medium' : 'hover:bg-(--fill)',
@@ -119,6 +120,24 @@ const item = (active: boolean) => [
       </UContextMenu>
       <p v-if="!tree.length" class="px-2.5 text-[13px] text-muted">No notebooks yet.</p>
 
+      <template v-if="state.smartFolders.length">
+        <div class="px-2.5 pt-4 pb-1.5 text-[11px] font-semibold text-muted">Smart Folders</div>
+        <UContextMenu v-for="f in state.smartFolders" :key="f.id" :items="smartFolderMenu(f.id)">
+          <UButton
+            color="neutral"
+            variant="ghost"
+            :class="item(isActive({ kind: 'smartFolder', id: f.id }))"
+            :aria-current="isActive({ kind: 'smartFolder', id: f.id }) ? 'page' : undefined"
+            :title="f.query"
+            @click="go({ kind: 'smartFolder', id: f.id })"
+            @dblclick.prevent="state.smartFolderDialog = { mode: 'edit', id: f.id }"
+          >
+            <UIcon name="i-lucide-folder-search" class="size-[17px] shrink-0 text-(--acc)" />
+            <span class="truncate">{{ f.name }}</span>
+          </UButton>
+        </UContextMenu>
+      </template>
+
       <template v-if="tags.length">
         <div class="px-2.5 pt-4 pb-1.5 text-[11px] font-semibold text-muted">Tags</div>
         <div class="flex flex-wrap gap-1.5 px-2.5">
@@ -143,7 +162,7 @@ const item = (active: boolean) => [
         icon="i-lucide-plus"
         label="New Notebook"
         class="justify-start px-2.5 font-normal text-muted"
-        @click="state.notebookDialog = { mode: 'create', ...(state.view.kind === 'notebook' ? { parent: state.view.id } : {}) }"
+        @click="state.notebookDialog = { mode: 'create' }"
       />
       <UButton color="neutral" variant="outline" class="justify-start gap-2 rounded-[10px] p-2.5 text-left text-xs/snug font-normal text-muted ring-(--line)" @click="state.settings = true">
         <UIcon name="i-lucide-server" class="size-[15px] shrink-0" />

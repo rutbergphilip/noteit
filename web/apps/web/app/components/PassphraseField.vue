@@ -2,13 +2,13 @@
 import { ref } from 'vue';
 import { PASSPHRASE_HINT } from '@noteit/doc';
 
-defineProps<{ label: string; autocomplete: string; autofocus?: boolean; name?: string }>();
+withDefaults(defineProps<{ label: string; autocomplete: string; autofocus?: boolean; name?: string; hint?: boolean }>(), { hint: true });
 const model = defineModel<string>({ required: true });
 const shown = ref(false);
 </script>
 
 <template>
-  <UFormField :label="label" :name="name" :help="PASSPHRASE_HINT">
+  <UFormField :label="label" :name="name" :help="hint ? PASSPHRASE_HINT : undefined">
     <UInput
       v-model="model"
       size="xl"

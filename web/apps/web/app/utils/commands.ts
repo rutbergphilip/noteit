@@ -38,6 +38,15 @@ export function webCommands(): WebCommand[] {
     { id: 'newTemplate', title: 'New Template', icon: 'i-lucide-file-plus-2', keywords: ['template'], available: always, run: () => void n.newTemplate() },
     { id: 'openToday', title: "Today's Note", icon: 'i-lucide-calendar', keys: ['ctrl+mod+t'], keywords: ['daily', 'journal'], available: always, run: () => void n.openToday() },
     { id: 'newNotebook', title: 'New Notebook…', icon: 'i-lucide-folder-plus', keys: ['shift+mod+n', 'alt+shift+mod+b'], keywords: ['folder'], available: always, run: () => (state.notebookDialog = { mode: 'create' }) },
+    { id: 'newSmartFolder', title: 'New Smart Folder…', icon: 'i-lucide-folder-search', keywords: ['saved search', 'filter'], available: always, run: () => (state.smartFolderDialog = { mode: 'create' }) },
+    {
+      id: 'saveSearchAsSmartFolder',
+      title: 'Save Search as Smart Folder…',
+      icon: 'i-lucide-folder-search',
+      keywords: ['saved search', 'filter'],
+      available: () => !!state.query.trim(),
+      run: () => (state.smartFolderDialog = { mode: 'create', query: state.query.trim() }),
+    },
     { id: 'showTasks', title: 'Show Tasks', icon: 'i-lucide-list-checks', keys: ['shift+mod+t', 'alt+shift+mod+t'], keywords: ['todo', 'checkbox', 'due'], available: always, run: () => ((state.view = { kind: 'tasks' }), (state.pane = 'list')) },
     { id: 'searchNotes', title: 'Search Notes', icon: 'i-lucide-search', keys: ['mod+f'], keywords: ['find', 'filter'], available: always, run: () => document.querySelector<HTMLInputElement>('input[aria-label="Search notes"]')?.focus() },
     { id: 'export', title: 'Export Note as Markdown', icon: 'i-lucide-file-down', keys: ['shift+mod+s'], keywords: ['save', 'markdown', 'download'], available: () => !!note(), run: () => exportNote(state.selectedId!, 'markdown') },
@@ -45,6 +54,7 @@ export function webCommands(): WebCommand[] {
     { id: 'print', title: 'Print…', icon: 'i-lucide-printer', keys: ['mod+p'], keywords: ['pdf'], available: () => !!note(), run: () => printNote(state.selectedId!) },
     { id: 'copyMarkdown', title: 'Copy as Markdown', icon: 'i-lucide-clipboard-copy', keys: ['alt+shift+mod+c'], keywords: ['clipboard'], available: () => !!note(), run: () => copyMarkdown(state.selectedId!) },
     { id: 'copyNoteLink', title: 'Copy Note Link', icon: 'i-lucide-link', keys: ['ctrl+mod+l'], keywords: ['url', 'clipboard'], available: live, run: () => copyNoteLink(state.selectedId!) },
+    { id: 'linkToNote', title: 'Link to Note…', icon: 'i-lucide-link', keys: ['shift+mod+k'], keywords: ['wiki', 'reference', '[['], available: editable, run: () => void (state.linkToNote += 1) },
     { id: 'showBacklinks', title: 'Show Backlinks', icon: 'i-lucide-link-2', keys: ['alt+mod+i'], keywords: ['links', 'references'], available: live, run: () => inspector('links') },
     { id: 'showOutline', title: 'Show Outline', icon: 'i-lucide-list-tree', keywords: ['headings', 'toc'], available: live, run: () => inspector('outline') },
     { id: 'showNoteInfo', title: 'Show Note Info', icon: 'i-lucide-info', keys: ['ctrl+mod+i'], keywords: ['word count', 'characters', 'reading time', 'statistics'], available: live, run: () => inspector('info') },
@@ -64,12 +74,7 @@ export function webCommands(): WebCommand[] {
       inText: false,
       keywords: ['remove', 'trash'],
       available: live,
-      run: async () => {
-        await n.client().updateNoteMeta(state.selectedId!, { trashed: true });
-        state.selectedId = undefined;
-        state.pane = 'list';
-        n.toast('Moved to Recently Deleted');
-      },
+      run: () => n.trashNote(state.selectedId!),
     },
     { id: 'showRecentlyDeleted', title: 'Show Recently Deleted', icon: 'i-lucide-trash-2', keywords: ['trash', 'restore'], available: () => state.notes.some((x) => x.deletedAt), run: () => ((state.view = { kind: 'trash' }), (state.pane = 'list')) },
     { id: 'settings', title: 'Settings…', icon: 'i-lucide-sliders-horizontal', keys: ['mod+,'], keywords: ['preferences'], available: always, run: () => (state.settings = true) },

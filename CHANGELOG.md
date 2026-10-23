@@ -23,6 +23,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Export from the web app as Markdown (⇧⌘S) or HTML, print or save as PDF (⌘P), Copy as Markdown and Copy Note Link. Markdown export writes links between notes as `[[wiki links]]`, as the Mac does.
 - The web app's command palette and keyboard shortcuts follow the Mac's menus, with Ctrl in place of ⌘ off a Mac; type `>` in the palette for commands only.
 - A [feature parity](docs/feature-parity.md) page lists every feature of the Mac and web apps and where each stands.
+- Smart folders in the web app: New Smart Folder… and Save Search as Smart Folder… make a saved search in the sidebar, and smart folders made on a Mac show up on the web and the other way round.
+- Note links as you type in the web app: `[[` lists your notes as you type, `[[Title]]`, `[[Title#Heading]]` and `[[Title|text]]` become links as on the Mac, and Link to Note… (⇧⌘K) starts one.
+- Pasting Markdown in the web app brings it in formatted, by the same rules as the Mac: only text that's clearly Markdown source, never inside a code block, and ⇧⌘V pastes plain text.
 
 ### Changed
 
@@ -32,6 +35,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - In the NoteIt web app, server setup, sign-in, invites, passwords and user management now run as type-checked server actions built with nuxt-safe-action. Forms point at the field that needs fixing, often before anything is sent, and lists such as your access keys and the server's users refresh by themselves after a change. Sync is unchanged.
 - Text colours and highlights picked in the web app are now the same swatches as the Mac's Format menu, and the web app has the Mac's paragraph shortcuts (⌥⌘4 and ⌥⌘5, ⇧⌘7, ⇧⌘8, ⇧⌘L, ⇧⌘U, ⇧⌘H, ⌥⇧⌘D, ⌘[ and ⌘]). Inline code is ⇧⌘E, as on the Mac; ⌘E still works.
 - The NoteIt web app is rebuilt on Nuxt UI, keeping its look. Dialogs, menus and the command palette handle the keyboard, focus and Escape consistently and animate in and out. Notes and notebooks have right-click menus, buttons show when they're working, confirmations are in-app dialogs instead of browser pop-ups, the sidebar and note list can be resized, and Settings opens over your notes.
+
+### Fixed
+
+- Two tabs of the NoteIt web app editing the same note no longer lose an edit. Tabs see each other's saves straight away, and a save made from an older version keeps the other version as a conflict copy, as the Mac does when a note changes on two devices at once.
+- In the web app, a note edited less than a second before a reload or a closed tab is saved; the browser asks you to stay while the save finishes. Reloading also opens faster.
+- Confirmation dialogs in the web app, such as Delete Notebook and Delete Now, open again after you cancel one.
+- In the web app, Tab and ⇧Tab indent and outdent list items and move between table cells (Tab in the last cell adds a row), and a new table starts with the cursor in its first cell. Focus no longer jumps out of the note.
+- The web app's Markdown shortcuts now match the Mac's: `>`, `+`, `1)`, ```` ``` ```` with a language, `---` then Return, and `**bold**`, `*italic*`, `` `code` `` and `~~strike~~` as you type. One ⌘Z gives back what you typed.
+- Quick Capture in the web app opens on the title, and Return in the title moves to the note.
+- A new web account, or a reload in the middle of setup, goes straight to choosing an encryption passphrase instead of asking to unlock a library that doesn't exist yet.
+- The web app's command palette matches and ranks like the Mac's, so `gn` finds *Grocery Notes*, and *New Note “…”* comes after every match.
+- In the web app's Settings, a new S3 secret is shown only once, revoking a key asks first, the Users list shows a renamed account's new name, and this browser's last sync time matches the header.
+- An invite link opened in a web app tab that's already open is no longer ignored.
+- Moving a note to Recently Deleted in the web app can be undone from the notice. A forced password change no longer asks again for the temporary password you just used. New Notebook in the sidebar makes a top-level notebook, and Edit Notebook can move a notebook inside another.
+- Notebooks made at the top level in the web app now record that they're top level, as the Mac does, so moving a notebook out of another on the web reaches your Mac.
 
 ### Security
 

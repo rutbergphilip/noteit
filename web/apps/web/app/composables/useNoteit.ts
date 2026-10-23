@@ -1,9 +1,9 @@
-import { computed, reactive, shallowRef } from 'vue';
+import { computed, reactive, shallowRef, watch } from 'vue';
 import { type BodyContainer, dailyNotebook, dailyTitle, dayKey, DAILY_NOTEBOOK_NAME, emptyContainer, expandTemplate, findDailyNote, parseQuery, TEMPLATES_NOTEBOOK_NAME } from '@noteit/doc';
 import { serverInfo, session as sessionAction, signOut as signOutAction } from '#safe-action/actions';
 import { failureOf, type ServerInfo, type SessionInfo } from '~/utils/actions';
 import { createWorkerClient } from '~/utils/workerClient';
-import type { NoteRow, NotebookRow, SyncStatus, UnlockResult } from '~/worker/types';
+import type { NoteRow, NotebookRow, SmartFolderRow, SyncStatus, UnlockResult } from '~/worker/types';
 
 export type Phase = 'loading' | 'setup' | 'signin' | 'changePassword' | 'unlock' | 'createStore' | 'legacy' | 'ready' | 'serverDown';
 export type View =
@@ -13,6 +13,7 @@ export type View =
   | { kind: 'trash' }
   | { kind: 'tasks' }
   | { kind: 'notebook'; id: string }
+  | { kind: 'smartFolder'; id: string }
   | { kind: 'tag'; tag: string };
 export type InspectorTab = 'links' | 'outline' | 'info';
 export type Theme = 'system' | 'light' | 'dark';
@@ -21,6 +22,7 @@ export interface Notice {
   title: string;
   description?: string;
   tone?: 'info' | 'success' | 'error';
+  action?: { label: string; run: () => void | Promise<void> };
 }
 
 /** Set by app.vue from Nuxt UI's useToast(), which needs a component setup to resolve. */
@@ -37,6 +39,11 @@ const state = reactive({
   hasCache: false,
   notes: [] as NoteRow[],
   notebooks: [] as NotebookRow[],
+  smartFolders: [] as SmartFolderRow[],
+  /** Notes the open smart folder's search finds (evaluated in the worker). */
+  smartHits: undefined as Set<string> | undefined,
+  /** New Smart Folder… / Edit: the dialog's subject. */
+  smartFolderDialog: undefined as undefined | { mode: 'create'; query?: string } | { mode: 'edit'; id: string },
   status: { phase: 'locked', recordErrors: [], pending: 0 } as SyncStatus,
   view: { kind: 'all' } as View,
   selectedId: undefined as string | undefined,
@@ -50,6 +57,8 @@ const state = reactive({
   templatePicker: undefined as undefined | 'new' | 'insert',
   /** An expanded template for the open editor to insert at the caret. */
   pendingInsert: undefined as BodyContainer | undefined,
+  /** Link to Note… (⇧⌘K): bumped to ask the open editor to start a `[[` link. */
+  linkToNote: 0,
   sort: 'edited' as 'edited' | 'created' | 'title',
   /** Mirrors Nuxt UI's color mode (app.vue keeps the two in step; it persists the choice). */
   theme: 'system' as Theme,
@@ -60,7 +69,20 @@ const state = reactive({
   capture: false,
   notebookDialog: undefined as undefined | { mode: 'create'; parent?: string } | { mode: 'edit'; id: string },
   settings: false,
+  /** An invite token from the URL (#invite=…), read at boot and on every hash change. */
+  inviteToken: '',
+  /** The temporary password just used to sign in, kept in memory so the forced change doesn't ask for it again. */
+  temporaryPassword: undefined as string | undefined,
 });
+
+function readInviteFromHash(): void {
+  const token = new URLSearchParams(location.hash.replace(/^#/, '')).get('invite') ?? '';
+  if (!token) return;
+  state.inviteToken = token;
+  // An invite opened in a tab that's already signed in: the link is for a new account.
+  if (state.session && state.phase !== 'signin') toast('This invite link is for creating a new account. Sign out first to use it.');
+}
+if (typeof window !== 'undefined') window.addEventListener('hashchange', readInviteFromHash);
 
 const worker = shallowRef<ReturnType<typeof createWorkerClient>>();
 
@@ -80,15 +102,35 @@ async function refresh(): Promise<void> {
   const snap = await client().snapshot();
   state.notes = snap.notes;
   state.notebooks = snap.notebooks;
+  state.smartFolders = snap.smartFolders;
   if (state.query) state.searchHits = new Set(await client().search(state.query));
+  await refreshSmartHits();
 }
 
-function toast(message: string, tone: Notice['tone'] = 'info'): void {
-  notifier?.({ title: message, tone });
+function toast(message: string, tone: Notice['tone'] = 'info', action?: Notice['action']): void {
+  notifier?.({ title: message, tone, ...(action ? { action } : {}) });
+}
+
+/** Moves a note to Recently Deleted, with Undo in the toast (native ⌘Z after a deletion). */
+async function trashNote(id: string): Promise<void> {
+  await client().updateNoteMeta(id, { trashed: true });
+  if (state.selectedId === id) {
+    state.selectedId = undefined;
+    state.pane = 'list';
+  }
+  toast('Moved to Recently Deleted', 'info', {
+    label: 'Undo',
+    run: async () => {
+      await client().updateNoteMeta(id, { trashed: false });
+      await refresh();
+      openNote(id);
+    },
+  });
 }
 
 /** Where the SPA starts: server info, then the session (null when signed out), then the account's next step. */
 async function boot(): Promise<void> {
+  readInviteFromHash();
   const info = await useAction(serverInfo).executeAsync(undefined);
   if (!info.data) {
     state.phase = 'serverDown';
@@ -121,7 +163,7 @@ async function enter(session: SessionInfo | undefined): Promise<void> {
   const init = await client().init({ userId: session.user.id, baseUrl: location.origin });
   state.deviceName = init.deviceName;
   state.hasCache = init.hasCache;
-  state.phase = 'unlock';
+  state.phase = init.hasStore === false && !init.hasCache ? 'createStore' : 'unlock';
 }
 
 async function unlock(passphrase: string, create = false, enter = true): Promise<UnlockResult> {
@@ -177,6 +219,7 @@ const visibleNotes = computed(() => {
     notes = notes.filter((n) => n.notebookID && ids.has(n.notebookID));
   }
   if (v.kind === 'tag') notes = notes.filter((n) => n.tags.some((t) => t === v.tag || t.startsWith(`${v.tag}/`)));
+  if (v.kind === 'smartFolder') notes = state.smartHits ? notes.filter((n) => state.smartHits!.has(n.id)) : [];
   if (state.searchHits) notes = notes.filter((n) => state.searchHits!.has(n.id));
   const by = state.sort;
   return [...notes].sort((a, b) => {
@@ -186,6 +229,30 @@ const visibleNotes = computed(() => {
     return Date.parse(b[key]) - Date.parse(a[key]);
   });
 });
+
+/** The open smart folder's notes: its saved search, run like a typed one (native SmartFolder). */
+async function refreshSmartHits(): Promise<void> {
+  const v = state.view;
+  const folder = v.kind === 'smartFolder' ? state.smartFolders.find((f) => f.id === v.id) : undefined;
+  state.smartHits = folder ? new Set(await client().search(folder.query)) : undefined;
+}
+watch(
+  () => state.view,
+  () => void refreshSmartHits(),
+);
+
+// Choosing another notebook, tag or list closes a note that isn't in it, rather than leaving it open beside a list
+// that doesn't show it.
+watch(
+  () => state.view,
+  () => {
+    if (state.view.kind === 'smartFolder') return;
+    if (state.selectedId && !visibleNotes.value.some((n) => n.id === state.selectedId)) {
+      state.selectedId = undefined;
+      state.pane = 'list';
+    }
+  },
+);
 
 function descendants(id: string): string[] {
   const out: string[] = [];
@@ -297,6 +364,7 @@ export function useNoteit() {
     visibleNotes,
     tags,
     createNote,
+    trashNote,
     descendants,
     openNote,
     templates,

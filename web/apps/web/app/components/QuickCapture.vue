@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import type { Block, BodyContainer } from '@noteit/doc';
 import { useNoteit } from '~/composables/useNoteit';
 
@@ -42,6 +42,18 @@ function discard(): void {
   draft.body = '';
   state.capture = false;
 }
+const titleInput = ref<HTMLInputElement>();
+/** Return in the title goes on to the body, as on the Mac; ⌘↩ saves from anywhere. */
+function titleEnter(e: KeyboardEvent): void {
+  if (e.metaKey || e.ctrlKey || e.isComposing) return;
+  e.preventDefault();
+  document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Note"]')?.focus();
+}
+/** The dialog opens on the title, not the "Save to" picker. */
+function focusTitle(e: Event): void {
+  e.preventDefault();
+  titleInput.value?.focus();
+}
 function onKey(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
     e.preventDefault();
@@ -52,7 +64,7 @@ function onKey(e: KeyboardEvent): void {
 
 <template>
   <!-- design p04 -->
-  <UModal v-model:open="state.capture" title="Quick Capture" description="Draft a note without leaving what you're doing." :ui="{ content: 'sm:max-w-[600px] sm:top-[140px] sm:translate-y-0 top-auto' }" @update:open="onOpen">
+  <UModal v-model:open="state.capture" title="Quick Capture" description="Draft a note without leaving what you're doing." :content="{ onOpenAutoFocus: focusTitle }" :ui="{ content: 'sm:max-w-[600px] sm:top-[140px] sm:translate-y-0 top-auto' }" @update:open="onOpen">
     <template #content>
       <form class="flex flex-col gap-3 px-5.5 py-4.5" @submit.prevent="save" @keydown="onKey">
         <div class="flex flex-wrap items-center gap-2.5">
@@ -63,7 +75,7 @@ function onKey(e: KeyboardEvent): void {
             <USelect v-model="draft.notebook" :items="destinations" size="sm" variant="soft" class="min-w-36" />
           </label>
         </div>
-        <input v-model="draft.title" class="w-full bg-transparent text-[22px] font-semibold outline-none placeholder:text-dimmed" placeholder="Title" aria-label="Title" autofocus />
+        <input ref="titleInput" v-model="draft.title" class="w-full bg-transparent text-[22px] font-semibold outline-none placeholder:text-dimmed" placeholder="Title" aria-label="Title" @keydown.enter="titleEnter" />
         <UTextarea v-model="draft.body" :rows="6" autoresize :maxrows="14" variant="none" placeholder="Write something. - [ ] makes a checklist item." aria-label="Note" :ui="{ base: 'px-0 text-sm/normal' }" />
         <div class="flex flex-wrap items-center gap-2 border-t border-default pt-3">
           <UKbd value="escape" />

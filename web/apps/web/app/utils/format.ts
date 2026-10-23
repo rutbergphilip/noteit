@@ -10,6 +10,12 @@ export function formatBytes(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
+/** An absolute date and time, one style everywhere (note info, the editor header, invites). */
+export function formatDateTime(iso: string | number | undefined): string {
+  if (iso === undefined || iso === '') return '—';
+  return new Date(iso).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
 export function relativeTime(iso: string | number | undefined): string {
   if (iso === undefined) return '';
   const t = typeof iso === 'number' ? iso : Date.parse(iso);

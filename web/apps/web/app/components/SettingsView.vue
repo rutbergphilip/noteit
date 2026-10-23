@@ -22,7 +22,7 @@ import { changePasswordInput, createUserInput } from '#shared/schemas';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { failureOf, unwrap } from '~/utils/actions';
-import { formatBytes, relativeTime } from '~/utils/format';
+import { formatBytes, formatDateTime, relativeTime } from '~/utils/format';
 import type { DeviceView } from '~/worker/types';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
@@ -78,6 +78,8 @@ watch(
   (open) => {
     if (!open) return;
     section.value = 'sync';
+    // A secret is shown once, right after it's made; reopening Settings never shows it again.
+    newKey.value = undefined;
     profile.values.value.displayName = state.session?.user.displayName ?? '';
     deviceName.value = state.deviceName;
     void loadSync();
@@ -115,6 +117,8 @@ const themes = [
 
 const profile = useFormAction(accountUpdateProfile, {
   initialValues: { displayName: state.session?.user.displayName ?? '' },
+  // The Users list shows display names: a rename refreshes it.
+  invalidate: { tags: ['users'] },
   onSuccess: ({ data }) => {
     state.session = data;
     toast('Name saved', 'success');
@@ -137,7 +141,17 @@ const newKey = ref<{ accessKeyId: string; secretAccessKey: string }>();
 const keyMutation = { invalidate: { tags: ['s3-keys'] }, onError: ({ error }: { error: Parameters<typeof failureOf>[0] }) => report(error) };
 const createKey = useAction(accountCreateS3Key, { ...keyMutation, onSuccess: ({ data }) => (newKey.value = data) });
 const rotateKey = useAction(accountRotateS3Key, { ...keyMutation, onSuccess: ({ data }) => (newKey.value = data) });
-const revokeKey = useAction(accountRevokeS3Key, { ...keyMutation, onSuccess: () => toast('Key revoked', 'success') });
+const revokeKey = useAction(accountRevokeS3Key, {
+  ...keyMutation,
+  onSuccess: ({ input }) => {
+    if (newKey.value?.accessKeyId === input.accessKeyId) newKey.value = undefined;
+    toast('Key revoked', 'success');
+  },
+});
+async function confirmRevoke(accessKeyId: string, label: string): Promise<void> {
+  const ok = await confirm({ title: `Revoke ${label}?`, description: 'Apps using this key stop syncing until they get a new one.', confirmLabel: 'Revoke Key', danger: true });
+  if (ok) revokeKey.execute({ accessKeyId });
+}
 
 // MARK: admin
 
@@ -272,7 +286,7 @@ const roles = [
                 v-for="d in devices"
                 :key="d.deviceID"
                 :label="d.name"
-                :sub="`${d.platform === 'web' ? 'NoteIt web' : d.platform === 'mac' ? 'NoteIt for Mac' : 'NoteIt'} · last synced ${relativeTime(d.lastSync).toLowerCase()}`"
+                :sub="`${d.platform === 'web' ? 'NoteIt web' : d.platform === 'mac' ? 'NoteIt for Mac' : 'NoteIt'} · last synced ${relativeTime(d.current && state.status.lastSync ? state.status.lastSync : d.lastSync).toLowerCase()}`"
               >
                 <UBadge v-if="d.current" variant="soft" label="This browser" />
               </SettingsRow>
@@ -329,7 +343,7 @@ const roles = [
               >
                 <template #label>{{ k.label }} <code class="ms-1 text-xs">{{ k.accessKeyId }}</code></template>
                 <UButton color="neutral" variant="outline" size="sm" label="Replace" :loading="rotateKey.isExecuting.value" @click="rotateKey.execute({ accessKeyId: k.accessKeyId })" />
-                <UButton color="error" variant="ghost" size="sm" label="Revoke" @click="revokeKey.execute({ accessKeyId: k.accessKeyId })" />
+                <UButton color="error" variant="ghost" size="sm" label="Revoke" @click="confirmRevoke(k.accessKeyId, k.label)" />
               </SettingsRow>
               <form class="flex gap-2 py-3" @submit.prevent="createKey.execute({ label: keyLabel })">
                 <UInput v-model="keyLabel" maxlength="64" aria-label="Key label" placeholder="Label" class="w-48" />
@@ -377,7 +391,7 @@ const roles = [
                 <SecretValue v-if="created" :value="created" label="New account" hint="Share it privately; they choose their own password on first sign-in." />
                 <SecretValue v-if="inviteLink" :value="inviteLink" label="Invite link" hint="Works once and expires in 3 days." />
               </div>
-              <SettingsRow v-for="i in invites.filter((x) => !x.usedAt && !x.revokedAt)" :key="i.id" :label="`Invite (${i.role})`" :sub="`Expires ${new Date(i.expiresAt).toLocaleString()}`">
+              <SettingsRow v-for="i in invites.filter((x) => !x.usedAt && !x.revokedAt)" :key="i.id" :label="`Invite (${i.role})`" :sub="`Expires ${formatDateTime(i.expiresAt)}`">
                 <UButton color="error" variant="ghost" size="sm" label="Revoke" @click="revokeInvite.execute({ id: i.id })" />
               </SettingsRow>
             </SettingsCard>

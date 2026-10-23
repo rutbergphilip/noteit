@@ -50,7 +50,7 @@ async function submit(): Promise<void> {
   busy.value = true;
   try {
     const nb = existing.value;
-    if (nb) await client().updateNotebook(nb.id, { name: trimmed, colorHex: color.value, symbol: symbol.value });
+    if (nb) await client().updateNotebook(nb.id, { name: trimmed, colorHex: color.value, symbol: symbol.value, parent: parent.value === TOP ? null : parent.value });
     else {
       const id = await client().createNotebook({ name: trimmed, colorHex: color.value, symbol: symbol.value, ...(parent.value !== TOP ? { parent: parent.value } : {}) });
       state.view = { kind: 'notebook', id };
@@ -123,7 +123,7 @@ async function remove(): Promise<void> {
             </UTooltip>
           </div>
         </fieldset>
-        <UFormField v-if="!existing" label="Inside">
+        <UFormField label="Inside" :help="parent === TOP ? 'A top-level notebook in the sidebar.' : `Nested inside ${state.notebooks.find((n) => n.id === parent)?.name || 'Untitled'}.`">
           <USelect v-model="parent" :items="parentChoices" class="w-full" />
         </UFormField>
       </form>
