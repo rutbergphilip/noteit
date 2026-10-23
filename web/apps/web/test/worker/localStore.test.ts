@@ -85,6 +85,21 @@ describe('WebLocalStore', () => {
     expect(s.search('is:done')).toEqual([source]);
   });
 
+  it('filters tasks by the search language per line and leaves out templates (native Search Tasks)', async () => {
+    const { s } = await store();
+    const task = (t: string, checked = false) => ({ type: 'listItem' as const, attrs: { kind: 'task' as const, level: 0, checked }, content: [{ type: 'text' as const, text: t }] });
+    const doc = (...content: ReturnType<typeof task>[]): BodyContainer => ({ ...emptyContainer(), doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Chores #home' }] }, ...content] } });
+    await s.createNote({ container: doc(task('buy milk #shop'), task('call mum @due(2026-10-21)'), task('milk done', true)) });
+    const templates = await s.createNotebook({ name: 'Templates', colorHex: '#8E8E93', symbol: 'doc.on.doc' });
+    await s.createNote({ container: doc(task('template milk')), notebookID: templates });
+    expect(s.tasks().map((t) => t.text)).toEqual(['buy milk #shop', 'call mum', 'milk done']);
+    expect(s.tasks('milk').map((t) => t.text)).toEqual(['buy milk #shop', 'milk done']);
+    // The note's tags count for each of its lines, as native TaskSearchDocument does.
+    expect(s.tasks('tag:shop').length).toBe(3);
+    expect(s.tasks('tag:home has:due').map((t) => t.text)).toEqual(['call mum']);
+    expect(s.tasks('is:done').map((t) => t.text)).toEqual(['milk done']);
+  });
+
   it("reads a notebook's synced default template", async () => {
     const { s } = await store();
     const id = newUuid();

@@ -46,6 +46,7 @@ import {
   type DocTask,
   hasAttachments,
   type LocalDateTime,
+  isEmptyQuery,
   matchesQuery,
   noteLinks,
   type NoteLinkRef,
@@ -64,6 +65,7 @@ import {
   searchFold,
   type TagEdit,
   tagRenameProblem,
+  tagsIn,
   searchableText,
   withConflictSuffix,
 } from '@noteit/doc';
@@ -372,11 +374,39 @@ export class WebLocalStore implements SyncLocalStore {
   }
 
   /** Every checklist item in live, editable notes (the Tasks view). */
-  tasks(): { noteId: Uuid; noteTitle: string; block: number; text: string; checked: boolean; due?: LocalDateTime; remind?: LocalDateTime }[] {
+  /**
+   * Checklist items from live notes outside the Templates notebook, filtered by `query` (the search language,
+   * evaluated against each line as native TaskSearchDocument does).
+   */
+  tasks(query = '', now: Date = this.now()): { noteId: Uuid; noteTitle: string; block: number; text: string; checked: boolean; due?: LocalDateTime; remind?: LocalDateTime }[] {
     const out: { noteId: Uuid; noteTitle: string; block: number; text: string; checked: boolean; due?: LocalDateTime; remind?: LocalDateTime }[] = [];
+    const q = parseQuery(query);
+    const notebooks = this.snapshot().notebooks;
+    const templates = notebooks.find((n) => n.name.trim().toLowerCase() === 'templates')?.id;
+    const ctx = { now, notebooks };
     for (const d of this.derived.values()) {
-      if (d.row.deletedAt || d.row.kind !== 'doc') continue;
-      for (const t of d.tasks) out.push({ noteId: d.row.id, noteTitle: d.row.title, block: t.block, text: t.text, checked: t.checked, ...(t.due ? { due: t.due } : {}), ...(t.remind ? { remind: t.remind } : {}) });
+      if (d.row.deletedAt || d.row.kind !== 'doc' || (templates && d.row.notebookID === templates)) continue;
+      for (const t of d.tasks) {
+        if (!isEmptyQuery(q)) {
+          const doc = {
+            foldedText: searchFold(t.text),
+            foldedTitle: '',
+            tags: [...new Set([...d.row.tags, ...tagsIn(t.text)])],
+            ...(d.row.notebookID ? { notebookID: d.row.notebookID } : {}),
+            isPinned: d.row.isPinned,
+            isConflict: !!d.row.conflictSource,
+            createdAt: new Date(d.row.createdAt),
+            updatedAt: new Date(d.row.updatedAt),
+            openTaskCount: t.checked ? 0 : 1,
+            doneTaskCount: t.checked ? 1 : 0,
+            openDueDates: !t.checked && t.due ? [t.due] : [],
+            hasLiveReminder: !!t.remind && !t.remindDone && !t.checked,
+            hasAttachment: d.hasAttachment,
+          };
+          if (!matchesQuery(q, doc, ctx)) continue;
+        }
+        out.push({ noteId: d.row.id, noteTitle: d.row.title, block: t.block, text: t.text, checked: t.checked, ...(t.due ? { due: t.due } : {}), ...(t.remind ? { remind: t.remind } : {}) });
+      }
     }
     return out;
   }

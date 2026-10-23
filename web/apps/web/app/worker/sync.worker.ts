@@ -291,7 +291,7 @@ const api = {
   search: async (q: string) => needLocal().search(q),
   getNote: async (id: string): Promise<OpenedNote | undefined> => needLocal().getNote(id),
   links: async (id: string) => needLocal().links(id),
-  tasks: async () => needLocal().tasks(),
+  tasks: async (query = '') => needLocal().tasks(query),
   setTaskChecked: async (id: string, block: number, checked: boolean) => needLocal().setTaskChecked(id, block, checked),
   createNote: async (opts: { notebookID?: string; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }) => needLocal().createNote(opts),
   saveNote: async (id: string, container: BodyContainer, baseRevision?: string) => needLocal().saveNote(id, container, baseRevision),
