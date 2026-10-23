@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useNoteit } from '~/composables/useNoteit';
-import { relativeTime } from '~/utils/api';
+import { relativeTime } from '~/utils/format';
 import { safeHex } from '~/utils/icons';
 
 const { state, visibleNotes, client, createNote } = useNoteit();

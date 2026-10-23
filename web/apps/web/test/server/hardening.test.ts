@@ -4,7 +4,7 @@ import type { H3Event } from 'h3';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { loadConfig } from '../../server/lib/config';
 import { clientIp } from '../../server/lib/http';
-import { browser, type Harness, SETUP_TOKEN, startServer } from './harness';
+import { action, browser, type Harness, SETUP_TOKEN, startServer } from './harness';
 
 const MB = 1024 * 1024;
 
@@ -41,8 +41,8 @@ describe('server hardening', () => {
   beforeAll(async () => {
     h = await startServer({ NOTEIT_MAX_OBJECT_MB: '1' });
     admin = browser(h.url);
-    await admin.fetch('/api/setup', { method: 'POST', body: JSON.stringify({ token: SETUP_TOKEN, username: 'admin', password: 'long enough password' }) });
-    key = await (await admin.fetch('/api/account/s3-keys', { method: 'POST', body: JSON.stringify({ label: 't' }) })).json();
+    await action(admin, 'setup', { token: SETUP_TOKEN, username: 'admin', password: 'long enough password' });
+    key = (await action(admin, 'account/create-s3-key', { label: 't' })).data;
   });
   afterAll(async () => h.close());
 
@@ -102,7 +102,7 @@ describe('server hardening', () => {
   it('never lets concurrent writes overshoot a quota', async () => {
     const me = h.ctx.accounts.byUsername('admin')!;
     const used = (await h.ctx.quotas.current(me.id)).bytes;
-    await admin.fetch(`/api/admin/users/${me.id}`, { method: 'PATCH', body: JSON.stringify({ quotaBytes: used + 1000 }) });
+    await action(admin, 'admin/update-user', { id: me.id, quotaBytes: used + 1000 });
     const results = await Promise.all(
       Array.from({ length: 12 }, (_, i) =>
         admin.fetch(`/api/storage/object/noteit/v1/devices/Q${i}.json`, { method: 'PUT', body: new Uint8Array(300), headers: { 'content-type': 'application/octet-stream' } }).then((r) => r.status),
@@ -137,17 +137,13 @@ describe('server hardening', () => {
       const proxied = await startServer({ NOTEIT_TRUST_PROXY: 'true' });
       try {
         const b = browser(proxied.url);
-        const statuses: number[] = [];
+        const codes: (string | undefined)[] = [];
         for (let i = 0; i < 14; i++) {
-          const res = await b.fetch('/api/setup', {
-            method: 'POST',
-            headers: { 'x-forwarded-for': `9.9.9.${i}, 198.51.100.7` },
-            body: JSON.stringify({ token: 'wrong', username: 'admin', password: 'long enough password' }),
-          });
-          statuses.push(res.status);
+          const res = await action(b, 'setup', { token: 'wrong', username: 'admin', password: 'long enough password' }, { headers: { 'x-forwarded-for': `9.9.9.${i}, 198.51.100.7` } });
+          codes.push(res.businessError?.code);
         }
-        expect(statuses.slice(0, 10).every((s) => s === 403)).toBe(true);
-        expect(statuses.slice(10).every((s) => s === 429)).toBe(true);
+        expect(codes.slice(0, 10).every((c) => c === 'invalidSetupToken')).toBe(true);
+        expect(codes.slice(10).every((c) => c === 'rateLimited')).toBe(true);
       } finally {
         await proxied.close();
       }

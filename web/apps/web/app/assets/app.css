@@ -230,6 +230,12 @@ input.ni-switch:checked::after {
   color: var(--ink2);
   line-height: 1.45;
 }
+.ni-hint.error {
+  color: var(--danger);
+}
+.ni-field input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
 .ni-btn {
   height: 44px;
   padding: 0 18px;

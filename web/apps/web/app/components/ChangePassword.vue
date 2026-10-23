@@ -1,35 +1,34 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed } from 'vue';
+import { accountChangePassword } from '#safe-action/actions';
+import { changePasswordInput } from '#shared/schemas';
 import { useNoteit } from '~/composables/useNoteit';
-import { api, ApiError } from '~/utils/api';
+import { failureOf } from '~/utils/actions';
 
 const { boot, state } = useNoteit();
-const current = ref('');
-const next = ref('');
-const error = ref('');
-
-async function submit(): Promise<void> {
-  error.value = '';
-  try {
-    await api('/account/password', { method: 'POST', body: { current: current.value, next: next.value } });
-    await boot();
-  } catch (e) {
-    error.value = e instanceof ApiError ? e.message : 'Could not reach the server.';
-  }
-}
+const { values, submit, fieldErrors, businessError, serverError, isExecuting } = useFormAction(accountChangePassword, {
+  initialValues: { current: '', next: '' },
+  clientSchema: changePasswordInput,
+  onSuccess: () => boot(),
+});
+const error = computed(() => (serverError.value ? failureOf({ serverError: serverError.value })?.message : undefined) ?? (businessError.value && !fieldErrors.value.current ? businessError.value.message : undefined));
 </script>
 
 <template>
   <AuthLayout>
-    <form @submit.prevent="submit">
+    <form novalidate @submit.prevent="submit">
       <div>
         <h1>Choose a New Password</h1>
         <p class="lead">Your admin gave {{ state.session?.user.username }} a temporary password. Pick your own to continue.</p>
       </div>
-      <label class="ni-field">Temporary password <input v-model="current" type="password" autocomplete="current-password" required /></label>
-      <label class="ni-field">New password <input v-model="next" type="password" autocomplete="new-password" minlength="10" required /><span class="ni-hint">At least 10 characters.</span></label>
+      <label class="ni-field">Temporary password <input v-model="values.current" type="password" autocomplete="current-password" :aria-invalid="!!fieldErrors.current" />
+        <span v-for="m in fieldErrors.current" :key="m" class="ni-hint error">{{ m }}</span>
+      </label>
+      <label class="ni-field">New password <input v-model="values.next" type="password" autocomplete="new-password" :aria-invalid="!!fieldErrors.next" />
+        <span v-for="m in fieldErrors.next ?? ['At least 10 characters.']" :key="m" class="ni-hint" :class="{ error: fieldErrors.next }">{{ m }}</span>
+      </label>
       <div v-if="error" class="ni-alert error" role="alert">{{ error }}</div>
-      <button class="ni-btn" type="submit">Save Password</button>
+      <button class="ni-btn" type="submit" :disabled="isExecuting">Save Password</button>
     </form>
   </AuthLayout>
 </template>

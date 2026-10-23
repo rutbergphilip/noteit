@@ -1,46 +1,36 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
+import { accountCreateS3Key, adminCreateInvite, setup } from '#safe-action/actions';
+import { setupInput } from '#shared/schemas';
 import { useNoteit } from '~/composables/useNoteit';
-import { api, ApiError, type SessionInfo } from '~/utils/api';
+import { failureOf } from '~/utils/actions';
 
-const { state, client, refresh } = useNoteit();
+const { state, client, refresh, toast } = useNoteit();
 const step = ref(1);
-const token = ref('');
-const username = ref('admin');
-const password = ref('');
-const error = ref('');
-const busy = ref(false);
-const invite = ref<string>();
-const s3Key = ref<{ accessKeyId: string; secretAccessKey: string }>();
+
+const admin = useFormAction(setup, {
+  initialValues: { token: '', username: 'admin', password: '' },
+  clientSchema: setupInput,
+  async onSuccess({ data }) {
+    state.session = data;
+    const init = await client().init({ userId: data.user.id, baseUrl: location.origin });
+    state.deviceName = init.deviceName;
+    step.value = 2;
+  },
+});
+const { values, fieldErrors } = admin;
+const adminError = computed(() => {
+  const f = failureOf({ businessError: admin.businessError.value, serverError: admin.serverError.value });
+  // A wrong token is also shown under its field; don't repeat it.
+  return f && !fieldErrors.value.token ? f.message : undefined;
+});
+
+const invite = useAction(adminCreateInvite, { onError: ({ error }) => toast(failureOf(error)!.message) });
+const inviteLink = computed(() => invite.data.value && `${location.origin}/#invite=${invite.data.value.token}`);
+const s3Key = useAction(accountCreateS3Key, { onError: ({ error }) => toast(failureOf(error)!.message) });
 
 const steps = ['Admin account', 'Storage', 'Encryption', 'Users & finish'];
 const origin = location.origin;
-
-async function createAdmin(): Promise<void> {
-  error.value = '';
-  busy.value = true;
-  try {
-    await api('/setup', { method: 'POST', body: { token: token.value.trim(), username: username.value, password: password.value } });
-    password.value = '';
-    state.session = await api<SessionInfo>('/session');
-    const init = await client().init({ userId: state.session.user.id, baseUrl: location.origin });
-    state.deviceName = init.deviceName;
-    step.value = 2;
-  } catch (e) {
-    error.value = e instanceof ApiError ? e.message : 'Could not reach the server.';
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function makeInvite(): Promise<void> {
-  const res = await api<{ token: string }>('/admin/invites', { method: 'POST', body: { role: 'user' } });
-  invite.value = `${location.origin}/#invite=${res.token}`;
-}
-
-async function makeKey(): Promise<void> {
-  s3Key.value = await api('/account/s3-keys', { method: 'POST', body: { label: 'Mac' } });
-}
 
 async function finish(): Promise<void> {
   if (state.server) state.server.needsSetup = false;
@@ -64,18 +54,24 @@ async function finish(): Promise<void> {
         </li>
       </ol>
 
-      <form v-if="step === 1" class="card" @submit.prevent="createAdmin">
+      <form v-if="step === 1" class="card" novalidate @submit.prevent="admin.submit()">
         <div>
           <h1>Create the admin account</h1>
           <p>Paste the setup token from the server's log (or the <code>setup-token</code> file in its data folder). It works once.</p>
         </div>
         <div class="grid">
-          <label class="ni-field">Setup token <input v-model="token" autocomplete="off" spellcheck="false" required /></label>
-          <label class="ni-field">Username <input v-model="username" autocomplete="username" autocapitalize="none" required pattern="[a-z0-9][a-z0-9._\-]{1,31}" /></label>
-          <label class="ni-field">Password <input v-model="password" type="password" autocomplete="new-password" minlength="10" required /><span class="ni-hint">This signs you in to the server. Your notes get their own passphrase in step 3.</span></label>
+          <label class="ni-field">Setup token <input v-model="values.token" autocomplete="off" spellcheck="false" :aria-invalid="!!fieldErrors.token" />
+            <span v-for="m in fieldErrors.token" :key="m" class="ni-hint error">{{ m }}</span>
+          </label>
+          <label class="ni-field">Username <input v-model="values.username" autocomplete="username" autocapitalize="none" :aria-invalid="!!fieldErrors.username" />
+            <span v-for="m in fieldErrors.username" :key="m" class="ni-hint error">{{ m }}</span>
+          </label>
+          <label class="ni-field">Password <input v-model="values.password" type="password" autocomplete="new-password" :aria-invalid="!!fieldErrors.password" />
+            <span v-for="m in fieldErrors.password ?? ['This signs you in to the server. Your notes get their own passphrase in step 3.']" :key="m" class="ni-hint" :class="{ error: fieldErrors.password }">{{ m }}</span>
+          </label>
         </div>
-        <div v-if="error" class="ni-alert error" role="alert">{{ error }}</div>
-        <div class="actions"><button class="ni-btn" type="submit" :disabled="busy">Continue</button></div>
+        <div v-if="adminError" class="ni-alert error" role="alert">{{ adminError }}</div>
+        <div class="actions"><button class="ni-btn" type="submit" :disabled="admin.isExecuting.value">Continue</button></div>
       </form>
 
       <section v-else-if="step === 2" class="card">
@@ -119,18 +115,18 @@ async function finish(): Promise<void> {
             <strong>Invite someone</strong>
             <div class="ni-hint">The link works once and expires in 3 days.</div>
           </div>
-          <button class="ni-btn secondary small" type="button" @click="makeInvite">Create Invite Link</button>
+          <button class="ni-btn secondary small" type="button" @click="invite.execute({ role: 'user' })">Create Invite Link</button>
         </div>
-        <code v-if="invite" class="secret">{{ invite }}</code>
+        <code v-if="inviteLink" class="secret">{{ inviteLink }}</code>
         <div class="row">
           <div>
             <strong>Sync your Mac</strong>
             <div class="ni-hint">In NoteIt on your Mac: Settings → Sync → S3-compatible, endpoint <code>{{ origin }}/s3</code>, bucket <code>noteit</code>, region <code>us-east-1</code>, path-style on.</div>
           </div>
-          <button class="ni-btn secondary small" type="button" @click="makeKey">Create Access Key</button>
+          <button class="ni-btn secondary small" type="button" @click="s3Key.execute({ label: 'Mac' })">Create Access Key</button>
         </div>
-        <div v-if="s3Key" class="secret">
-          Access key ID: <code>{{ s3Key.accessKeyId }}</code><br />Secret: <code>{{ s3Key.secretAccessKey }}</code>
+        <div v-if="s3Key.data.value" class="secret">
+          Access key ID: <code>{{ s3Key.data.value.accessKeyId }}</code><br />Secret: <code>{{ s3Key.data.value.secretAccessKey }}</code>
           <div class="ni-hint">Copy the secret now; it isn't shown again.</div>
         </div>
         <div class="actions"><button class="ni-btn" type="button" @click="finish">Open NoteIt</button></div>

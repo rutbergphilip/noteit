@@ -1,5 +1,7 @@
 // The web client is a pure SPA: the server only serves static assets, /api and /s3, and never renders notes.
+// The control plane is nuxt-safe-action actions (server/actions → /api/_actions/*); sync stays plain routes.
 export default defineNuxtConfig({
+  modules: ['nuxt-safe-action'],
   compatibilityDate: '2026-09-01',
   ssr: false,
   devtools: { enabled: false },

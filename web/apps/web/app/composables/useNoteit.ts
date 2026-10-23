@@ -1,6 +1,7 @@
 import { computed, reactive, shallowRef } from 'vue';
 import type { BodyContainer } from '@noteit/doc';
-import { api, ApiError, type ServerInfo, type SessionInfo } from '~/utils/api';
+import { serverInfo, session as sessionAction, signOut as signOutAction } from '#safe-action/actions';
+import { failureOf, type ServerInfo, type SessionInfo } from '~/utils/actions';
 import { createWorkerClient } from '~/utils/workerClient';
 import type { NoteRow, NotebookRow, SyncStatus, UnlockResult } from '~/worker/types';
 
@@ -72,29 +73,38 @@ function toast(message: string): void {
   }, 3500);
 }
 
+/** Where the SPA starts: server info, then the session (null when signed out), then the account's next step. */
 async function boot(): Promise<void> {
-  try {
-    state.server = await api<ServerInfo>('/server-info');
-  } catch {
+  const info = await useAction(serverInfo).executeAsync(undefined);
+  if (!info.data) {
     state.phase = 'serverDown';
     return;
   }
-  if (state.server.needsSetup) {
+  state.server = info.data;
+  if (info.data.needsSetup) {
     state.phase = 'setup';
     return;
   }
-  try {
-    state.session = await api<SessionInfo>('/session');
-  } catch (e) {
-    state.session = undefined;
-    state.phase = e instanceof ApiError && e.status === 401 ? 'signin' : 'serverDown';
+  const current = await useAction(sessionAction).executeAsync(undefined);
+  if (failureOf(current)) {
+    state.phase = 'serverDown';
     return;
   }
-  if (state.session.user.mustChangePassword) {
+  await enter(current.data ?? undefined);
+}
+
+/** After boot, sign-in, setup or an invite: the session the action returned decides the next screen. */
+async function enter(session: SessionInfo | undefined): Promise<void> {
+  state.session = session;
+  if (!session) {
+    state.phase = 'signin';
+    return;
+  }
+  if (session.user.mustChangePassword) {
     state.phase = 'changePassword';
     return;
   }
-  const init = await client().init({ userId: state.session.user.id, baseUrl: location.origin });
+  const init = await client().init({ userId: session.user.id, baseUrl: location.origin });
   state.deviceName = init.deviceName;
   state.hasCache = init.hasCache;
   state.phase = 'unlock';
@@ -123,7 +133,7 @@ async function lock(): Promise<void> {
 async function signOut(forget = false): Promise<void> {
   if (forget) await client().forgetDevice();
   else await client().lock();
-  await api('/logout', { method: 'POST' }).catch(() => undefined);
+  await useAction(signOutAction).executeAsync(undefined);
   state.session = undefined;
   state.notes = [];
   state.notebooks = [];
@@ -196,6 +206,7 @@ export function useNoteit() {
     state,
     client,
     boot,
+    enter,
     unlock,
     lock,
     signOut,

@@ -19,7 +19,7 @@ import {
   type SyncLocalStore,
 } from '@noteit/core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { browser, type Harness, SETUP_TOKEN, startServer } from './harness';
+import { action, browser, type Harness, SETUP_TOKEN, startServer } from './harness';
 
 const PASS = 'a sync passphrase never sent to the server';
 
@@ -75,34 +75,79 @@ describe('NoteIt server', () => {
   afterAll(async () => h.close());
 
   it('gates everything behind first-admin setup', async () => {
-    const info = await (await fetch(`${h.url}/api/server-info`)).json();
-    expect(info.needsSetup).toBe(true);
-    expect((await admin.fetch('/api/session')).status).toBe(503);
-    expect((await admin.fetch('/api/setup', { method: 'POST', body: JSON.stringify({ token: 'wrong', username: 'admin', password: 'long enough password' }) })).status).toBe(403);
-    const res = await admin.fetch('/api/setup', { method: 'POST', body: JSON.stringify({ token: SETUP_TOKEN, username: 'admin', password: 'long enough password' }) });
-    expect(res.status).toBe(204);
+    expect((await action(admin, 'server-info', undefined, { method: 'GET' })).data.needsSetup).toBe(true);
+    expect((await action(admin, 'session', undefined, { method: 'GET' })).data).toBeNull();
+    expect((await admin.fetch('/api/storage/list?prefix=noteit/')).status).toBe(503);
+    expect((await action(admin, 'account/create-s3-key', {})).serverError?.code).toBe('unauthorized');
+    const wrong = await action(admin, 'setup', { token: 'wrong', username: 'admin', password: 'long enough password' });
+    expect(wrong.businessError?.code).toBe('invalidSetupToken');
+    expect(wrong.validationErrors?.token).toBeDefined();
+    const short = await action(admin, 'setup', { token: SETUP_TOKEN, username: 'A B', password: 'short' });
+    expect(Object.keys(short.validationErrors ?? {}).sort()).toEqual(['password', 'username']);
+    const res = await admin.fetch('/api/_actions/setup', { method: 'POST', body: JSON.stringify({ token: SETUP_TOKEN, username: 'admin', password: 'long enough password' }) });
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.user.role).toBe('admin');
     expect(admin.cookie()).toMatch(/^noteit_session=/);
     expect(res.headers.get('set-cookie')).toMatch(/HttpOnly/i);
     expect(res.headers.get('set-cookie')).toMatch(/SameSite=Strict/i);
-    expect((await admin.fetch('/api/setup', { method: 'POST', body: JSON.stringify({ token: SETUP_TOKEN, username: 'x2', password: 'long enough password' }) })).status).toBe(404);
-    const session = await (await admin.fetch('/api/session')).json();
-    expect(session.user.role).toBe('admin');
+    expect((await action(admin, 'setup', { token: SETUP_TOKEN, username: 'x2', password: 'long enough password' })).businessError?.code).toBe('alreadySetUp');
+    expect((await action(admin, 'server-info', undefined, { method: 'GET' })).data.needsSetup).toBe(false);
+    const session = await action(admin, 'session', undefined, { method: 'GET' });
+    expect(session.data.user.role).toBe('admin');
   });
 
   it('sends security headers and enforces CSRF on writes', async () => {
     const res = await fetch(`${h.url}/api/health`);
     expect(res.headers.get('content-security-policy')).toContain("default-src 'self'");
     expect(res.headers.get('x-content-type-options')).toBe('nosniff');
-    expect((await admin.fetch('/api/logout', { method: 'POST', headers: { 'x-noteit': '0' } })).status).toBe(403);
-    expect((await admin.fetch('/api/logout', { method: 'POST', headers: { origin: 'https://evil.example' } })).status).toBe(403);
+    // Actions: JSON only (a cross-site page can't send it without a preflight), same Origin, same-origin fetch site.
+    const evil = await action(admin, 'sign-out', {}, { headers: { origin: 'https://evil.example' } });
+    expect(evil.status).toBe(403);
+    expect(evil.serverError?.code).toBe('forbidden');
+    expect((await action(admin, 'sign-out', {}, { headers: { origin: '' } })).status).toBe(403);
+    expect((await action(admin, 'sign-out', {}, { headers: { 'sec-fetch-site': 'cross-site' } })).status).toBe(403);
+    const form = await admin.fetch('/api/_actions/sign-out', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: 'a=1' });
+    expect(form.status).toBe(415);
+    const text = await admin.fetch('/api/_actions/admin/create-invite', { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}' });
+    expect(text.status).toBe(415);
+    expect(h.ctx.accounts.invites).toHaveLength(0);
+    // None of those signed us out.
+    expect((await action(admin, 'session', undefined, { method: 'GET' })).data.user.username).toBe('admin');
+    // The data plane keeps its X-NoteIt header check.
+    const put = (headers: Record<string, string>) => admin.fetch('/api/storage/object/noteit/v1/devices/Z.json', { method: 'PUT', headers: { 'content-type': 'application/octet-stream', ...headers }, body: 'x' });
+    expect((await put({ 'x-noteit': '0' })).status).toBe(403);
+    expect((await put({ origin: 'https://evil.example' })).status).toBe(403);
+  });
+
+  it('checks auth, admin role and the forced password change in action middleware', async () => {
+    const anon = browser(h.url);
+    expect((await action(anon, 'account/s3-keys', undefined, { method: 'GET' })).serverError?.code).toBe('unauthorized');
+    expect((await action(anon, 'admin/create-invite', {})).serverError?.code).toBe('unauthorized');
+    const created = await action(admin, 'admin/create-user', { username: 'carol' });
+    expect(created.data.user.mustChangePassword).toBe(true);
+    expect((await action(admin, 'admin/create-user', { username: 'Carol' })).validationErrors?.username).toEqual(['That username is taken.']);
+    const carol = browser(h.url);
+    expect((await action(carol, 'sign-in', { username: 'carol', password: created.data.temporaryPassword })).data.user.mustChangePassword).toBe(true);
+    expect((await action(carol, 'account/create-s3-key', {})).serverError?.code).toBe('passwordChangeRequired');
+    expect((await carol.fetch('/api/storage/list?prefix=noteit/')).status).toBe(403);
+    expect((await action(carol, 'account/change-password', { current: 'not it at all', next: 'carols new password' })).businessError?.code).toBe('wrongPassword');
+    expect((await action(carol, 'account/change-password', { current: created.data.temporaryPassword, next: 'short' })).validationErrors?.next).toBeDefined();
+    expect((await action(carol, 'account/change-password', { current: created.data.temporaryPassword, next: 'carols new password' })).data).toBe(true);
+    expect((await action(carol, 'account/s3-keys', undefined, { method: 'GET' })).data).toEqual([]);
+    expect((await action(carol, 'admin/users', undefined, { method: 'GET' })).serverError?.code).toBe('forbidden');
+    const id = h.ctx.accounts.byUsername('carol')!.id;
+    expect((await action(admin, 'admin/delete-user', { id, confirmUsername: 'nope' })).businessError?.code).toBe('confirmMismatch');
+    expect((await action(admin, 'admin/delete-user', { id, confirmUsername: 'carol' })).data).toBe(true);
+    expect((await action(carol, 'session', undefined, { method: 'GET' })).data).toBeNull();
   });
 
   it('rejects bad logins with a uniform error', async () => {
     const anon = browser(h.url);
-    const r1 = await anon.fetch('/api/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password: 'wrong password!' }) });
-    const r2 = await anon.fetch('/api/login', { method: 'POST', body: JSON.stringify({ username: 'nobody', password: 'wrong password!' }) });
-    expect(r1.status).toBe(401);
-    expect(await r1.json()).toEqual(await r2.json());
+    const r1 = await action(anon, 'sign-in', { username: 'admin', password: 'wrong password!' });
+    const r2 = await action(anon, 'sign-in', { username: 'nobody', password: 'wrong password!' });
+    expect(r1.businessError?.code).toBe('invalidCredentials');
+    expect(r1).toEqual(r2);
+    expect(anon.cookie()).toBeUndefined();
     expect((await anon.fetch('/api/storage/list?prefix=noteit/')).status).toBe(401);
   });
 
@@ -163,7 +208,7 @@ describe('NoteIt server', () => {
   });
 
   it('serves the S3 subset with per-user keys, SigV4 and conditional requests', async () => {
-    const created = await (await admin.fetch('/api/account/s3-keys', { method: 'POST', body: JSON.stringify({ label: 'Mac' }) })).json();
+    const created = (await action(admin, 'account/create-s3-key', { label: 'Mac' })).data;
     expect(created.accessKeyId).toMatch(/^NIK[A-Z2-7]{17}$/);
     const cfg = { endpoint: `${h.url}/s3`, bucket: 'noteit', region: 'us-east-1', accessKeyId: created.accessKeyId, secretAccessKey: created.secretAccessKey, pathStyle: true };
     const s3 = new S3Backend(cfg);
@@ -197,7 +242,7 @@ describe('NoteIt server', () => {
   });
 
   it('lists with delimiters, paging and the ListObjects v1 refusal', async () => {
-    const created = await (await admin.fetch('/api/account/s3-keys', { method: 'POST', body: JSON.stringify({ label: 'rclone' }) })).json();
+    const created = (await action(admin, 'account/create-s3-key', { label: 'rclone' })).data;
     const s3 = new S3Backend({ endpoint: `${h.url}/s3`, bucket: 'noteit', region: 'us-east-1', accessKeyId: created.accessKeyId, secretAccessKey: created.secretAccessKey, pathStyle: true });
     const url = s3.makeURL(undefined, [['list-type', '2'], ['prefix', 'noteit/v1/'], ['delimiter', '/'], ['max-keys', '2']]);
     const { signRequest, EMPTY_PAYLOAD_SHA256 } = await import('@noteit/core');
@@ -221,25 +266,25 @@ describe('NoteIt server', () => {
   });
 
   it('isolates users: invites, separate namespaces and S3 keys', async () => {
-    const invite = await (await admin.fetch('/api/admin/invites', { method: 'POST', body: JSON.stringify({ role: 'user' }) })).json();
+    const invite = (await action(admin, 'admin/create-invite', { role: 'user' })).data;
     const bob = browser(h.url);
-    expect((await bob.fetch('/api/invites/redeem', { method: 'POST', body: JSON.stringify({ token: invite.token, username: 'bob', password: 'bobs long password' }) })).status).toBe(204);
-    expect((await bob.fetch('/api/invites/redeem', { method: 'POST', body: JSON.stringify({ token: invite.token, username: 'bob2', password: 'bobs long password' }) })).status).toBe(410);
+    expect((await action(bob, 'redeem-invite', { token: invite.token, username: 'bob', password: 'bobs long password' })).data.user.username).toBe('bob');
+    expect((await action(bob, 'redeem-invite', { token: invite.token, username: 'bob2', password: 'bobs long password' })).businessError?.code).toBe('inviteInvalid');
     const bobBackend = new HttpProxyBackend({ baseUrl: h.url, fetch: bob.fetch });
     expect(await bobBackend.list('noteit/')).toEqual([]);
-    expect((await bob.fetch('/api/admin/users')).status).toBe(403);
-    const key = await (await bob.fetch('/api/account/s3-keys', { method: 'POST', body: JSON.stringify({ label: 'b' }) })).json();
+    expect((await action(bob, 'admin/users', undefined, { method: 'GET' })).serverError?.code).toBe('forbidden');
+    const key = (await action(bob, 'account/create-s3-key', { label: 'b' })).data;
     const bobS3 = new S3Backend({ endpoint: `${h.url}/s3`, bucket: 'noteit', region: 'us-east-1', accessKeyId: key.accessKeyId, secretAccessKey: key.secretAccessKey, pathStyle: true });
     expect(await bobS3.list('noteit/')).toEqual([]);
     await expect(connect(bobS3, { passphrase: PASS, createIfMissing: false })).rejects.toMatchObject({ kind: 'storeMissing' });
   });
 
   it('enforces quotas', async () => {
-    const users = (await (await admin.fetch('/api/admin/users')).json()).users as { id: string; username: string }[];
+    const users = (await action(admin, 'admin/users', undefined, { method: 'GET' })).data.users as { id: string; username: string }[];
     const bob = users.find((u) => u.username === 'bob')!;
-    expect((await admin.fetch(`/api/admin/users/${bob.id}`, { method: 'PATCH', body: JSON.stringify({ quotaBytes: 1000 }) })).status).toBe(200);
+    expect((await action(admin, 'admin/update-user', { id: bob.id, quotaBytes: 1000 })).data).toBe(true);
     const login = browser(h.url);
-    await login.fetch('/api/login', { method: 'POST', body: JSON.stringify({ username: 'bob', password: 'bobs long password' }) });
+    await action(login, 'sign-in', { username: 'bob', password: 'bobs long password' });
     const backend = new HttpProxyBackend({ baseUrl: h.url, fetch: login.fetch });
     await backend.put('noteit/v1/devices/X.json', new Uint8Array(500));
     await expect(backend.put('noteit/v1/devices/Y.json', new Uint8Array(600))).rejects.toMatchObject({ kind: 'quotaExceeded' });
@@ -248,11 +293,11 @@ describe('NoteIt server', () => {
 
   it('refuses the last admin being demoted and disabled users', async () => {
     const me = h.ctx.accounts.byUsername('admin')!;
-    const res = await admin.fetch(`/api/admin/users/${me.id}`, { method: 'PATCH', body: JSON.stringify({ role: 'user' }) });
-    expect(res.status).toBe(409);
+    expect((await action(admin, 'admin/update-user', { id: me.id, role: 'user' })).businessError?.code).toBe('lastAdmin');
+    expect(h.ctx.accounts.byId(me.id)!.role).toBe('admin');
     const bob = h.ctx.accounts.byUsername('bob')!;
     const bobKey = bob.s3Keys[0]!;
-    await admin.fetch(`/api/admin/users/${bob.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'disabled' }) });
+    await action(admin, 'admin/update-user', { id: bob.id, status: 'disabled' });
     const s3 = new S3Backend({ endpoint: `${h.url}/s3`, bucket: 'noteit', region: 'us-east-1', accessKeyId: bobKey.accessKeyId, secretAccessKey: bobKey.secretAccessKey, pathStyle: true });
     await expect(s3.list('noteit/')).rejects.toBeInstanceOf(StorageError);
   });

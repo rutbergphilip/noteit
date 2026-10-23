@@ -1,94 +1,138 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
+import {
+  accountChangePassword,
+  accountCreateS3Key,
+  accountRevokeS3Key,
+  accountRotateS3Key,
+  accountS3Keys,
+  accountSignOutEverywhere,
+  accountUpdateProfile,
+  adminCreateInvite,
+  adminCreateUser,
+  adminDeleteUser,
+  adminInvites,
+  adminResetPassword,
+  adminRevokeInvite,
+  adminUpdateUser,
+  adminUsers,
+  session,
+} from '#safe-action/actions';
+import { changePasswordInput, createUserInput } from '#shared/schemas';
 import { useNoteit } from '~/composables/useNoteit';
-import { api, ApiError, formatBytes, relativeTime, type SessionInfo } from '~/utils/api';
+import { failureOf, unwrap } from '~/utils/actions';
+import { formatBytes, relativeTime } from '~/utils/format';
 import type { DeviceView } from '~/worker/types';
 
-const { state, client, setTheme, lock, signOut, toast } = useNoteit();
+const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
 type Section = 'general' | 'sync' | 'security' | 'account' | 'users' | 'about';
 const section = ref<Section>('sync');
 const isAdmin = computed(() => state.session?.user.role === 'admin');
-
-const devices = ref<DeviceView[]>([]);
-const deviceName = ref(state.deviceName);
-const keys = ref<{ accessKeyId: string; label: string; createdAt: string; lastUsedAt?: string }[]>([]);
-const newKey = ref<{ accessKeyId: string; secretAccessKey: string }>();
-const keyLabel = ref('Mac');
-const pw = ref({ current: '', next: '' });
-const displayName = ref(state.session?.user.displayName ?? '');
-const users = ref<{ id: string; username: string; displayName: string; role: string; status: string; usedBytes: number; quotaBytes: number; objectCount: number; lastSeenAt?: string }[]>([]);
-const invites = ref<{ id: string; role: string; expiresAt: string; usedAt?: string; revokedAt?: string }[]>([]);
-const newUser = ref({ username: '', role: 'user' });
-const created = ref<string>();
-const inviteLink = ref<string>();
 const origin = location.origin;
-
 const noteCount = computed(() => state.notes.filter((n) => !n.deletedAt).length);
 
-async function loadSection(): Promise<void> {
-  try {
-    if (section.value === 'sync') {
-      devices.value = await client().devices();
-      state.session = await api<SessionInfo>('/session');
-    } else if (section.value === 'account') keys.value = await api('/account/s3-keys');
-    else if (section.value === 'users' && isAdmin.value) {
-      users.value = (await api<{ users: typeof users.value }>('/admin/users')).users;
-      invites.value = await api('/admin/invites');
-    }
-  } catch (e) {
-    toast(e instanceof Error ? e.message : String(e));
-  }
-}
-watch(section, loadSection);
-onMounted(loadSection);
-
-async function run(fn: () => Promise<unknown>, done?: string): Promise<void> {
-  try {
-    await fn();
-    if (done) toast(done);
-    await loadSection();
-  } catch (e) {
-    toast(e instanceof ApiError ? e.message : e instanceof Error ? e.message : String(e));
-  }
+/** Every failed call surfaces as a toast; an expired session goes back through boot to the sign-in screen. */
+function report(error: Parameters<typeof failureOf>[0]): void {
+  const f = failureOf(error);
+  if (!f) return;
+  if (f.code === 'unauthorized') void boot();
+  toast(f.message);
 }
 
-const saveDeviceName = () => run(async () => (state.deviceName = await client().setDeviceName(deviceName.value)), 'Device name saved');
-const saveDisplayName = () => run(async () => (state.session = await api<SessionInfo>('/account', { method: 'PATCH', body: { displayName: displayName.value } })), 'Name saved');
-const changePassword = () =>
-  run(async () => {
-    await api('/account/password', { method: 'POST', body: pw.value });
-    pw.value = { current: '', next: '' };
-  }, 'Password changed. Other browsers are signed out.');
-const createKey = () => run(async () => (newKey.value = await api('/account/s3-keys', { method: 'POST', body: { label: keyLabel.value } })));
-const revokeKey = (id: string) => run(() => api(`/account/s3-keys/${id}`, { method: 'DELETE' }), 'Key revoked');
-const rotateKey = (id: string) => run(async () => (newKey.value = await api(`/account/s3-keys/${id}/rotate`, { method: 'POST' })));
-const addUser = () =>
-  run(async () => {
-    const res = await api<{ temporaryPassword: string }>('/admin/users', { method: 'POST', body: newUser.value });
-    created.value = `${newUser.value.username}: temporary password ${res.temporaryPassword}`;
-    newUser.value = { username: '', role: 'user' };
-  });
-const setStatus = (id: string, status: string) => run(() => api(`/admin/users/${id}`, { method: 'PATCH', body: { status } }));
-const resetPassword = (id: string, username: string) =>
-  run(async () => {
-    const res = await api<{ temporaryPassword: string }>(`/admin/users/${id}/reset-password`, { method: 'POST' });
-    created.value = `${username}: temporary password ${res.temporaryPassword}`;
-  });
-const deleteUser = (id: string, username: string) => {
-  const typed = prompt(`This deletes ${username} and all of their encrypted notes on this server. Type the username to confirm.`);
-  if (typed !== username) return;
-  void run(() => api(`/admin/users/${id}`, { method: 'DELETE', body: { confirmUsername: username } }), 'User deleted');
+// MARK: queries. GET actions read through Nuxt's useAsyncData; each key is tagged so a mutation can name
+// what it changed (`invalidate: { tags }`) instead of every caller refetching by hand.
+
+const queries = {
+  session: useAction(session),
+  keys: useAction(accountS3Keys),
+  users: useAction(adminUsers),
+  invites: useAction(adminInvites),
 };
-const createInvite = () =>
-  run(async () => {
-    const res = await api<{ token: string }>('/admin/invites', { method: 'POST', body: { role: 'user' } });
-    inviteLink.value = `${origin}/#invite=${res.token}`;
-  });
-const revokeInvite = (id: string) => run(() => api(`/admin/invites/${id}`, { method: 'DELETE' }));
+const { data: keys } = useAsyncData('settings:s3-keys', async () => unwrap(await queries.keys.executeAsync(undefined)), { default: () => [] });
+useActionQueryTags('settings:s3-keys', ['s3-keys']);
+const { data: users } = useAsyncData('settings:users', async () => (isAdmin.value ? unwrap(await queries.users.executeAsync(undefined)).users : []), { default: () => [] });
+useActionQueryTags('settings:users', ['users']);
+const { data: invites } = useAsyncData('settings:invites', async () => (isAdmin.value ? unwrap(await queries.invites.executeAsync(undefined)) : []), { default: () => [] });
+useActionQueryTags('settings:invites', ['invites']);
+
+const devices = ref<DeviceView[]>([]);
+async function loadSync(): Promise<void> {
+  devices.value = await client().devices();
+  const s = await queries.session.executeAsync(undefined);
+  if (s.data) state.session = s.data;
+  else report(s);
+}
+watch(section, (s) => s === 'sync' && loadSync());
+onMounted(loadSync);
+
+// MARK: this browser
+
+const deviceName = ref(state.deviceName);
+async function saveDeviceName(): Promise<void> {
+  state.deviceName = await client().setDeviceName(deviceName.value);
+  toast('Device name saved');
+}
 async function forget(): Promise<void> {
   if (!confirm('Sign out and delete the encrypted copy of your notes from this browser? Notes on the server are kept.')) return;
   await signOut(true);
 }
+
+// MARK: account
+
+const profile = useFormAction(accountUpdateProfile, {
+  initialValues: { displayName: state.session?.user.displayName ?? '' },
+  onSuccess: ({ data }) => {
+    state.session = data;
+    toast('Name saved');
+  },
+  onError: ({ error }) => report(error),
+});
+const password = useFormAction(accountChangePassword, {
+  initialValues: { current: '', next: '' },
+  clientSchema: changePasswordInput,
+  onSuccess: () => {
+    password.reset();
+    toast('Password changed. Other browsers are signed out.');
+  },
+  onError: ({ error }) => error.serverError && report(error),
+});
+const signOutEverywhere = useAction(accountSignOutEverywhere, { onSuccess: () => signOut(), onError: ({ error }) => report(error) });
+
+const keyLabel = ref('Mac');
+const newKey = ref<{ accessKeyId: string; secretAccessKey: string }>();
+const keyMutation = { invalidate: { tags: ['s3-keys'] }, onError: ({ error }: { error: Parameters<typeof failureOf>[0] }) => report(error) };
+const createKey = useAction(accountCreateS3Key, { ...keyMutation, onSuccess: ({ data }) => (newKey.value = data) });
+const rotateKey = useAction(accountRotateS3Key, { ...keyMutation, onSuccess: ({ data }) => (newKey.value = data) });
+const revokeKey = useAction(accountRevokeS3Key, { ...keyMutation, onSuccess: () => toast('Key revoked') });
+
+// MARK: admin
+
+const created = ref<string>();
+const inviteLink = ref<string>();
+const userMutation = { invalidate: { tags: ['users'] }, onError: ({ error }: { error: Parameters<typeof failureOf>[0] }) => report(error) };
+const addUser = useFormAction(adminCreateUser, {
+  initialValues: { username: '', role: 'user' as 'user' | 'admin' },
+  clientSchema: createUserInput,
+  invalidate: { tags: ['users'] },
+  onSuccess: ({ data }) => {
+    created.value = `${data.user.username}: temporary password ${data.temporaryPassword}`;
+    addUser.reset();
+  },
+  onError: ({ error }) => error.serverError && report(error),
+});
+const updateUser = useAction(adminUpdateUser, userMutation);
+const resetPassword = useAction(adminResetPassword, {
+  ...userMutation,
+  onSuccess: ({ data, input }) => (created.value = `${users.value.find((u) => u.id === input.id)?.username}: temporary password ${data.temporaryPassword}`),
+});
+const removeUser = useAction(adminDeleteUser, { ...userMutation, onSuccess: () => toast('User deleted') });
+function deleteUser(id: string, username: string): void {
+  const typed = prompt(`This deletes ${username} and all of their encrypted notes on this server. Type the username to confirm.`);
+  if (typed === username) removeUser.execute({ id, confirmUsername: typed });
+}
+const inviteMutation = { invalidate: { tags: ['invites'] }, onError: ({ error }: { error: Parameters<typeof failureOf>[0] }) => report(error) };
+const createInvite = useAction(adminCreateInvite, { ...inviteMutation, onSuccess: ({ data }) => (inviteLink.value = `${origin}/#invite=${data.token}`) });
+const revokeInvite = useAction(adminRevokeInvite, inviteMutation);
 </script>
 
 <template>
@@ -130,7 +174,7 @@ async function forget(): Promise<void> {
             <div class="row">
               <div class="grow"><div>Device name</div><div class="sub">Shown in conflict copies on your other devices.</div></div>
               <input v-model="deviceName" class="ni-input short" maxlength="64" />
-              <button type="button" class="ni-btn small secondary" @click="saveDeviceName">Save</button>
+              <button type="button" class="ni-btn small secondary" @click="saveDeviceName()">Save</button>
             </div>
           </section>
         </template>
@@ -184,14 +228,18 @@ async function forget(): Promise<void> {
           <section class="card">
             <h3>Password</h3>
             <p class="sub">Your password opens your account. Your notes use your separate encryption passphrase, which never reaches the server.</p>
-            <form class="form" @submit.prevent="changePassword">
-              <label class="ni-field">Current password <input v-model="pw.current" type="password" autocomplete="current-password" required /></label>
-              <label class="ni-field">New password <input v-model="pw.next" type="password" autocomplete="new-password" minlength="10" required /></label>
-              <button type="submit" class="ni-btn small">Change Password</button>
+            <form class="form" novalidate @submit.prevent="password.submit()">
+              <label class="ni-field">Current password <input v-model="password.values.value.current" type="password" autocomplete="current-password" :aria-invalid="!!password.fieldErrors.value.current" />
+                <span v-for="m in password.fieldErrors.value.current" :key="m" class="ni-hint error">{{ m }}</span>
+              </label>
+              <label class="ni-field">New password <input v-model="password.values.value.next" type="password" autocomplete="new-password" :aria-invalid="!!password.fieldErrors.value.next" />
+                <span v-for="m in password.fieldErrors.value.next" :key="m" class="ni-hint error">{{ m }}</span>
+              </label>
+              <button type="submit" class="ni-btn small" :disabled="password.isExecuting.value">Change Password</button>
             </form>
             <div class="row">
               <div class="grow"><div>Sign out everywhere</div><div class="sub">Ends every session of this account, including this one.</div></div>
-              <button type="button" class="ni-btn small secondary" @click="run(() => api('/account/logout-everywhere', { method: 'POST' })).then(() => signOut())">Sign Out Everywhere</button>
+              <button type="button" class="ni-btn small secondary" @click="signOutEverywhere.execute(undefined)">Sign Out Everywhere</button>
             </div>
           </section>
         </template>
@@ -201,8 +249,8 @@ async function forget(): Promise<void> {
           <section class="card">
             <div class="row first">
               <div class="grow"><div>Name</div><div class="sub">Signed in as {{ state.session?.user.username }}</div></div>
-              <input v-model="displayName" class="ni-input short" maxlength="64" />
-              <button type="button" class="ni-btn small secondary" @click="saveDisplayName">Save</button>
+              <input v-model="profile.values.value.displayName" class="ni-input short" maxlength="64" aria-label="Name" />
+              <button type="button" class="ni-btn small secondary" :disabled="profile.isExecuting.value" @click="profile.submit()">Save</button>
             </div>
           </section>
           <section class="card">
@@ -216,12 +264,12 @@ async function forget(): Promise<void> {
                 <div>{{ k.label }} <code>{{ k.accessKeyId }}</code></div>
                 <div class="sub">Created {{ relativeTime(k.createdAt).toLowerCase() }}{{ k.lastUsedAt ? ` · used ${relativeTime(k.lastUsedAt).toLowerCase()}` : ' · never used' }}</div>
               </div>
-              <button type="button" class="ni-btn small secondary" @click="rotateKey(k.accessKeyId)">Replace</button>
-              <button type="button" class="ni-btn small ghost" @click="revokeKey(k.accessKeyId)">Revoke</button>
+              <button type="button" class="ni-btn small secondary" @click="rotateKey.execute({ accessKeyId: k.accessKeyId })">Replace</button>
+              <button type="button" class="ni-btn small ghost" @click="revokeKey.execute({ accessKeyId: k.accessKeyId })">Revoke</button>
             </div>
             <div class="row">
               <input v-model="keyLabel" class="ni-input short" maxlength="64" aria-label="Key label" />
-              <button type="button" class="ni-btn small" @click="createKey">Create Key</button>
+              <button type="button" class="ni-btn small" :disabled="createKey.isExecuting.value" @click="createKey.execute({ label: keyLabel })">Create Key</button>
             </div>
             <div v-if="newKey" class="secret">
               Access key ID: <code>{{ newKey.accessKeyId }}</code><br />Secret access key: <code>{{ newKey.secretAccessKey }}</code>
@@ -242,25 +290,26 @@ async function forget(): Promise<void> {
                 <div class="sub">{{ formatBytes(u.usedBytes) }} of {{ formatBytes(u.quotaBytes) }} · {{ u.objectCount }} objects{{ u.lastSeenAt ? ` · seen ${relativeTime(u.lastSeenAt).toLowerCase()}` : '' }}</div>
               </div>
               <template v-if="u.id !== state.session?.user.id">
-                <button type="button" class="ni-btn small ghost" @click="resetPassword(u.id, u.username)">Reset Password</button>
-                <button type="button" class="ni-btn small ghost" @click="setStatus(u.id, u.status === 'active' ? 'disabled' : 'active')">{{ u.status === 'active' ? 'Disable' : 'Enable' }}</button>
+                <button type="button" class="ni-btn small ghost" @click="resetPassword.execute({ id: u.id })">Reset Password</button>
+                <button type="button" class="ni-btn small ghost" @click="updateUser.execute({ id: u.id, status: u.status === 'active' ? 'disabled' : 'active' })">{{ u.status === 'active' ? 'Disable' : 'Enable' }}</button>
                 <button type="button" class="ni-btn small ghost" @click="deleteUser(u.id, u.username)">Delete</button>
               </template>
             </div>
           </section>
           <section class="card">
             <h3>Add someone</h3>
-            <form class="inline" @submit.prevent="addUser">
-              <input v-model="newUser.username" class="ni-input short" placeholder="username" pattern="[a-z0-9][a-z0-9._\-]{1,31}" required aria-label="Username" />
-              <select v-model="newUser.role" class="sel" aria-label="Role"><option value="user">User</option><option value="admin">Admin</option></select>
-              <button type="submit" class="ni-btn small">Create User</button>
-              <button type="button" class="ni-btn small secondary" @click="createInvite">Create Invite Link</button>
+            <form class="inline" novalidate @submit.prevent="addUser.submit()">
+              <input v-model="addUser.values.value.username" class="ni-input short" placeholder="username" aria-label="Username" :aria-invalid="!!addUser.fieldErrors.value.username" />
+              <select v-model="addUser.values.value.role" class="sel" aria-label="Role"><option value="user">User</option><option value="admin">Admin</option></select>
+              <button type="submit" class="ni-btn small" :disabled="addUser.isExecuting.value">Create User</button>
+              <button type="button" class="ni-btn small secondary" @click="createInvite.execute({ role: 'user' })">Create Invite Link</button>
             </form>
+            <span v-for="m in addUser.fieldErrors.value.username" :key="m" class="ni-hint error">{{ m }}</span>
             <code v-if="created" class="secret">{{ created }}</code>
             <code v-if="inviteLink" class="secret">{{ inviteLink }}</code>
             <div v-for="i in invites.filter((x) => !x.usedAt && !x.revokedAt)" :key="i.id" class="row">
               <div class="grow sub">Invite ({{ i.role }}) · expires {{ new Date(i.expiresAt).toLocaleString() }}</div>
-              <button type="button" class="ni-btn small ghost" @click="revokeInvite(i.id)">Revoke</button>
+              <button type="button" class="ni-btn small ghost" @click="revokeInvite.execute({ id: i.id })">Revoke</button>
             </div>
           </section>
         </template>

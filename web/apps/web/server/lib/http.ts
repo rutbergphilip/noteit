@@ -49,6 +49,10 @@ export function isHttps(event: H3Event, cfg: ServerConfig): boolean {
   return getRequestURL(event).protocol === 'https:';
 }
 
+function expectedOrigin(event: H3Event, cfg: ServerConfig): string {
+  return cfg.publicUrl ? new URL(cfg.publicUrl).origin : getRequestURL(event, { xForwardedHost: cfg.trustProxy, xForwardedProto: cfg.trustProxy }).origin;
+}
+
 /**
  * CSRF for state-changing /api requests: the custom header (never sent cross-origin without a preflight we don't
  * allow) and an Origin that matches NOTEIT_PUBLIC_URL (or the request's own host when it isn't set).
@@ -57,9 +61,24 @@ export function checkCsrf(event: H3Event, cfg: ServerConfig): void {
   const method = event.method.toUpperCase();
   if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
   if (getHeader(event, 'x-noteit') !== '1') throw new ApiFailure(403, 'forbidden', 'Missing X-NoteIt header');
-  const origin = getHeader(event, 'origin');
-  const expected = cfg.publicUrl ? new URL(cfg.publicUrl).origin : getRequestURL(event, { xForwardedHost: cfg.trustProxy, xForwardedProto: cfg.trustProxy }).origin;
-  if (origin !== expected) throw new ApiFailure(403, 'forbidden', 'Cross-origin request refused');
+  if (getHeader(event, 'origin') !== expectedOrigin(event, cfg)) throw new ApiFailure(403, 'forbidden', 'Cross-origin request refused');
+}
+
+/**
+ * CSRF for safe actions that change state (every non-GET action). The action transport always sends
+ * `Content-Type: application/json`, which a cross-site page can only send after a CORS preflight we never answer:
+ * the same guarantee the X-NoteIt header gives the routes above. Form-encoded and text bodies (the ones a plain
+ * cross-site <form> can send) are refused, Sec-Fetch-Site must say same-origin when the browser sends it, and the
+ * Origin must match exactly as for /api.
+ */
+export function checkActionCsrf(event: H3Event, cfg: ServerConfig): void {
+  const method = event.method.toUpperCase();
+  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
+  const type = getHeader(event, 'content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+  if (type !== 'application/json') throw new ApiFailure(415, 'unsupportedMediaType', 'Actions only accept JSON.');
+  const site = getHeader(event, 'sec-fetch-site');
+  if (site && site !== 'same-origin' && site !== 'none') throw new ApiFailure(403, 'forbidden', 'Cross-site request refused');
+  if (getHeader(event, 'origin') !== expectedOrigin(event, cfg)) throw new ApiFailure(403, 'forbidden', 'Cross-origin request refused');
 }
 
 /** The CSP; the SPA page adds sha256 hashes of its own inline scripts (Nuxt's config and importmap). */

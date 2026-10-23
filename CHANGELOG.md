@@ -22,6 +22,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Saving a note to sync is now crash-safe: a note's new text is uploaded completely before other devices are pointed at it, so they never see half a save.
 - On S3 storage, a request that could change data is never sent twice automatically. A dropped connection is sorted out on the next sync instead.
 - On storage that can't delete conditionally (sync folders and some S3 providers), NoteIt checks that a note is unchanged right before deleting it, and leaves anything another device changed meanwhile.
+- In the NoteIt web app, server setup, sign-in, invites, passwords and user management now run as type-checked server actions built with nuxt-safe-action. Forms point at the field that needs fixing, often before anything is sent, and lists such as your access keys and the server's users refresh by themselves after a change. Sync is unchanged.
 
 ### Security
 

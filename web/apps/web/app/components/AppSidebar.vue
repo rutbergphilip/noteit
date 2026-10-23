@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useNoteit, type View } from '~/composables/useNoteit';
-import { relativeTime } from '~/utils/api';
+import { relativeTime } from '~/utils/format';
 import { safeHex, SYMBOL_ICONS } from '~/utils/icons';
 import type { NotebookRow } from '~/worker/types';
 

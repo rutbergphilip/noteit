@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { useNoteit } from '~/composables/useNoteit';
-import { relativeTime } from '~/utils/api';
+import { relativeTime } from '~/utils/format';
 
 const { state, client } = useNoteit();
 const open = ref(false);

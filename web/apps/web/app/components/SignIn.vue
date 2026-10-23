@@ -1,55 +1,73 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { redeemInvite, signIn } from '#safe-action/actions';
+import { redeemInviteInput, signInInput } from '#shared/schemas';
 import { useNoteit } from '~/composables/useNoteit';
-import { api, ApiError } from '~/utils/api';
+import { failureOf } from '~/utils/actions';
 
-const { boot } = useNoteit();
-const username = ref('');
-const password = ref('');
-const error = ref('');
-const busy = ref(false);
-const inviteToken = ref(new URLSearchParams(location.hash.replace(/^#/, '')).get('invite') ?? '');
-const mode = ref<'signin' | 'invite'>(inviteToken.value ? 'invite' : 'signin');
+const { enter } = useNoteit();
+const hashInvite = new URLSearchParams(location.hash.replace(/^#/, '')).get('invite') ?? '';
+const mode = ref<'signin' | 'invite'>(hashInvite ? 'invite' : 'signin');
 const host = computed(() => location.host);
 
-async function submit(): Promise<void> {
-  error.value = '';
-  busy.value = true;
-  try {
-    if (mode.value === 'invite') {
-      await api('/invites/redeem', { method: 'POST', body: { token: inviteToken.value.trim(), username: username.value, password: password.value } });
-      history.replaceState(null, '', location.pathname);
-    } else {
-      await api('/login', { method: 'POST', body: { username: username.value, password: password.value } });
-    }
-    password.value = '';
-    await boot();
-  } catch (e) {
-    error.value = e instanceof ApiError ? e.message : 'Could not reach the server.';
-  } finally {
-    busy.value = false;
-  }
-}
+const login = useFormAction(signIn, {
+  initialValues: { username: '', password: '' },
+  clientSchema: signInInput,
+  onSuccess: ({ data }) => enter(data),
+});
+const invite = useFormAction(redeemInvite, {
+  initialValues: { token: hashInvite, username: '', password: '' },
+  clientSchema: redeemInviteInput,
+  onSuccess: ({ data }) => {
+    history.replaceState(null, '', location.pathname);
+    return enter(data);
+  },
+});
+const loginValues = login.values;
+const inviteValues = invite.values;
+const busy = computed(() => login.isExecuting.value || invite.isExecuting.value);
+const error = computed(() => {
+  const f = mode.value === 'invite' ? invite : login;
+  if (f.businessError.value || f.serverError.value) return failureOf({ businessError: f.businessError.value, serverError: f.serverError.value })?.message;
+  return undefined;
+});
+const errs = computed(() => (mode.value === 'invite' ? invite.fieldErrors.value : login.fieldErrors.value));
+const submit = () => (mode.value === 'invite' ? invite.submit() : login.submit());
 </script>
 
 <template>
   <AuthLayout>
-    <form @submit.prevent="submit">
+    <form novalidate @submit.prevent="submit">
       <div>
         <h1>{{ mode === 'invite' ? 'Create Your Account' : 'Sign In' }}</h1>
         <p class="lead">
           to <strong>{{ host }}</strong>
         </p>
       </div>
-      <label v-if="mode === 'invite'" class="ni-field">Invite code
-        <input v-model="inviteToken" autocomplete="off" required />
-      </label>
-      <label class="ni-field">Username
-        <input v-model="username" autocomplete="username" autocapitalize="none" spellcheck="false" required />
-      </label>
-      <label class="ni-field">Password
-        <input v-model="password" type="password" :autocomplete="mode === 'invite' ? 'new-password' : 'current-password'" required :minlength="mode === 'invite' ? 10 : undefined" />
-      </label>
+      <template v-if="mode === 'invite'">
+        <label class="ni-field">Invite code
+          <input v-model="inviteValues.token" autocomplete="off" :aria-invalid="!!errs.token" />
+          <span v-for="m in errs.token" :key="m" class="ni-hint error">{{ m }}</span>
+        </label>
+        <label class="ni-field">Username
+          <input v-model="inviteValues.username" autocomplete="username" autocapitalize="none" spellcheck="false" :aria-invalid="!!errs.username" />
+          <span v-for="m in errs.username" :key="m" class="ni-hint error">{{ m }}</span>
+        </label>
+        <label class="ni-field">Password
+          <input v-model="inviteValues.password" type="password" autocomplete="new-password" :aria-invalid="!!errs.password" />
+          <span v-for="m in errs.password" :key="m" class="ni-hint error">{{ m }}</span>
+        </label>
+      </template>
+      <template v-else>
+        <label class="ni-field">Username
+          <input v-model="loginValues.username" autocomplete="username" autocapitalize="none" spellcheck="false" :aria-invalid="!!errs.username" />
+          <span v-for="m in errs.username" :key="m" class="ni-hint error">{{ m }}</span>
+        </label>
+        <label class="ni-field">Password
+          <input v-model="loginValues.password" type="password" autocomplete="current-password" :aria-invalid="!!errs.password" />
+          <span v-for="m in errs.password" :key="m" class="ni-hint error">{{ m }}</span>
+        </label>
+      </template>
       <div v-if="error" class="ni-alert error" role="alert">{{ error }}</div>
       <button class="ni-btn" type="submit" :disabled="busy">{{ mode === 'invite' ? 'Create Account' : 'Sign In' }}</button>
       <p class="fine">Signing in only opens your account. Your notes stay encrypted until you unlock them with your passphrase on the next step.</p>
