@@ -1,4 +1,24 @@
-import type { NoteItDoc } from '../schema.js';
+import { plainLines } from '../derive.js';
+import type { BodyContainer, NoteItDoc } from '../schema.js';
+import { validateContainer } from '../validate.js';
+
+/**
+ * The only way a synced document reaches the editor. A container that passes the doc-validate rules is loaded as
+ * it is (and the extensions still sanitize every attribute that reaches style/href/src). Anything else is shown
+ * read-only as its plain text lines, so unknown nodes, bad links or out-of-range attributes never get rendered.
+ */
+export function prepareForEditor(container: BodyContainer): { doc: Record<string, unknown>; editable: boolean; reason?: string } {
+  const validation = validateContainer(container);
+  if (validation === 'valid') return { doc: toEditorJSON(container.doc), editable: true };
+  let lines: string[];
+  try {
+    lines = plainLines(container.doc);
+  } catch {
+    lines = [];
+  }
+  const content = lines.map((text) => (text ? { type: 'paragraph', content: [{ type: 'text', text }] } : { type: 'paragraph' }));
+  return { doc: { type: 'doc', content: content.length ? content : [{ type: 'paragraph' }] }, editable: false, reason: validation.readOnly };
+}
 
 type Json = { type?: string; attrs?: Record<string, unknown>; content?: Json[]; marks?: Json[]; text?: string };
 

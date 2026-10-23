@@ -1,21 +1,28 @@
 import { Extension, Mark, mergeAttributes, Node, textblockTypeInputRule, type AnyExtension, type Editor } from '@tiptap/core';
 import { history, redo, undo } from '@tiptap/pm/history';
-import { isAllowedLink } from '../schema.js';
+import { safeAlign, safeBlobUrl, safeColor, safeHref, safeInt, safeLanguage, safePositive } from './safe.js';
 
 const BULLETS = ['•', '◦', '▪'];
+const safeKind = (v: unknown): 'bullet' | 'ordered' | 'task' => (v === 'ordered' || v === 'task' ? v : 'bullet');
 
 const alignAttr = {
   align: {
     default: null,
-    parseHTML: (el: HTMLElement) => el.style.textAlign || null,
-    renderHTML: (a: Record<string, unknown>) => (a.align ? { style: `text-align: ${String(a.align)}` } : {}),
+    parseHTML: (el: HTMLElement) => safeAlign(el.style.textAlign),
+    renderHTML: (a: Record<string, unknown>) => {
+      const align = safeAlign(a.align);
+      return align ? { style: `text-align: ${align}` } : {};
+    },
   },
 };
 const indentAttr = {
   indent: {
     default: null,
-    parseHTML: (el: HTMLElement) => (el.dataset.indent ? Number(el.dataset.indent) : null),
-    renderHTML: (a: Record<string, unknown>) => (a.indent ? { 'data-indent': String(a.indent), style: `margin-left: ${Number(a.indent) * 24}px` } : {}),
+    parseHTML: (el: HTMLElement) => safeInt(el.dataset.indent, 0, 8),
+    renderHTML: (a: Record<string, unknown>) => {
+      const indent = safeInt(a.indent, 0, 8);
+      return indent ? { 'data-indent': String(indent), style: `margin-left: ${indent * 24}px` } : {};
+    },
   },
 };
 
@@ -39,7 +46,7 @@ export const HeadingNode = Node.create({
   defining: true,
   addAttributes: () => ({ level: { default: 1, rendered: false }, ...alignAttr, ...indentAttr }),
   parseHTML: () => [1, 2, 3].map((level) => ({ tag: `h${level}`, attrs: { level } })),
-  renderHTML: ({ node, HTMLAttributes }) => [`h${node.attrs.level as number}`, HTMLAttributes, 0],
+  renderHTML: ({ node, HTMLAttributes }) => [`h${safeInt(node.attrs.level, 1, 3) ?? 1}`, HTMLAttributes, 0],
   addInputRules() {
     return [1, 2, 3].map((level) => textblockTypeInputRule({ find: new RegExp(`^(#{${level}})\\s$`), type: this.type, getAttributes: { level } }));
   },
@@ -52,7 +59,7 @@ export const CodeBlockNode = Node.create({
   marks: 'bold italic underline strike link textColor highlight fontSize',
   whitespace: 'pre',
   defining: true,
-  addAttributes: () => ({ ...alignAttr, language: { default: null, parseHTML: (el) => el.dataset.language || null, renderHTML: (a) => (a.language ? { 'data-language': a.language } : {}) } }),
+  addAttributes: () => ({ ...alignAttr, language: { default: null, parseHTML: (el) => safeLanguage(el.dataset.language), renderHTML: (a) => (safeLanguage(a.language) ? { 'data-language': safeLanguage(a.language) } : {}) } }),
   parseHTML: () => [{ tag: 'pre', preserveWhitespace: 'full' }],
   renderHTML: ({ HTMLAttributes }) => ['pre', mergeAttributes(HTMLAttributes, { class: 'ni-code' }), 0],
   addInputRules() {
@@ -98,9 +105,9 @@ export const ListItemNode = Node.create({
   content: 'inline*',
   defining: true,
   addAttributes: () => ({
-    kind: { default: 'bullet', parseHTML: (el) => el.dataset.kind ?? 'bullet', renderHTML: (a) => ({ 'data-kind': a.kind }) },
-    level: { default: 0, parseHTML: (el) => Number(el.dataset.level ?? 0), renderHTML: (a) => ({ 'data-level': String(a.level) }) },
-    number: { default: null, parseHTML: (el) => (el.dataset.number ? Number(el.dataset.number) : null), renderHTML: (a) => (a.number != null ? { 'data-number': String(a.number) } : {}) },
+    kind: { default: 'bullet', parseHTML: (el) => safeKind(el.dataset.kind), renderHTML: (a) => ({ 'data-kind': safeKind(a.kind) }) },
+    level: { default: 0, parseHTML: (el) => safeInt(el.dataset.level, 0, 8) ?? 0, renderHTML: (a) => ({ 'data-level': String(safeInt(a.level, 0, 8) ?? 0) }) },
+    number: { default: null, parseHTML: (el) => safeInt(el.dataset.number, -1e9, 1e9), renderHTML: (a) => (safeInt(a.number, -1e9, 1e9) != null ? { 'data-number': String(safeInt(a.number, -1e9, 1e9)) } : {}) },
     checked: { default: null, parseHTML: (el) => (el.dataset.checked ? el.dataset.checked === 'true' : null), renderHTML: (a) => (a.checked != null ? { 'data-checked': String(a.checked) } : {}) },
     ...alignAttr,
   }),
@@ -116,11 +123,11 @@ export const ListItemNode = Node.create({
       content.className = 'ni-li-content';
       dom.append(marker, content);
       const render = (n: typeof node) => {
-        const a = n.attrs as { kind: string; level: number; number: number | null; checked: boolean | null; align: string | null };
+        const a = { kind: safeKind(n.attrs.kind), level: safeInt(n.attrs.level, 0, 8) ?? 0, number: safeInt(n.attrs.number, -1e9, 1e9), checked: n.attrs.checked === true };
         dom.className = `ni-li ni-li-${a.kind}${a.checked ? ' is-checked' : ''}`;
         dom.dataset.level = String(a.level);
         dom.style.paddingLeft = `${a.level * 24}px`;
-        content.style.textAlign = a.align ?? '';
+        content.style.textAlign = safeAlign(n.attrs.align) ?? '';
         marker.replaceChildren();
         if (a.kind === 'task') {
           const box = document.createElement('input');
@@ -233,15 +240,16 @@ export const ImageNode = Node.create<{ resolver?: AttachmentResolver }>({
   }),
   // Pasted <img> elements are never parsed: an image is always an attachment of the note, never a remote URL.
   parseHTML: () => [],
-  renderHTML: ({ HTMLAttributes }) => ['img', { alt: HTMLAttributes.name, 'data-sha': HTMLAttributes.sha }],
+  renderHTML: ({ HTMLAttributes }) => ['img', { alt: String(HTMLAttributes.name ?? ''), 'data-sha': /^[0-9a-f]{64}$/.test(String(HTMLAttributes.sha)) ? HTMLAttributes.sha : null }],
   addNodeView() {
     return ({ node }) => {
       const img = document.createElement('img');
       img.className = 'ni-image';
       img.alt = String(node.attrs.name ?? '');
-      const src = this.options.resolver?.url(String(node.attrs.sha));
+      const src = safeBlobUrl(this.options.resolver?.url(String(node.attrs.sha)));
       if (src) img.src = src;
-      if (node.attrs.width) img.style.width = `${Number(node.attrs.width)}px`;
+      const width = safePositive(node.attrs.width, 10_000);
+      if (width) img.style.width = `${width}px`;
       return { dom: img };
     };
   },
@@ -261,7 +269,7 @@ export const AttachmentNode = Node.create<{ resolver?: AttachmentResolver }>({
       const a = document.createElement('a');
       a.className = 'ni-attachment';
       a.textContent = `📎 ${String(node.attrs.name)}`;
-      const src = this.options.resolver?.url(String(node.attrs.sha));
+      const src = safeBlobUrl(this.options.resolver?.url(String(node.attrs.sha)));
       if (src) {
         a.href = src;
         a.download = String(node.attrs.name);
@@ -317,14 +325,14 @@ export const LinkMark = Mark.create({
     {
       tag: 'a[href]',
       getAttrs: (el) => {
-        const href = (el as HTMLElement).getAttribute('href') ?? '';
-        return isAllowedLink(href) ? { href } : false;
+        const href = safeHref((el as HTMLElement).getAttribute('href'));
+        return href ? { href } : false;
       },
     },
   ],
   renderHTML: ({ HTMLAttributes }) => {
-    const href = String(HTMLAttributes.href ?? '');
-    return ['a', { href: isAllowedLink(href) ? href : null, rel: 'noopener noreferrer nofollow', target: href.startsWith('noteit:') ? null : '_blank' }, 0];
+    const href = safeHref(HTMLAttributes.href);
+    return ['a', { href, rel: 'noopener noreferrer nofollow', target: href && !href.startsWith('noteit:') ? '_blank' : null }, 0];
   },
 });
 
@@ -336,14 +344,14 @@ const colorMark = (name: 'textColor' | 'highlight', tag: string, cssProp: string
       {
         tag: `${tag}[data-${name}]`,
         getAttrs: (el) => {
-          const color = (el as HTMLElement).getAttribute(`data-${name}`) ?? '';
-          return /^#[0-9A-Fa-f]{6}$/.test(color) ? { color } : false;
+          const color = safeColor((el as HTMLElement).getAttribute(`data-${name}`));
+          return color ? { color } : false;
         },
       },
     ],
     renderHTML: ({ HTMLAttributes }) => {
-      const color = /^#[0-9A-Fa-f]{6}$/.test(String(HTMLAttributes.color)) ? String(HTMLAttributes.color) : '#000000';
-      return [tag, { [`data-${name}`]: color, style: `${cssProp}: ${color}` }, 0];
+      const color = safeColor(HTMLAttributes.color);
+      return color ? [tag, { [`data-${name}`]: color, style: `${cssProp}: ${color}` }, 0] : [tag, {}, 0];
     },
   });
 
@@ -353,9 +361,9 @@ export const HighlightMark = colorMark('highlight', 'mark', 'background-color');
 export const FontSizeMark = Mark.create({
   name: 'fontSize',
   addAttributes: () => ({ delta: { default: 0 } }),
-  parseHTML: () => [{ tag: 'span[data-font-delta]', getAttrs: (el) => ({ delta: Number((el as HTMLElement).dataset.fontDelta ?? 0) }) }],
+  parseHTML: () => [{ tag: 'span[data-font-delta]', getAttrs: (el) => ({ delta: safeInt((el as HTMLElement).dataset.fontDelta, -88, 88) ?? 0 }) }],
   renderHTML: ({ HTMLAttributes }) => {
-    const delta = Math.trunc(Number(HTMLAttributes.delta) || 0);
+    const delta = safeInt(HTMLAttributes.delta, -88, 88) ?? 0;
     return ['span', { 'data-font-delta': String(delta), style: `font-size: calc(1em + ${delta}px)` }, 0];
   },
 });
@@ -407,4 +415,5 @@ export function noteItExtensions(opts: { resolver?: AttachmentResolver } = {}): 
   ];
 }
 
-export { toEditorJSON, fromEditorJSON } from './convert.js';
+export { toEditorJSON, fromEditorJSON, prepareForEditor } from './convert.js';
+export * from './safe.js';
