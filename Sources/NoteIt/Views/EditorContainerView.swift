@@ -73,11 +73,8 @@ struct EditorContainerView: View {
                         .padding(.horizontal, 16)
                 }
                 if store.isMarkdownBodyMissing(id), let folder = store.markdownStorage?.contentRootURL {
-                    Text("This note’s file is missing from “\(folder.lastPathComponent)”, so it’s read-only.")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 16)
+                    LoadErrorBanner(message: "This note’s file is missing from “\(folder.lastPathComponent)”. If it doesn’t come back, the note moves to Recently Deleted with its last text.",
+                                    file: nil, readOnly: true, retry: { store.retryReadingBody(id) })
                 }
                 if let message = store.loadError(for: id) {
                     LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked,

@@ -1057,6 +1057,47 @@ final class ExternalChangeTests: XCTestCase {
         try assertMissingFileIsNeverSyncedOrEdited(store, plan)
     }
 
+    func testANoteWhoseBodyWasNeverWrittenLoadsAsEmptyAndStaysEditable() throws {
+        try put("Plan.md", "# Plan\n\nPlan text\n")
+        let store = open()
+        let plan = try note(store, titled: "Plan").id
+        let storage = try XCTUnwrap(store.markdownStorage)
+        // Listed in library.json, but its first write never happened.
+        try fm.removeItem(at: content.appendingPathComponent("Plan.md"))
+        storage.index.remove(plan)
+        store.dropCachedBody(plan)
+
+        XCTAssertEqual(store.body(for: plan).string, "")
+        XCTAssertFalse(store.isMarkdownBodyMissing(plan))
+        XCTAssertNil(store.bodyNotReadError(plan), "editable")
+        guard case .text(let exported) = try store.exportBodySource(plan) else { return XCTFail("not text") }
+        XCTAssertEqual(exported.string, "", "sync sees what the editor shows")
+        store.updateBody(plan, NSAttributedString(string: "Plan\nwritten at last"))
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertTrue(try read("Plan.md").contains("written at last"), "the next write creates the file")
+    }
+
+    func testANoteWhoseFileIsGoneForGoodCanBeRetriedAndMovesToRecentlyDeleted() async throws {
+        try put("Plan.md", "# Plan\n\nPlan text\n")
+        let store = open()
+        let plan = try note(store, titled: "Plan").id
+        store.dropCachedBody(plan)
+        try fm.removeItem(at: content.appendingPathComponent("Plan.md"))
+        XCTAssertEqual(store.body(for: plan).string, "")
+        XCTAssertTrue(store.isMarkdownBodyMissing(plan))
+        XCTAssertTrue(store.canRetryReadingBody(plan), "the banner offers Retry")
+        try await waitUntil({ store.note(with: plan)?.deletedAt != nil },
+                            "the scan the missing read starts moves the note to Recently Deleted")
+        _ = store.recover([plan])
+        try await waitUntil({
+            _ = store.body(for: plan, wait: 0)
+            return store.note(with: plan)?.deletedAt == nil && store.cachedBody(plan) != nil
+        },
+                            "a recovered note is usable again")
+        XCTAssertTrue(store.body(for: plan).string.contains("Plan text"), "with its last text")
+    }
+
     private func assertMissingFileIsNeverSyncedOrEdited(_ store: NoteStore, _ plan: UUID,
                                                         file: StaticString = #filePath, line: UInt = #line) throws {
         for pass in 1...3 {

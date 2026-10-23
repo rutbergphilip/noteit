@@ -142,6 +142,9 @@ final class NoteStore: ObservableObject {
     /// Notes whose Markdown file was missing when read (with no held body): never cached as empty, so neither a
     /// later sync pass nor an edit treats nothing as their text; read again after the same pause as a failed read.
     private var markdownMissingRetryAt: [UUID: Date] = [:]
+    /// The path each of those notes was missing at: once the note's entry points elsewhere (moved, or its last text
+    /// put in `.trash/` when the scan removed it) it's read again at once.
+    private var markdownMissingPaths: [UUID: String] = [:]
     private enum MarkdownPlaceholder { case lastKnown, failed, missing }
     /// What `body(for:)` last gave instead of a note's text; an editor showing it is reloaded once that changes,
     /// whichever caller took the read that changed it.
@@ -404,8 +407,8 @@ final class NoteStore: ObservableObject {
                 }
                 wait = 0
             }
-            if let retry = markdownMissingRetryAt[id] {
-                guard Date() >= retry else {
+            if markdownMissingRetryAt[id] != nil {
+                guard !isWaitingToRetryMissingBody(id) else {
                     gaveMarkdownBody(id, .missing)
                     return NSAttributedString()
                 }
@@ -451,11 +454,23 @@ final class NoteStore: ObservableObject {
             return .text(stored.text)
         case .missing:
             clearUnreadableMarkdownBody(id)
+            // A note whose body was never written has no file yet: it's empty, and its next write creates the file.
+            guard storage.index.entry(id) != nil else {
+                markdownMissingRetryAt[id] = nil
+                return .text(NSAttributedString())
+            }
             guard let held = heldMarkdownBody(id) else {
-                // Shown empty and read-only until the file is back (or the scan removes the note).
+                // Shown empty and read-only until the file is back, or the scan this starts finds it gone and moves
+                // the note to Recently Deleted with its last text.
+                markdownMissingPaths[id] = storage.index.entry(id)?.path
                 if markdownMissingRetryAt.updateValue(Date().addingTimeInterval(markdownFailedReadRetryInterval),
                                                       forKey: id) == nil {
-                    DispatchQueue.main.async { [weak self] in self?.objectWillChange.send() }
+                    DispatchQueue.main.async { [weak self] in
+                        MainActor.assumeIsolated {
+                            self?.objectWillChange.send()
+                            self?.markdownFolderNeedsScan()
+                        }
+                    }
                 }
                 gaveMarkdownBody(id, .missing)
                 return .placeholder(NSAttributedString())
@@ -902,13 +917,18 @@ final class NoteStore: ObservableObject {
         externallyUpdatedNoteID = id
     }
 
+    private func isWaitingToRetryMissingBody(_ id: UUID) -> Bool {
+        guard let retry = markdownMissingRetryAt[id], Date() < retry else { return false }
+        return markdownStorage?.index.entry(id)?.path == markdownMissingPaths[id]
+    }
+
     /// The note's Markdown file was missing when last read: shown empty and read-only, never output or synced.
     func isMarkdownBodyMissing(_ id: UUID) -> Bool {
         markdownMissingRetryAt[id] != nil && bodyCache[id] == nil
     }
 
     func canRetryReadingBody(_ id: UUID) -> Bool {
-        markdownStorage != nil && loadErrors[id] != nil && markdownFailedReadRetryAt[id] != nil
+        isMarkdownBodyMissing(id) || (markdownStorage != nil && loadErrors[id] != nil && markdownFailedReadRetryAt[id] != nil)
     }
 
     /// A Markdown file that exists but can't be read: shown empty and never written, so it needs no backup.
@@ -2473,7 +2493,7 @@ final class NoteStore: ObservableObject {
         if loadErrors[id] != nil, let retry = markdownFailedReadRetryAt[id], Date() < retry {
             throw NoteStoreSyncError.unreadableBody(id)
         }
-        if let retry = markdownMissingRetryAt[id], Date() < retry { throw NoteStoreSyncError.unreadableBody(id) }
+        if isWaitingToRetryMissingBody(id) { throw NoteStoreSyncError.unreadableBody(id) }
         // Taken as body(for:) takes it, so the note (and an editor waiting for this read) ends in the same state.
         let outcome = readMarkdownBody(id, from: markdownStorage, wait: markdownBlockingTimeout)
         guard case .text(let text) = takeMarkdownRead(id, outcome, from: markdownStorage) else {
