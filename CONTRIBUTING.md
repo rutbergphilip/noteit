@@ -59,6 +59,14 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --filter Liv
 - **Keep changes focused.** Put one logical change in each PR, and leave unrelated refactors for a separate PR.
 - **Write commit messages as [Conventional Commits](https://www.conventionalcommits.org/):** `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`, `ci:`, `perf:`, and so on. Add a scope when it helps, for example `fix(sync): …`.
 
+## Feature parity
+
+NoteIt is a Mac app and a self-hosted web app (`web/`) that open the same encrypted store, and they should offer the same features.
+
+- **Land user-facing changes on both.** A new or changed feature goes into the Mac app and the web app in the same PR, or [docs/feature-parity.md](docs/feature-parity.md) gets a row saying where the other side stands and why (a web gap to close later, native-only by design, or data the Mac keeps locally).
+- **Change shared formats on both sides together.** Anything that is synced or exported (note and notebook records, the noteit-doc body, tokens such as `#tags` and `@due(…)`, the search language) changes in Swift and in `web/packages/core` or `web/packages/doc` at once, with the golden vectors in [`fixtures/golden/`](fixtures/golden/) or `Tests/NoteItCoreTests/Vectors/` updated and read by tests on both sides. Never give the web a format of its own for shared data.
+- **New palette commands need a parity row.** `web/apps/web/test/parity.test.ts` fails when a command in the native palette or the web's `utils/commands.ts` has no row in the parity page.
+
 ## Pull requests
 
 - **Sync, crypto or storage changes need tests.** Add or update cases in `Tests/NoteItSyncTests/`. Planner changes need a row in the decision-table tests. Changes to the on-disk or remote format must stay readable by existing libraries, or bump the format version deliberately and explain why. Stores written before the rename to NoteIt live under `inkwell/v1/` and are copied to `noteit/v1/` on connect (`RemoteMigration`), and manifests sealing the `inkwell-key-check` plaintext still verify. `RemoteLayout.revisionHashSeed` keeps its `inkwell` value on purpose: changing it would give every note a new revision on every device.

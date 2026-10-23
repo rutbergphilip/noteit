@@ -16,6 +16,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - A waiting Quick Capture draft now shows. While a draft is kept after you dismiss the panel, the menu bar icon gets a small dot and the menu bar panel shows a *Quick Capture draft waiting* row with a Resume button.
 - Importing twice no longer makes duplicates. NoteIt remembers what each import made, by the source note's file path or id and a fingerprint of its content. Notes that are already in NoteIt are left alone and counted in the summary. A note whose source has changed since is imported again as a new note, so nothing you edited in NoteIt is overwritten. The memory is kept on this Mac only.
 - Note info. The Links and Outline panel has a new Info tab with the note's word count, character count, reading time, created and last edited dates, notebook and tags. Counts update as you type. Show it with Show Note Info in the View menu (⌃⌘I) or from the command palette.
+- The NoteIt web app searches with the same filters as the Mac: `tag:`, `notebook:`, `is:todo`, `has:due`, `due:today`, dates, `OR`, `-word` and "phrases". A filter it can't read shows a warning and is searched as a word.
+- Tasks in the web app (⇧⌘T, or ⌥⇧⌘T where the browser keeps ⇧⌘T): checklist items from all your notes, grouped by due date, to check off or open.
+- Templates and daily notes in the web app: New Note from Template…, Insert Template… and New Template use your Templates notebook and fill in `{{title}}`, `{{date}}`, `{{time}}` and `{{clipboard}}`; a notebook's default template starts its new notes; Today in the sidebar (⌃⌘T) opens the same daily note as your Mac.
+- Links and Outline in the web app (⌥⌘I): notes that link here, links in this note, headings, and a Note Info tab (⌃⌘I) with the same word and character counts as the Mac. Clicking a link to a note opens it.
+- Export from the web app as Markdown (⇧⌘S) or HTML, print or save as PDF (⌘P), Copy as Markdown and Copy Note Link. Markdown export writes links between notes as `[[wiki links]]`, as the Mac does.
+- The web app's command palette and keyboard shortcuts follow the Mac's menus, with Ctrl in place of ⌘ off a Mac; type `>` in the palette for commands only.
+- A [feature parity](docs/feature-parity.md) page lists every feature of the Mac and web apps and where each stands.
 
 ### Changed
 
@@ -23,6 +30,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - On S3 storage, a request that could change data is never sent twice automatically. A dropped connection is sorted out on the next sync instead.
 - On storage that can't delete conditionally (sync folders and some S3 providers), NoteIt checks that a note is unchanged right before deleting it, and leaves anything another device changed meanwhile.
 - In the NoteIt web app, server setup, sign-in, invites, passwords and user management now run as type-checked server actions built with nuxt-safe-action. Forms point at the field that needs fixing, often before anything is sent, and lists such as your access keys and the server's users refresh by themselves after a change. Sync is unchanged.
+- Text colours and highlights picked in the web app are now the same swatches as the Mac's Format menu, and the web app has the Mac's paragraph shortcuts (⌥⌘4 and ⌥⌘5, ⇧⌘7, ⇧⌘8, ⇧⌘L, ⇧⌘U, ⇧⌘H, ⌥⇧⌘D, ⌘[ and ⌘]). Inline code is ⇧⌘E, as on the Mac; ⌘E still works.
 - The NoteIt web app is rebuilt on Nuxt UI, keeping its look. Dialogs, menus and the command palette handle the keyboard, focus and Escape consistently and animate in and out. Notes and notebooks have right-click menus, buttons show when they're working, confirmations are in-app dialogs instead of browser pop-ups, the sidebar and note list can be resized, and Settings opens over your notes.
 
 ### Security
