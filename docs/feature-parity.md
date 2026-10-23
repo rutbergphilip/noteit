@@ -29,13 +29,13 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Find and replace in a note (`find`, `findReplace`) | ⌥⌘F, ⇧⌘F | ⌥⌘F, ⇧⌘F: Match Case, Whole Word, regex with `$1`, ⌘G/⇧⌘G, ⌘E, one ⌘Z per replace | Parity |
 | Pin and unpin (`togglePin`) | Yes | Yes | Parity |
 | Notebooks: create, rename, colour, symbol (`newNotebook`) | ⇧⌘N | ⌥⇧⌘B (⇧⌘N where the browser allows it) | Parity |
-| Nested notebooks | Drag, Move To | Create inside, shown nested; moving a notebook is a web gap | Parity |
+| Nested notebooks | Drag, Move To | Create inside, shown nested; Edit Notebook › Inside moves one | Parity |
 | Move a note to a notebook (`move.<notebook>`) | Palette, menu | Notebook picker in the editor | Parity |
 | A notebook's default template for new notes | Notebook settings | Used for new notes; choosing one is a web gap | Parity |
 | Recently Deleted, recover, delete now, 30-day purge (`deleteNote`, `showRecentlyDeleted`) | ⌘⌫ | ⌘⌫ outside text, toolbar | Parity |
-| Undo a deletion | ⌘Z | Recover from Recently Deleted | Web gap |
+| Undo a deletion | ⌘Z | Undo in the "Moved to Recently Deleted" notice, or Recover | Parity |
 | Conflict copies | Yes | Yes, with the same notice | Parity |
-| Locked notes | Lock and unlock | Listed by title, read-only | Web gap |
+| Locked notes | Lock and unlock | Listed by title, read-only | Web gap: needs the notes password, the wrapped key in `keys/locked-notes.json`, `noteit-locked/1` bodies with shared vectors, `ensureFeature(locked-notes)` and relock timers; about 2–3 days to do safely |
 | Notes from older Macs (RTFD bodies) | Yes | Listed, read-only until a Mac converts them | Native-only by design |
 | Version history (`versionHistory`) | ⌥⌘Y | — | Native-only (local data): versions stay on the Mac that saved them |
 | Note list sorting | Date edited; Best Match while searching | Edited (Best Match while searching), created or title | Web-only (the extra orders) |
@@ -125,4 +125,4 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 
 ## Summary
 
-As of this page's last change, by row: 36 parity, 20 web gaps, 13 native-only by design, 4 native-only (local data), 3 web-only. Highest-value web gaps, roughly in order: smart folders (needs the `smart-folders/` record kind in `@noteit/core`, with golden vectors), reminders with notifications and claims, `[[` link suggestions, tag rename/merge/delete, find and replace, Markdown import, natural due dates and the date picker, locked notes.
+As of this page's last change, by row: 49 parity, 10 web gaps, 13 native-only by design, 4 native-only (local data), 3 web-only. Highest-value web gaps, roughly in order: locked notes (notes password, wrapped key and locked bodies with shared vectors), Evernote/Notion import, tag suggestions after `#`, updating links on rename, exporting a notebook or everything, code block syntax colouring, Quick Capture's reminder offer.
