@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CryptoKit
 import Foundation
+import NoteItMarkdown
 import NoteItSync
 
 @MainActor
@@ -2607,13 +2608,32 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    /// Front matter from another device is untrusted: it must parse as front matter (else the record is refused as
+    /// an invalid payload), and keys NoteIt owns (`id`, `created`, `pinned`…) and delimiter lines are dropped, so it
+    /// can never override this note's own metadata in a Markdown library.
+    nonisolated static func sanitizedRemoteExtras(_ extras: ContainerExtras) throws -> ContainerExtras {
+        guard let frontMatter = extras.frontMatter else { return extras }
+        var clean = extras
+        do {
+            let sanitized = try FrontMatter.sanitizedExtra(frontMatter)
+            clean.frontMatter = sanitized.isEmpty ? nil : sanitized
+        } catch {
+            throw NoteStoreSyncError.invalidPayload("front matter: \(error)")
+        }
+        return clean
+    }
+
+    /// A noteit-doc body (by `payload.bodyFormat`) brings its own extras; `extras` and `bodyIsRTFD` describe an RTFD one.
     nonisolated static func prepareRemoteNote(_ payload: RecordPayload, storage: NoteBodyStorage,
                                               extras: ContainerExtras = .empty,
                                               bodyIsRTFD: Bool = true) throws -> PreparedRemoteNote {
         var meta = try decodeMeta(NoteMeta.self, payload)
         meta.revision = payload.revision
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
-        let body = try deserializeBody(data)
+        let decoded = try decodeSyncBody(data, format: payload.bodyFormat)
+        let body = decoded.body.text
+        let extras = decoded.isRTFD ? extras : try sanitizedRemoteExtras(decoded.body.extras)
+        let bodyIsRTFD = decoded.isRTFD && bodyIsRTFD
         applyDerivedFields(to: &meta, from: body)
         var tempExtras = extras
         if bodyIsRTFD, storage.kind != .rtfd {

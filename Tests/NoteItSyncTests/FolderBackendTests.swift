@@ -20,6 +20,17 @@ final class FolderBackendTests: XCTestCase {
         backend = nil
     }
 
+    /// sync-security Task 3.0: the flock covers one Mac only, so neither capability is claimed.
+    func testReportsNeitherAtomicCapability() async throws {
+        let writes = await backend.atomicConditionalWrites()
+        let deletes = await backend.atomicConditionalDelete()
+        XCTAssertFalse(writes)
+        XCTAssertFalse(deletes)
+        try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: false)
+        let listed = try await backend.list(prefix: "")
+        XCTAssertNil(listed.first?.lastModified)
+    }
+
     func testPutGetRoundTrip() async throws {
         let data = Data("hello".utf8)
         let etag = try await backend.put("a/b", data: data, ifMatch: nil, ifNoneMatch: false)

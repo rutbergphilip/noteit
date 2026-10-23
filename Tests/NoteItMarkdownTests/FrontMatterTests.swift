@@ -127,4 +127,53 @@ final class FrontMatterTests: XCTestCase {
         XCTAssertEqual(read.extra, "", "never kept as an unknown key")
         XCTAssertNil(read.id)
     }
+
+    // MARK: Untrusted extras (synced noteit-doc containers)
+
+    func testWrittenNeverLetsExtraOverrideOwnedKeys() throws {
+        let id = UUID()
+        var fm = FrontMatter(id: id, pinned: false)
+        fm.extra = "source: web\nid: 00000000-0000-0000-0000-000000000000\npinned: true\nconflict-of: x\n  continued\n---\nlocked: yes\naliases:\n  - a"
+        let text = fm.written()
+        XCTAssertEqual(text, "---\nid: \(id.uuidString)\nsource: web\naliases:\n  - a\n---\n")
+        let (read, _) = try FrontMatter.read(text + "body")
+        XCTAssertEqual(read.id, id)
+        XCTAssertFalse(read.pinned)
+        XCTAssertFalse(read.locked)
+    }
+
+    func testSanitizedExtraDropsOwnedKeysAndDelimiters() throws {
+        let remote = "id: 00000000-0000-0000-0000-000000000000\ncreated: 2020-01-01\nsource: web\n---\ndeleted: 2020-01-02\n...\ntags: [a, b]"
+        XCTAssertEqual(try FrontMatter.sanitizedExtra(remote), "source: web\ntags: [a, b]")
+        XCTAssertEqual(try FrontMatter.sanitizedExtra("---\n..."), "")
+    }
+
+    /// Security review: no line break other than "\n" may hide a key or a delimiter from the filter.
+    static let otherLineBreaks: [(String, String)] = [
+        ("CR", "\r"), ("CRLF", "\r\n"), ("NEL", "\u{85}"), ("LS", "\u{2028}"), ("PS", "\u{2029}"), ("VT", "\u{0B}"), ("FF", "\u{0C}"),
+    ]
+
+    func testSanitizedExtraRejectsOtherLineBreaks() {
+        for (name, separator) in Self.otherLineBreaks {
+            XCTAssertThrowsError(try FrontMatter.sanitizedExtra("source: web\(separator)id: 00000000-0000-0000-0000-000000000000"), name)
+            XCTAssertThrowsError(try FrontMatter.sanitizedExtra("source: web\(separator)---\(separator)pinned: true"), name)
+        }
+        XCTAssertEqual(try FrontMatter.sanitizedExtra("source: web\nkind: note"), "source: web\nkind: note")
+    }
+
+    func testWrittenSplitsOnEveryLineBreak() throws {
+        let id = UUID()
+        for (name, separator) in Self.otherLineBreaks {
+            var fm = FrontMatter(id: id)
+            fm.extra = "source: web\(separator)pinned: true\(separator) --- \(separator)created: 2020-01-01"
+            let text = fm.written()
+            XCTAssertEqual(text, "---\nid: \(id.uuidString)\nsource: web\n---\n", name)
+            XCTAssertFalse(text.contains("pinned"), name)
+        }
+    }
+
+    func testSanitizedExtraRejectsInvalidFrontMatter() {
+        XCTAssertThrowsError(try FrontMatter.sanitizedExtra("this is not front matter"))
+        XCTAssertThrowsError(try FrontMatter.sanitizedExtra("created: not-a-date"))
+    }
 }

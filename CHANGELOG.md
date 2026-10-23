@@ -7,6 +7,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- A portable note format for sync, so the upcoming NoteIt web app can open your notes. The first time this version syncs, it switches your storage over and converts your notes in the background; there's nothing to set up. If another Mac still runs an older NoteIt, it asks you first, because that Mac stops syncing until it's updated. Nothing on it is lost. Each of your devices downloads every note once while this happens.
+- A “NoteIt Server” choice when you set up sync, for syncing with your own NoteIt web app.
+- Clean Up Unused Storage… in Settings › Sync removes leftover copies of notes that were never finished saving, for example from a Mac that was erased while it was syncing. It's available on storage that supports conditional writes, and it asks first.
+
+### Changed
+
+- Saving a note to sync is now crash-safe: a note's new text is uploaded completely before other devices are pointed at it, so they never see half a save.
+- On S3 storage, a request that could change data is never sent twice automatically. A dropped connection is sorted out on the next sync instead.
+- On storage that can't delete conditionally (sync folders and some S3 providers), NoteIt checks that a note is unchanged right before deleting it, and leaves anything another device changed meanwhile.
+
+### Security
+
+- Information that another device stores with a note's text can no longer change the note's own details, such as its dates or whether it's pinned, in a Markdown library.
+
 ## [0.6.2] - 2026-10-23
 
 ### Changed

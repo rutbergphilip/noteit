@@ -67,6 +67,10 @@ final class SyncController: ObservableObject {
     @Published private(set) var conflictCount = 0
     /// The storage rejected the saved access key/secret; Settings offers "Update Credentials…".
     @Published private(set) var credentialsRejected = false
+    /// Whether "Clean up unused storage…" can run on the connected storage (web-app Task 0.4).
+    @Published var cleanupAvailable = false
+    /// The answer to the noteit-doc device check in this launch (web-app Task 0.4).
+    var upgradeConfirmation = UpgradeConfirmation()
 
     var isConfigured: Bool { configuration != nil }
 
@@ -188,10 +192,11 @@ final class SyncController: ObservableObject {
         let (storeSession, created) = try await withAccess(destination) {
             try await Self.offMain {
                 try await destination.backend.probe()
+                // A new store is portable from its first manifest and never needs the upgrade (web-app spec §3.4 item 4).
                 return try await SyncEngine.connectSession(backend: destination.backend, kind: .library,
                                                            credential: passphrase.map(StoreCredential.passphrase),
                                                            deviceName: deviceName, createIfMissing: true, encrypted: encryptNew,
-                                                           migrationRecord: migrationRecord)
+                                                           initialFeatures: [.noteItDoc], migrationRecord: migrationRecord)
             }
         }
         config.encrypted = storeSession.keyID != nil
@@ -227,10 +232,11 @@ final class SyncController: ObservableObject {
             let removed = store.removePristineSeedContent()
             if removed != (0, 0) { NSLog("NoteItSync: removed \(removed.notes) unedited sample notes and \(removed.notebooks) sample notebooks before joining") }
         }
-        let adapter = NoteStoreSyncAdapter(store: store, deviceID: config.deviceID)
         let ref = StoreSessionRef(storeSession)
+        let adapter = NoteStoreSyncAdapter(store: store, deviceID: config.deviceID, session: ref)
         let engine = SyncEngine(backend: destination.backend, session: ref, local: adapter, stateURL: stateURL,
                                 deviceID: config.deviceID, deviceName: config.deviceName, appVersion: Self.appVersion)
+        await installUpgradeHandlers(engine)
         let session = Session(engine: engine, backend: destination.backend, store: ref, adapter: adapter,
                               folder: destination.folder, scoped: destination.scoped)
         lastSync = nil
@@ -328,6 +334,7 @@ final class SyncController: ObservableObject {
         lastSync = nil
         devices = []
         conflictCount = 0
+        cleanupAvailable = false
         if ephemeralSecrets != nil {
             ephemeralSecrets = Secrets()
         } else {
@@ -382,6 +389,16 @@ final class SyncController: ObservableObject {
         if ephemeralSecrets == nil { config.save() }
         pendingDeviceRename = true
         requestSync(after: 0.5)
+    }
+
+    /// "Clean up unused storage…" once the user confirmed it (web-app spec §3.4.9). Nothing else calls it.
+    func cleanUpUnusedStorage() async throws -> CleanupReport {
+        guard let config = configuration else { throw SyncError.cleanupUnavailable }
+        let session = try await ensureSession(config)
+        let destination = Destination(backend: session.backend, folder: session.folder, scoped: session.scoped)
+        return try await withAccess(destination) {
+            try await Self.offMain { try await session.engine.cleanUpUnusedStorage() }
+        }
     }
 
     func refreshDevices() async {
@@ -525,7 +542,7 @@ final class SyncController: ObservableObject {
         }
     }
 
-    private func requestSync(after delay: TimeInterval) {
+    func requestSync(after delay: TimeInterval) {
         guard loop != nil else { return }
         let due = Date().addingTimeInterval(delay)
         if due < timerDue { timerDue = due }
@@ -627,6 +644,8 @@ final class SyncController: ObservableObject {
                 return try await self.runTrackedPass(session)
             }
             guard gen == generation else { return nil }
+            let available = await session.engine.cleanupAvailable()
+            if cleanupAvailable != available { cleanupAvailable = available }
             let now = Date()
             if lastReport != report { lastReport = report }
             lastSync = now
@@ -698,6 +717,7 @@ final class SyncController: ObservableObject {
             try? state.save(to: stateURL(for: config))
             let engine = SyncEngine(backend: session.backend, session: session.store, local: session.adapter, stateURL: stateURL(for: config),
                                     deviceID: config.deviceID, deviceName: config.deviceName, appVersion: Self.appVersion)
+            await installUpgradeHandlers(engine)
             let renewed = Session(engine: engine, backend: session.backend, store: session.store, adapter: session.adapter,
                                   folder: session.folder, scoped: session.scoped)
             self.session = renewed
@@ -739,10 +759,11 @@ final class SyncController: ObservableObject {
         if Self.encoded(storeSession.dataKey) != secrets.dataKey {
             saveDataKey(storeSession.dataKey)
         }
-        let adapter = NoteStoreSyncAdapter(store: store, deviceID: config.deviceID)
         let ref = StoreSessionRef(storeSession)
+        let adapter = NoteStoreSyncAdapter(store: store, deviceID: config.deviceID, session: ref)
         let engine = SyncEngine(backend: destination.backend, session: ref, local: adapter, stateURL: stateURL(for: config),
                                 deviceID: config.deviceID, deviceName: config.deviceName, appVersion: Self.appVersion)
+        await installUpgradeHandlers(engine)
         let session = Session(engine: engine, backend: destination.backend, store: ref, adapter: adapter,
                               folder: destination.folder, scoped: destination.scoped)
         self.session = session

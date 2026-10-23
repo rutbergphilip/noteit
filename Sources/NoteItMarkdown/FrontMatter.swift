@@ -171,6 +171,43 @@ public struct FrontMatter: Sendable, Equatable {
 
     // MARK: Writing
 
+    /// Keys NoteIt writes itself. `extra` never supplies them: a value there (from another device's synced extras)
+    /// could otherwise override NoteIt's own metadata.
+    public static let ownedKeys: Set<String> = ["id", "created", "updated", "pinned", "deleted", "conflict-of", "conflict-source", "locked"]
+
+    /// `extra` without owned keys (and their continuation lines) and without `---`/`...` lines, which would end the
+    /// front matter early.
+    /// Every character some reader may treat as a line break; synced extras may use only "\n".
+    static let otherLineBreaks = CharacterSet(charactersIn: "\r\u{0B}\u{0C}\u{85}\u{2028}\u{2029}")
+
+    public static func strippingOwnedKeys(_ extra: String) -> String {
+        var kept: [String] = []
+        var dropping = false
+        // Split on every line break, not just "\n", so none can hide a key or a delimiter from this filter.
+        let normalized = extra.replacingOccurrences(of: "\r\n", with: "\n")
+        for line in normalized.components(separatedBy: otherLineBreaks.union(CharacterSet(charactersIn: "\n"))) {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmed == "---" || trimmed == "..." { continue }
+            let isContinuation = line.first.map { $0 == " " || $0 == "\t" || $0 == "-" } ?? true
+            if !isContinuation, !line.hasPrefix("#"), let key = key(of: line) { dropping = ownedKeys.contains(key) }
+            if !dropping { kept.append(line) }
+        }
+        return kept.joined(separator: "\n")
+    }
+
+    /// Untrusted front matter extras from another device (a synced noteit-doc container): parsed with `read`, which
+    /// throws when they aren't valid front matter, and returned without owned keys or delimiter lines.
+    /// Any line break other than "\n" (a lone or CRLF "\r", VT, FF, U+0085, U+2028, U+2029) is refused outright.
+    public static func sanitizedExtra(_ text: String) throws -> String {
+        if text.rangeOfCharacter(from: otherLineBreaks) != nil { throw MarkdownError.invalidFrontMatter(line: 0) }
+        let body = text.components(separatedBy: "\n")
+            .filter { let t = $0.trimmingCharacters(in: .whitespacesAndNewlines); return t != "---" && t != "..." }
+            .joined(separator: "\n")
+        guard !body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "" }
+        let (parsed, _) = try read("---\n" + body + "\n---\n")
+        return strippingOwnedKeys(parsed.extra)
+    }
+
     /// "" when there is nothing to write; otherwise ends with "---\n".
     public func written() -> String {
         var lines: [String] = []
@@ -182,6 +219,7 @@ public struct FrontMatter: Sendable, Equatable {
         if let conflictOf { lines.append("conflict-of: \(conflictOf.uuidString)") }
         if let conflictSource { lines.append("conflict-source: \(Self.quoted(conflictSource))") }
         if locked { lines.append("locked: true") }
+        let extra = Self.strippingOwnedKeys(extra)
         if !extra.isEmpty { lines.append(extra) }
         guard !lines.isEmpty else { return "" }
         return "---\n" + lines.joined(separator: "\n") + "\n---\n"

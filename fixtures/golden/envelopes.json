@@ -154,6 +154,85 @@
       "name" : "device",
       "plaintextJSON" : "{\"deviceID\":\"device-1\",\"lastSync\":788918400.125,\"name\":\"Work Mac\\/Studio\"}",
       "sealed" : "b/pT2cdCIfH94wl3FSfEZpKqILBh9NSmpI8/bPYMn6/Dr903jmjuGk8uFOpHsdA/qZZNkhXpG1FuHJLpLRCua6Ixoa61Ex3QVd2v1mx5xiAdx+XpWH4dQVU9A0/7n384xfleSObT"
+    },
+    {
+      "context" : "notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
+      "decoded" : {
+        "bodyFormat" : "noteit-doc/1",
+        "bodySHA256" : "3daba1b63033b56007c824119e82a535f7020abf0180a0e7f0efc8ee96bfe92c",
+        "bodyVersion" : "AF6E24C1-168C-42B4-B1C4-0421EDDE1302",
+        "deviceID" : "device-1",
+        "deviceName" : "Work Mac/Studio",
+        "id" : "430742D2-5082-469B-9F71-FF2B36718F0D",
+        "kind" : "note",
+        "meta" : {
+          "createdAt" : "2026-01-01T00:00:00Z",
+          "id" : "430742D2-5082-469B-9F71-FF2B36718F0D",
+          "isPinned" : true,
+          "notebookID" : "432F35A9-1533-47B0-898F-B41726DFC163",
+          "preview" : "Road trip: A/B testing",
+          "revision" : "B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA",
+          "tags" : [
+            "work/2026",
+            "ideas"
+          ],
+          "title" : "Plans / ideas",
+          "updatedAt" : "2026-01-02T00:00:00Z"
+        },
+        "modifiedAt" : 789004800.25,
+        "revision" : "B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA"
+      },
+      "key" : "noteit/v1/notes/430742D2-5082-469B-9F71-FF2B36718F0D.meta",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "note-envelope-noteit-doc",
+      "plaintextJSON" : "{\"bodyFormat\":\"noteit-doc\\/1\",\"bodySHA256\":\"3daba1b63033b56007c824119e82a535f7020abf0180a0e7f0efc8ee96bfe92c\",\"bodyVersion\":\"AF6E24C1-168C-42B4-B1C4-0421EDDE1302\",\"deviceID\":\"device-1\",\"deviceName\":\"Work Mac\\/Studio\",\"id\":\"430742D2-5082-469B-9F71-FF2B36718F0D\",\"kind\":\"note\",\"meta\":\"ewogICJjcmVhdGVkQXQiIDogIjIwMjYtMDEtMDFUMDA6MDA6MDBaIiwKICAiaWQiIDogIjQzMDc0MkQyLTUwODItNDY5Qi05RjcxLUZGMkIzNjcxOEYwRCIsCiAgImlzUGlubmVkIiA6IHRydWUsCiAgIm5vdGVib29rSUQiIDogIjQzMkYzNUE5LTE1MzMtNDdCMC04OThGLUI0MTcyNkRGQzE2MyIsCiAgInByZXZpZXciIDogIlJvYWQgdHJpcDogQVwvQiB0ZXN0aW5nIiwKICAicmV2aXNpb24iIDogIkIzMjlEQzhCLTkwMjgtNEMwQy04N0YxLTBBQzkxRUI0RTRDQSIsCiAgInRhZ3MiIDogWwogICAgIndvcmtcLzIwMjYiLAogICAgImlkZWFzIgogIF0sCiAgInRpdGxlIiA6ICJQbGFucyBcLyBpZGVhcyIsCiAgInVwZGF0ZWRBdCIgOiAiMjAyNi0wMS0wMlQwMDowMDowMFoiCn0=\",\"modifiedAt\":789004800.25,\"revision\":\"B329DC8B-9028-4C0C-87F1-0AC91EB4E4CA\"}",
+      "sealed" : "qjJ1meT+GMLTd1pg5opQTmT9tlS8vkYm0P093U4UV7cub/ux7Mhu5wngso9ag7HiLFe20X8stVRs8ej+rS45QDQG/OZ/LFHzMkxBMaw9MuXmwXQRAkBSOcpODnWZXkTxtSKTgne8IvoHVwGPbjMziFMKbOjJzDsFqGLzEs7pgTWjTaMFXRTftsP24AR0kdmN1DIVVn/HxOytUwDi9HKZwfaEHtP0aj0QoOQ+51h5H9f9NQMqTw6A0k4zVZObCQIxjINeXMG1mAEpX78seeV7PPsLK6Dqlf8Kv0vpY5x7loou82khVAoJ//MIi1yIWLBlJLmdA1HbbV9VGg/eN3ug4XL1ja6HmQ8vJYDveAsG2KQGpKJ6d4ODSZHBlveDV81DRWI0JMDwXPwanvkr4XRyW0EPbDOXG/vuIDOGcbWqe1CmqLbfRPhVvRt5swctXfcxrvU2hJEUAa5F27t33Cn8WPGSawpXsccZ5+70N8yAbMWAiULVLPBRQ14CuQuKpDcOtwMRYg7bYeBI5tPe7w4C+qFj5EJo7w1IUmvFubl1X3J6PJw/tqTG4t1lRS9IX8GGLQnWad7Z4WcvMkZSVfxxYMu69wquVd+c/C3g0akJ/8EdiOS1xxlP8Ur+J4LFXo0QaHwweAjpHrXGNuaN/yftsm1KR/6KOj4/7PbNxZBt5tFJTWh/t/yxp6t/XogjrKSNJDsKfKRmRz/MsaPjCsPqNAs0lLI828QYAJgEHd96ZHNGp2UHY2cLO9OXtZLZ6xmYXjzfyE8OM0r8tCU8Y32wO00RyHJNafPX7YR70R34Gs5LOmyLml7OrmQgQ55Et6UZ52/y5nH3wR5/dx3DY9fUX8lgJngXeneuY87XfZ6cW/f7KBw+Brnj35Vi0RFOZ9iWCKGTDTiCnBKd0eB10fFvEl1K5D2J3/1IXmTzTK/j5l4Wu7kLpqmYjwiGSBokUyEEoB6AoEZ01UVJN5IsUc+mGxmVP3D4WU+yXtV8uOy9wFRLc6Er3U5G9qEX0bBwyTErM7RVB8ED7rh+I2aIUOJ57vEvGePke2IdBEYhBTLqr28OEVhBSaB0dqERYMYfX1K8umQSCpJ0odBJmoJv6trEPnTIbptT2nUbJmd0xy4l468eY0xyUialup5cw+dbwS9ZZ5zvKWRDdLNgXXwlHrrncE4ONuC8WDC0x9DGGfCjmGjrpsZSfw=="
+    },
+    {
+      "context" : "bodies/430742D2-5082-469B-9F71-FF2B36718F0D.AF6E24C1-168C-42B4-B1C4-0421EDDE1302.JEKOEM3UXMQR4POK.body",
+      "decoded" : {
+        "attachments" : {
+
+        },
+        "doc" : {
+          "content" : [
+            {
+              "attrs" : {
+                "level" : 1
+              },
+              "content" : [
+                {
+                  "text" : "Plans / ideas",
+                  "type" : "text"
+                }
+              ],
+              "type" : "heading"
+            },
+            {
+              "content" : [
+                {
+                  "marks" : [
+                    {
+                      "type" : "bold"
+                    }
+                  ],
+                  "text" : "Road trip: A/B testing",
+                  "type" : "text"
+                }
+              ],
+              "type" : "paragraph"
+            }
+          ],
+          "type" : "doc"
+        },
+        "format" : "noteit-doc",
+        "version" : 1
+      },
+      "key" : "noteit/v1/bodies/430742D2-5082-469B-9F71-FF2B36718F0D.AF6E24C1-168C-42B4-B1C4-0421EDDE1302.JEKOEM3UXMQR4POK.body",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "noteit-doc-body",
+      "plaintextJSON" : "{\"attachments\":{},\"doc\":{\"content\":[{\"attrs\":{\"level\":1},\"content\":[{\"text\":\"Plans / ideas\",\"type\":\"text\"}],\"type\":\"heading\"},{\"content\":[{\"marks\":[{\"type\":\"bold\"}],\"text\":\"Road trip: A/B testing\",\"type\":\"text\"}],\"type\":\"paragraph\"}],\"type\":\"doc\"},\"format\":\"noteit-doc\",\"version\":1}",
+      "sealed" : "J5EgeCybR8K0ZBcsKNqH8AC5N5gNlgGqW2zXTd7w+jSBGlJClJjZ4f1kRqbXtgEw9GtK9EkTOlZz2f2JTGU/WlOdnka3GTUBNp7QoTFF/jifUjzYUR88gjndTH6nRAQ/FHp0pffZ/xk0IH3FBh6Q1SktdMLWuk78JOPk9WDS9Vl3dyCgSKo/vQHhwBUXxPqdBw7uJ8+KFp6yxNe+lRbh+LkZw7ncOV+dYW6AnLWdZg+DggWPuzFksAmAWI3DwjxqdXzfSw4i/8B+Q2pp5AgrJMzcgs8uPXMVdx5Bxstn2d8Brvs9FVf+gLaZxYqptw1BdBbS+0+GwDEH1WRZE/OqTe9SpxV392on8P0qsxWCK7sEbNnHbJIkh6XVeTxibxk+U/bWZ/pnNJ+y4V0WyoZXUcOSmj8HJA=="
     }
   ],
   "generator" : "swift",

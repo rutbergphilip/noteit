@@ -623,7 +623,8 @@ final class SyncEngineTests: XCTestCase {
         await assertConverged(a, b)
     }
 
-    /// A provider that ignores If-Match on DELETE removes B's edit; the tombstone tells B the deleter never saw it.
+    /// A provider that ignores If-Match on DELETE removes B's edit (the deleter deletes best-effort there, as v1 did);
+    /// the tombstone tells B the deleter never saw it, so B resurrects it.
     func testIgnoredConditionalDeleteStillKeepsTheEdit() async throws {
         let a = device("A"), b = device("B", backend: memory)
         let id = await a.store.create(title: "v1")

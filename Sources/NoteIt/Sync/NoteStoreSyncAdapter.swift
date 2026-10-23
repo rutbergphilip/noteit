@@ -26,14 +26,18 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
     private let store: NoteStore
     private let deviceID: String
     private let bodyStorage: NoteBodyStorage
+    /// The engine's session: `export` sends noteit-doc bodies exactly when the store has the `noteit-doc` feature
+    /// (web-app Task 0.4); nil exports RTFD.
+    private let session: StoreSessionRef?
     /// Main-actor state: revisions as of the engine's latest `records()` read, and the on/off switch.
     private var seenRevisions: [UUID: UUID] = [:]
     private var isActive = true
 
-    init(store: NoteStore, deviceID: String) {
+    init(store: NoteStore, deviceID: String, session: StoreSessionRef? = nil) {
         self.store = store
         self.deviceID = deviceID
         self.bodyStorage = store.bodyStorage
+        self.session = session
     }
 
     @MainActor func deactivate() {
@@ -64,11 +68,13 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
 
     func export(_ id: UUID, kind: RecordKind) async throws -> RecordPayload {
         let deviceID = deviceID
-        let (payload, source) = try await onMain {
+        let encoding = session?.current.bodyEncoding ?? .rtfd
+        let (payload, source, extras, extrasURL) = try await onMain {
             try requireActive()
-            return try store.exportPlan(id: id, kind: kind, deviceID: deviceID)
+            let (payload, source) = try store.exportPlan(id: id, kind: kind, deviceID: deviceID)
+            return (payload, source, store.bodyExtras[id] ?? .empty, store.bodyExtrasFileURL(id))
         }
-        return try NoteStore.completeExport(payload, source)
+        return try NoteStore.completeExport(payload, source, encoding: encoding, extras: extras, storage: bodyStorage, extrasURL: extrasURL)
     }
 
     func apply(_ payload: RecordPayload) async throws {

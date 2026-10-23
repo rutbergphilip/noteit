@@ -6,6 +6,8 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 
 - **Folders kept in sync by another tool** (iCloud Drive, Dropbox and similar) get best-effort protection only. NoteIt locks the folder while writing, but that only helps when your Macs write to the same volume, such as a NAS share. A sync tool copies files between Macs after the fact, so two Macs can still race. When the tool leaves its own conflict files behind (such as `<id> 2.meta`), NoteIt imports them as conflict copies and cleans up unusable ones after 30 days.
 - **S3 providers without conditional writes** (`If-Match` / `If-None-Match`) also get best-effort protection: NoteIt checks before and after each write, which narrows the race between two Macs but doesn't close it. This includes providers that silently ignore those headers, such as Google Cloud Storage's S3-compatible API. NoteIt detects them with a one-time check.
+- **Synced storage keeps earlier copies of notes on folders.** Sync folders, and S3 providers that don't enforce conditional writes, keep each note's earlier versions and its pre-conversion RTFD copy, because there NoteIt can't prove that no other device still points at them. Clean Up Unused Storage… is unavailable there. Deleting a note removes all of its copies.
+- **Older NoteIt builds stop syncing once a store uses the portable format.** They show “update NoteIt” and keep their notes; an edit made there syncs again after updating.
 - **No WebDAV** backend yet.
 - **No side-by-side view for conflicts.** You compare the conflict copy with the original yourself.
 - **Encryption is chosen when you connect.** You can't change the passphrase or turn encryption on later without starting a new synced library.

@@ -214,6 +214,7 @@ private struct SyncSetupView: View {
             guard new.isS3 else { return }
             region = new.defaultRegion
             pathStyle = new.defaultPathStyle
+            if let defaultBucket = new.defaultBucket { bucket = defaultBucket }
             switch new {
             case .awsS3: endpoint = "https://s3.\(new.defaultRegion).amazonaws.com"
             case .backblazeB2: endpoint = "https://s3.\(new.defaultRegion).backblazeb2.com"
@@ -365,6 +366,7 @@ private struct SyncSetupView: View {
             _region = State(initialValue: preset.defaultRegion)
             _pathStyle = State(initialValue: preset.defaultPathStyle)
             _endpoint = State(initialValue: preset.endpointTemplate)
+            if let defaultBucket = preset.defaultBucket { _bucket = State(initialValue: defaultBucket) }
             if let i = args.firstIndex(of: "--debug-sync-endpoint"), i + 1 < args.count {
                 _endpoint = State(initialValue: args[i + 1])
             }
@@ -469,6 +471,7 @@ struct ProviderIcon: View {
         case .googleCloud: Tokens.Color.SyncProvider.googleCloud
         case .minio: Tokens.Color.SyncProvider.minio
         case .customS3: Tokens.Color.SyncProvider.customS3
+        case .noteItServer: Tokens.Color.SyncProvider.noteItServer
         }
     }
 }
@@ -528,7 +531,41 @@ private struct SyncConnectedView: View {
     @State private var newSecret = ""
     @State private var credentialsBusy = false
     @State private var credentialsFeedback: (text: String, isError: Bool)?
+    @State private var cleanupBusy = false
+    @State private var cleanupResult: String?
     @FocusState private var nameFocused: Bool
+
+    /// "Clean Up Unused Storage…" (web-app spec §3.4.9): only after the confirmation, never automatically.
+    private var cleanupRow: some View {
+        let state = CleanupButtonState(connected: sync.status != .needsPassphrase && sync.lastSync != nil,
+                                       available: sync.cleanupAvailable)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                SettingsFootnote(text: "Removes copies of notes that were never finished saving.")
+                Spacer()
+                Button("Clean Up Unused Storage…") { confirmCleanup() }
+                    .disabled(!state.isEnabled || cleanupBusy)
+            }
+            if let caption = state.caption {
+                SettingsFootnote(text: caption)
+            }
+            if let cleanupResult {
+                Text(cleanupResult)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func confirmCleanup() {
+        let response = CleanupConfirmation.makeAlert().runModal()
+        guard response == .alertSecondButtonReturn else { return }
+        cleanupBusy = true
+        Task {
+            cleanupResult = await CleanupConfirmation.handle(response: response, cleaner: sync)
+            cleanupBusy = false
+        }
+    }
 
     var body: some View {
         Form {
@@ -585,6 +622,12 @@ private struct SyncConnectedView: View {
                 devicesList
             } header: {
                 Text("Devices")
+            }
+
+            Section {
+                cleanupRow
+            } header: {
+                Text("Storage")
             }
 
             Section {

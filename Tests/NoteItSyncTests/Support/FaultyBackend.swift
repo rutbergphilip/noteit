@@ -89,4 +89,7 @@ actor FaultyBackend: StorageBackend {
         try await inner.delete(key, ifMatch: ignoreDeleteConditions ? nil : ifMatch)
     }
     func probe() async throws {}
+
+    func atomicConditionalWrites() async -> Bool { await inner.atomicConditionalWrites() }
+    func atomicConditionalDelete() async -> Bool { ignoreDeleteConditions ? false : await inner.atomicConditionalDelete() }
 }

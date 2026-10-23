@@ -71,6 +71,7 @@ enum Tokens {
             static let googleCloud = SwiftUI.Color(hex: Hex.syncGreen)
             static let minio = SwiftUI.Color(hex: Hex.syncTeal)
             static let customS3 = notebookGray
+            static let noteItServer = notebookPurple
         }
     }
 

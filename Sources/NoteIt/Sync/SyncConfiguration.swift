@@ -4,7 +4,7 @@ import NoteItSync
 
 /// Where the library syncs to. S3 presets only differ in their defaults and help text.
 enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
-    case folder, awsS3, cloudflareR2, backblazeB2, googleCloud, minio, customS3
+    case folder, awsS3, cloudflareR2, backblazeB2, googleCloud, minio, customS3, noteItServer
 
     var id: String { rawValue }
 
@@ -17,6 +17,7 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .googleCloud: "Google Cloud"
         case .minio: "MinIO / NAS"
         case .customS3: "Custom S3"
+        case .noteItServer: "NoteIt Server"
         }
     }
 
@@ -29,6 +30,7 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .googleCloud: "globe"
         case .minio: "externaldrive.fill.badge.wifi"
         case .customS3: "server.rack"
+        case .noteItServer: "network"
         }
     }
 
@@ -42,6 +44,7 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .googleCloud: "Cloud Storage with HMAC keys"
         case .minio: "Self-hosted S3 on your network"
         case .customS3: "Wasabi, Synology C2 and more"
+        case .noteItServer: "Your self-hosted NoteIt web app"
         }
     }
 
@@ -61,6 +64,8 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
             "Use the S3 API address of your MinIO server or NAS (Synology, QNAP, TrueNAS), usually on port 9000."
         case .customS3:
             "Any S3-compatible service. Path-style addressing works with most self-hosted servers."
+        case .noteItServer:
+            "Create an access key in the NoteIt web app under Settings → Account → S3 Access Keys. Each person uses their own key and their own sync passphrase."
         }
     }
 
@@ -78,6 +83,7 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .googleCloud: "https://storage.googleapis.com"
         case .minio: "http://<nas-host>:9000"
         case .customS3: "https://"
+        case .noteItServer: "https://<host>/s3"
         }
     }
 
@@ -86,12 +92,15 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
         case .awsS3: "us-east-1"
         case .cloudflareR2, .googleCloud: "auto"
         case .backblazeB2: "us-west-004"
-        case .minio, .customS3: "us-east-1"
+        case .minio, .customS3, .noteItServer: "us-east-1"
         case .folder: ""
         }
     }
 
-    var defaultPathStyle: Bool { self == .minio || self == .customS3 || self == .googleCloud }
+    var defaultPathStyle: Bool { self == .minio || self == .customS3 || self == .googleCloud || self == .noteItServer }
+
+    /// The bucket a NoteIt server serves under `/s3` (web-app spec §6.3); the other presets have none.
+    var defaultBucket: String? { self == .noteItServer ? "noteit" : nil }
 }
 
 /// Non-secret sync settings, stored as JSON in UserDefaults. Secrets live in the keychain.

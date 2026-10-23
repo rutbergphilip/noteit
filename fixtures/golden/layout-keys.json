@@ -132,6 +132,66 @@
       "key": "noteit/v1/claims/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.json",
       "prefix": null,
       "valid": false
+    },
+    {
+      "action": "reseal",
+      "key": "noteit/v1/bodies/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9.MFRGGZDFMZTWQ2LK.body",
+      "prefix": "noteit/v1/bodies/",
+      "valid": true
+    },
+    {
+      "action": "reseal",
+      "key": "noteit/v1/bodies/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9.MFRGGZDFMZTWQ2LK.locked",
+      "prefix": "noteit/v1/bodies/",
+      "valid": true
+    },
+    {
+      "action": "reseal",
+      "key": "noteit/v1/bodies/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9.new.body",
+      "prefix": "noteit/v1/bodies/",
+      "valid": true
+    },
+    {
+      "action": "block",
+      "key": "noteit/v1/bodies/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.0f1e2d3c-4b5a-4978-8695-a4b3c2d1e0f9.MFRGGZDFMZTWQ2LK.body",
+      "prefix": "noteit/v1/bodies/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "noteit/v1/bodies/6a1c8e8c-3f55-4c3a-9f7e-1d2b3c4d5e6f.0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9.MFRGGZDFMZTWQ2LK.body",
+      "prefix": "noteit/v1/bodies/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "noteit/v1/bodies/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9.body",
+      "prefix": "noteit/v1/bodies/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "noteit/v1/bodies/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9.mfrggzdfmztwq2lk.body",
+      "prefix": "noteit/v1/bodies/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "noteit/v1/bodies/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9.MFRGGZDFMZTWQ2L.body",
+      "prefix": "noteit/v1/bodies/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "noteit/v1/bodies/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F.0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9.MFRGGZDFMZTWQ2LK.rtfd",
+      "prefix": "noteit/v1/bodies/",
+      "valid": false
+    },
+    {
+      "action": "block",
+      "key": "noteit/v1/bodies/6A1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F/0F1E2D3C-4B5A-4978-8695-A4B3C2D1E0F9.MFRGGZDFMZTWQ2LK.body",
+      "prefix": null,
+      "valid": false
     }
   ],
   "listPrefixes": [
@@ -158,6 +218,10 @@
     {
       "allowed": true,
       "prefix": "noteit/v1/claims/reminders/"
+    },
+    {
+      "allowed": true,
+      "prefix": "noteit/v1/bodies/"
     },
     {
       "allowed": true,

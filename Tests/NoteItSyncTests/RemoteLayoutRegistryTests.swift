@@ -43,7 +43,8 @@ final class RemoteLayoutRegistryTests: XCTestCase {
         let id = UUID()
         let keys = [RemoteLayout.meta(.notebook, id), RemoteLayout.meta(.note, id), RemoteLayout.body(id),
                     RemoteLayout.tombstone(id), RemoteLayout.device(UUID().uuidString), RemoteLayout.meta(.smartFolder, id),
-                    RemoteLayout.reminderClaim(id)]
+                    RemoteLayout.reminderClaim(id), RemoteLayout.docBody(id, version: UUID(), tag: RemoteLayout.newTag),
+                    RemoteLayout.docBody(id, version: UUID(), tag: RemoteLayout.baseTag("\"etag\""), locked: true)]
         for key in keys {
             XCTAssertNotNil(RemoteLayout.prefix(for: key), key)
             XCTAssertTrue(RemoteLayout.isValidKey(key), key)
@@ -56,7 +57,7 @@ final class RemoteLayoutRegistryTests: XCTestCase {
         for row in RemoteLayout.prefixes {
             XCTAssertEqual(row.depth, 1)
             XCTAssertEqual(row.sealing, .storeKey)
-            XCTAssertTrue(["core", "organise"].contains(row.owner), row.path)
+            XCTAssertTrue(["core", "organise", "web-app"].contains(row.owner), row.path)
             XCTAssertTrue(RemoteLayout.isListablePrefix(row.path))
         }
     }

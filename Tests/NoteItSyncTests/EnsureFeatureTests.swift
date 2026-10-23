@@ -306,8 +306,9 @@ final class EnsureFeatureTests: XCTestCase {
     func testEnsureFeatureRefusesUnsupported() async throws {
         let (memory, _, session) = try await plainStore()
         let before = try await raw(memory)
+        // A wave 0 build (before web-app Task 0.4 added noteit-doc to `supported`).
         await assertThrows(.unsupportedFeature("noteit-doc")) {
-            try await SyncEngine.ensureFeature(.noteItDoc, backend: memory, session: session, currentDeviceID: self.me) { _ in true }
+            try await self.ensure(.noteItDoc, memory, session, supported: [.keyring])
         }
         await assertThrows(.unsupportedFeature("noteit-doc")) {
             try await self.ensure(.lockedNotes, memory, session, supported: [.keyring, .lockedNotes])
