@@ -7,6 +7,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-23
+
 ### Added
 
 - Import from Evernote. Choose one or more `.enex` files, or a folder of them, in File › Import…. Each file becomes a new notebook and folders become notebooks around them; a name already in use gets a number, such as “Work 2”. Notes keep their dates, tags, checklists, images and attachments, reminders and links to each other.
@@ -149,7 +151,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Folders kept in sync by another tool, such as iCloud Drive or Dropbox, and S3 services without conditional writes only get best-effort protection when two Macs write at the same time.
 - The full list is in [Known limitations](https://github.com/rutbergphilip/noteit/blob/main/docs/known-limitations.md).
 
-[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/rutbergphilip/noteit/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rutbergphilip/noteit/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rutbergphilip/noteit/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rutbergphilip/noteit/compare/v0.2.0...v0.3.0
