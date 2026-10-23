@@ -7,6 +7,52 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- Import from Evernote. Choose one or more `.enex` files, or a folder of them, in File › Import…. Each file becomes a new notebook and folders become notebooks around them; a name already in use gets a number, such as “Work 2”. Notes keep their dates, tags, checklists, images and attachments, reminders and links to each other.
+- Import from Notion. Choose the `.zip` from Notion's Export › Markdown & CSV in File › Import…. Pages keep their images and links to each other, subpages go into a new notebook named after their top page (a name already in use gets a number, such as “Projects 2”), and databases become tables.
+- `noteit://` links. Open a note, search, or create and add to notes from Shortcuts, Raycast, Alfred, scripts and web pages. Links that create or add to a note ask first; you can turn that off in Settings › Integrations.
+- Copy Note Link (⌃⌘L) in the Edit menu copies a link to the current note.
+- Local API. Turn on Allow apps on this Mac to use NoteIt in Settings › Integrations, and scripts, command line tools and browser extensions on this Mac can read and change your notes. Apps pair with a code that NoteIt shows, and the same settings list every connected app so you can revoke one, or make a token for your own scripts. The command palette has Turn Local API On and Off.
+- The `noteit` command line tool. Create, append to, list, search, show, edit and delete notes from Terminal and your scripts, with `--json` for machine-readable output. Install it from Settings › Integrations or with Install Command Line Tool… in the command palette, then run `noteit auth login` and enter the code NoteIt shows. Installing it also sets up tab completion for zsh, bash and fish, including note ids, notebooks and tags while NoteIt is running; zsh needs `autoload -Uz compinit && compinit` in `~/.zshrc` and bash needs bash-completion 2; `noteit help completion` has the details.
+- Spotlight. Your notes now show up in Spotlight by title and text, and choosing one opens it in NoteIt. Notes in Recently Deleted and locked notes stay out. You can leave out the note text, rebuild the index or turn it off in Settings › Integrations.
+- Shortcuts actions. Create Note, Append to Note, Open Note, Find Notes and Get Note Text are in the Shortcuts app, and you can say “Create a note in NoteIt”, “Search NoteIt” or “Add to a note in NoteIt” to Siri.
+- Daily notes from scripts and Shortcuts. `noteit today` prints today's daily note or adds a line to it, as does `noteit append --today`, and there's an Append to Daily Note action in Shortcuts, `noteit://daily` links and Local API routes for it. Lines are added with the time, and a new daily note starts from your daily note template.
+- Links between notes. Type `[[` to pick a note, or one of its headings after `#`, and press ↩ to link it. Edit › Link to Note… (⇧⌘K) links the selected text. Clicking a link to a note that doesn't exist yet creates it.
+- Links and Outline (⌥⌘I). See the notes that link to the open note, with a line of context, the links in it, mentions of its title that aren't links yet (link them with one click) and its headings. Go Back and Go Forward (⌃⌘← and ⌃⌘→) move through the notes you've opened.
+- When you rename a note, NoteIt offers to update the text of the links to it, and you can undo it.
+- Daily notes. Open Today's Note (⌃⌘T), the Today row in the sidebar, or an optional global hotkey open today's note, creating it in a Daily Notes notebook the first time. File › Daily Note for Date… opens a calendar, and ‹ › in a daily note's header go to the day before and after. Choose the notebook, title format and template in Settings › Editor.
+- Templates. Notes in the Templates notebook can start new notes with New Note from Template… (⌥⌘N) or be added to the open note with Edit › Insert Template…. Templates can fill in the date, time, title and clipboard and place the cursor, and each notebook can have a default template for its new notes.
+- Markdown export keeps links between notes as `[[wiki links]]`, and importing a folder of Markdown files or an Obsidian vault turns `[[wiki links]]` back into links.
+- The Local API can list a note's backlinks, links and outline, list templates and create a note from a template.
+- Nested notebooks. Put notebooks inside other notebooks by dragging them in the sidebar, with Move To, or by choosing where it goes in the notebook's settings. A notebook shows the notes of the notebooks inside it. Exporting a nested notebook as Markdown makes matching folders, and importing a folder of Markdown files keeps its subfolders as nested notebooks.
+- Nested tags. Write `#work/clients` and the sidebar shows clients under work; choosing a tag shows the notes of the tags under it too. Tags show as chips in the note list, and typing `#` suggests the tags you already use.
+- Rename, merge and delete tags from the sidebar. NoteIt changes the tag in every note that has it and you can undo it.
+- Smart folders. Save a search as a smart folder (New Smart Folder… or Save Search as Smart Folder…) and it stays in the sidebar, up to date, on every Mac you sync with.
+- Search filters. Narrow a search with `tag:`, `notebook:`, `is:todo`, `is:done`, `is:pinned`, `has:attachment`, `due:today`, dates and more, combine them with `OR`, leave words out with `-` and search exact phrases with quotes.
+- Tasks (⇧⌘T). See the checklist items from all your notes in one place, grouped into Overdue, Today, Upcoming, Later and No Date. Check them off there or jump to the note. Give an item a due date with Set Due Date… (⇧⌘D) or by writing `@due(2026-10-24)`.
+- Reminders. Add Reminder… (⌃⌘R) or `@remind(2026-10-24 09:00)` in a note gives you a notification at that time. When you sync several Macs, only one of them shows it.
+- Quick Capture offers to remind you when the first line has a date, such as "Call the bank tomorrow".
+- Clicking a reminder in a note lets you mark it done. The first reminder you add offers to open NoteIt at login, since reminders only ring while NoteIt is running.
+- The Tasks view tells you when notifications are off for NoteIt, with a button to open System Settings.
+- The Local API can rename, merge and delete tags, move notebooks, list and change smart folders, and list, check off and set due dates for tasks.
+
+### Changed
+
+- Links and Outline explains itself: each section says what it lists and how to fill it (type `[[` to link a note), the section titles and buttons have tooltips, and found unlinked mentions say that Link turns them into links.
+- New libraries start with a refreshed welcome note, and no longer include a sample shortcuts note or Shortcuts notebook.
+- Search puts the best matches first, shows a line of matching text under each note and highlights the words you searched for in the list and in the open note. While searching, the sort menu switches between Best Match and Date Edited.
+- Local API search ranks its results like the app does and reports where each one matched, and a notebook filter includes the notebooks inside it.
+
+### Fixed
+
+- Sidebar icons turn white on the selected row, so a notebook icon in a colour close to the selection colour (such as a blue notebook) stays visible, including notebooks inside other notebooks, tags and smart folders.
+- With no note open, the editor is now simply blank instead of repeating the note list's “No Notes Yet” and New Note button.
+- Going from Tasks to a notebook, tag or other list no longer leaves a note from elsewhere open; the first note in the list opens instead.
+- A notebook with notebooks inside it now says so under its title (“including nested notebooks”), and notes from those inner notebooks show which notebook they're in.
+- HTML export in Dark Mode no longer gives captured text, or notes made in Open Quickly, a fixed colour that could come out near-white.
+- NoteIt no longer freezes when a sync folder on a NAS or network drive becomes unreachable. Sync shows “Can't reach” the folder and picks up again when it's back, and notes on this Mac are never removed because the folder couldn't be read.
+
 ## [0.5.0] - 2026-10-20
 
 ### Added

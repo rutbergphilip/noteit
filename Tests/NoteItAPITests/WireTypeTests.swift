@@ -31,6 +31,21 @@ final class WireTypeTests: XCTestCase {
         XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"error":{"code":"not_found","message":"Gone"}}"#)
     }
 
+    func testNullableKeysEncodeExplicitNull() throws {
+        let page = String(decoding: try APIJSON.encoder().encode(Page<String>(items: ["a"], nextCursor: nil)), as: UTF8.self)
+        XCTAssertTrue(page.contains(#""nextCursor":null"#), page)
+        let notebooks = String(decoding: try APIJSON.encoder().encode(NotebooksResponseDTO(notebooks: [], defaultNotebookID: nil)),
+                               as: UTF8.self)
+        XCTAssertTrue(notebooks.contains(#""defaultNotebookID":null"#), notebooks)
+
+        let decoder = APIJSON.decoder()
+        XCTAssertEqual(try decoder.decode(Page<String>.self, from: Data(#"{"items":[]}"#.utf8)), Page(items: [], nextCursor: nil))
+        XCTAssertEqual(try decoder.decode(NotebooksResponseDTO.self, from: Data(#"{"notebooks":[]}"#.utf8)),
+                       NotebooksResponseDTO(notebooks: [], defaultNotebookID: nil))
+        XCTAssertEqual(try decoder.decode(Page<String>.self, from: Data(#"{"items":["a"],"nextCursor":"c"}"#.utf8)),
+                       Page(items: ["a"], nextCursor: "c"))
+    }
+
     func testHighlightEncodesRangesAsPairs() throws {
         let highlight = HighlightDTO(field: .body, ranges: [[0, 3], [7, 2]])
         let object = try jsonObject(highlight)

@@ -162,12 +162,26 @@ struct DocExporter {
             }
             let marks = marks(attrs, kind: kind, checked: checked)
             let pieces = ns.substring(with: run).components(separatedBy: "\u{2028}")
+            var location = run.location
             for (index, piece) in pieces.enumerated() {
-                if index > 0 { content.append(.hardBreak) }
+                if index > 0 {
+                    content.append(isSoftBreak(at: location) ? .softBreak : .hardBreak)
+                    location += 1
+                }
                 appendText(piece, marks: marks)
+                location += (piece as NSString).length
             }
         }
         return content
+    }
+
+    /// Only a U+2028 marked `noteItSoftBreak` whose neighbours are not: text typed next to it may have inherited it.
+    private func isSoftBreak(at location: Int) -> Bool {
+        guard text.attribute(.noteItSoftBreak, at: location, effectiveRange: nil) != nil else { return false }
+        if location > 0, text.attribute(.noteItSoftBreak, at: location - 1, effectiveRange: nil) != nil { return false }
+        if location + 1 < text.length,
+           text.attribute(.noteItSoftBreak, at: location + 1, effectiveRange: nil) != nil { return false }
+        return true
     }
 
     private func marks(_ attrs: [NSAttributedString.Key: Any], kind: BlockKind, checked: Bool) -> [Mark] {
@@ -187,7 +201,7 @@ struct DocExporter {
             marks.append(.link(href: href))
         }
         if let color = attrs[.foregroundColor] as? NSColor, !(checked && DocParagraphModel.isCheckedGray(color)),
-           let hex = ConverterSupport.hex(color) {
+           !DocParagraphModel.isSystemTextColor(color), let hex = ConverterSupport.hex(color) {
             marks.append(.textColor(hex))
         }
         if let color = attrs[.backgroundColor] as? NSColor, !DocParagraphModel.isLegacyInlineCodeBackground(color),

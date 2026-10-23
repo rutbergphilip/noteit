@@ -199,6 +199,6 @@ final class DerivedIndexRegistryTests: XCTestCase {
         XCTAssertTrue(store.canRegisterDerivedIndex("other"))
         store.registerDerivedIndex(RecordingDerivedIndex("other"))
         XCTAssertFalse(store.canRegisterDerivedIndex("other"))
-        XCTAssertEqual(store.derivedIndexes.map(\.indexID), ["recording", "other"])
+        XCTAssertEqual(store.derivedIndexes.map(\.indexID), ["search", "recording", "other"])
     }
 }

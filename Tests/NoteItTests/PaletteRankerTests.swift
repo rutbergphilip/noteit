@@ -29,7 +29,7 @@ final class PaletteRankerTests: XCTestCase {
         notes: [NoteMeta] = [],
         notebooks: [Notebook] = [],
         commands: [PaletteCommandInfo] = [],
-        bodyMatches: Set<UUID> = [],
+        bodyMatches: [UUID: Double] = [:],
         limit: Int = 50
     ) -> [PaletteItem] {
         PaletteRanker.items(query: query, notes: notes, notebooks: notebooks, commands: commands,
@@ -146,7 +146,7 @@ final class PaletteRankerTests: XCTestCase {
         let weakTitle = note("Some very long title that barely matches recipes later on", minutesAgo: 5)
         let strongTitle = note("Recipes 2026", minutesAgo: 10)
         let ignored = note("Unrelated", minutesAgo: 0)
-        let items = ranked("recipes", notes: [bodyOnly, weakTitle, strongTitle, ignored], bodyMatches: [bodyOnly.id])
+        let items = ranked("recipes", notes: [bodyOnly, weakTitle, strongTitle, ignored], bodyMatches: [bodyOnly.id: 1])
         let ids = items.map(\.id)
         XCTAssertEqual(ids, ["note:\(strongTitle.id.uuidString)", "note:\(weakTitle.id.uuidString)",
                              "note:\(bodyOnly.id.uuidString)", "create"])
@@ -265,5 +265,26 @@ final class PaletteRankerTests: XCTestCase {
         print("Palette warm ranking of \(notes.count) titles: \(Int(elapsed * 1000)) ms")
         XCTAssertEqual(items.count, 51)
         XCTAssertLessThan(elapsed, 0.5)
+    }
+
+    // MARK: - Smart folders and tags
+
+    func testSmartFolderRanksByName() {
+        let folder = SmartFolder(name: "Open tasks", query: "is:todo", sortIndex: 0)
+        let items = PaletteRanker.items(query: "open tas", notes: [note("Groceries")], notebooks: [], commands: [command("x", "Open Quickly…")],
+                                        bodyMatches: [:], smartFolders: [folder])
+        XCTAssertEqual(items.first?.kind, .smartFolder(folder.id))
+        XCTAssertEqual(items.first?.subtitle, "Smart Folder · is:todo")
+        XCTAssertFalse(PaletteRanker.items(query: "todo", notes: [], notebooks: [], commands: [], bodyMatches: [:],
+                                           smartFolders: [folder]).contains { $0.kind == .smartFolder(folder.id) })
+    }
+
+    func testTagRanksByPathWithCount() {
+        let items = PaletteRanker.items(query: "work/ac", notes: [], notebooks: [], commands: [], bodyMatches: [:],
+                                        tags: [("work", 3), ("work/acme", 1), ("home", 2)])
+        XCTAssertEqual(items.first?.kind, .tag("work/acme"))
+        XCTAssertEqual(items.first?.title, "#work/acme")
+        XCTAssertEqual(items.first?.subtitle, "1 note")
+        XCTAssertFalse(items.contains { $0.kind == .tag("home") })
     }
 }

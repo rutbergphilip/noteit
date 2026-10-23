@@ -7,6 +7,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | Shortcut | Action |
 |---|---|
 | ⌘N | New note in the selected notebook, with the cursor in the editor |
+| ⌥⌘N | New Note from Template… (type to find a template; text that matches none becomes the new note's title) |
 | ⇧⌘N | New notebook… |
 | ⌘O | Open Quickly… (see [Command palette](#command-palette)) |
 | ⇧⌘P | Command Palette… |
@@ -16,6 +17,11 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 | ⇧⌘S | Export note as… |
 | ⌘P | Print the note |
 | ⌥⇧⌘C | Copy as Markdown (the selection, or the whole note) |
+| ⌃⌘L | Copy Note Link (a `noteit://` link to the current note) |
+| ⌃⌘← / ⌃⌘→ | Go Back / Go Forward through the notes you opened in this window |
+| ⌃⌘T | Open Today's Note (creates it in Daily Notes the first time) |
+| ⇧⌘T | Tasks: every checkbox from every note, grouped by due date |
+| ⌥⌘I | Show or hide Links and Outline (backlinks, the links in this note and its headings) |
 | ⌘0 | Show the main window (*NoteIt Notes* in the Window menu) |
 | ⌘, | Settings |
 | ⌘⌫, or ⌫ in the note list | Move the selected note to Recently Deleted (in Recently Deleted: delete it now, after confirming) |
@@ -24,7 +30,7 @@ Everything in NoteIt can be done from the keyboard. This page lists every shortc
 
 ### Changing menu shortcuts
 
-The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Version History… and Delete Note (⌘⌫) can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
+The menu shortcuts above for New Note, New Notebook…, Open Quickly…, Command Palette…, Search Notes, Find…, Find and Replace…, Export Note As…, Print…, Copy as Markdown, Copy Note Link, Version History…, Delete Note (⌘⌫), Go Back, Go Forward, Link to Note…, Show Links and Outline, New Note from Template…, Open Today's Note, Daily Note for Date…, New Smart Folder…, Save Search as Smart Folder… (these last three have no shortcut until you set one), Tasks, Set Due Date… and Add Reminder… can be changed in **Settings › Shortcuts › In NoteIt**. The menus and the command palette pick up the change right away.
 
 When recording one:
 
@@ -45,6 +51,7 @@ The button next to a changed shortcut puts back its default, and **Restore Defau
 | ⇧⌘E | Inline code |
 | ⇧⌘H | Highlight on or off |
 | ⌘K | Link… |
+| ⇧⌘K | Link to Note… (the selection becomes the link's text) |
 | ⌘+ / ⌘− | Bigger / smaller text |
 | ⌥⌘\\ | Clear formatting |
 
@@ -71,6 +78,8 @@ If you've bound ⇧⌘V yourself, as a menu shortcut or a global hotkey, it keep
 | ⇧⌘7 | Numbered list |
 | ⇧⌘L | Checklist |
 | ⇧⌘U | Check or uncheck a checklist item |
+| ⇧⌘D | Set Due Date… for the checklist item under the cursor (Edit › Task) |
+| ⌃⌘R | Add Reminder… for the line under the cursor, using the date written in it (Edit › Task) |
 | ⌘] / ⌘[ | Indent / outdent |
 | Tab / ⇧Tab | Indent or outdent a list item; move to the next or previous table cell |
 | ⇧⌘{ / ⇧⌘\| / ⇧⌘} | Align left / center / right |
@@ -134,8 +143,27 @@ And these anywhere in a line:
 | `*italic*` | *italic* |
 | `` `code` `` | `code` |
 | `~~strike~~` | ~~strike~~ |
+| `[[Note title]]` | A link to that note (`[[Title#Heading]]` for a heading, `[[Title\|text]]` to show other text) |
 
 Each conversion can be undone with ⌘Z.
+
+Dates in words become full dates when you type the closing `)`: `@due(fri)`, `@due(tomorrow)`, `@due(+3d)` or `@remind(tomorrow 9am)` turn into `@due(2026-10-23)` and so on. ⌘Z puts back what you typed.
+
+### Tasks view
+
+| Shortcut | Action |
+|---|---|
+| Space | Check or uncheck the selected task |
+| ↩ or double-click | Open the task's note in All Notes |
+| ⌘Z | Undo the last check |
+
+### Note link suggestions
+
+Typing `[[` opens a list of notes under the caret that filters as you type. ↑/↓ (or ⌃P/⌃N) move through it, ↩ or Tab inserts the link, and Esc closes it and leaves what you typed. After `#` the list shows the note's headings.
+
+### Template picker and daily calendar
+
+In New Note from Template… and Edit › Insert Template…, ↑/↓ move through the templates, ↩ uses the highlighted one and Esc cancels. In File › Daily Note for Date…, the arrow keys move by a day (← →) or a week (↑ ↓), ↩ opens that day's note and Esc closes the calendar.
 
 ## Menu bar panel
 
@@ -169,6 +197,8 @@ These work from any app. They're **unbound by default**, so NoteIt never takes o
 | Open Quickly | Opens the command palette to find notes, notebooks and commands |
 | Command Palette | Opens the command palette with `>` typed, to find commands only |
 | Capture Selection | Saves the text selected in the app you're in as a new note, with a link back to where it came from |
+| Open Today's Note | Brings NoteIt forward with today's daily note open, creating it if needed |
+| Show Tasks | Brings NoteIt forward with Tasks selected |
 
 Pressed while you're in another app, the palette opens over that app. Esc closes it and takes you back there.
 

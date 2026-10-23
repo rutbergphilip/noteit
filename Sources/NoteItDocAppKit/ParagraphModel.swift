@@ -142,6 +142,12 @@ public enum DocParagraphModel {
             && abs(c.blueComponent - l.blueComponent) < tolerance && abs(c.alphaComponent - l.alphaComponent) < tolerance
     }
 
+    /// The appearance-dependent `labelColor` / `textColor` that captures stored up to 0.5.0; they mean the default text colour.
+    public static func isSystemTextColor(_ color: NSColor) -> Bool {
+        guard color.type == .catalog, color.catalogNameComponent == "System" else { return false }
+        return color.colorNameComponent == "labelColor" || color.colorNameComponent == "textColor"
+    }
+
     public static func isCheckedGray(_ color: NSColor) -> Bool {
         if color == checkedTextColor { return true }
         guard let rgb = color.usingColorSpace(.sRGB) else { return false }
@@ -274,4 +280,6 @@ extension NSAttributedString.Key {
     /// A code paragraph's `codeBlock.language` identifier as written, known to `CodeLanguage` or not (foundations
     /// Task 2.3). Value: String. The only paragraph attribute NoteItDocAppKit adds.
     public static let noteItCodeLanguageID = NSAttributedString.Key("NoteItCodeLanguageID")
+    /// On a U+2028 that came from a `softBreak`, so it is written back as one; a typed line break has none. Value: true.
+    public static let noteItSoftBreak = NSAttributedString.Key("NoteItSoftBreak")
 }

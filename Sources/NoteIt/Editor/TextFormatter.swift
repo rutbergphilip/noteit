@@ -403,7 +403,7 @@ extension NoteItTextView {
                 counters[level] = expected
                 if expected != n {
                     changed = true
-                    let markerAttrs = storage.attributes(at: cur.location, effectiveRange: nil)
+                    let markerAttrs = EditorStyle.forInsertion(storage.attributes(at: cur.location, effectiveRange: nil))
                     edits.append(makeEdit(cur, newMarker: EditorStyle.markerText(.numbered(expected), level: level),
                                           markerAttributes: markerAttrs, paragraphStyle: nil))
                 } else {
@@ -511,7 +511,7 @@ extension NoteItTextView {
         }
         let end = NSMaxRange(para)
         let endsWithNewline = end > 0 && nsString.character(at: end - 1) == 10
-        let prefix = endsWithNewline ? NSAttributedString() : NSAttributedString(string: "\n", attributes: attributes(ofParagraph: para))
+        let prefix = endsWithNewline ? NSAttributedString() : NSAttributedString(string: "\n", attributes: EditorStyle.forInsertion(attributes(ofParagraph: para)))
         let followedByParagraph = end < storage.length
         return (end, prefix, followedByParagraph && blockKind(ofParagraph: paragraphRange(at: end)) == .body
                 && content(of: paragraphRange(at: end)).isEmpty)
@@ -769,7 +769,8 @@ extension NoteItTextView {
         let s = NSMutableAttributedString()
         var attrs = typingAttributes
         attrs[.link] = nil
-        for (i, url) in urls.enumerated() {
+        let refused = urls.filter(NoteItTextView.isOversized)
+        for (i, url) in urls.filter({ !refused.contains($0) }).enumerated() {
             guard let wrapper = try? FileWrapper(url: url, options: .immediate) else { continue }
             wrapper.preferredFilename = url.lastPathComponent
             let attachment = NSTextAttachment(fileWrapper: wrapper)
@@ -778,6 +779,7 @@ extension NoteItTextView {
             piece.addAttributes(attrs, range: NSRange(location: 0, length: piece.length))
             s.append(piece)
         }
+        if let first = refused.first { refuseAttachment(named: first.lastPathComponent) }
         guard s.length > 0 else { return }
         window?.makeFirstResponder(self)
         breakUndoCoalescing()

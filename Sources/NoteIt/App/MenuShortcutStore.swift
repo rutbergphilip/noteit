@@ -36,6 +36,7 @@ final class MenuShortcutStore: ObservableObject {
         self.table = table
         overrides = Self.loadOverrides(from: defaults)
         table?.update(overrides)
+        if overrides != defaults.data(forKey: Self.defaultsKey).map(MenuShortcutCoding.decode) ?? [:] { save() }
     }
 
     func current(_ command: MenuShortcutCommand) -> MenuShortcut? {
@@ -49,7 +50,7 @@ final class MenuShortcutStore: ObservableObject {
 
     /// Leaves the command without a shortcut.
     func clear(_ command: MenuShortcutCommand) {
-        overrides[command] = .noShortcut
+        overrides[command] = command.defaultShortcut == nil ? nil : .noShortcut
         save()
     }
 
@@ -62,8 +63,8 @@ final class MenuShortcutStore: ObservableObject {
 
     /// The command now using `command`'s default shortcut, which stops it from being restored.
     func resetBlocker(for command: MenuShortcutCommand) -> MenuShortcutCommand? {
-        guard isCustomized(command) else { return nil }
-        return self.command(using: command.defaultShortcut, excluding: command)
+        guard isCustomized(command), let shortcut = command.defaultShortcut else { return nil }
+        return self.command(using: shortcut, excluding: command)
     }
 
     func resetAll() {
@@ -76,10 +77,11 @@ final class MenuShortcutStore: ObservableObject {
     var hasCustomizations: Bool { !overrides.isEmpty }
 
     func command(using shortcut: MenuShortcut, excluding excluded: MenuShortcutCommand? = nil) -> MenuShortcutCommand? {
-        for command in MenuShortcutCommand.allCases where command != excluded {
-            if current(command) == shortcut { return command }
-        }
-        return nil
+        commands(using: shortcut, excluding: excluded).first
+    }
+
+    func commands(using shortcut: MenuShortcut, excluding excluded: MenuShortcutCommand? = nil) -> [MenuShortcutCommand] {
+        MenuShortcutCommand.allCases.filter { $0 != excluded && current($0) == shortcut }
     }
 
     private func save() {
@@ -112,7 +114,22 @@ final class MenuShortcutStore: ObservableObject {
 
     nonisolated static func loadOverrides(from defaults: UserDefaults) -> [MenuShortcutCommand: MenuShortcutOverride] {
         guard let data = defaults.data(forKey: defaultsKey) else { return [:] }
-        return MenuShortcutCoding.decode(data)
+        return clearingTakenDefaults(MenuShortcutCoding.decode(data))
+    }
+
+    /// A command added in an update has no saved entry; when one of the user's own shortcuts already uses its
+    /// default, it starts without a shortcut instead of clashing.
+    nonisolated static func clearingTakenDefaults(_ overrides: [MenuShortcutCommand: MenuShortcutOverride])
+        -> [MenuShortcutCommand: MenuShortcutOverride] {
+        let taken = overrides.values.compactMap { override -> MenuShortcut? in
+            if case .shortcut(let shortcut) = override { return shortcut }
+            return nil
+        }
+        var result = overrides
+        for command in MenuShortcutCommand.allCases where overrides[command] == nil {
+            if let shortcut = command.defaultShortcut, taken.contains(shortcut) { result[command] = .noShortcut }
+        }
+        return result
     }
 }
 

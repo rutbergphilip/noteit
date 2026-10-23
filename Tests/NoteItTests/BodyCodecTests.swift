@@ -31,7 +31,10 @@ final class BodyCodecTests: XCTestCase {
             let text = MarkdownReader.attributedString(from: markdown, resolveImage: { _ in nil })
             XCTAssertEqual(BodyCodec.plainText(of: text), item["plainText"], markdown)
             XCTAssertEqual(NoteExporter.plainText(text), item["plainText"], markdown)
-            XCTAssertEqual(BodyCodec.html(of: text, title: "Fixture"), item["html"], markdown)
+            // Heading ids were added after the golden file was captured.
+            let html = BodyCodec.html(of: text, title: "Fixture")
+                .replacingOccurrences(of: #"<h([1-3]) id="[^"]*""#, with: "<h$1", options: .regularExpression)
+            XCTAssertEqual(html, item["html"], markdown)
             XCTAssertEqual(BodyCodec.html(of: text, title: "Fixture"), HTMLWriter.write(text, title: "Fixture"), markdown)
         }
     }
@@ -40,7 +43,8 @@ final class BodyCodecTests: XCTestCase {
         let text = try fullNote()
         for codec in BodyCodec.allCases {
             let url = dir.appendingPathComponent("note.\(codec.fileExtension)")
-            try codec.write(text, to: url)
+            try codec.write(text, meta: NoteMeta(id: UUID(), title: "", preview: "", isPinned: false, createdAt: Date(),
+                                                 updatedAt: Date(), tags: []), to: url)
             let read = try codec.read(at: url)
             XCTAssertTrue(BodyCodec.semanticallyEqual(read.text, text), "\(codec)")
             XCTAssertEqual(read.extras, .empty, "\(codec)")

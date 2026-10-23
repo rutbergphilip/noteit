@@ -9,6 +9,7 @@ final class PaletteModelTests: XCTestCase {
     private let fm = FileManager.default
     private var calls: [String] = []
     private var deferred: [@MainActor () -> Void] = []
+    private var stores: [NoteStore] = []
 
     override func setUpWithError() throws {
         base = fm.temporaryDirectory.appendingPathComponent("noteit-palette-model-\(UUID().uuidString)", isDirectory: true)
@@ -18,11 +19,16 @@ final class PaletteModelTests: XCTestCase {
     }
 
     override func tearDownWithError() throws {
+        stores.forEach { $0.flush() }
+        stores = []
+        deferred = []
         try? fm.removeItem(at: base)
     }
 
     private func makeStore() -> NoteStore {
-        NoteStore(location: LibraryLocation(url: base.appendingPathComponent("lib", isDirectory: true), seedsFreshLibrary: false))
+        let store = NoteStore(location: LibraryLocation(url: base.appendingPathComponent("lib", isDirectory: true), seedsFreshLibrary: false))
+        stores.append(store)
+        return store
     }
 
     private func makeModel(_ store: NoteStore) -> PaletteModel {

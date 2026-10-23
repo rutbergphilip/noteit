@@ -7,13 +7,14 @@ final class SettingsTabTests: XCTestCase {
         XCTAssertEqual(SettingsView.Tab.allCases.map(\.rawValue), URLCommand.settingsTabs)
     }
 
-    func testAvailableTabsAreTheBuiltFive() {
-        XCTAssertEqual(SettingsView.Tab.allCases.filter(\.isAvailable), [.general, .shortcuts, .editor, .sync, .about])
+    func testAvailableTabsAreTheBuiltSix() {
+        XCTAssertEqual(SettingsView.Tab.allCases.filter(\.isAvailable), [.general, .shortcuts, .editor, .sync, .integrations, .about])
     }
 
     func testHiddenOrUnknownStoredValueOpensGeneral() {
         XCTAssertEqual(SettingsView.Tab.resolved("plugins"), .general)
-        XCTAssertEqual(SettingsView.Tab.resolved("integrations"), .general)
+        XCTAssertEqual(SettingsView.Tab.resolved("smart"), .general)
+        XCTAssertEqual(SettingsView.Tab.resolved("integrations"), .integrations)
         XCTAssertEqual(SettingsView.Tab.resolved("nonsense"), .general)
         XCTAssertEqual(SettingsView.Tab.resolved("sync"), .sync)
         XCTAssertEqual(SettingsView.Tab.plugins.availableOrGeneral, .general)

@@ -36,6 +36,16 @@ final class ConverterCodeBlockTests: XCTestCase {
         XCTAssertNotEqual(SemanticText(text), SemanticText(code([("ab", [:])])), "the comparer sees colors")
     }
 
+    func testSystemTextColorsAreDefaultButExplicitBlackIsKept() throws {
+        let label = NSAttributedString(string: "a", attributes: [.foregroundColor: NSColor.labelColor])
+        let rtf = try label.data(from: NSRange(location: 0, length: 1), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
+        let saved = try XCTUnwrap(NSAttributedString(rtf: rtf, documentAttributes: nil)?.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        let text = code([("a", [.foregroundColor: NSColor.labelColor]), ("b", [.foregroundColor: NSColor.textColor]),
+                         ("c", [.foregroundColor: saved]), ("d", [.foregroundColor: NSColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)])])
+        let doc = try DocConverter.export(text, styles: styles)
+        XCTAssertEqual(doc.doc, .doc([.codeBlock(align: nil, language: nil, content: [.text("abc", marks: []), .text("d", marks: [.textColor("#000000")])])]))
+    }
+
     func testHighlight() throws {
         let text = code([("a", [.backgroundColor: NSColor(srgbRed: 1, green: 1, blue: 0, alpha: 1)])])
         try check(text, [.codeBlock(align: nil, language: nil, content: [.text("a", marks: [.highlight("#FFFF00")])])])

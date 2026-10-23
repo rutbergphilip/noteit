@@ -1,4 +1,5 @@
 import AppKit
+import CoreSpotlight
 import NoteItSync
 import SwiftUI
 
@@ -7,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     static let hideDockIconKey = PrefKey.hideDockIcon
 
     private var observers: [NSObjectProtocol] = []
+    private var reminderScheduler: ReminderScheduler?
     private var lastHideDockIcon: Bool?
     /// Last (hideDockIcon, showMenuBarIcon) pair seen by the defaults observer.
     private var lastVisibilityPrefs: (hide: Bool, showMenuBar: Bool)?
@@ -29,7 +31,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             PrefKey.showMenuBarIcon: true,
             PrefKey.editorFontSize: PrefDefault.editorFontSize,
             PrefKey.captureIncludesBrowserLinks: true,
+            PrefKey.urlSchemeChangesWithoutAsking: false,
+            PrefKey.localAPIEnabled: false,
+            PrefKey.localAPIPort: 0,
+            PrefKey.spotlightEnabled: true,
+            PrefKey.spotlightIncludesText: true,
         ])
+        URLSchemeHandler.shared.install()
         applyActivationPolicy()
     }
 
@@ -38,9 +46,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Unbundled runs (`swift run`) have no .icns; show the same artwork in the Dock.
             NSApp.applicationIconImage = artwork
         }
+        NoteStore.shared.installLinkIndex()
+        SpotlightIndexer.shared.start()
         NoteStore.shared.startRecentlyDeletedMaintenance()
+        NoteStore.shared.onMarkdownFolderMissing = { url in
+            DispatchQueue.main.async { LibraryLauncher.contentRootLost(url, dataDir: NoteStore.shared.rootURL) }
+        }
+        NoteStore.shared.onManyNotesDisappeared = { _ in
+            DispatchQueue.main.async { MassDeletionGuard.askIfNeeded(NoteStore.shared) }
+        }
+        NoteStore.shared.onTemplateNotRead = { message in
+            let alert = NSAlert()
+            alert.messageText = "The template couldn't be read"
+            alert.informativeText = message
+            if let window = NSApp.keyWindow { alert.beginSheetModal(for: window) } else { alert.runModal() }
+        }
+        NoteStore.shared.startWatchingMarkdownFolder()
+        NoteStore.shared.askAboutHeldDeletions()
+        DispatchQueue.main.async { PreviousLibrary.askIfDue(dataDir: NoteStore.shared.rootURL) }
+        AutomationService.shared.staged.purgeExpired(now: Date())
         _ = AppUpdater.shared
+        LinkingAPIRoutes.register(in: .shared, store: NoteStore.shared)
+        OrganiseRoutes.register(in: .shared, store: NoteStore.shared)
+        _ = LocalAPIController.shared
         PasteAndMatchStyleShortcut.install()
+        ReminderNotifications.shared.configure()
+        let scheduler = ReminderScheduler(store: .shared, notifications: ReminderNotifications.shared,
+                                          claims: ReminderClaims.live(.shared),
+                                          defaults: .standard, clock: Date.init)
+        reminderScheduler = scheduler
+        scheduler.start()
         let center = NotificationCenter.default
 
         // Notification callbacks never assume main-actor isolation: they hop with a Task instead, because
@@ -80,6 +115,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 PaletteController.shared.hotkeyToggle(mode: .commands)
             case .captureSelection:
                 CaptureController.shared.captureSelection()
+            case .openToday:
+                WindowRouter.showMainWindow()
+                NoteStore.shared.openDailyNote(for: Date())
+                WindowRouter.focusEditor()
+            case .showTasks:
+                WindowRouter.showMainWindow()
+                NoteStore.shared.showTasks()
             }
         }
         HotkeyManager.shared.start()
@@ -95,7 +137,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        NoteStore.shared.flush()
+        NoteStore.shared.stopWatchingMarkdownFolder()
+        NoteStore.shared.flushBeforeQuit()
+        SpotlightIndexer.shared.finishBeforeQuit()
+        AutomationService.shared.staged.removeAll()
+        LocalAPIController.shared.shutDown()
+    }
+
+    func application(_ application: NSApplication, continue userActivity: NSUserActivity,
+                     restorationHandler: @escaping ([any NSUserActivityRestoring]) -> Void) -> Bool {
+        guard userActivity.activityType == CSSearchableItemActionType,
+              let raw = userActivity.userInfo?[CSSearchableItemActivityIdentifier] as? String,
+              let id = UUID(uuidString: raw) else { return false }
+        WindowRouter.showMainWindow()
+        NoteStore.shared.reveal(id)
+        return true
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {

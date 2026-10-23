@@ -9,6 +9,7 @@ let package = Package(
         .library(name: "NoteItCore", targets: ["NoteItCore"]),
         .library(name: "NoteItSync", targets: ["NoteItSync"]),
         .library(name: "NoteItDoc", targets: ["NoteItDoc"]),
+        .library(name: "NoteItMarkdown", targets: ["NoteItMarkdown"]),
         .library(name: "NoteItAPI", targets: ["NoteItAPI"])
     ],
     dependencies: [
@@ -23,6 +24,11 @@ let package = Package(
             name: "NoteItDoc",
             dependencies: ["NoteItCore"],
             path: "Sources/NoteItDoc"
+        ),
+        .target(
+            name: "NoteItMarkdown",
+            dependencies: ["NoteItDoc"],
+            path: "Sources/NoteItMarkdown"
         ),
         .target(
             name: "NoteItDocAppKit",
@@ -54,6 +60,7 @@ let package = Package(
                 "NoteItCore",
                 "NoteItDoc",
                 "NoteItDocAppKit",
+                "NoteItMarkdown",
                 "NoteItSync",
                 "NoteItAPI",
                 .product(name: "Sparkle", package: "Sparkle")
@@ -64,12 +71,19 @@ let package = Package(
         .testTarget(
             name: "NoteItCoreTests",
             dependencies: ["NoteItCore"],
-            path: "Tests/NoteItCoreTests"
+            path: "Tests/NoteItCoreTests",
+            resources: [.copy("Vectors")]
         ),
         .testTarget(
             name: "NoteItDocTests",
             dependencies: ["NoteItDoc", "NoteItDocTestSupport"],
             path: "Tests/NoteItDocTests"
+        ),
+        .testTarget(
+            name: "NoteItMarkdownTests",
+            dependencies: ["NoteItMarkdown", "NoteItDocTestSupport"],
+            path: "Tests/NoteItMarkdownTests",
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "NoteItDocAppKitTests",
@@ -83,13 +97,18 @@ let package = Package(
         ),
         .testTarget(
             name: "NoteItTests",
-            dependencies: ["NoteIt", "NoteItCore", "NoteItDoc", "NoteItDocAppKit", "NoteItSync"],
+            dependencies: ["NoteIt", "NoteItCore", "NoteItDoc", "NoteItDocAppKit", "NoteItMarkdown", "NoteItSync"],
             path: "Tests/NoteItTests"
         ),
         .testTarget(
             name: "NoteItAPITests",
             dependencies: ["NoteItAPI", "NoteItCore", "NoteItSync"],
             path: "Tests/NoteItAPITests"
+        ),
+        .testTarget(
+            name: "NoteItCLITests",
+            dependencies: ["NoteItCLI", "NoteItAPI", "NoteItSync"],
+            path: "Tests/NoteItCLITests"
         )
     ]
 )

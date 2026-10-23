@@ -7,12 +7,11 @@ struct SettingsView: View {
     enum Tab: String, Hashable, CaseIterable {
         case general, shortcuts, editor, sync, data, sharing, smart, integrations, plugins, about
 
-        /// False until the owner builds the tab: data (markdown-storage), sharing, smart (private-ai),
-        /// integrations (automation) and plugins.
+        /// False until the owner builds the tab: data (markdown-storage), sharing, smart (private-ai) and plugins.
         var isAvailable: Bool {
             switch self {
-            case .general, .shortcuts, .editor, .sync, .about: true
-            case .data, .sharing, .smart, .integrations, .plugins: false
+            case .general, .shortcuts, .editor, .sync, .integrations, .about: true
+            case .data, .sharing, .smart, .plugins: false
             }
         }
 
@@ -59,6 +58,9 @@ struct SettingsView: View {
             SyncSettingsView()
                 .tabItem { Label("Sync", systemImage: "arrow.triangle.2.circlepath.icloud") }
                 .tag(Tab.sync)
+            IntegrationsSettingsView()
+                .tabItem { Label("Integrations", systemImage: Tab.integrations.symbol) }
+                .tag(Tab.integrations)
             AboutSettingsView()
                 .tabItem { Label("About", systemImage: "info.circle") }
                 .tag(Tab.about)

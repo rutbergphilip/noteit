@@ -252,6 +252,9 @@ final class GoldenVectorTests: XCTestCase {
                                 tags: ["work/2026", "ideas"], revision: VectorIO.uuid("envelope-note-rev"))
         let notebook = Notebook(id: notebookID, name: "Home/Work", symbol: "folder", colorHex: "#3478F6", sortIndex: 2,
                                 revision: VectorIO.uuid("envelope-notebook-rev"), modifiedAt: VectorIO.epoch.addingTimeInterval(3_600))
+        let nestedNotebook = Notebook(id: VectorIO.uuid("envelope-notebook-nested"), name: "Clients", symbol: "folder", colorHex: "#34C759",
+                                      sortIndex: 0, revision: VectorIO.uuid("envelope-notebook-nested-rev"),
+                                      modifiedAt: VectorIO.epoch.addingTimeInterval(3_660), parent: notebookID)
         let noteMetaData = try LibraryCoding.encoder.encode(noteMeta)
         let body = Data("{\\rtf1\\ansi Plans}".utf8)
         let inputs: [(String, String, any Encodable)] = [
@@ -264,6 +267,9 @@ final class GoldenVectorTests: XCTestCase {
             ("notebook-envelope", RemoteLayout.meta(.notebook, notebookID),
              RemoteEnvelope(id: notebookID, kind: .notebook, revision: notebook.revision!, modifiedAt: notebook.modifiedAt!,
                             deviceID: "device-2", deviceName: "Laptop", meta: try LibraryCoding.encoder.encode(notebook))),
+            ("notebook-envelope-nested", RemoteLayout.meta(.notebook, nestedNotebook.id),
+             RemoteEnvelope(id: nestedNotebook.id, kind: .notebook, revision: nestedNotebook.revision!, modifiedAt: nestedNotebook.modifiedAt!,
+                            deviceID: "device-2", deviceName: "Laptop", meta: try LibraryCoding.encoder.encode(nestedNotebook))),
             ("tombstone", RemoteLayout.tombstone(noteID),
              Tombstone(id: noteID, kind: .note, deletedAt: VectorIO.epoch.addingTimeInterval(172_800.5), deviceID: "device-2",
                        deletedMetaETag: "\"5d41402abc4b2a76b9719d911017c592\"")),

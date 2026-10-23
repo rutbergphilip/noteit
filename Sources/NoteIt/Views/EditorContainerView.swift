@@ -1,21 +1,98 @@
+import NoteItCore
 import SwiftUI
 
 struct EditorContainerView: View {
     @EnvironmentObject private var store: NoteStore
     @StateObject private var editor = EditorController()
     @StateObject private var find = FindReplaceModel()
+    @StateObject private var searchHighlights = SearchHighlightController()
+    @StateObject private var renames = RenameTracker()
+    @EnvironmentObject private var navigation: NavigationModel
+    @ObservedObject private var linkState = LinkNavigationState.shared
+    @AppStorage(PrefKey.inspectorVisible) private var inspectorVisible = false
 
     var body: some View {
+        content
+            .inspector(isPresented: $inspectorVisible) {
+                LinksPanelView(noteID: store.selectedNoteID)
+                    .inspectorColumnWidth(min: 240, ideal: 280, max: 420)
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
             let writeBlocked = store.isBodyWriteBlocked(id)
-            let readOnly = writeBlocked || note.deletedAt != nil
+            let readOnly = writeBlocked || note.deletedAt != nil || store.libraryConversionInProgress
+                || store.markdownFolderUnavailable || store.isMarkdownBodyLoading(id) || store.isMarkdownBodyUnread(id)
+                || store.isMarkdownBodyMissing(id)
             VStack(spacing: 0) {
                 EditorHeader(note: note)
+                LinkRenameBanner(tracker: renames)
+                if let missing = linkState.missingHeading, missing.note == id {
+                    Text("Heading “\(missing.heading)” not found")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                        .transition(.opacity)
+                }
                 if let deletedAt = note.deletedAt {
                     DeletedNoteBanner(note: note, deletedAt: deletedAt)
                 }
+                if store.libraryConversionInProgress {
+                    Text("Converting your library…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.markdownFolderUnavailable, let folder = store.markdownStorage?.contentRootURL {
+                    Text(store.markdownFolderChecking
+                         ? "Checking “\(folder.lastPathComponent)”… Notes are read-only until it answers."
+                         : "“\(folder.lastPathComponent)” isn’t responding. Notes are read-only until it’s back.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.isMarkdownBodyLoading(id), !store.markdownFolderUnavailable,
+                   let folder = store.markdownStorage?.contentRootURL {
+                    Text("Reading this note from “\(folder.lastPathComponent)”…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.isRecoveredEditUnreadable(id) {
+                    LoadErrorBanner(message: "This note’s recovered edit couldn’t be read from the Recovery folder. Retry, or discard the edit to keep the note without it; the edit is set aside, not deleted.",
+                                    file: store.recoveryURL, readOnly: true, retry: { store.retryMarkdownRecovery(of: [id]) },
+                                    secondary: ("Discard Recovered Edit", { store.discardRecoveredEdit(id) }))
+                } else if store.isMarkdownRecoveryHeld(id), note.deletedAt == nil, !store.markdownFolderUnavailable {
+                    Text("Restoring this note’s recovered edit…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.isMarkdownBodyUnread(id), !store.isMarkdownBodyLoading(id), !store.markdownFolderUnavailable,
+                   !store.isMarkdownRecoveryHeld(id), let folder = store.markdownStorage?.contentRootURL {
+                    Text("This note hasn’t been read from “\(folder.lastPathComponent)” yet, so it’s read-only.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.isMarkdownBodyMissing(id), let folder = store.markdownStorage?.contentRootURL {
+                    LoadErrorBanner(message: "This note’s file is missing from “\(folder.lastPathComponent)”. If it doesn’t come back, the note moves to Recently Deleted with its last text.",
+                                    file: nil, readOnly: true, retry: { store.retryReadingBody(id) })
+                }
                 if let message = store.loadError(for: id) {
-                    LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked)
+                    LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked,
+                                    retry: store.canRetryReadingBody(id) ? { store.retryReadingBody(id) } : nil)
+                }
+                if let notice = store.bodySaveNotice(for: id) {
+                    LoadErrorBanner(message: notice, file: nil, readOnly: false, title: "This note isn’t saved")
                 }
                 FormattingToolbar(controller: editor)
                     .disabled(readOnly)
@@ -32,24 +109,57 @@ struct EditorContainerView: View {
                     }
                     .animation(.easeOut(duration: 0.15), value: find.isVisible)
             }
-            .onAppear { find.editor = editor }
+            .onAppear {
+                find.editor = editor
+                searchHighlights.editor = editor
+            }
+            .onChange(of: id, initial: true) { searchHighlights.update(search: store.searchText) }
+            .onChange(of: store.searchText) { _, search in searchHighlights.update(search: search) }
             .onDisappear { find.close(refocusText: false) }
             .onChange(of: readOnly, initial: true) { find.allowsReplace = !readOnly }
             .onChange(of: id) { find.close(refocusText: false) }
+            .onChange(of: id, initial: true) { _, id in
+                renames.store = store
+                renames.open(id, title: note.title)
+            }
+            .onChange(of: note.title) { _, title in renames.titleObserved(title, of: id) }
             .background(Tokens.Color.surfaceEditor)
             .toolbar {
+                ToolbarItemGroup(placement: .navigation) {
+                    NavigationButtons(navigation: navigation)
+                }
                 ToolbarItem(placement: .primaryAction) {
                     ShareToolbarButton(note: note)
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { inspectorVisible.toggle() } label: {
+                        Label("Links and Outline", systemImage: "sidebar.trailing")
+                    }
+                    .help(inspectorVisible ? "Hide Links and Outline" : "Show Links and Outline")
+                }
             }
         } else {
-            EmptyStateView(
-                symbol: "square.and.pencil",
-                title: "No Note Selected",
-                message: "Choose a note from the list, or start something new.",
-                actionTitle: "New Note"
-            ) { store.createNoteInCurrentContext() }
-            .background(Tokens.Color.surfaceEditor)
+            // Blank, like Notes: the list column carries the empty state and its New Note action.
+            Tokens.Color.surfaceEditor
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+}
+
+private struct NavigationButtons: View {
+    @EnvironmentObject private var store: NoteStore
+    @ObservedObject var navigation: NavigationModel
+
+    var body: some View {
+        ControlGroup {
+            Button { navigation.goBack(in: store) } label: { Image(systemName: "chevron.backward") }
+                .help("Go Back")
+                .accessibilityLabel("Go Back")
+                .disabled(!navigation.history.canGoBack)
+            Button { navigation.goForward(in: store) } label: { Image(systemName: "chevron.forward") }
+                .help("Go Forward")
+                .accessibilityLabel("Go Forward")
+                .disabled(!navigation.history.canGoForward)
         }
     }
 }
@@ -57,17 +167,18 @@ struct EditorContainerView: View {
 struct EditorHeader: View {
     @EnvironmentObject private var store: NoteStore
     let note: NoteMeta
+    @State private var showsCalendar = false
 
     private var notebook: Notebook? { store.notebook(with: note.notebookID) }
 
     var body: some View {
         HStack(spacing: 10) {
             Menu {
-                ForEach(store.sortedNotebooks) { nb in
+                ForEach(store.notebookPickerEntries) { entry in
                     Button {
-                        store.moveNote(note.id, to: nb.id)
+                        store.moveNote(note.id, to: entry.id)
                     } label: {
-                        Label(nb.name, systemImage: nb.symbol)
+                        NotebookPickerLabel(entry)
                     }
                 }
                 Divider()
@@ -92,6 +203,10 @@ struct EditorHeader: View {
                 ConflictBadge(source: source) { store.markConflictResolved(note.id) }
             }
 
+            if DailyNotes.isAvailable, note.deletedAt == nil, let day = store.dailyDay(of: note.id) {
+                dailyControls(day)
+            }
+
             Button {
                 store.togglePin(note.id)
             } label: {
@@ -107,6 +222,32 @@ struct EditorHeader: View {
         .padding(.top, 8)
         .padding(.bottom, 2)
     }
+
+    @ViewBuilder
+    private func dailyControls(_ day: DayKey) -> some View {
+        let previous = store.adjacentDailyNote(to: note.id, forward: false)
+        let next = store.adjacentDailyNote(to: note.id, forward: true)
+        HStack(spacing: 2) {
+            Button { store.openAdjacentDailyNote(to: note.id, forward: false) } label: { Image(systemName: "chevron.left").frame(width: 18, height: 22) }
+                .disabled(previous == nil)
+                .help(previous.map { "Previous Daily Note: \($0.displayTitle)" } ?? "No earlier daily note")
+                .accessibilityLabel("Previous Daily Note")
+            Button { showsCalendar = true } label: { Image(systemName: "calendar").frame(width: 22, height: 22) }
+                .help("Daily Note for Date…")
+                .accessibilityLabel("Daily Note for Date")
+                .popover(isPresented: $showsCalendar, arrowEdge: .bottom) {
+                    DailyCalendarView(selected: day) { showsCalendar = false }
+                        .environmentObject(store)
+                }
+            Button { store.openAdjacentDailyNote(to: note.id, forward: true) } label: { Image(systemName: "chevron.right").frame(width: 18, height: 22) }
+                .disabled(next == nil)
+                .help(next.map { "Next Daily Note: \($0.displayTitle)" } ?? "No later daily note")
+                .accessibilityLabel("Next Daily Note")
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+    }
+
 }
 
 /// Shown on a sync conflict copy; "Resolved" clears the badge (also cleared by editing the copy).
@@ -156,6 +297,9 @@ struct LoadErrorBanner: View {
     let message: String
     let file: URL?
     let readOnly: Bool
+    var title: String? = nil
+    var retry: (() -> Void)? = nil
+    var secondary: (title: String, action: () -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -164,7 +308,7 @@ struct LoadErrorBanner: View {
                 .foregroundStyle(.orange)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
-                Text(readOnly ? "This note is read-only" : "This note couldn’t be opened")
+                Text(title ?? (readOnly ? "This note is read-only" : "This note couldn’t be opened"))
                     .font(.system(size: 12, weight: .semibold))
                 Text(message)
                     .font(.system(size: 11))
@@ -173,6 +317,14 @@ struct LoadErrorBanner: View {
                     .help(message)
             }
             Spacer(minLength: 8)
+            if let retry {
+                Button("Retry", action: retry)
+                    .controlSize(.small)
+            }
+            if let secondary {
+                Button(secondary.title, action: secondary.action)
+                    .controlSize(.small)
+            }
             if let file {
                 Button("Show in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([file])

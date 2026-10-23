@@ -1,0 +1,129 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "attrs": {
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "Weekly plan",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "content": [
+          {
+            "text": "See ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "href": "noteit://note/8F14E45F-CEEA-467A-9575-5E4F0C6B7A21"
+                },
+                "type": "link"
+              }
+            ],
+            "text": "Plan",
+            "type": "text"
+          },
+          {
+            "text": " and ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "href": "noteit://note/8F14E45F-CEEA-467A-9575-5E4F0C6B7A21?heading=Intro"
+                },
+                "type": "link"
+              }
+            ],
+            "text": "the intro",
+            "type": "text"
+          },
+          {
+            "text": ".",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "attrs": {
+              "mime": "image/png",
+              "name": "diagram.png",
+              "sha": "diagram.png"
+            },
+            "type": "image"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "content": [
+              {
+                "text": "[!note] Remember",
+                "type": "text"
+              },
+              {
+                "attrs": {
+                  "soft": true
+                },
+                "type": "hardBreak"
+              },
+              {
+                "text": "Bring the slides.",
+                "type": "text"
+              }
+            ],
+            "type": "paragraph"
+          }
+        ],
+        "type": "blockquote"
+      },
+      {
+        "attrs": {
+          "checked": false,
+          "kind": "task",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "Draft",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "checked": true,
+          "kind": "task",
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "Outline",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "frontMatter": "aliases:\n  - Weekly\ntags: [work]",
+  "version": 1
+}

@@ -36,6 +36,7 @@ final class PersistNowTests: XCTestCase {
         var prepared = try NoteStore.prepareRemoteNote(
             RawMetaSupport.notePayload(remoteID, revision: UUID(), text: "Remote\nbody"), storage: store.bodyStorage)
         prepared.extras = extras
+        prepared.bodyIsRTFD = false
         try store.applyPreparedRemoteNote(prepared)
         store.updateBody(remoteID, NSAttributedString(string: "Remote\nedited"))
         try store.persistNow(remoteID)

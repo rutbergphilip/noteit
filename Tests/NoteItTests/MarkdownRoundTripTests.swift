@@ -1,4 +1,5 @@
 import AppKit
+import NoteItCore
 import XCTest
 @testable import NoteIt
 
@@ -427,5 +428,91 @@ final class MarkdownRoundTripTests: XCTestCase {
         XCTAssertFalse(first.contains("\n\n\n"), first)
         XCTAssertTrue(first.contains("A paragraph written\\\nover two lines.\n\nAnother paragraph after extra blank lines."), first)
         XCTAssertTrue(first.contains("> Quote line one\\\n> quote line two\n>\n> Second quote paragraph"), first)
+    }
+
+    func testWikiLinksRoundTripThroughImporter() async throws {
+        let work = Notebook(id: UUID(), name: "Work", symbol: "book", colorHex: "#0A84FF", sortIndex: 0)
+        func meta(_ title: String) -> NoteMeta {
+            NoteMeta(id: UUID(), notebookID: work.id, title: title, preview: "", isPinned: false,
+                     createdAt: Date(), updatedAt: Date(), tags: [])
+        }
+        let atlas = meta("Atlas"), plan = meta("Plan")
+        func body(_ title: String, _ text: String, _ link: NoteLink) -> NSAttributedString {
+            let out = NSMutableAttributedString(attributedString: EditorStyle.paragraph(title, kind: .title))
+            var attrs = EditorStyle.bodyAttributes
+            attrs[.link] = link.url
+            out.append(NSAttributedString(string: text, attributes: attrs))
+            out.append(NSAttributedString(string: "\n", attributes: EditorStyle.bodyAttributes))
+            return out
+        }
+        let bodies = [atlas.id: body("Atlas", "the plan", .note(id: plan.id, heading: "Steps")),
+                      plan.id: body("Plan", "Atlas", .note(id: atlas.id, heading: nil))]
+        let result = try NoteExporter.exportNotebook(work, notes: [atlas, plan], format: .markdown, to: folder) { bodies[$0]! }
+
+        let store = NoteStore(location: LibraryLocation(url: folder.appendingPathComponent("Library", isDirectory: true), seedsFreshLibrary: false))
+        _ = await MarkdownImporter(store: store).run(MarkdownImporter.items(for: [result.folder])) { _ in }
+        let ids = Dictionary(uniqueKeysWithValues: store.notes.map { ($0.title, $0.id) })
+        func links(_ id: UUID?) -> [NoteLink] {
+            guard let id else { return [] }
+            let text = store.body(for: id)
+            var out: [NoteLink] = []
+            text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+                if let url = value as? URL, let link = NoteLink(url: url) { out.append(link) }
+            }
+            return out
+        }
+        XCTAssertEqual(links(ids["Atlas"]), [.note(id: ids["Plan"]!, heading: "Steps")])
+        XCTAssertEqual(links(ids["Plan"]), [.note(id: ids["Atlas"]!, heading: nil)])
+        XCTAssertTrue(store.body(for: ids["Atlas"]!).string.contains("the plan"))
+    }
+
+    func testSameNamedNotesInTwoNotebooksKeepTheirLinks() async throws {
+        try await sameNamedRoundTrip(work: "Work", home: "Home", written: "[[Work/Plan]] [[Home/Plan|home]]")
+    }
+
+    func testFolderPartsOfLinksDropLinkSyntaxCharacters() async throws {
+        try await sameNamedRoundTrip(work: "C# Work", home: "[Old]", written: "[[C Work/Plan]] [[Old/Plan|home]]")
+    }
+
+    private func sameNamedRoundTrip(work workName: String, home homeName: String, written: String) async throws {
+        let work = Notebook(id: UUID(), name: workName, symbol: "book", colorHex: "#0A84FF", sortIndex: 0)
+        let home = Notebook(id: UUID(), name: homeName, symbol: "book", colorHex: "#0A84FF", sortIndex: 1)
+        func meta(_ title: String, _ notebook: Notebook) -> NoteMeta {
+            NoteMeta(id: UUID(), notebookID: notebook.id, title: title, preview: "", isPinned: false,
+                     createdAt: Date(), updatedAt: Date(), tags: [])
+        }
+        let workPlan = meta("Plan", work), homePlan = meta("Plan", home), index = meta("Index", home)
+        func body(_ title: String, _ links: [(String, NoteLink)]) -> NSAttributedString {
+            let out = NSMutableAttributedString(attributedString: EditorStyle.paragraph(title, kind: .title))
+            for (text, link) in links {
+                var attrs = EditorStyle.bodyAttributes
+                attrs[.link] = link.url
+                out.append(NSAttributedString(string: text, attributes: attrs))
+                out.append(NSAttributedString(string: " ", attributes: EditorStyle.bodyAttributes))
+            }
+            out.append(NSAttributedString(string: "\n", attributes: EditorStyle.bodyAttributes))
+            return out
+        }
+        let bodies = [workPlan.id: body("Plan", []), homePlan.id: body("Plan", []),
+                      index.id: body("Index", [("Plan", .note(id: workPlan.id, heading: nil)),
+                                               ("home", .note(id: homePlan.id, heading: nil))])]
+        let result = try NoteExporter.exportAll(notebooks: [work, home], notes: [workPlan, homePlan, index],
+                                                format: .markdown, to: folder) { bodies[$0]! }
+        let markdown = try String(contentsOf: result.folder.appendingPathComponent(homeName + "/Index.md"), encoding: .utf8)
+        XCTAssertTrue(markdown.contains(written), markdown)
+
+        let store = NoteStore(location: LibraryLocation(url: folder.appendingPathComponent("Library", isDirectory: true), seedsFreshLibrary: false))
+        _ = await MarkdownImporter(store: store).run(MarkdownImporter.items(for: [result.folder])) { _ in }
+        let notebookNames = Dictionary(uniqueKeysWithValues: store.notebooks.map { ($0.id, $0.name) })
+        func id(_ title: String, in notebook: String) throws -> UUID {
+            try XCTUnwrap(store.notes.first { $0.title == title && $0.notebookID.flatMap { notebookNames[$0] }?.hasSuffix(notebook) == true }).id
+        }
+        let imported = try id("Index", in: homeName)
+        var links: [NoteLink] = []
+        let text = store.body(for: imported)
+        text.enumerateAttribute(.link, in: NSRange(location: 0, length: text.length)) { value, _, _ in
+            if let url = value as? URL, let link = NoteLink(url: url) { links.append(link) }
+        }
+        XCTAssertEqual(links, [.note(id: try id("Plan", in: workName), heading: nil), .note(id: try id("Plan", in: homeName), heading: nil)])
     }
 }

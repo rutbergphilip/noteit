@@ -18,12 +18,65 @@ enum PrefKey {
     static let dailyNotesNotebookID = "dailyNotesNotebookID"
     /// A `DailyTitleFormat` raw value for new daily notes; unset means `iso`.
     static let dailyNoteTitleFormat = "dailyNoteTitleFormat"
+    /// `ask`, `always` or `never`: what happens to links showing a note's old title after a rename.
+    static let linkRenameUpdates = "linkRenameUpdates"
+    /// `source` (the linking note's notebook) or `default` (the notebook for new notes).
+    static let linkNewNoteNotebook = "linkNewNoteNotebook"
+    /// The daily note template's UUID string; empty for none.
+    static let dailyNoteTemplateID = "dailyNoteTemplateID"
+    static let showTodayInSidebar = "showTodayInSidebar"
+    /// The Templates notebook's UUID string; empty means found by name or created on first use.
+    static let templatesNotebookID = "templatesNotebookID"
+    static let inspectorVisible = "inspectorVisible"
+    /// `links` or `outline`.
+    static let inspectorTab = "inspectorTab"
+    static let unlinkedMentionsExpanded = "unlinkedMentionsExpanded"
+    /// Settings › Integrations › Links: `noteit://new` and `append` links run without asking. Off by default.
+    static let urlSchemeChangesWithoutAsking = "urlSchemeChangesWithoutAsking"
+    /// Settings › Integrations › Local API. Off by default.
+    static let localAPIEnabled = "localAPIEnabled"
+    /// 0 means automatic (47600–47609).
+    static let localAPIPort = "localAPIPort"
+    /// `[client id: Date]`, written at most once a minute per client.
+    static let localAPIClientLastUsed = "localAPIClientLastUsed"
+    /// Settings › Integrations › Spotlight. On by default.
+    static let spotlightEnabled = "spotlightEnabled"
+    /// Adds the note text to Spotlight items. On by default.
+    static let spotlightIncludesText = "spotlightIncludesText"
+    /// The index version the Spotlight items were last built with; a different version rebuilds them.
+    static let spotlightIndexVersion = "spotlightIndexVersion"
+    /// Set before a change is handed to Spotlight and cleared once Spotlight has taken every change; still set at
+    /// launch, it rebuilds the items (a change may have been lost to a crash or a failed Core Spotlight call).
+    static let spotlightIndexDirty = "spotlightIndexDirty"
+    /// Settings › General › Reminders. On by default.
+    static let remindersEnabled = "remindersEnabled"
+    /// Minutes after midnight for a reminder given only a date.
+    static let reminderDefaultTime = "reminderDefaultTime"
+    /// When reminders were last checked; reminders due between then and launch are delivered once.
+    static let remindersLastCheck = "remindersLastCheck"
+    /// Reminder IDs (UUID string → fire date) shown after `remindersLastCheck`, which stays behind while the index is
+    /// built at launch; a relaunch doesn't show them again. Pruned as `remindersLastCheck` moves past them.
+    static let remindersShownAhead = "remindersShownAhead"
+    /// Set once the reminder popover has offered Open at Login, so it's only offered the first time.
+    static let reminderLoginOffered = "reminderLoginOffered"
+    /// A `SearchSortOrder` raw value.
+    static let searchSortOrder = "searchSortOrder"
+    static let tasksShowCompleted = "tasksShowCompleted"
+    /// UUID strings of the notebooks expanded in the sidebar.
+    static let expandedNotebookIDs = "expandedNotebookIDs"
 }
 
 enum PrefDefault {
     static let editorFontSize: Double = 15
     /// Stored in `defaultNotebookID` to mean "no notebook" (as opposed to unset == automatic).
     static let noNotebook = "none"
+    static let linkRenameUpdates = "ask"
+    static let linkNewNoteNotebook = "source"
+    static let showTodayInSidebar = true
+    static let inspectorTab = "links"
+    static let remindersEnabled = true
+    static let reminderDefaultTime = 540
+    static let searchSortOrder = SearchSortOrder.bestMatch.rawValue
 }
 
 /// Opens the Settings scene and brings it to the front, also in menu-bar-only (`.accessory`) mode.

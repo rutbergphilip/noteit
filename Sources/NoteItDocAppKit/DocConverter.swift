@@ -18,10 +18,11 @@ import UniformTypeIdentifiers
 /// | point size against the block's base font | `fontSize{delta}` |
 /// | underline / strikethrough style | `underline` / `strike` |
 /// | `.link` | `link{href}` |
-/// | `.foregroundColor` / `.backgroundColor` (sRGB) | `textColor` / `highlight`; the legacy inline-code gray is dropped |
+/// | `.foregroundColor` / `.backgroundColor` (sRGB) | `textColor` / `highlight`; the legacy inline-code gray and the system `labelColor` / `textColor` are dropped |
 /// | `NSTextAttachment` file | `image` (PNG, JPEG, GIF, WebP) or `attachment` |
 /// | `NSTextTable` cells | `table`; a cell background marks a header |
 /// | code-language tab stop, `noteItCodeLanguageID` | `codeBlock.language` |
+/// | U+2028 alone in a `noteItSoftBreak` run, or any other U+2028 | `softBreak` / `hardBreak` |
 /// | other fonts, kerning, shadows, baseline and similar | dropped |
 public enum DocConverter {
     public static func export(_ text: NSAttributedString, styles: DocStyleProvider, imagePolicy: ImagePolicy = .normalize) throws -> BodyContainer {

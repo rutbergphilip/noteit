@@ -1,3 +1,4 @@
+import NoteItCore
 import SwiftUI
 
 /// Editable notebook values; `id == nil` means a new notebook.
@@ -7,16 +8,22 @@ struct NotebookDraft: Identifiable {
     var name: String = ""
     var symbol: String = "book"
     var colorHex: String = NotebookPalette.colors[0]
+    var defaultTemplateID: UUID?
+    var parentID: UUID?
 
     var id: UUID { draftID }
 
-    init() {}
+    init(parentID: UUID? = nil) {
+        self.parentID = parentID
+    }
 
     init(_ notebook: Notebook) {
         notebookID = notebook.id
         name = notebook.name
         symbol = notebook.symbol
         colorHex = notebook.colorHex
+        defaultTemplateID = notebook.defaultTemplateID
+        parentID = notebook.parent
     }
 }
 
@@ -96,6 +103,25 @@ struct NotebookEditSheet: View {
                 }
             }
 
+            Picker("Inside", selection: $draft.parentID) {
+                Text("Top Level").tag(UUID?.none)
+                Divider()
+                ForEach(store.notebookPickerEntries) { entry in
+                    NotebookPickerLabel(entry).tag(UUID?.some(entry.id))
+                        .selectionDisabled(!canPlace(under: entry.id))
+                }
+            }
+
+            if draft.notebookID == nil || draft.notebookID != store.templatesNotebookIDIfSet {
+                Picker("Template for new notes", selection: templateBinding) {
+                    Text("None").tag(UUID?.none)
+                    if !store.templates.isEmpty { Divider() }
+                    ForEach(store.templates) { template in
+                        Text(NoteStore.templateName(template)).tag(UUID?.some(template.id))
+                    }
+                }
+            }
+
             HStack {
                 Spacer()
                 Button("Cancel", role: .cancel) { dismiss() }
@@ -110,15 +136,38 @@ struct NotebookEditSheet: View {
         .onAppear { nameFocused = true }
     }
 
+    /// A template that is gone shows as None; the stored value is kept unless another one is picked.
+    private var templateBinding: Binding<UUID?> {
+        Binding(
+            get: { draft.defaultTemplateID.flatMap { id in store.templates.contains { $0.id == id } ? id : nil } },
+            set: { draft.defaultTemplateID = $0 }
+        )
+    }
+
+    private func canPlace(under parent: UUID) -> Bool {
+        guard let id = draft.notebookID else { return store.notebookTree.depth(of: parent) < NotebookTree.maxDepth }
+        return store.notebookTree.canMove(id, under: parent)
+    }
+
     private func save() {
         guard !trimmedName.isEmpty else { return }
         if let id = draft.notebookID, var notebook = store.notebook(with: id) {
             notebook.name = trimmedName
             notebook.symbol = draft.symbol
             notebook.colorHex = draft.colorHex
+            notebook.defaultTemplateID = draft.defaultTemplateID
             store.updateNotebook(notebook)
+            if store.notebookTree.effectiveParent(of: id) != draft.parentID {
+                store.moveNotebook(id, under: draft.parentID)
+            }
         } else {
-            let notebook = store.createNotebook(name: trimmedName, symbol: draft.symbol, colorHex: draft.colorHex)
+            let parent = draft.parentID.flatMap { canPlace(under: $0) ? $0 : nil }
+            var notebook = store.createNotebook(name: trimmedName, symbol: draft.symbol, colorHex: draft.colorHex, parentID: parent)
+            if let parent { NotebookExpansion.shared.set(parent, expanded: true) }
+            if let template = draft.defaultTemplateID {
+                notebook.defaultTemplateID = template
+                store.updateNotebook(notebook)
+            }
             store.selection = .notebook(notebook.id)
         }
         dismiss()

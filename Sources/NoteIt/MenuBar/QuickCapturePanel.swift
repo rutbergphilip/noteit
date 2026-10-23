@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import NoteItCore
 import SwiftUI
 
 /// Borderless floating panel that can take keyboard focus without activating NoteIt.
@@ -14,6 +15,14 @@ final class QuickCaptureModel: ObservableObject {
     @Published var body = ""
     @Published var notebookID: UUID?
     @Published var focusToken = 0
+    /// Remind at the date in the first line; off again for every new capture.
+    @Published var remind = false
+
+    /// The reminder the clock button offers, or nil when the first line has no future date.
+    func offeredReminder(now: Date = Date(), calendar: Calendar = .current) -> LocalDateTime? {
+        NoteStore.captureReminder(title: title, body: body, now: now, calendar: calendar,
+                                  defaultMinutes: NoteStore.reminderDefaultMinutes())
+    }
 
     var isEmpty: Bool {
         title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -115,7 +124,11 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
             NSSound.beep()
             return
         }
-        guard NoteStore.shared.captureNote(title: model.title, body: model.body, in: model.notebookID) != nil else {
+        var text = (title: model.title, body: model.body)
+        if model.remind, let reminder = model.offeredReminder() {
+            text = NoteStore.addingCaptureReminder(reminder, title: text.title, body: text.body)
+        }
+        guard NoteStore.shared.captureNote(title: text.title, body: text.body, in: model.notebookID) != nil else {
             NSSound.beep()
             return
         }
@@ -132,6 +145,7 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
     private func clearDraft() {
         model.title = ""
         model.body = ""
+        model.remind = false
         model.notebookID = NoteStore.shared.defaultNotebookIDForNewNotes
     }
 
@@ -279,11 +293,23 @@ struct QuickCaptureView: View {
                 HStack(spacing: 4) {
                     Keycap(label: "esc")
                     Text("to dismiss — draft is kept")
+                        .lineLimit(1)
                 }
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+                .layoutPriority(-1)
 
                 Spacer()
+
+                if let reminder = model.offeredReminder() {
+                    Toggle(isOn: $model.remind) {
+                        Label("Remind " + ReminderSetPopover.dayAndTime(reminder, now: Date(), calendar: .current),
+                              systemImage: "alarm")
+                    }
+                    .toggleStyle(.button)
+                    .controlSize(.small)
+                    .help("Add a reminder for the date in the first line when the note is saved")
+                }
 
                 if !model.isEmpty {
                     Button("Discard", role: .destructive, action: onDiscard)

@@ -277,6 +277,7 @@ final class VersionHistoryTests: XCTestCase {
         var prepared = try NoteStore.prepareRemoteNote(RawMetaSupport.notePayload(id, revision: UUID(), text: "Shared\nbefore"),
                                                        storage: b.bodyStorage)
         prepared.extras = extras
+        prepared.bodyIsRTFD = false
         try b.applyPreparedRemoteNote(prepared)
 
         try b.applyRemote(RawMetaSupport.notePayload(id, revision: UUID(), text: "Shared\nafter"))

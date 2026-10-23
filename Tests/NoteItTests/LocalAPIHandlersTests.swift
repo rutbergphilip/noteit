@@ -1,0 +1,856 @@
+import AppKit
+import XCTest
+import NoteItAPI
+import NoteItCore
+@testable import NoteIt
+
+@MainActor
+final class LocalAPIHandlersTests: XCTestCase {
+    private var root: URL!
+    private var defaults: UserDefaults!
+    private var suiteName: String!
+    private let fm = FileManager.default
+    private var stores: [NoteStore] = []
+
+    override func setUpWithError() throws {
+        root = fm.temporaryDirectory.appendingPathComponent("noteit-localapi-\(UUID().uuidString)", isDirectory: true)
+        suiteName = "noteit-localapi-\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: suiteName)
+    }
+
+    override func tearDownWithError() throws {
+        stores.forEach { $0.flush() }
+        stores = []
+        controllers = []
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
+        try? fm.removeItem(at: root)
+    }
+
+    private struct Fixture {
+        let handlers: LocalAPIHandlers
+        let store: NoteStore
+        let registry: LocalAPIRouteRegistry
+    }
+
+    private func makeFixture(loading: Bool = false, dailyAvailable: Bool = DailyNotes.isAvailable, opened: ((UUID) -> Void)? = nil) -> Fixture {
+        let store = NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
+        stores.append(store)
+        let staged = StagedUploads(directory: root.appendingPathComponent("staged"))
+        let service = AutomationService(store: store, defaults: defaults, staged: staged, dailyNotesAvailable: { dailyAvailable },
+                                        isLoading: { loading })
+        let registry = LocalAPIRouteRegistry()
+        let handlers = LocalAPIHandlers(service: service, registry: registry, openNote: { id in
+            _ = try service.note(id)
+            opened?(id)
+        })
+        return Fixture(handlers: handlers, store: store, registry: registry)
+    }
+
+    private func call(_ fixture: Fixture, _ route: RouteID, params: [String: String] = [:], query: [String: String] = [:],
+                      headers: [(String, String)] = [], body: Data = Data(),
+                      scopes: [APIScope] = [.read, .write]) async -> HTTPResponse {
+        let spec = APIRoutes.all.first { $0.id == route.rawValue }!
+        let request = HTTPRequest(method: spec.method.rawValue, path: spec.pattern, query: query, headers: HTTPHeaders(headers),
+                                  body: body)
+        let client = ClientRecord(id: UUID(), name: "Test", kind: .script, scopes: scopes, origin: nil, tokenHash: "h",
+                                  tokenHint: "nit_test", createdAt: Date())
+        let context = LocalAPIContext(request: request, route: RouteMatch(spec: spec, params: params), client: client,
+                                      origin: .native)
+        return await fixture.handlers.respond(context)
+    }
+
+    private func json<T: Encodable>(_ value: T) -> Data {
+        try! APIJSON.encoder().encode(value)
+    }
+
+    private func decode<T: Decodable>(_ type: T.Type, _ response: HTTPResponse, file: StaticString = #filePath,
+                                      line: UInt = #line) throws -> T {
+        do {
+            return try APIJSON.decoder().decode(type, from: response.body)
+        } catch {
+            XCTFail("Status \(response.status): \(String(decoding: response.body, as: UTF8.self))", file: file, line: line)
+            throw error
+        }
+    }
+
+    private func object(_ response: HTTPResponse) throws -> [String: Any] {
+        try XCTUnwrap(JSONSerialization.jsonObject(with: response.body) as? [String: Any])
+    }
+
+    private func errorCode(_ response: HTTPResponse) -> String? {
+        (try? APIJSON.decoder().decode(APIErrorBody.self, from: response.body))?.error.code.rawValue
+    }
+
+    @discardableResult
+    private func addNote(_ store: NoteStore, _ text: String, in notebook: UUID? = nil) -> UUID {
+        store.createNote(in: notebook, initial: NSAttributedString(string: text)).id
+    }
+
+    private func assertEqual<T: Equatable>(_ a: T, _ b: T, _ message: String = "", file: StaticString = #filePath,
+                                           line: UInt = #line) {
+        XCTAssertEqual(a, b, message, file: file, line: line)
+    }
+
+    private func unwrap<T>(_ value: T?, file: StaticString = #filePath, line: UInt = #line) throws -> T {
+        try XCTUnwrap(value, file: file, line: line)
+    }
+
+    private func lock(_ store: NoteStore, _ id: UUID) {
+        store.notes[store.noteIndex(id)!].lock = NoteLock(keyID: "k1", sealedID: UUID())
+    }
+
+    private func pngData() -> Data {
+        let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2, bitsPerSample: 8, samplesPerPixel: 4,
+                                   hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        return rep.representation(using: .png, properties: [:])!
+    }
+
+    // MARK: Notes
+
+    func testNotesList() async throws {
+        let f = makeFixture()
+        let work = f.store.createNotebook(name: "Work", symbol: "folder", colorHex: "#0A84FF")
+        addNote(f.store, "One\nfirst", in: work.id)
+        addNote(f.store, "Two\nsecond", in: work.id)
+        addNote(f.store, "Three\nthird")
+        let page = try decode(Page<NoteSummaryDTO>.self, await call(f, .notesList, query: ["notebook": "work", "limit": "1"]))
+        XCTAssertEqual(page.items.count, 1)
+        XCTAssertEqual(page.items.first?.notebookName, "Work")
+        let next = try decode(Page<NoteSummaryDTO>.self,
+                              await call(f, .notesList, query: ["notebook": work.id.uuidString, "cursor": try XCTUnwrap(page.nextCursor)]))
+        XCTAssertEqual(next.items.count, 1)
+        XCTAssertNil(next.nextCursor)
+        XCTAssertNotEqual(next.items.first?.id, page.items.first?.id)
+        let all = await call(f, .notesList)
+        XCTAssertEqual(try decode(Page<NoteSummaryDTO>.self, all).items.count, 3)
+        XCTAssertTrue(try object(all).keys.contains("nextCursor"))
+        assertEqual(await call(f, .notesList, query: ["deleted": "maybe"]).status, 400)
+        assertEqual(await call(f, .notesList, query: ["updatedSince": "yesterday"]).status, 400)
+        let future = try decode(Page<NoteSummaryDTO>.self, await call(f, .notesList, query: ["updatedSince": "2999-01-01T00:00:00Z"]))
+        XCTAssertTrue(future.items.isEmpty)
+    }
+
+    func testNoteCreate201() async throws {
+        let f = makeFixture()
+        let inbox = f.store.createNotebook(name: "Inbox", symbol: "tray", colorHex: "#0A84FF")
+        let response = await call(f, .noteCreate, body: json(CreateNoteRequest(title: "Groceries", body: "- Milk", tags: ["home"])))
+        XCTAssertEqual(response.status, 201)
+        let note = try decode(NoteDTO.self, response)
+        XCTAssertEqual(note.summary.title, "Groceries")
+        XCTAssertEqual(note.summary.notebookID, inbox.id)
+        XCTAssertEqual(note.summary.tags, ["home"])
+        XCTAssertNotNil(note.summary.revision)
+        XCTAssertEqual(note.format, .markdown)
+        XCTAssertTrue(note.body.contains("Milk"))
+        XCTAssertNotNil(f.store.note(with: note.summary.id))
+        let named = await call(f, .noteCreate, body: json(CreateNoteRequest(body: "x", format: .text, notebook: "Nowhere")))
+        XCTAssertEqual(named.status, 404)
+    }
+
+    func testNoteGetFormats() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Plan\nBuy milk")
+        for format in ["markdown", "text", "html", "noteit-doc"] {
+            let note = try decode(NoteDTO.self, await call(f, .noteGet, params: ["id": id.uuidString], query: ["format": format]))
+            XCTAssertEqual(note.format.rawValue, format)
+            XCTAssertTrue(note.body.contains("Buy milk"), format)
+        }
+        assertEqual(try decode(NoteDTO.self, await call(f, .noteGet, params: ["id": id.uuidString])).format, .markdown)
+        assertEqual(await call(f, .noteGet, params: ["id": id.uuidString], query: ["format": "rtf"]).status, 400)
+    }
+
+    func testNotePatchIfMatch412IncludesCurrent() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Plan\nold")
+        let revision = try XCTUnwrap(f.store.note(with: id)?.revision)
+        let patched = await call(f, .notePatch, params: ["id": id.uuidString], headers: [("If-Match", "\"\(revision.uuidString)\"")],
+                                 body: json(PatchNoteRequest(body: "Plan\n\nnew", format: .markdown, pinned: true)))
+        let note = try decode(NoteDTO.self, patched)
+        XCTAssertTrue(note.summary.pinned)
+        XCTAssertTrue(note.body.contains("new"))
+        let current = try XCTUnwrap(note.summary.revision)
+        XCTAssertNotEqual(current, revision)
+
+        let stale = await call(f, .notePatch, params: ["id": id.uuidString], headers: [("If-Match", "\"\(revision.uuidString)\"")],
+                               body: json(PatchNoteRequest(title: "Changed")))
+        XCTAssertEqual(stale.status, 412)
+        XCTAssertEqual(errorCode(stale), "revision_mismatch")
+        let body = try object(stale)
+        let currentNote = try XCTUnwrap(body["current"] as? [String: Any])
+        XCTAssertEqual(currentNote["revision"] as? String, current.uuidString)
+        XCTAssertEqual(currentNote["title"] as? String, "Plan")
+        assertEqual(await call(f, .notePatch, params: ["id": id.uuidString], headers: [("If-Match", "nope")],
+                                  body: json(PatchNoteRequest(pinned: false))).status, 400)
+    }
+
+    func testNoteDeleteAndRestore() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Gone")
+        assertEqual(await call(f, .noteDelete, params: ["id": id.uuidString]).status, 204)
+        XCTAssertNotNil(f.store.note(with: id)?.deletedAt)
+        let deleted = try decode(Page<NoteSummaryDTO>.self, await call(f, .notesList, query: ["deleted": "only"]))
+        XCTAssertEqual(deleted.items.map(\.id), [id])
+        XCTAssertNotNil(deleted.items.first?.deletedAt)
+        assertEqual(await call(f, .noteGet, params: ["id": id.uuidString]).status, 200)
+        let restored = try decode(NoteDTO.self, await call(f, .noteRestore, params: ["id": id.uuidString]))
+        XCTAssertNil(restored.summary.deletedAt)
+        XCTAssertNil(f.store.note(with: id)?.deletedAt)
+    }
+
+    func testPermanentDeleteNeedsAdmin() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Gone")
+        f.store.moveToRecentlyDeleted([id])
+        let denied = await call(f, .noteDelete, params: ["id": id.uuidString], query: ["permanent": "true"])
+        XCTAssertEqual(denied.status, 403)
+        XCTAssertEqual(errorCode(denied), "forbidden_scope")
+        XCTAssertNotNil(f.store.note(with: id))
+        let allowed = await call(f, .noteDelete, params: ["id": id.uuidString], query: ["permanent": "true"],
+                                 scopes: [.read, .write, .admin])
+        XCTAssertEqual(allowed.status, 204)
+        XCTAssertNil(f.store.note(with: id))
+    }
+
+    func testAppend() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Log\nfirst")
+        let note = try decode(NoteDTO.self, await call(f, .noteAppend, params: ["id": id.uuidString],
+                                                      body: json(AppendRequest(text: "second"))))
+        XCTAssertTrue(note.body.contains("second"), note.body)
+        XCTAssertTrue(note.body.contains("second"))
+        _ = await call(f, .noteAppend, params: ["id": id.uuidString], body: json(AppendRequest(text: "zero", position: .start)))
+        XCTAssertTrue(f.store.plainText(for: id).contains("zero"))
+        assertEqual(await call(f, .noteAppend, params: ["id": id.uuidString],
+                                  body: json(AppendRequest(text: "x", format: .html))).status, 400)
+    }
+
+    func testAppendIfRevision412() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Log\nfirst")
+        let response = await call(f, .noteAppend, params: ["id": id.uuidString],
+                                  body: json(AppendRequest(text: "second", ifRevision: UUID())))
+        XCTAssertEqual(response.status, 412)
+        let current = try XCTUnwrap(try object(response)["current"] as? [String: Any])
+        XCTAssertEqual(current["revision"] as? String, f.store.note(with: id)?.revision?.uuidString)
+        XCTAssertFalse(f.store.plainText(for: id).contains("second"))
+    }
+
+    func testNoteOpen204() async {
+        var opened: [UUID] = []
+        let f = makeFixture(opened: { opened.append($0) })
+        let id = addNote(f.store, "Open me")
+        let response = await call(f, .noteOpen, params: ["id": id.uuidString])
+        XCTAssertEqual(response.status, 204)
+        XCTAssertTrue(response.body.isEmpty)
+        XCTAssertEqual(opened, [id])
+    }
+
+    func testListSortUpdated() async throws {
+        let f = makeFixture()
+        let pinned = addNote(f.store, "Pinned")
+        f.store.togglePin(pinned)
+        let older = addNote(f.store, "Older")
+        let newer = addNote(f.store, "Newer")
+        f.store.notes[f.store.noteIndex(pinned)!].updatedAt = Date(timeIntervalSinceNow: -300)
+        f.store.notes[f.store.noteIndex(older)!].updatedAt = Date(timeIntervalSinceNow: -200)
+        f.store.notes[f.store.noteIndex(newer)!].updatedAt = Date(timeIntervalSinceNow: -100)
+        let list = try decode(Page<NoteSummaryDTO>.self, await call(f, .notesList))
+        XCTAssertEqual(list.items.map(\.id), [pinned, newer, older])
+        let updated = try decode(Page<NoteSummaryDTO>.self, await call(f, .notesList, query: ["sort": "updated"]))
+        XCTAssertEqual(updated.items.map(\.id), [newer, older, pinned])
+        assertEqual(await call(f, .notesList, query: ["sort": "title"]).status, 400)
+    }
+
+    // MARK: Notebooks and tags
+
+    func testNotebooksIncludeDefault() async throws {
+        let f = makeFixture()
+        let work = f.store.createNotebook(name: "Work", symbol: "folder", colorHex: "#0A84FF")
+        let inbox = f.store.createNotebook(name: "Inbox", symbol: "tray", colorHex: "#0A84FF")
+        addNote(f.store, "A", in: work.id)
+        let response = await call(f, .notebooksList)
+        let body = try decode(NotebooksResponseDTO.self, response)
+        XCTAssertEqual(body.defaultNotebookID, inbox.id)
+        XCTAssertEqual(body.notebooks.map(\.name), f.store.sortedNotebooks.map(\.name))
+        XCTAssertEqual(body.notebooks.first { $0.id == work.id }?.noteCount, 1)
+        XCTAssertNil(try object(response)["notebooks"].flatMap { ($0 as? [[String: Any]])?.first?["parentID"] })
+
+        defaults.set(PrefDefault.noNotebook, forKey: PrefKey.defaultNotebookID)
+        let none = await call(f, .notebooksList)
+        XCTAssertTrue(try object(none)["defaultNotebookID"] is NSNull)
+    }
+
+    func testNotebooksCRUD() async throws {
+        let f = makeFixture()
+        let created = await call(f, .notebookCreate, body: json(NotebookRequest(name: "Ideas", symbol: "lightbulb", color: "#FF9500")))
+        XCTAssertEqual(created.status, 201)
+        let notebook = try decode(NotebookDTO.self, created)
+        XCTAssertEqual(notebook.name, "Ideas")
+        XCTAssertEqual(notebook.symbol, "lightbulb")
+        XCTAssertEqual(notebook.color.uppercased(), "#FF9500")
+        assertEqual(await call(f, .notebookCreate, body: json(NotebookRequest(symbol: "x"))).status, 400)
+
+        let renamed = try decode(NotebookDTO.self, await call(f, .notebookPatch, params: ["id": notebook.id.uuidString],
+                                                              body: json(NotebookRequest(name: "Later"))))
+        XCTAssertEqual(renamed.name, "Later")
+        XCTAssertEqual(f.store.notebook(with: notebook.id)?.name, "Later")
+
+        let note = addNote(f.store, "Inside", in: notebook.id)
+        assertEqual(await call(f, .notebookDelete, params: ["id": notebook.id.uuidString]).status, 204)
+        XCTAssertNil(f.store.notebook(with: notebook.id))
+        XCTAssertNotNil(f.store.note(with: note)?.deletedAt)
+        assertEqual(await call(f, .notebookDelete, params: ["id": notebook.id.uuidString]).status, 404)
+    }
+
+    func testTags() async throws {
+        let f = makeFixture()
+        addNote(f.store, "A\n#work #home")
+        addNote(f.store, "B\n#work")
+        let tags = try decode([TagDTO].self, await call(f, .tags))
+        XCTAssertEqual(tags, [TagDTO(name: "home", noteCount: 1), TagDTO(name: "work", noteCount: 2)])
+    }
+
+    func testTagsTreeWithoutProviderIs501() async {
+        let f = makeFixture()
+        let response = await call(f, .tags, query: ["tree": "1"])
+        XCTAssertEqual(response.status, 501)
+        XCTAssertEqual(errorCode(response), "not_implemented")
+    }
+
+    func testTagsTreeUsesProvider() async throws {
+        let f = makeFixture()
+        let node = TagNodeDTO(name: "work", path: "work", noteCount: 1, totalCount: 2,
+                              children: [TagNodeDTO(name: "clients", path: "work/clients", noteCount: 1, totalCount: 1, children: [])])
+        f.registry.extendTags { [node] }
+        assertEqual(try decode([TagNodeDTO].self, await call(f, .tags, query: ["tree": "1"])), [node])
+    }
+
+    private final class PathExtender: NotebookDTOExtending, @unchecked Sendable {
+        let parent = UUID()
+        func extend(_ dto: inout NotebookDTO, notebookID: UUID) {
+            dto.parentID = parent
+            dto.path = ["Parent", dto.name]
+        }
+    }
+
+    func testNotebookExtenderFillsParentAndPath() async throws {
+        let f = makeFixture()
+        _ = f.store.createNotebook(name: "Work", symbol: "folder", colorHex: "#0A84FF")
+        let extender = PathExtender()
+        f.registry.extendNotebooks(with: extender)
+        let listed = try decode(NotebooksResponseDTO.self, await call(f, .notebooksList)).notebooks
+        XCTAssertEqual(listed.first?.parentID, extender.parent)
+        XCTAssertEqual(listed.first?.path, ["Parent", "Work"])
+        let created = try decode(NotebookDTO.self, await call(f, .notebookCreate, body: json(NotebookRequest(name: "New"))))
+        XCTAssertEqual(created.path, ["Parent", "New"])
+    }
+
+    // MARK: Search
+
+    func testSearch() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Groceries\nBuy oat milk today")
+        addNote(f.store, "Other\nnothing")
+        let response = await call(f, .search, query: ["q": "oat"])
+        let body = try decode(SearchResponseDTO.self, response)
+        XCTAssertEqual(body.mode, "keyword")
+        XCTAssertEqual(body.results.map(\.note.id), [id])
+        XCTAssertTrue(body.results.first?.snippet.contains("oat milk") == true)
+        assertEqual(await call(f, .search).status, 400)
+        assertEqual(await call(f, .search, query: ["q": "oat", "limit": "0"]).status, 400)
+    }
+
+    private struct ImageText: ImageTextProviding {
+        var texts: [UUID: String]
+        func imageText(for noteID: UUID) -> String? { texts[noteID] }
+    }
+
+    func testKeywordSearchRanksWithQueryLanguageAndMarksImageMatches() async throws {
+        let f = makeFixture()
+        let work = f.store.createNotebook(name: "Work", symbol: "folder", colorHex: "#0A84FF")
+        let titled = addNote(f.store, "Oat ideas\nporridge oat oat #food", in: work.id)
+        let mentioned = addNote(f.store, "Breakfast\nsome oat")
+        let pictured = addNote(f.store, "Receipt\nnothing here")
+        f.store.registerImageTextProvider(ImageText(texts: [pictured: "oat milk 2.50"]))
+
+        let ranked = try decode(SearchResponseDTO.self, await call(f, .search, query: ["q": "oat"]))
+        XCTAssertEqual(ranked.results.first?.note.id, titled)
+        XCTAssertEqual(Set(ranked.results.map(\.note.id)), [titled, mentioned, pictured])
+        let title = ranked.results.first?.highlights?.first { $0.field == .title }
+        XCTAssertEqual(title?.ranges, [[0, 3]])
+        XCTAssertEqual(ranked.results.first { $0.note.id == pictured }?.matchedIn, "image")
+        XCTAssertNil(ranked.results.first { $0.note.id == mentioned }?.matchedIn)
+
+        let filtered = try decode(SearchResponseDTO.self, await call(f, .search, query: ["q": "oat tag:food"]))
+        XCTAssertEqual(filtered.results.map(\.note.id), [titled])
+        let scoped = try decode(SearchResponseDTO.self, await call(f, .search, query: ["q": "oat", "notebook": work.id.uuidString]))
+        XCTAssertEqual(scoped.results.map(\.note.id), [titled])
+    }
+
+    func testUnknownSearchModeIs400() async {
+        let f = makeFixture()
+        let response = await call(f, .search, query: ["q": "x", "mode": "telepathy"])
+        XCTAssertEqual(response.status, 400)
+        XCTAssertEqual(errorCode(response), "bad_request")
+    }
+
+    func testRegisteredSearchModeOffIs501() async {
+        let f = makeFixture()
+        f.registry.registerSearchMode("meaning") { _, _ in .failure(.notAvailable) }
+        let response = await call(f, .search, query: ["q": "x", "mode": "meaning"])
+        XCTAssertEqual(response.status, 501)
+        XCTAssertEqual(errorCode(response), "not_available")
+    }
+
+    func testHighlightsShape() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Groceries\nBuy oat milk")
+        let keyword = try object(await call(f, .search, query: ["q": "oat"]))
+        let first = try XCTUnwrap((keyword["results"] as? [[String: Any]])?.first)
+        XCTAssertNotNil(first["score"] as? Double)
+        let bodyHighlight = try XCTUnwrap((first["highlights"] as? [[String: Any]])?.first)
+        XCTAssertEqual(bodyHighlight["field"] as? String, "body")
+        XCTAssertEqual(first["snippet"] as? String, "Buy oat milk")
+        XCTAssertEqual(bodyHighlight["ranges"] as? [[Int]], [[4, 3]])
+        XCTAssertNil(first["matchedIn"])
+
+        let summary = try decode(NoteDTO.self, await call(f, .noteGet, params: ["id": id.uuidString])).summary
+        f.registry.registerSearchMode("ranked") { query, _ in
+            .success([SearchResultDTO(note: summary, snippet: "Buy oat milk", score: 0.5,
+                                      highlights: [HighlightDTO(field: .body, ranges: [[4, 3]])], matchedBy: ["ranked"])])
+        }
+        let ranked = try object(await call(f, .search, query: ["q": "oat", "mode": "ranked"]))
+        XCTAssertEqual(ranked["mode"] as? String, "ranked")
+        let result = try XCTUnwrap((ranked["results"] as? [[String: Any]])?.first)
+        XCTAssertEqual(result["score"] as? Double, 0.5)
+        let highlight = try XCTUnwrap((result["highlights"] as? [[String: Any]])?.first)
+        XCTAssertEqual(highlight["field"] as? String, "body")
+        XCTAssertEqual(highlight["ranges"] as? [[Int]], [[4, 3]])
+    }
+
+    // MARK: Locked notes and readiness
+
+    func testLockedNoteBodyIs423() async {
+        let f = makeFixture()
+        let id = addNote(f.store, "Secret\nhidden")
+        lock(f.store, id)
+        for response in [
+            await call(f, .noteGet, params: ["id": id.uuidString]),
+            await call(f, .notePatch, params: ["id": id.uuidString], body: json(PatchNoteRequest(body: "x"))),
+            await call(f, .noteAppend, params: ["id": id.uuidString], body: json(AppendRequest(text: "x"))),
+            await call(f, .attachmentsList, params: ["id": id.uuidString]),
+            await call(f, .attachmentAdd, params: ["id": id.uuidString], body: pngData()),
+        ] {
+            XCTAssertEqual(response.status, 423)
+            XCTAssertEqual(errorCode(response), "note_locked")
+        }
+        let pinned = await call(f, .notePatch, params: ["id": id.uuidString], body: json(PatchNoteRequest(pinned: true)))
+        XCTAssertEqual(pinned.status, 200)
+        XCTAssertNil(try? object(pinned)["body"])
+        XCTAssertEqual(f.store.note(with: id)?.isPinned, true)
+    }
+
+    func testLockedNoteListedWithLockedTrue() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Secret\nhidden words")
+        lock(f.store, id)
+        let item = try unwrap(try decode(Page<NoteSummaryDTO>.self, await call(f, .notesList)).items.first)
+        XCTAssertEqual(item.id, id)
+        XCTAssertTrue(item.locked)
+        XCTAssertEqual(item.preview, "")
+        XCTAssertEqual(item.title, "Secret")
+    }
+
+    func testNotReadyIs503() async {
+        let f = makeFixture(loading: true)
+        for route in [RouteID.notesList, .notebooksList, .tags] {
+            let response = await call(f, route)
+            XCTAssertEqual(response.status, 503)
+            XCTAssertEqual(errorCode(response), "not_ready")
+        }
+    }
+
+    func testUrlIsNoteForm() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Linked")
+        let item = try unwrap(try decode(Page<NoteSummaryDTO>.self, await call(f, .notesList)).items.first)
+        XCTAssertEqual(item.url, "noteit://note/\(id.uuidString)")
+    }
+
+    // MARK: Attachments
+
+    func testAttachmentsAddListGet() async throws {
+        let f = makeFixture()
+        let id = addNote(f.store, "Photos")
+        let png = pngData()
+        let added = await call(f, .attachmentAdd, params: ["id": id.uuidString],
+                               headers: [("Content-Type", "image/png"), ("X-NoteIt-Filename", "shot.png")], body: png)
+        XCTAssertEqual(added.status, 200)
+        XCTAssertEqual(try decode(NoteDTO.self, added).summary.id, id)
+        _ = await call(f, .attachmentAdd, params: ["id": id.uuidString], headers: [("Content-Type", "image/png")], body: png)
+        let list = try decode([AttachmentDTO].self, await call(f, .attachmentsList, params: ["id": id.uuidString]))
+        XCTAssertEqual(list.map(\.name), ["shot.png", "attachment.png"])
+        XCTAssertEqual(list.first?.contentType, "image/png")
+        XCTAssertEqual(list.first?.size, png.count)
+        let file = await call(f, .attachmentGet, params: ["id": id.uuidString, "name": "shot.png"])
+        XCTAssertEqual(file.status, 200)
+        XCTAssertEqual(file.headers["Content-Type"], "image/png")
+        XCTAssertEqual(file.body, png)
+        assertEqual(await call(f, .attachmentGet, params: ["id": id.uuidString, "name": "none.png"]).status, 404)
+    }
+
+    func testStagedUploadInMarkdown() async throws {
+        let f = makeFixture()
+        let response = await call(f, .stagedUpload, headers: [("Content-Type", "image/png")], body: pngData())
+        XCTAssertEqual(response.status, 201)
+        let staged = try decode(StagedUploadDTO.self, response)
+        XCTAssertTrue(staged.id.hasPrefix("att_"))
+        let created = try decode(NoteDTO.self, await call(f, .noteCreate, body: json(CreateNoteRequest(
+            title: "Pic", body: "![shot](noteit-attachment:\(staged.id))"))))
+        let list = try decode([AttachmentDTO].self, await call(f, .attachmentsList, params: ["id": created.summary.id.uuidString]))
+        XCTAssertEqual(list.count, 1)
+    }
+
+    // MARK: Trash and daily
+
+    func testTrashEmptyNeedsAdmin() async {
+        let f = makeFixture()
+        let id = addNote(f.store, "Gone")
+        f.store.moveToRecentlyDeleted([id])
+        assertEqual(await call(f, .trashEmpty).status, 403)
+        XCTAssertNotNil(f.store.note(with: id))
+        assertEqual(await call(f, .trashEmpty, scopes: [.admin]).status, 204)
+        XCTAssertNil(f.store.note(with: id))
+    }
+
+    func testDailyUnavailableWhileGateOff() async {
+        let f = makeFixture(dailyAvailable: false)
+        for (route, query, body) in [(RouteID.daily, ["create": "true"], Data()), (.dailyAppend, [:], json(DailyAppendRequest(text: "x")))] {
+            let response = await call(f, route, query: query, body: body)
+            XCTAssertEqual(response.status, 501)
+            XCTAssertEqual(errorCode(response), "not_implemented")
+        }
+        XCTAssertTrue(f.store.notes.isEmpty)
+    }
+
+    func testDailyCreateAndAppend() async throws {
+        let f = makeFixture()
+        let appended = try decode(NoteDTO.self, await call(f, .dailyAppend,
+                                                           body: json(DailyAppendRequest(text: "Called Sam", timestamp: false))))
+        XCTAssertEqual(appended.format, .markdown)
+        XCTAssertTrue(appended.body.contains("- Called Sam"), appended.body)
+        let fetched = try decode(NoteDTO.self, await call(f, .daily))
+        XCTAssertEqual(fetched.summary.id, appended.summary.id)
+        XCTAssertEqual(fetched.summary.notebookName, NoteStore.dailyNotesNotebookName)
+
+        let other = try decode(NoteDTO.self, await call(f, .dailyAppend, body: json(DailyAppendRequest(text: "Earlier",
+                                                                                                    date: "2020-02-29"))))
+        XCTAssertNotEqual(other.summary.id, appended.summary.id)
+        XCTAssertTrue(other.body.contains(" Earlier"))
+        let leapDay = try decode(NoteDTO.self, await call(f, .daily, query: ["date": "2020-02-29"]))
+        XCTAssertEqual(leapDay.summary.id, other.summary.id)
+        for bad in ["2020-02-30", "today", "2020-2-1"] {
+            assertEqual(await call(f, .daily, query: ["date": bad]).status, 400, bad)
+        }
+        let markdown = try decode(NoteDTO.self, await call(f, .dailyAppend,
+                                                           body: json(DailyAppendRequest(text: "a **b**", timestamp: false,
+                                                                                         format: .markdown))))
+        XCTAssertTrue(markdown.body.contains("- a **b**"), markdown.body)
+        assertEqual(await call(f, .dailyAppend, body: json(DailyAppendRequest(text: " "))).status, 400)
+    }
+
+    func testDailyGetFormatParam() async throws {
+        let f = makeFixture()
+        _ = await call(f, .dailyAppend, body: json(DailyAppendRequest(text: "**bold**", timestamp: false, format: .markdown)))
+        let markdown = try decode(NoteDTO.self, await call(f, .daily))
+        XCTAssertEqual(markdown.format, .markdown)
+        XCTAssertTrue(markdown.body.contains("**bold**"))
+        let plain = try decode(NoteDTO.self, await call(f, .daily, query: ["format": "plain"]))
+        XCTAssertEqual(plain.format, .text)
+        XCTAssertTrue(plain.body.contains("- bold"))
+        XCTAssertFalse(plain.body.contains("**"))
+        assertEqual(await call(f, .daily, query: ["format": "html"]).status, 400)
+    }
+
+    func testDailyGetWithoutCreate404() async throws {
+        let f = makeFixture()
+        let response = await call(f, .daily)
+        XCTAssertEqual(response.status, 404)
+        XCTAssertEqual(errorCode(response), "not_found")
+        XCTAssertTrue(f.store.notes.isEmpty)
+        let created = try decode(NoteDTO.self, await call(f, .daily, query: ["create": "true"]))
+        XCTAssertEqual(f.store.notes.map(\.id), [created.summary.id])
+    }
+
+    func testDailyRouteCreateNeedsWrite() async throws {
+        let f = makeFixture()
+        let denied = await call(f, .daily, query: ["create": "true"], scopes: [.read])
+        XCTAssertEqual(denied.status, 403)
+        XCTAssertEqual(errorCode(denied), "forbidden_scope")
+        XCTAssertTrue(f.store.notes.isEmpty)
+        assertEqual(await call(f, .daily, scopes: [.read]).status, 404)
+        assertEqual(await call(f, .daily, query: ["create": "true"], scopes: [.write]).status, 200)
+        assertEqual(await call(f, .daily, scopes: [.read]).status, 200)
+    }
+
+    // MARK: Errors
+
+    func testUnknownIdIs404() async {
+        let f = makeFixture()
+        for route in [RouteID.noteGet, .notePatch, .noteDelete, .noteRestore, .noteOpen, .attachmentsList] {
+            let response = await call(f, route, params: ["id": UUID().uuidString], body: json(PatchNoteRequest(pinned: true)))
+            XCTAssertEqual(response.status, 404, route.rawValue)
+            XCTAssertEqual(errorCode(response), "not_found")
+        }
+        assertEqual(await call(f, .noteGet, params: ["id": "not-a-uuid"]).status, 404)
+        assertEqual(await call(f, .notebookPatch, params: ["id": UUID().uuidString], body: json(NotebookRequest(name: "x"))).status, 404)
+    }
+
+    func testMalformedJSONIs400() async {
+        let f = makeFixture()
+        let id = addNote(f.store, "Plan")
+        for (route, params) in [(RouteID.noteCreate, [:]), (.notePatch, ["id": id.uuidString]), (.noteAppend, ["id": id.uuidString]),
+                                (.notebookCreate, [:])] {
+            let response = await call(f, route, params: params, body: Data("{not json".utf8))
+            XCTAssertEqual(response.status, 400, route.rawValue)
+            XCTAssertEqual(errorCode(response), "bad_request")
+        }
+    }
+
+    // MARK: Controller
+
+    private var controllers: [LocalAPIController] = []
+
+    private func makeController(defaults: UserDefaults? = nil, store: NoteStore? = nil,
+                                dailyAvailable: Bool = DailyNotes.isAvailable) -> (LocalAPIController, NoteStore) {
+        let store = store ?? NoteStore(location: LibraryLocation(url: root.appendingPathComponent("lib"), seedsFreshLibrary: false))
+        stores.append(store)
+        let service = AutomationService(store: store, defaults: defaults ?? self.defaults,
+                                        staged: StagedUploads(directory: root.appendingPathComponent("staged")),
+                                        dailyNotesAvailable: { dailyAvailable }, isLoading: { false })
+        let controller = LocalAPIController(service: service, defaults: defaults ?? self.defaults,
+                                            clientStore: InMemoryClientStore(),
+                                            discoveryDirectory: root.appendingPathComponent("discovery-\(controllers.count)"),
+                                            automaticPorts: [0], routeRegistry: LocalAPIRouteRegistry(), appVersion: "9.9",
+                                            showsPairingWindow: false)
+        controllers.append(controller)
+        addTeardownBlock { @MainActor in controller.shutDown() }
+        return (controller, store)
+    }
+
+    private func discovery(_ index: Int) throws -> DiscoveryFile {
+        let url = root.appendingPathComponent("discovery-\(index)").appendingPathComponent(DiscoveryFile.fileName)
+        return try APIJSON.decoder().decode(DiscoveryFile.self, from: Data(contentsOf: url))
+    }
+
+    func testControllerWritesDiscoveryWhenOff() async throws {
+        let (controller, _) = makeController()
+        await controller.settle()
+        XCTAssertEqual(controller.status, .off)
+        let file = try discovery(0)
+        XCTAssertFalse(file.apiEnabled)
+        XCTAssertNil(file.port)
+        XCTAssertNil(file.baseURL)
+        XCTAssertEqual(file.appVersion, "9.9")
+        XCTAssertEqual(file.pid, ProcessInfo.processInfo.processIdentifier)
+        controller.shutDown()
+        XCTAssertFalse(fm.fileExists(atPath: root.appendingPathComponent("discovery-0/\(DiscoveryFile.fileName)").path))
+    }
+
+    func testControllerStartsAndStopsOnPrefChange() async throws {
+        let (controller, store) = makeController()
+        let legacy = addNote(store, "Before sync")
+        store.notes[store.noteIndex(legacy)!].revision = nil
+        defaults.set(true, forKey: PrefKey.localAPIEnabled)
+        controller.reconcile()
+        await controller.settle()
+        guard case .on(let port) = controller.status else { return XCTFail("\(controller.status)") }
+        XCTAssertNotNil(store.notes.first { $0.id == legacy }?.revision)
+        var file = try discovery(0)
+        XCTAssertTrue(file.apiEnabled)
+        XCTAssertEqual(file.port, port)
+        XCTAssertEqual(file.baseURL?.absoluteString, "http://127.0.0.1:\(port)/v1")
+        let (data, response) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/ping")!)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 200)
+        XCTAssertEqual(try APIJSON.decoder().decode(PingDTO.self, from: data).appVersion, "9.9")
+
+        defaults.set(false, forKey: PrefKey.localAPIEnabled)
+        controller.reconcile()
+        await controller.settle()
+        XCTAssertEqual(controller.status, .off)
+        file = try discovery(0)
+        XCTAssertFalse(file.apiEnabled)
+        do {
+            _ = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/ping")!)
+            XCTFail("Still listening")
+        } catch {}
+    }
+
+    func testPingHasDailyOnlyWhenAvailable() async throws {
+        defaults.set(true, forKey: PrefKey.localAPIEnabled)
+        var capabilities: [[String]] = []
+        for available in [false, true] {
+            let (controller, _) = makeController(dailyAvailable: available)
+            controller.reconcile()
+            await controller.settle()
+            guard case .on(let port) = controller.status else { return XCTFail("\(controller.status)") }
+            let (data, _) = try await URLSession.shared.data(from: URL(string: "http://127.0.0.1:\(port)/v1/ping")!)
+            capabilities.append(try APIJSON.decoder().decode(PingDTO.self, from: data).capabilities)
+            controller.shutDown()
+        }
+        XCTAssertFalse(capabilities[0].contains("daily"))
+        XCTAssertTrue(capabilities[1].contains("daily"))
+        XCTAssertTrue(capabilities.allSatisfy { $0.contains("events") && $0.contains("attachments") })
+    }
+
+    func testDailyOverHTTP() async throws {
+        defaults.set(true, forKey: PrefKey.localAPIEnabled)
+        let (controller, store) = makeController()
+        controller.reconcile()
+        await controller.settle()
+        guard case .on(let port) = controller.status else { return XCTFail("\(controller.status)") }
+        let (_, token) = try controller.registry.issue(name: "CLI", kind: .cli, scopes: [.read, .write], origin: nil)
+        var append = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/daily/append")!)
+        append.httpMethod = "POST"
+        append.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        append.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        append.httpBody = json(DailyAppendRequest(text: "From curl", timestamp: false))
+        let (appendData, appendResponse) = try await URLSession.shared.data(for: append)
+        XCTAssertEqual((appendResponse as? HTTPURLResponse)?.statusCode, 200, String(decoding: appendData, as: UTF8.self))
+        var get = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/daily?format=plain")!)
+        get.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        let (data, _) = try await URLSession.shared.data(for: get)
+        let note = try APIJSON.decoder().decode(NoteDTO.self, from: data)
+        XCTAssertTrue(note.body.contains("- From curl"), note.body)
+        XCTAssertEqual(store.notes.map(\.id), [note.summary.id])
+    }
+
+    func testPinnedPortInUseReportsStatus() async throws {
+        let (first, _) = makeController()
+        defaults.set(true, forKey: PrefKey.localAPIEnabled)
+        first.reconcile()
+        await first.settle()
+        guard case .on(let port) = first.status else { return XCTFail("\(first.status)") }
+
+        let otherSuite = "noteit-localapi-\(UUID().uuidString)"
+        let other = try XCTUnwrap(UserDefaults(suiteName: otherSuite))
+        defer { other.removePersistentDomain(forName: otherSuite) }
+        other.set(true, forKey: PrefKey.localAPIEnabled)
+        other.set(Int(port), forKey: PrefKey.localAPIPort)
+        let (second, _) = makeController(defaults: other)
+        await second.settle()
+        XCTAssertEqual(second.status, .portInUse(port))
+        XCTAssertFalse(try discovery(1).apiEnabled)
+    }
+
+    func testChangesFlowFromStoreToHub() async throws {
+        let (controller, store) = makeController()
+        let start = controller.hub.currentCursor
+        let id = addNote(store, "Fresh")
+        var changes: [ChangeDTO] = []
+        for _ in 0..<40 {
+            if case .success(let page) = controller.hub.changes(since: start, limit: 50), !page.changes.isEmpty {
+                changes = page.changes
+                break
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertEqual(changes.map(\.id), [id])
+        XCTAssertEqual(changes.first?.kind, .note)
+        XCTAssertEqual(changes.first?.op, .created)
+    }
+
+    func testKeychainClientStoreRoundTrip() throws {
+        let secrets = MemorySecrets()
+        let store = KeychainClientStore(secrets: secrets, service: "test.local-api")
+        XCTAssertEqual(store.load(), [])
+        let registry = ClientRegistry(store: store)
+        let (record, token) = try registry.issue(name: "CLI", kind: .cli, scopes: [.read], origin: nil)
+        XCTAssertEqual(secrets.labels["test.local-api/clients"], "NoteIt Local API")
+        XCTAssertEqual(KeychainClientStore(secrets: secrets, service: "test.local-api").load(), [record])
+        XCTAssertFalse(secrets.values["test.local-api/clients"]!.contains(token))
+        try registry.revoke(record.id)
+        XCTAssertNil(secrets.values["test.local-api/clients"])
+    }
+
+    func testKeychainClientStoreKeepsClientsItCouldNotRead() throws {
+        let secrets = MemorySecrets()
+        let (record, _) = try ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+            .issue(name: "CLI", kind: .cli, scopes: [.read], origin: nil)
+        let saved = secrets.values["s/clients"]
+
+        secrets.failsReads = true
+        let registry = ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+        XCTAssertEqual(registry.clients, [])
+        XCTAssertThrowsError(try registry.issue(name: "New", kind: .cli, scopes: [.read], origin: nil))
+        XCTAssertThrowsError(try registry.revokeAll())
+        XCTAssertEqual(secrets.values["s/clients"], saved)
+
+        secrets.failsReads = false
+        XCTAssertEqual(KeychainClientStore(secrets: secrets, service: "s").load(), [record])
+    }
+
+    func testKeychainClientStoreSetsAsideAListItCannotDecode() throws {
+        let secrets = MemorySecrets()
+        let corrupt = #"{"not":"a list"}"#
+        secrets.values["s/clients"] = corrupt
+        let registry = ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+        XCTAssertEqual(registry.clients, [])
+        XCTAssertEqual(secrets.values["s/clients.unreadable"], corrupt)
+        XCTAssertEqual(secrets.labels["s/clients.unreadable"], "NoteIt Local API")
+
+        let (record, _) = try registry.issue(name: "CLI", kind: .cli, scopes: [.read], origin: nil)
+        XCTAssertEqual(KeychainClientStore(secrets: secrets, service: "s").load(), [record])
+        try registry.revokeAll()
+        XCTAssertNil(secrets.values["s/clients"])
+        XCTAssertEqual(secrets.values["s/clients.unreadable"], corrupt)
+    }
+
+    func testKeychainClientStoreSkipsOnlyRecordsItCannotDecode() throws {
+        let secrets = MemorySecrets()
+        let (record, _) = try ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+            .issue(name: "CLI", kind: .cli, scopes: [.read], origin: nil)
+        var list = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(secrets.values["s/clients"]!.utf8)) as? [[String: Any]])
+        var newer = list[0]
+        newer["id"] = UUID().uuidString
+        newer["kind"] = "robot"
+        list.append(newer)
+        let mixed = String(decoding: try JSONSerialization.data(withJSONObject: list), as: UTF8.self)
+        secrets.values["s/clients"] = mixed
+
+        let registry = ClientRegistry(store: KeychainClientStore(secrets: secrets, service: "s"))
+        XCTAssertEqual(registry.clients, [record])
+        XCTAssertEqual(secrets.values["s/clients.unreadable"], mixed)
+        try registry.revoke(record.id)
+        XCTAssertNil(secrets.values["s/clients"])
+    }
+}
+
+private final class MemorySecrets: LabeledSecretStore {
+    var values: [String: String] = [:]
+    var labels: [String: String] = [:]
+
+    var failsReads = false
+
+    func read(service: String, account: String) -> String? { values["\(service)/\(account)"] }
+
+    func readExisting(service: String, account: String) throws -> String? {
+        if failsReads { throw Keychain.Failure(status: errSecInteractionNotAllowed) }
+        return values["\(service)/\(account)"]
+    }
+
+    func write(_ value: String, service: String, account: String) throws {
+        try write(value, service: service, account: account, label: "NoteIt Sync")
+    }
+
+    func write(_ value: String, service: String, account: String, label: String) throws {
+        values["\(service)/\(account)"] = value
+        labels["\(service)/\(account)"] = label
+    }
+
+    func remove(service: String, account: String) throws {
+        values["\(service)/\(account)"] = nil
+        labels["\(service)/\(account)"] = nil
+    }
+}

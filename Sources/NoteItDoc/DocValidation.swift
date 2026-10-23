@@ -99,7 +99,7 @@ public enum DocValidation: Equatable, Sendable {
                 if let width { try checkWidth(width, of: "Image") }
             case .attachment(_, let name, _):
                 try checkName(name, of: "An attachment")
-            case .hardBreak:
+            case .hardBreak, .softBreak:
                 break
             }
         }

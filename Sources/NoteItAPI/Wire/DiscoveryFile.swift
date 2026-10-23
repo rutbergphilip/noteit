@@ -15,6 +15,13 @@ public struct DiscoveryFile: Codable, Sendable, Equatable {
 
     public static let fileName = "local-api.json"
 
+    /// The API root clients use, built from `port` alone: the server only listens on 127.0.0.1, and a token must
+    /// never follow a `baseURL` that points anywhere else.
+    public var loopbackBaseURL: URL? {
+        guard let port, port != 0 else { return nil }
+        return URL(string: "http://127.0.0.1:\(port)\(APIRoutes.basePath)")
+    }
+
     public init(version: Int = 1, pid: Int32, appVersion: String, apiEnabled: Bool, port: UInt16?, baseURL: URL?,
                 startedAt: Date) {
         self.version = version

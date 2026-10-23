@@ -8,7 +8,7 @@ final class GeneralSettingsSectionTests: XCTestCase {
     }
 
     func testAvailableSections() {
-        XCTAssertEqual(GeneralSettingsSection.allCases.filter(\.isAvailable), [.appearance, .startup, .capture, .updates])
+        XCTAssertEqual(GeneralSettingsSection.allCases.filter(\.isAvailable), [.appearance, .startup, .capture, .reminders, .updates])
     }
 
     func testCheatSheetAfterRemindersAndBeforeUpdates() throws {
@@ -25,6 +25,7 @@ final class GeneralSettingsSectionTests: XCTestCase {
             "Show NoteIt in", "Show menu bar icon",
             "Launch at login",
             "Read selected text", "Include page links from browsers",
+            "Show reminders on this Mac", "Default time",
             "Check for Updates Automatically",
         ])
     }

@@ -1,4 +1,13 @@
 import AppKit
+import NoteItCore
+
+/// How many entries and unpacked bytes the archives of one import may hold, so a ZIP bomb is refused.
+struct ZipLimits: Sendable {
+    var maxEntries: Int
+    var maxBytes: Int64
+
+    static let standard = ZipLimits(maxEntries: 200_000, maxBytes: 8 << 30)
+}
 
 /// Imports Markdown and plain-text files, Obsidian vaults and Bear exports (`.textbundle` folders,
 /// `.textpack` zips or plain Markdown).
@@ -12,7 +21,8 @@ final class MarkdownImporter {
     /// One note to import, with the notebook it goes into.
     struct Item: Equatable {
         var url: URL
-        var notebook: String
+        /// Folder names from the chosen folder down; each becomes a nested notebook.
+        var notebook: [String]
         /// Images must stay inside this folder; for a chosen folder, `![[image.png]]` names are looked up anywhere in it.
         var root: URL
         /// False for loose files, whose images are only looked up next to them.
@@ -21,6 +31,7 @@ final class MarkdownImporter {
 
     private let store: NoteStore
     private let fileManager = FileManager.default
+    private var createdIDs: [UUID] = []
 
     init(store: NoteStore) {
         self.store = store
@@ -29,22 +40,22 @@ final class MarkdownImporter {
     // MARK: Walking
 
     /// The files to import from the chosen files and folders. Folders become notebooks named after
-    /// them, subfolders `Folder / Subfolder`; loose files go into a notebook named after their folder.
+    /// them and subfolders nested notebooks; loose files go into a notebook named after their folder.
     nonisolated static func items(for urls: [URL]) -> [Item] {
         var result: [Item] = []
         for url in urls {
             let url = url.standardizedFileURL
             if isDirectory(url), !isBundle(url) {
-                walk(url, notebook: url.lastPathComponent, root: url, into: &result)
+                walk(url, notebook: [url.lastPathComponent], root: url, into: &result)
             } else if isImportable(url) {
                 let parent = url.deletingLastPathComponent()
-                result.append(Item(url: url, notebook: parent.lastPathComponent, root: parent, indexesRoot: false))
+                result.append(Item(url: url, notebook: [parent.lastPathComponent], root: parent, indexesRoot: false))
             }
         }
         return result
     }
 
-    nonisolated private static func walk(_ folder: URL, notebook: String, root: URL, into result: inout [Item]) {
+    nonisolated private static func walk(_ folder: URL, notebook: [String], root: URL, into result: inout [Item]) {
         let contents = (try? FileManager.default.contentsOfDirectory(
             at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
         )) ?? []
@@ -55,7 +66,7 @@ final class MarkdownImporter {
             if isImportable(url), isInside(url, root: root) { result.append(Item(url: url, notebook: notebook, root: root)) }
         }
         for url in sorted where isDirectory(url) && !isBundle(url) {
-            walk(url, notebook: notebook + " / " + url.lastPathComponent, root: root, into: &result)
+            walk(url, notebook: notebook + [url.lastPathComponent], root: root, into: &result)
         }
     }
 
@@ -82,33 +93,47 @@ final class MarkdownImporter {
     func run(_ items: [Item], progress: (ImportProgress) -> Void) async -> ImportReport {
         var report = ImportReport()
         var nameIndexes: [URL: [String: URL]] = [:]
+        let ids = items.map { _ in UUID() }
+        var names: [String: [WikiTarget]] = [:]
+        for (item, id) in zip(items, ids) {
+            let key = TextFold.fold(item.url.deletingPathExtension().lastPathComponent)
+            names[key, default: []].append(WikiTarget(id: id, folders: Self.folders(of: item)))
+        }
+        let store = store
+        let resolveWikiLink = Self.wikiLinkResolver(names: names) { store.noteID(forTitle: $0, preferring: nil) }
         progress(ImportProgress(completed: 0, total: items.count))
         for (index, item) in items.enumerated() {
             if Task.isCancelled { report.cancelled = true; break }
             progress(ImportProgress(completed: index, total: items.count, currentName: item.url.deletingPathExtension().lastPathComponent))
             if item.indexesRoot, nameIndexes[item.root] == nil { nameIndexes[item.root] = Self.fileIndex(under: item.root) }
-            if importItem(item, nameIndex: item.indexesRoot ? nameIndexes[item.root] ?? [:] : [:], report: &report) == false {
+            if importItem(item, nameIndex: item.indexesRoot ? nameIndexes[item.root] ?? [:] : [:], id: ids[index],
+                          resolveWikiLink: item.indexesRoot ? resolveWikiLink : nil, report: &report) == false {
                 report.filesSkipped += 1
             }
             await Task.yield()
         }
         progress(ImportProgress(completed: report.cancelled ? report.notesImported : items.count, total: items.count))
+        store.unresolveLinksToSkipped(in: createdIDs,
+                                      planned: Dictionary(zip(ids, items.map { $0.url.deletingPathExtension().lastPathComponent }),
+                                                          uniquingKeysWith: { a, _ in a }))
         store.flush()
         return report
     }
 
     /// Imports one file or bundle. Returns false when it couldn't be read.
     @discardableResult
-    func importItem(_ item: Item, nameIndex: [String: URL] = [:], report: inout ImportReport) -> Bool {
+    func importItem(_ item: Item, nameIndex: [String: URL] = [:], id: UUID? = nil, resolveWikiLink: WikiLinkResolver? = nil,
+                    report: inout ImportReport) -> Bool {
         let ext = item.url.pathExtension.lowercased()
         if ext == "textpack" {
-            guard let unpacked = unzip(item.url) else { return false }
+            // A cancelled unpack isn't an unreadable file.
+            guard let unpacked = Self.unzip(item.url) else { return Task.isCancelled }
             defer { try? fileManager.removeItem(at: unpacked) }
             guard let bundle = Self.textBundle(in: unpacked) else { return false }
-            return importBundle(bundle, named: item.url.deletingPathExtension().lastPathComponent, item: item, report: &report)
+            return importBundle(bundle, named: item.url.deletingPathExtension().lastPathComponent, item: item, id: id, report: &report)
         }
         if ext == "textbundle" {
-            return importBundle(item.url, named: item.url.deletingPathExtension().lastPathComponent, item: item, report: &report)
+            return importBundle(item.url, named: item.url.deletingPathExtension().lastPathComponent, item: item, id: id, report: &report)
         }
         guard let text = Self.readText(item.url) else { return false }
         let fileDates = Self.fileDates(item.url)
@@ -118,15 +143,15 @@ final class MarkdownImporter {
         let name = item.url.deletingPathExtension().lastPathComponent
         let note: MarkdownNote = ext == "txt"
             ? Self.plainTextNote(text, fallbackTitle: name)
-            : MarkdownReader.note(from: text, fallbackTitle: name, resolveImage: resolver)
+            : MarkdownReader.note(from: text, fallbackTitle: name, resolveImage: resolver, resolveWikiLink: resolveWikiLink)
         report.attachmentsSkipped += skipped.count
         save(note, notebook: item.notebook, created: note.frontMatter.created ?? fileDates.created,
-             updated: note.frontMatter.updated ?? fileDates.modified, report: &report)
+             updated: note.frontMatter.updated ?? fileDates.modified, id: id, report: &report)
         return true
     }
 
     /// A TextBundle: `text.md` (or `.markdown`/`.txt`) plus an `assets` folder; Bear adds its dates to `info.json`.
-    private func importBundle(_ bundle: URL, named name: String, item: Item, report: inout ImportReport) -> Bool {
+    private func importBundle(_ bundle: URL, named name: String, item: Item, id: UUID?, report: inout ImportReport) -> Bool {
         let candidates = ["text.md", "text.markdown", "text.txt"].map { bundle.appendingPathComponent($0) }
         let textURL = candidates.first { fileManager.fileExists(atPath: $0.path) }
             ?? ((try? fileManager.contentsOfDirectory(at: bundle, includingPropertiesForKeys: nil)) ?? [])
@@ -142,70 +167,104 @@ final class MarkdownImporter {
         let fileDates = Self.fileDates(item.url)
         save(note, notebook: item.notebook,
              created: note.frontMatter.created ?? info.created ?? fileDates.created,
-             updated: note.frontMatter.updated ?? info.modified ?? fileDates.modified, report: &report)
+             updated: note.frontMatter.updated ?? info.modified ?? fileDates.modified, id: id, report: &report)
         return true
     }
 
-    private func save(_ note: MarkdownNote, notebook: String, created: Date?, updated: Date?, report: inout ImportReport) {
-        let nb = store.notebookForImport(named: notebook)
-        store.createImportedNote(body: note.body, title: note.title, notebookID: nb.id, createdAt: created, updatedAt: updated)
+    private func save(_ note: MarkdownNote, notebook: [String], created: Date?, updated: Date?, id: UUID?, report: inout ImportReport) {
+        let nb = store.notebookForImport(path: notebook)
+        createdIDs.append(store.createImportedNote(body: note.body, title: note.title, notebookID: nb.id,
+                                                   createdAt: created, updatedAt: updated, id: id).id)
         report.notesImported += 1
         report.notebookIDs.insert(nb.id)
     }
 
-    /// Unpacks a `.textpack` into a temporary folder, refusing archives with entries that would land outside it.
-    private func unzip(_ url: URL) -> URL? {
-        guard let entries = Self.zipEntries(url), entries.allSatisfy(Self.isSafeZipEntry) else { return nil }
-        let destination = fileManager.temporaryDirectory.appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        process.arguments = ["-x", "-k", url.path, destination.path]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return nil
-        }
-        guard process.terminationStatus == 0, Self.staysInside(destination) else {
-            try? fileManager.removeItem(at: destination)
-            return nil
-        }
-        return destination
+    /// A note in the import that wiki links can name: its id and the folded folders above it, starting with
+    /// the chosen folder.
+    struct WikiTarget {
+        var id: UUID
+        var folders: [String]
     }
 
-    /// The entry names in a zip archive, or nil when it can't be listed.
-    nonisolated static func zipEntries(_ url: URL) -> [String]? {
-        let process = Process()
-        let pipe = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo")
-        process.arguments = ["-1", url.path]
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        do {
-            try process.run()
-        } catch {
-            return nil
+    nonisolated static func folders(of item: Item) -> [String] {
+        let base = item.root.deletingLastPathComponent().standardizedFileURL.pathComponents
+        let dir = item.url.deletingLastPathComponent().standardizedFileURL.pathComponents
+        guard dir.starts(with: base) else { return [] }
+        return dir.dropFirst(base.count).map(foldedPathPart)
+    }
+
+    nonisolated static func foldedPathPart(_ folder: String) -> String {
+        TextFold.fold(ExportLinkContext.linkPathPart(folder))
+    }
+
+    /// Resolves a wiki-link target to a note in the same import by file name (folded), preferring the one whose
+    /// folders end with the link's path (`[[Work/Plan]]`, `[[../Work/Plan]]`), else whose folders end the link's path
+    /// (a vault path when a subfolder was imported); a path no imported note matches skips this step. Then an existing
+    /// note with that title, else an unresolved title link.
+    static func wikiLinkResolver(names: [String: [WikiTarget]], existing: @escaping (String) -> UUID?) -> WikiLinkResolver {
+        { target, heading, folders in
+            let candidates = names[TextFold.fold(target)] ?? []
+            let wanted = folders.filter { !["", ".", ".."].contains($0) }.map(foldedPathPart)
+            func endsWith(_ path: [String], _ tail: [String]) -> Bool {
+                !tail.isEmpty && path.count >= tail.count && Array(path.suffix(tail.count)) == tail
+            }
+            let match = wanted.isEmpty ? candidates.first
+                : candidates.first { endsWith($0.folders, wanted) } ?? candidates.first { endsWith(wanted, $0.folders) }
+            if let id = match?.id ?? existing(target) { return .note(id: id, heading: heading) }
+            return .unresolved(title: target, heading: heading)
         }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0, let text = String(data: data, encoding: .utf8) else { return nil }
-        return text.split(whereSeparator: \.isNewline).map(String.init)
+    }
+
+    /// Unpacks a zip archive (a `.textpack`, a Notion export) into a temporary folder with `ZipExtractor`, refusing
+    /// archives with entries that would land outside it.
+    nonisolated static func unzip(_ url: URL) -> URL? {
+        var limits = ZipLimits.standard
+        return try? unzip(url, within: &limits)
+    }
+
+    /// `unzip(_:)` that also takes the archive's entries and unpacked size off `limits`, throwing
+    /// `ImportError.archiveTooLarge` when they don't fit. Nil when the archive can't be opened.
+    nonisolated static func unzip(_ url: URL, within limits: inout ZipLimits) throws -> URL? {
+        try unpack(url, within: &limits)?.folder
+    }
+
+    /// `unzip(_:within:)` that also returns how many bytes were written for each file. Symbolic links, encrypted
+    /// entries, unknown compression methods and names nested more than 256 deep or with a part over 255 characters
+    /// throw `ImportError.unsupportedArchive`; cancellation is rethrown.
+    nonisolated static func unpack(_ url: URL, within limits: inout ZipLimits) throws -> ZipExtractor.Result? {
+        let destination = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noteit-import-\(UUID().uuidString)", isDirectory: true)
+        let result: ZipExtractor.Result
+        do {
+            result = try ZipExtractor.extract(url, to: destination, maxEntries: limits.maxEntries, maxBytes: limits.maxBytes)
+        } catch ZipExtractor.Failure.tooLarge {
+            throw ImportError.archiveTooLarge(url.lastPathComponent)
+        } catch let failure as ZipExtractor.Failure {
+            switch failure {
+            case .symlink, .encrypted, .unsupportedMethod, .nameTooLong:
+                throw ImportError.unsupportedArchive(url.lastPathComponent, reason: failure.errorDescription ?? "")
+            default:
+                return nil
+            }
+        }
+        limits.maxEntries -= result.entries
+        limits.maxBytes -= result.bytes
+        return result
+    }
+
+    /// The entry names in a zip archive, or nil when it can't be read.
+    nonisolated static func zipEntries(_ url: URL) -> [String]? {
+        ZipDirectory.read(url)?.entries.map(\.name)
+    }
+
+    /// The number of entries in a zip archive and their unpacked size, as its directory states them.
+    nonisolated static func zipTotals(_ url: URL) -> (entries: Int, bytes: Int64)? {
+        ZipDirectory.read(url).map { ($0.entries.count, Int64(clamping: $0.totalUncompressedSize)) }
     }
 
     nonisolated static func isSafeZipEntry(_ name: String) -> Bool {
         let parts = name.split(separator: "/", omittingEmptySubsequences: false)
         return !name.hasPrefix("/") && !name.hasPrefix("~") && !parts.contains("..")
-    }
-
-    /// True when everything under `folder`, with symlinks followed, is still inside it.
-    nonisolated static func staysInside(_ folder: URL) -> Bool {
-        guard let enumerator = FileManager.default.enumerator(at: folder, includingPropertiesForKeys: nil) else { return false }
-        for case let url as URL in enumerator where !isInside(url, root: folder) {
-            return false
-        }
-        return true
     }
 
     /// The bundle inside an unpacked `.textpack`, or the unpacked folder itself.

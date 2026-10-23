@@ -30,6 +30,9 @@ Tests live in `Tests/NoteItSyncTests/` (the sync library) and `Tests/NoteItTests
 | `Hotkeys/` | `HotkeyAction`, `HotkeyManager` (Carbon `RegisterEventHotKey`), `KeyCombo` and the `ShortcutRecorder` view, whose recording session is shared with the menu shortcut recorder |
 | `Settings/` | The Settings window and its General, Shortcuts, Editor, Sync and About tabs, plus `Preferences` (defaults keys) |
 | `Sync/` | `SyncController`, `NoteStoreSyncAdapter`, `SyncConfiguration` (providers and settings) and `Keychain` |
+| `Reminders/` | `ReminderScheduler` (finds reminders that are due, also after sleep or a clock change), `ReminderNotifications` (notifications with Done, Snooze and Tomorrow) and `ReminderClaims` (shows each reminder on one Mac) |
+| `Automation/` | The Local API handlers, URL scheme, App Intents and Spotlight, plus `OrganiseRoutes` (the `organise.*` Local API routes, the tag tree and the notebook `parentID` and `path`) |
+| `Linking/` | `LinkExtractor` (note links in a body), `LinkIndex` (outgoing links and backlinks), `LinkSuggester` (ranks the `[[` list), `MentionFinder` (unlinked mentions), `OutlineExtractor`, `NavigationHistory` and `NavigationModel` (Go Back and Go Forward), `TemplateExpander` and `LinkingAPIRoutes` (the `linking.*` Local API routes) |
 
 ## Storage
 
@@ -40,7 +43,9 @@ Your library lives in `~/Library/Application Support/NoteIt/`. Set `NOTEIT_DATA_
 ├── .initialized                     marker: first launch (seeding) has happened
 ├── library.json                     notebooks and note metadata (pretty-printed, ISO-8601 dates); notes in Recently Deleted have a `deletedAt` date
 ├── library.corrupt-<ts>.json        backup of an unreadable library.json, if that ever happens
-├── search-index.json                folded plain text of each note, for search
+├── search-index.json                folded plain text, tasks and reminders of each note (format 2), for search and the Tasks view
+├── smart-folders.json               smart folders and smart folder deletions not yet pushed
+├── link-index.json                  outgoing note links of each note, for backlinks (rebuilt if missing or stale)
 ├── seed-manifest.json               IDs and revisions of the sample content, until sync is connected
 ├── tombstones.json                  removed notes whose bodies haven't been moved to .trash yet
 ├── sync-state-<hash>.json           last-synced state per remote store (only while sync is set up)
@@ -80,8 +85,26 @@ The editor is an `NSTextView` that stores each note as RTFD.
 - **Inline code** is stored only as a monospaced font (older notes may also carry a flat background, which the editor removes and never draws). The pill and tinted text are drawn from Settings. Its padding is a small kern on the characters around the code, and the *Same as Text* font swaps in the text font with an `inlineCodeDisplay` marker. Both live only in the editor: `NoteItTextView.attributedString()` and copy/drag return the saved form (`CodeStyler.persisted`), so export and saving still detect inline code by its monospaced font.
 - **Find and replace.** `FindReplaceEngine` finds matches (UTF-16 ranges) and builds replacement strings, including `$1` captures in regex mode. `FindReplaceModel` drives the bar: it highlights matches with layout-manager temporary attributes, so the note's text is never changed to show them, and recomputes them when the text changes. Replace and Replace All go through the text view's `shouldChangeText`/`didChangeText` in one undo group, so they're single undo steps and are saved like typing. Each replacement keeps the attributes found at the start of the text it replaces.
 - **Markdown shortcuts** are handled in `MarkdownShortcuts.swift`, and every formatting command, with its menu title, toolbar icon and shortcut, is defined in `FormatCommand.swift`. The full list is in [keyboard-shortcuts.md](keyboard-shortcuts.md).
-- **Tags.** `#hashtags` are collected from note text, lowercased. A `#` counts only at the start of the text or after whitespace, an opening bracket or quote, `,` or `;`. Hashtags inside inline code, code blocks and links are ignored.
-- **Search** matches every word of the query against the title and full text. Matching ignores case, accents and character width, using the folded text in `search-index.json`.
+- **Tags.** `#hashtags` are collected from note text, lowercased. A `#` counts only at the start of the text or after whitespace, an opening bracket or quote, `,` or `;`. Hashtags inside inline code, code blocks and links are ignored. A `/` nests a tag (`#work/clients`); `TagTree` builds the sidebar tree and `TagRewriter` renames, merges and deletes tags in note text through `NoteStore.editBody`, keeping a version of each note so it can be undone.
+- **Search** uses the query language in `NoteItCore/Query` (`SearchQuery` and `QueryEvaluator`): words, `"phrases"`, `-word`, `OR`, and filters such as `tag:`, `notebook:`, `is:todo`, `due:` and `edited:`. Matching ignores case, accents and character width, using the folded text in `search-index.json`. `SearchRanker` ranks results by best match with BM25, and `SearchHighlighter` builds the snippets and the highlighted ranges in the note list and editor.
+
+## Organise
+
+- **Shared rules.** The token grammar (`TokenGrammar`: tags, `@due(…)`, `@remind(…)`), the task parser, natural dates, the query language, the tag tree and the notebook tree live in `NoteItCore`, so they can be reused on other platforms. The app keeps them in step with note bodies through `OrganiseIndexer`, a `DerivedIndex` that writes search index format 2.
+- **Nested notebooks.** `Notebook.parent` holds the parent notebook's ID. `NotebookTree` places a notebook whose parent is missing or would make a loop at the top level, and limits nesting to four levels. Older versions of NoteIt don't know the field; sync keeps it in the raw record (`RawMetaOverlay`), so an older Mac renaming a notebook doesn't flatten it.
+- **Smart folders** are saved searches in `smart-folders.json`, synced as `smart-folders/<id>.json`. Their raw sync records are kept in `sync-meta-raw/smart-folders/`. A smart folder deleted while sync is set up is remembered until the deletion is pushed.
+- **Tasks.** Every checkbox paragraph in notes that aren't locked or in Recently Deleted is a task. The Tasks view groups them by due date. A task is named by its note, paragraph index and a hash of its text, so a change from another Mac or the editor is noticed before the task is checked or dated.
+- **Reminders.** `@remind(2026-10-21 09:00)` in a line rings at that local time while NoteIt is running. `ReminderScheduler` checks again after sleep, a clock or time zone change and when notes change. With sync set up, the first Mac to write `claims/reminders/<id>` shows the reminder; an idle Mac waits 20 seconds first so an active one wins. Old claims are swept once a day.
+- **Local API.** `OrganiseRoutes` adds tag rename and delete, notebook move, smart folders and tasks under `organise.*`, the tag tree for `GET /v1/tags?tree=1` and `parentID` and `path` on notebooks. `GET /v1/search` ranks results and adds `score`, `highlights` and `matchedIn`.
+
+## Links, daily notes and templates
+
+- **Links.** A link to a note is an ordinary link whose URL is `noteit://note/<UUID>`, with `?heading=<text>` for a heading. A link to a note that doesn't exist yet is `noteit://note?title=<text>[&heading=<text>]`. `NoteLink` (in `NoteItCore`) parses both, ignoring case, and writes the canonical form. Typing `[[` opens `InlineCompletionController`, a list under the caret that never takes focus; the text view forwards ↑ ↓ ↩ ⇥ and Esc to it. `LinkSuggester` ranks titles with `FuzzyMatcher`.
+- **Link index.** `LinkIndex` is a `DerivedIndex` registered with `NoteStore` before `rebuildDerivedIndexes()` runs, so it's populated at launch. It keeps each note's outgoing links and reverse maps for backlinks and unresolved titles, saved to `link-index.json`. Bodies are parsed off the main thread and only for notes whose revision changed. Locked notes and notes in Recently Deleted contribute no links, so their text never reaches backlinks, previews or mentions.
+- **Inspector.** `LinksPanelView` shows backlinks with a line of context, outgoing links, unlinked mentions (found by `MentionFinder` on a background task) and the note's outline. `RenameTracker` watches the open note's title and `LinkRenameBanner` offers to update the text of links to it; the rewrite goes through `NoteStore.editBody` in batches, keeping a version of each note so it can be undone.
+- **Daily notes.** A daily note is a note in the daily notebook titled with a date (`DailyNoteTitle`, in any of its formats). Days are always counted in the Gregorian calendar in the current time zone (`DayKey.dailyCalendar()`), whatever the system calendar. `NoteStore+DailyUI` keeps a cached day index, reparsing only titles that changed, for Today, the calendar sheet and the header's ‹ › buttons.
+- **Templates.** Notes in the Templates notebook are templates. `TemplateExpander` fills in `{{title}}`, `{{date}}` and `{{time}}` (each with an optional format), `{{clipboard}}` and `{{cursor}}` when a note is created from one, and a notebook can have a default template.
+- **Export and import.** Markdown export writes note links as `[[Title]]` or relative links, and the folder importer turns `[[wiki links]]` back into note links once every file is in.
 
 ## Export
 
@@ -142,7 +165,9 @@ The full design, including the decision table, remote format and the reasoning b
   ```text
   noteit/v1/
   ├── manifest.json            format version and encryption parameters; never encrypted
-  ├── notebooks/<id>.json      notebook record
+  ├── notebooks/<id>.json      notebook record (with `parent` for a nested notebook)
+  ├── smart-folders/<id>.json  smart folder record
+  ├── claims/reminders/<id>    which Mac showed a reminder; each Mac removes its own after 7 days
   ├── notes/<id>.meta          note metadata, including the hash of the body it expects
   ├── notes/<id>.body          the note body (flattened RTFD)
   ├── tombstones/<id>.json     deletion marker

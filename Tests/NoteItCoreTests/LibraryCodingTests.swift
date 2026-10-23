@@ -9,6 +9,7 @@ final class LibraryCodingTests: XCTestCase {
           "colorHex" : "#0A84FF",
           "id" : "0B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F",
           "name" : "Inbox",
+          "parent" : null,
           "revision" : "1B1C8E8C-3F55-4C3A-9F7E-1D2B3C4D5E6F",
           "sortIndex" : 0,
           "symbol" : "tray"

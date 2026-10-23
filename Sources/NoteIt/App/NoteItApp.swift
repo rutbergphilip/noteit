@@ -1,3 +1,4 @@
+import NoteItCore
 import SwiftUI
 
 @main
@@ -50,10 +51,19 @@ struct NoteItCommands: Commands {
             }
             .menuShortcut(.newNote)
 
+            Button("New Note from Template…") {
+                WindowRouter.showMainWindow()
+                NotificationCenter.default.post(name: .noteItShowTemplatePicker, object: TemplatePickerRequest(mode: .newNote))
+            }
+            .menuShortcut(.newNoteFromTemplate)
+
             Button("New Notebook…") {
                 NotificationCenter.default.post(name: .noteItNewNotebook, object: nil)
             }
             .menuShortcut(.newNotebook)
+
+            Button("New Smart Folder…") { SmartFolderActions.newSmartFolder() }
+                .menuShortcut(.newSmartFolder)
 
             Divider()
 
@@ -62,6 +72,21 @@ struct NoteItCommands: Commands {
 
             Button("Command Palette…") { PaletteController.shared.toggle(mode: .commands) }
                 .menuShortcut(.commandPalette)
+
+            if DailyNotes.isAvailable {
+                Divider()
+                Button("Open Today's Note") {
+                    WindowRouter.showMainWindow()
+                    NoteStore.shared.openDailyNote(for: Date())
+                    WindowRouter.focusEditor()
+                }
+                .menuShortcut(.openToday)
+                Button("Daily Note for Date…") {
+                    WindowRouter.showMainWindow()
+                    NotificationCenter.default.post(name: .noteItShowDailyCalendar, object: nil)
+                }
+                .menuShortcut(.dailyNoteForDate)
+            }
         }
 
         // ⌘F searches all notes; in-note find moves to ⌥⌘F.
@@ -70,6 +95,8 @@ struct NoteItCommands: Commands {
                 NotificationCenter.default.post(name: .noteItFocusSearch, object: nil)
             }
             .menuShortcut(.searchNotes)
+
+            SaveSearchMenuButton()
 
             Divider()
 
@@ -85,12 +112,70 @@ struct NoteItCommands: Commands {
                 Button("Use Selection for Find") { FindReplaceModel.active()?.useSelectionForFind() }
                     .keyboardShortcut("e", modifiers: .command)
             }
+
+            Divider()
+
+            Button("Link to Note…") {
+                NSApp.sendAction(#selector(NoteItTextView.linkToNote(_:)), to: nil, from: nil)
+            }
+            .menuShortcut(.linkToNote)
+
+            Button("Insert Template…") {
+                NSApp.sendAction(#selector(NoteItTextView.showInsertTemplatePicker(_:)), to: nil, from: nil)
+            }
+
+            Menu("Task") {
+                Button("Set Due Date…") {
+                    NSApp.sendAction(#selector(NoteItTextView.setDueDate(_:)), to: nil, from: nil)
+                }
+                .menuShortcut(.setDueDate)
+
+                Button("Add Reminder…") {
+                    NSApp.sendAction(#selector(NoteItTextView.addReminder(_:)), to: nil, from: nil)
+                }
+                .menuShortcut(.addReminder)
+            }
+        }
+
+        CommandGroup(after: .toolbar) {
+            Divider()
+            InspectorMenuButton()
+            Button("Tasks") {
+                WindowRouter.showMainWindow()
+                NoteStore.shared.showTasks()
+            }
+            .menuShortcut(.showTasks)
+            Button("Go Back") { NotificationCenter.default.post(name: .noteItGoBack, object: nil) }
+                .menuShortcut(.goBack)
+            Button("Go Forward") { NotificationCenter.default.post(name: .noteItGoForward, object: nil) }
+                .menuShortcut(.goForward)
         }
 
         CommandGroup(after: .windowArrangement) {
             Button("NoteIt Notes") { WindowRouter.showMainWindow() }
                 .keyboardShortcut("0", modifiers: .command)
         }
+    }
+}
+
+/// View › Show / Hide Links and Outline.
+struct InspectorMenuButton: View {
+    @AppStorage(PrefKey.inspectorVisible) private var visible = false
+
+    var body: some View {
+        Button(visible ? "Hide Links and Outline" : "Show Links and Outline") { visible.toggle() }
+            .menuShortcut(.toggleInspector)
+    }
+}
+
+/// Enabled while the main window's search field has text.
+private struct SaveSearchMenuButton: View {
+    @ObservedObject private var store = NoteStore.shared
+
+    var body: some View {
+        Button("Save Search as Smart Folder…") { SmartFolderActions.newSmartFolder(query: store.searchText) }
+            .menuShortcut(.saveSearchAsSmartFolder)
+            .disabled(store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }
 
@@ -111,6 +196,8 @@ extension Notification.Name {
     static let noteItFocusSearch = Notification.Name("noteItFocusSearch")
     static let noteItShowMainWindow = Notification.Name("noteItShowMainWindow")
     static let noteItNewNotebook = Notification.Name("noteItNewNotebook")
+    static let noteItGoBack = Notification.Name("noteItGoBack")
+    static let noteItGoForward = Notification.Name("noteItGoForward")
     /// Posted after a user change to the library has been saved (sync uses it to schedule a pass).
     static let noteItLocalChange = Notification.Name("noteItLocalChange")
 }

@@ -1,9 +1,13 @@
 import AppKit
 import Foundation
+import NoteItDoc
+import NoteItDocAppKit
+import NoteItMarkdown
 
 /// The one body codec type, with no registry. Owned by the foundations plan (Task 4.2; program §6).
 /// `rtfd` is the editor's NSAttributedString as RTFD libraries store it (an `.rtfd` package); `noteItDoc` is a
-/// self-contained `.noteitdoc` file. markdown-storage adds `case markdown` in wave 1 with a branch in each switch.
+/// self-contained `.noteitdoc` file. `markdown` is a standalone `.md` file in the library flavour, with its images and
+/// attachments in `_attachments/` beside it (markdown-storage Task 2.4).
 ///
 /// Sync's body encoding: a `noteit-doc` body is built with `noteItDoc(of: text, extras: bodyExtras[id] ?? .empty)`
 /// before sealing, and an incoming one is applied with `attributedString(from:)`, writing with the returned extras
@@ -11,38 +15,67 @@ import Foundation
 enum BodyCodec: String, CaseIterable, Sendable {
     case rtfd
     case noteItDoc
+    case markdown
 
     var fileExtension: String {
         switch self {
         case .rtfd: "rtfd"
         case .noteItDoc: "noteitdoc"
+        case .markdown: "md"
         }
     }
 
-    /// `.rtfd` reads `extras` as `.empty`.
+    /// `.rtfd` reads `extras` as `.empty`. `.markdown` reads either flavour, takes relative image and attachment
+    /// paths from inside the file's folder, and returns the unknown front matter keys as `extras.frontMatter` and the
+    /// known ones as `frontMatter`.
     func read(at url: URL) throws -> StoredBody {
         switch self {
         case .rtfd:
             return StoredBody(text: try RTFDBodyStorage.readBody(at: url))
         case .noteItDoc:
             return try Self.attributedString(from: BodyContainer.decode(Data(contentsOf: url)))
+        case .markdown:
+            guard let text = String(data: try Data(contentsOf: url), encoding: .utf8) else { throw MarkdownError.notUTF8 }
+            let folder = url.deletingLastPathComponent()
+            let imported = MarkdownCodec.resolvingAttachments(try MarkdownCodec.parse(text)) { path in
+                Self.fileInside(folder, path: path).flatMap { try? Data(contentsOf: $0) }
+            }
+            var stored = try Self.attributedString(from: imported.body)
+            var known = imported.frontMatter
+            known.extra = ""
+            stored.frontMatter = known
+            return stored
         }
     }
 
     /// Replaces `url` atomically. `.rtfd` ignores `extras`; `.noteItDoc` writes one file with the attachments and
-    /// `extras` inside.
-    func write(_ text: NSAttributedString, extras: ContainerExtras = .empty, to url: URL) throws {
+    /// `extras` inside; `.markdown` writes the attachments to `_attachments/` beside the file and front matter with
+    /// the keys NoteIt owns taken from `meta` followed by `extras.frontMatter`. Only `.markdown` reads `meta`, and
+    /// requires it.
+    func write(_ text: NSAttributedString, extras: ContainerExtras = .empty, meta: NoteMeta? = nil, to url: URL) throws {
         switch self {
         case .rtfd:
             let temp = try RTFDBodyStorage.writeTempBody(text, in: url.deletingLastPathComponent())
             try RTFDBodyStorage.installBody(temp, at: url)
         case .noteItDoc:
             try data(of: text, extras: extras).write(to: url, options: .atomic)
+        case .markdown:
+            assert(meta != nil, "a library Markdown file is written with the note's metadata")
+            let container = try Self.noteItDoc(of: text, extras: extras)
+            let folder = url.deletingLastPathComponent().appendingPathComponent(AttachmentPaths.folder, isDirectory: true)
+            for (sha, attachment) in container.attachments {
+                let file = folder.appendingPathComponent(AttachmentPaths.fileName(sha256: sha, originalName: attachment.name))
+                guard !FileManager.default.fileExists(atPath: file.path) else { continue }
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try attachment.data.write(to: file, options: .atomic)
+            }
+            try Data(Self.markdown(of: container, frontMatter: Self.frontMatter(meta, extras: extras), profile: .library).utf8)
+                .write(to: url, options: .atomic)
         }
     }
 
-    /// The bytes `write(_:extras:to:)` stores; for `.rtfd`, the package's flat-file serialization.
-    func data(of text: NSAttributedString, extras: ContainerExtras = .empty) throws -> Data {
+    /// The bytes `write(_:extras:meta:to:)` stores; for `.rtfd`, the package's flat-file serialization.
+    func data(of text: NSAttributedString, extras: ContainerExtras = .empty, meta: NoteMeta? = nil) throws -> Data {
         switch self {
         case .rtfd:
             guard let data = text.rtfd(from: NSRange(location: 0, length: text.length),
@@ -52,6 +85,10 @@ enum BodyCodec: String, CaseIterable, Sendable {
             return data
         case .noteItDoc:
             return try Self.noteItDoc(of: text, extras: extras).encoded()
+        case .markdown:
+            assert(meta != nil, "a library Markdown file is written with the note's metadata")
+            return Data(Self.markdown(of: try Self.noteItDoc(of: text, extras: extras), frontMatter: Self.frontMatter(meta, extras: extras),
+                                      profile: .library).utf8)
         }
     }
 
@@ -91,8 +128,8 @@ enum BodyCodec: String, CaseIterable, Sendable {
     }
 
     @MainActor
-    static func html(of text: NSAttributedString, title: String) -> String {
-        HTMLWriter.write(text, title: title)
+    static func html(of text: NSAttributedString, title: String, links: ExportLinkContext = .titlesOnly) -> String {
+        HTMLWriter.write(text, title: title, links: links)
     }
 
     // MARK: noteit-doc container
@@ -115,5 +152,123 @@ enum BodyCodec: String, CaseIterable, Sendable {
     static func semanticallyEqual(_ a: NSAttributedString, _ b: NSAttributedString) -> Bool {
         guard let left = try? noteItDoc(of: a).encoded(), let right = try? noteItDoc(of: b).encoded() else { return false }
         return left == right
+    }
+}
+
+// MARK: Markdown
+
+extension BodyCodec {
+    /// The unknown front matter keys of the Markdown file at `url`, read without parsing its body.
+    static func markdownFrontMatterExtra(at url: URL) throws -> String? {
+        guard let text = String(data: try Data(contentsOf: url), encoding: .utf8) else { throw MarkdownError.notUTF8 }
+        let extra = try FrontMatter.read(text).0.extra
+        return extra.isEmpty ? nil : extra
+    }
+
+    /// `text` as a standalone Markdown file; images and attachments point into `_attachments/`.
+    static func markdown(of text: NSAttributedString, profile: MarkdownProfile) throws -> String {
+        markdown(of: try noteItDoc(of: text), profile: profile)
+    }
+
+    /// Markdown from outside the library (automation, plugins, the web clipper).
+    static func attributedString(fromMarkdown text: String, options: MarkdownImportOptions) async throws
+        -> (NSAttributedString, unresolvedImages: [AttachmentRef]) {
+        let imported = try await MarkdownCodec.importDocument(text, options: options)
+        return (try DocConverter.importDocument(imported.body, styles: AppDocStyleProvider.shared), imported.unresolvedImages)
+    }
+
+    /// The keys NoteIt owns always come from the note itself (markdown-storage spec §3.3), never from what was read.
+    static func frontMatter(_ meta: NoteMeta?, extras: ContainerExtras) -> FrontMatter {
+        var frontMatter = FrontMatter(extra: extras.frontMatter ?? "")
+        guard let meta else { return frontMatter }
+        frontMatter.id = meta.id
+        frontMatter.created = meta.createdAt
+        frontMatter.updated = meta.updatedAt
+        frontMatter.pinned = meta.isPinned
+        frontMatter.deleted = meta.deletedAt
+        frontMatter.conflictOf = meta.conflictOriginalID
+        frontMatter.conflictSource = meta.conflictSource
+        frontMatter.locked = meta.lock != nil
+        return frontMatter
+    }
+
+    /// `path` (already percent-decoded) from a note in `folder`, or nil when it leaves the folder, also through a
+    /// symbolic link.
+    static func fileInside(_ folder: URL, path: String) -> URL? {
+        guard let relative = AttachmentPaths.resolve(decoded: path, fromNoteAt: "note.md") else { return nil }
+        let root = folder.standardizedFileURL.resolvingSymlinksInPath()
+        let file = folder.appendingPathComponent(relative).standardizedFileURL.resolvingSymlinksInPath()
+        return file.path.hasPrefix(root.path + "/") ? file : nil
+    }
+
+    // MARK: A Markdown library's files
+
+    /// A note file of a Markdown library: `text` with original image bytes, its attachments stored in the shared
+    /// `_attachments/` and referred to relative to `notePath`. With `previous`, unchanged blocks keep their bytes.
+    static func libraryMarkdown(of text: NSAttributedString, extras: ContainerExtras, frontMatter: FrontMatter,
+                                notePath: String, attachments: AttachmentStore, links: MarkdownLinkResolver,
+                                previous: ParsedMarkdown?) throws -> (text: String, attachmentNames: [String]) {
+        let container = try noteItDoc(of: text, extras: extras, imagePolicy: .keepOriginal)
+        var names: [String: String] = [:]
+        for (sha, attachment) in container.attachments {
+            names[sha] = try attachments.store(attachment, sha: sha)
+        }
+        var markdown = MarkdownCodec.serialize(container, frontMatter: frontMatter, profile: .library, attachmentPath: { sha in
+            let name = names[sha] ?? AttachmentPaths.fileName(sha256: sha, originalName: container.attachments[sha]?.name ?? "")
+            return AttachmentPaths.relativePath(fromNoteAt: notePath, fileName: name)
+        }, noteLinkName: { links.target(for: $0) }, previous: previous.map(links.withoutStaleLinks))
+        if !markdown.hasSuffix("\n") { markdown += "\n" }
+        return (markdown, Array(Set(names.values)).sorted())
+    }
+
+    /// The body of a library note file parsed from `notePath`. Images and attachments are read from relative
+    /// paths and `file://` URLs inside `contentRoot` and from bare names in `_attachments/`; `unresolved` counts
+    /// the ones that couldn't be read. `attachmentNames` are the files in `_attachments/` it refers to.
+    static func libraryBody(from parsed: ParsedMarkdown, notePath: String, contentRoot: URL)
+        throws -> (body: StoredBody, attachmentNames: [String], unresolved: Int) {
+        var names = Set<String>()
+        let imported = MarkdownCodec.resolvingAttachments(parsed) { path in
+            guard let relative = libraryRelativePath(path, notePath: notePath, contentRoot: contentRoot),
+                  let url = fileInside(contentRoot, path: relative) else { return nil }
+            if relative.hasPrefix(AttachmentPaths.folder + "/"), !relative.dropFirst(AttachmentPaths.folder.count + 1).contains("/") {
+                names.insert(String(relative.dropFirst(AttachmentPaths.folder.count + 1)))
+            }
+            return try? Data(contentsOf: url)
+        }
+        var stored = try attributedString(from: imported.body)
+        // Every imported paragraph ends in a newline; the editor's last paragraph doesn't.
+        if stored.text.string.hasSuffix("\n") {
+            let text = NSMutableAttributedString(attributedString: stored.text)
+            text.deleteCharacters(in: NSRange(location: text.length - 1, length: 1))
+            stored.text = text
+        }
+        var known = imported.frontMatter
+        known.extra = ""
+        stored.frontMatter = known
+        stored.extras.extra = [:]
+        return (stored, names.sorted(), imported.unresolvedImages.count)
+    }
+
+    private static func libraryRelativePath(_ path: String, notePath: String, contentRoot: URL) -> String? {
+        if path.lowercased().hasPrefix("file:") {
+            guard let url = URL(string: path) ?? URL(string: path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""),
+                  url.isFileURL else { return nil }
+            let root = contentRoot.standardizedFileURL.resolvingSymlinksInPath().path + "/"
+            let file = url.standardizedFileURL.resolvingSymlinksInPath().path
+            return file.hasPrefix(root) ? String(file.dropFirst(root.count)) : nil
+        }
+        if let relative = AttachmentPaths.resolve(decoded: path, fromNoteAt: notePath),
+           FileManager.default.fileExists(atPath: contentRoot.appendingPathComponent(relative).path) {
+            return relative
+        }
+        guard !path.contains("/") else { return nil }
+        return AttachmentPaths.folder + "/" + path
+    }
+
+    fileprivate static func markdown(of container: BodyContainer, frontMatter: FrontMatter = .empty, profile: MarkdownProfile) -> String {
+        MarkdownCodec.serialize(container, frontMatter: frontMatter, profile: profile, attachmentPath: { sha in
+            let name = container.attachments[sha]?.name ?? ""
+            return AttachmentPaths.folder + "/" + AttachmentPaths.fileName(sha256: sha, originalName: name)
+        }, previous: nil)
     }
 }

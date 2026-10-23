@@ -36,14 +36,46 @@ enum ExportActions {
         return WindowRouter.mainWindow ?? NSApp.mainWindow
     }
 
-    /// The note's saved body, including edits still waiting in the editor.
-    static func body(of note: NoteMeta) -> NSAttributedString {
+    /// The note's saved body, including edits still waiting in the editor. Nil, after telling the user, while its
+    /// file hasn't been read: a placeholder is never exported, printed, copied or shared.
+    static func body(of note: NoteMeta) -> NSAttributedString? {
         NotificationCenter.default.post(name: .noteItWillExportNote, object: note.id)
-        return store.body(for: note.id)
+        guard let body = store.bodyForOutput(note.id) else {
+            showUnread([note.displayTitle])
+            return nil
+        }
+        return body
     }
 
-    static func markdown(of note: NoteMeta) -> String {
-        MarkdownWriter.write(body(of: note), title: ExportNaming.sanitized(note.displayTitle)).markdown
+    private static func showUnread(_ titles: [String], in parent: NSWindow? = nil) {
+        let folder = store.markdownStorage?.contentRootURL.lastPathComponent ?? "the library folder"
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = titles.count == 1 ? "“\(titles[0])” wasn’t read yet" : "\(titles.count) notes weren’t read yet"
+        alert.informativeText = Self.unreadDetail(titles, folder: folder)
+        if let window = parent ?? Self.window {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    static func unreadDetail(_ titles: [String], folder: String) -> String {
+        let shown = titles.prefix(10).map { "“\($0)”" }.joined(separator: ", ")
+        let more = titles.count > 10 ? " and \(titles.count - 10) more" : ""
+        let subject = titles.count == 1 ? "Its file" : "Their files"
+        return "\(shown)\(more): \(subject) in “\(folder)” didn’t answer or couldn’t be read, so nothing was output for \(titles.count == 1 ? "it" : "them"). Try again once the folder responds."
+    }
+
+    /// Note links written with the linked notes' current titles.
+    static var noteTitles: ExportLinkContext {
+        let store = store
+        return .titles { store.note(with: $0)?.displayTitle }
+    }
+
+    static func markdown(of note: NoteMeta) -> String? {
+        guard let body = body(of: note) else { return nil }
+        return MarkdownWriter.write(body, title: ExportNaming.sanitized(note.displayTitle), links: noteTitles).markdown
     }
 
     // MARK: Copy as Markdown
@@ -55,9 +87,10 @@ enum ExportActions {
         let markdown: String
         if let textView = window?.firstResponder as? NoteItTextView, textView.selectedRange().length > 0 {
             let selection = textView.attributedString().attributedSubstring(from: textView.selectedRange())
-            markdown = MarkdownWriter.write(selection, title: title).markdown
+            markdown = MarkdownWriter.write(selection, title: title, links: noteTitles).markdown
         } else {
-            markdown = MarkdownWriter.write(body(of: note), title: title).markdown
+            guard let body = body(of: note) else { return }
+            markdown = MarkdownWriter.write(body, title: title, links: noteTitles).markdown
         }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
@@ -69,8 +102,8 @@ enum ExportActions {
     // MARK: Print
 
     static func printCurrentNote() {
-        guard let note = currentNote else { return }
-        let operation = NoteExporter.printOperation(body(of: note), title: note.displayTitle)
+        guard let note = currentNote, let body = body(of: note) else { return }
+        let operation = NoteExporter.printOperation(body, title: note.displayTitle)
         if let window {
             operation.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
         } else {
@@ -87,13 +120,15 @@ enum ExportActions {
         (NSSharingService.self as SharingServiceLookup.Type).sharingServices(forItems: ["Markdown"])
 
     static func share(_ note: NoteMeta, with service: NSSharingService) {
+        guard let markdown = markdown(of: note) else { return }
         service.subject = note.displayTitle
-        service.perform(withItems: [markdown(of: note)])
+        service.perform(withItems: [markdown])
     }
 
     static func showSharePicker(for note: NoteMeta, relativeTo view: NSView) {
+        guard let markdown = markdown(of: note) else { return }
         shareDelegate.subject = note.displayTitle
-        let picker = NSSharingServicePicker(items: [markdown(of: note)])
+        let picker = NSSharingServicePicker(items: [markdown])
         picker.delegate = shareDelegate
         picker.show(relativeTo: view.bounds, of: view, preferredEdge: .minY)
     }
@@ -122,8 +157,9 @@ enum ExportActions {
         present(panel) { url in
             let format = picker.format
             lastFormat = format
+            guard let body = body(of: note) else { return }
             do {
-                try NoteExporter.write(body(of: note), title: note.displayTitle, format: format, to: url)
+                try NoteExporter.write(body, title: note.displayTitle, format: format, to: url, links: noteTitles)
             } catch {
                 showError(error, message: "Couldn’t export “\(note.displayTitle)”")
             }
@@ -133,7 +169,7 @@ enum ExportActions {
     static func exportCurrentNotebook() {
         guard let notebook = currentNotebook else { return }
         chooseFolder(title: "Export “\(notebook.name)”") { folder, format in
-            try NoteExporter.prepareNotebook(notebook, notes: store.notes, format: format, to: folder, body: body(ofNoteWith:))
+            try NoteExporter.prepareNotebook(notebook, notebooks: store.notebooks, notes: store.notes, format: format, to: folder, body: body(ofNoteWith:))
         }
     }
 
@@ -144,9 +180,9 @@ enum ExportActions {
         }
     }
 
-    private static func body(ofNoteWith id: UUID) -> NSAttributedString {
+    private static func body(ofNoteWith id: UUID) -> NSAttributedString? {
         NotificationCenter.default.post(name: .noteItWillExportNote, object: id)
-        return store.body(for: id)
+        return store.bodyForOutput(id)
     }
 
     private static func chooseFolder(title: String, export: @escaping (URL, ExportFormat) throws -> NotesExport) {
@@ -167,7 +203,12 @@ enum ExportActions {
             let format = picker.format
             lastFormat = format
             do {
-                run(try export(folder, format), title: title)
+                let notes = try export(folder, format)
+                notes.bodyWhenRead = { [store] id, isCancelled in
+                    NotificationCenter.default.post(name: .noteItWillExportNote, object: id)
+                    return await store.bodyForOutputWhenRead(id, isCancelled: isCancelled)
+                }
+                run(notes, title: title)
             } catch {
                 showError(error, message: "Couldn’t export the notes")
             }
@@ -182,11 +223,12 @@ enum ExportActions {
         let progress = ExportProgress(total: export.total)
         var sheet: NSWindow?
         isExporting = true
+        export.isCancelled = { progress.isCancelled }
         Task { @MainActor in
             defer { isExporting = false }
             do {
                 let result = try await export.write { export in
-                    progress.completed = export.written
+                    progress.completed = export.next
                     if sheet == nil, !export.isFinished, let parent {
                         sheet = ExportProgressPresenter.show(progress, title: title, on: parent)
                     }
@@ -226,6 +268,11 @@ enum ExportActions {
             alert.messageText = result.noteCount == 1 ? "Exported 1 note" : "Exported \(result.noteCount) notes"
         }
         alert.informativeText = "They’re in “\(result.folder.lastPathComponent)”."
+        if !result.skipped.isEmpty {
+            let folder = store.markdownStorage?.contentRootURL.lastPathComponent ?? "the library folder"
+            alert.alertStyle = .warning
+            alert.informativeText += " Not exported: " + unreadDetail(result.skipped, folder: folder)
+        }
         alert.addButton(withTitle: "OK")
         alert.addButton(withTitle: "Show in Finder")
         let folder = result.folder

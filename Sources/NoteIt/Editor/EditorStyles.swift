@@ -218,6 +218,13 @@ enum EditorStyle {
         [.font: bodyFont, .paragraphStyle: listParagraphStyle(level: level, existing: existing)]
     }
 
+    /// Attributes copied from the text onto text being inserted: only a line break read from a file is soft.
+    static func forInsertion(_ attrs: [NSAttributedString.Key: Any]) -> [NSAttributedString.Key: Any] {
+        var attrs = attrs
+        attrs[.noteItSoftBreak] = nil
+        return attrs
+    }
+
     // MARK: Builders (shared with SeedData)
 
     static func paragraph(_ text: String, kind: BlockKind) -> NSAttributedString {

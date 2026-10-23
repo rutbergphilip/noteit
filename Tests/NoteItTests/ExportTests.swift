@@ -265,7 +265,7 @@ final class ExportTests: XCTestCase {
         XCTAssertTrue(html.contains("color: \(HTMLWriter.cssColor(red)!)"))
         XCTAssertTrue(html.contains("<mark style=\"background-color: \(HTMLWriter.cssColor(yellow)!)\">After</mark>"))
         XCTAssertTrue(html.contains("<u>here</u>"))
-        XCTAssertTrue(html.contains("<h1>Groceries</h1>"))
+        XCTAssertTrue(html.contains("<h1 id=\"groceries\">Groceries</h1>"), html)
         XCTAssertTrue(html.contains("<strong>bold</strong>"))
         XCTAssertTrue(html.contains("<a href=\"https://example.com/a\">site</a>"))
         XCTAssertTrue(html.contains("<li class=\"checked\"><input type=\"checkbox\" disabled checked> <span class=\"done\">Done task</span>"))
@@ -275,6 +275,17 @@ final class ExportTests: XCTestCase {
         XCTAssertFalse(html.contains("src=\"http"), "no external resources")
         // Nested bullets: Apples and Pears sit inside the item above them.
         XCTAssertTrue(html.contains("<ul>\n<li>Fruit<ul>\n<li>Apples<ul>\n<li>Pears</li></ul>\n</li></ul>\n</li></ul>"), html)
+    }
+
+    func testHTMLLeavesOutSystemTextColorInDarkMode() throws {
+        let text = NoteStore.capturedText(title: "", body: NSAttributedString(string: "Quote", attributes: [
+            .font: EditorStyle.bodyFont, .foregroundColor: NSColor.labelColor,
+        ]))
+        var html = ""
+        try XCTUnwrap(NSAppearance(named: .darkAqua)).performAsCurrentDrawingAppearance {
+            html = HTMLWriter.write(text, title: "Dark")
+        }
+        XCTAssertFalse(html.contains("<span style=\"color"), html)
     }
 
     func testHTMLStrikesThroughOnlyTheCheckedItemItself() {
@@ -508,6 +519,30 @@ final class ExportTests: XCTestCase {
         XCTAssertEqual(files(in: second.folder), ["Trip.txt"])
     }
 
+    func testExportsNestNotebookFolders() throws {
+        let work = notebook("Work", 0), home = notebook("Home", 1)
+        var clients = notebook("Clients", 0), acme = notebook("Acme", 0), plan = notebook("Plan.md", 1)
+        clients.parent = work.id
+        acme.parent = clients.id
+        plan.parent = work.id
+        let notes = [
+            meta("Plan", in: work, created: 1),
+            meta("Brief", in: acme, created: 1),
+            meta("Call", in: clients, created: 1),
+            meta("Garden", in: home, created: 1),
+        ]
+        let all = [work, home, clients, acme, plan]
+        let result = try NoteExporter.exportAll(notebooks: all, notes: notes, format: .markdown, to: folder) { _ in NSAttributedString() }
+        XCTAssertEqual(files(in: result.folder), [
+            "Home", "Home/Garden.md", "Work", "Work/Clients", "Work/Clients/Acme", "Work/Clients/Acme/Brief.md",
+            "Work/Clients/Call.md", "Work/Plan.md", "Work/Plan.md 2",
+        ])
+
+        let one = try NoteExporter.exportNotebook(clients, notebooks: all, notes: notes, format: .plainText, to: folder) { _ in NSAttributedString() }
+        XCTAssertEqual(one.noteCount, 2)
+        XCTAssertEqual(files(in: one.folder), ["Acme", "Acme/Brief.txt", "Call.txt"])
+    }
+
     func testEveryFormatWritesAFile() throws {
         let tv = try fullNote()
         let body = tv.attributedString()
@@ -631,4 +666,75 @@ final class ExportTests: XCTestCase {
         XCTAssertEqual(all.noteCount, 1)
         XCTAssertEqual(files(in: all.folder), ["Work", "Work/Kept.md"])
     }
+
+    // MARK: Note links
+
+    private func linked(_ before: String, _ text: String, _ link: NoteLink, _ after: String = "") -> NSAttributedString {
+        let out = NSMutableAttributedString(string: before, attributes: EditorStyle.bodyAttributes)
+        var attrs = EditorStyle.bodyAttributes
+        attrs[.link] = link.url
+        out.append(NSAttributedString(string: text, attributes: attrs))
+        out.append(NSAttributedString(string: after + "\n", attributes: EditorStyle.bodyAttributes))
+        return out
+    }
+
+    func testMarkdownWikiLinkUsesExportedName() throws {
+        let work = notebook("Work", 0)
+        let plan = meta("Plan", in: work, created: 1), old = meta("Plan", in: work, created: 0)
+        let bodies: [UUID: NSAttributedString] = [
+            plan.id: linked("See ", "Plan", .note(id: old.id, heading: nil)),
+            old.id: EditorStyle.paragraph("Old", kind: .body),
+        ]
+        let result = try NoteExporter.exportNotebook(work, notes: [plan, old], format: .markdown, to: folder) { bodies[$0]! }
+        let markdown = try String(contentsOf: result.folder.appendingPathComponent("Plan 2.md"), encoding: .utf8)
+        XCTAssertEqual(markdown, "See [[Plan]]\n")
+        let id = UUID()
+        let titled = MarkdownWriter.write(linked("See ", "it", .note(id: id, heading: nil)), title: "x",
+                                          links: .titles { $0 == id ? "Q[1]|#^" : nil }).markdown
+        XCTAssertEqual(titled, "See [[Q1|it]]\n")
+    }
+
+    func testAliasAndHeading() {
+        let id = UUID()
+        let links = ExportLinkContext(title: { _ in "Atlas" }, exportedName: { $0 == id ? "Atlas 2" : nil })
+        XCTAssertEqual(MarkdownWriter.write(linked("", "Atlas 2", .note(id: id, heading: "Maps")), title: "x", links: links).markdown,
+                       "[[Atlas 2#Maps]]\n")
+        XCTAssertEqual(MarkdownWriter.write(linked("Go ", "there", .note(id: id, heading: "Maps"), " now"), title: "x", links: links).markdown,
+                       "Go [[Atlas 2#Maps|there]] now\n")
+    }
+
+    func testUnresolvedAndMissing() {
+        let links = ExportLinkContext.titles { _ in nil }
+        XCTAssertEqual(MarkdownWriter.write(linked("", "Later", .unresolved(title: "Later", heading: nil)), title: "x", links: links).markdown,
+                       "[[Later]]\n")
+        XCTAssertEqual(MarkdownWriter.write(linked("", "Gone", .note(id: UUID(), heading: nil)), title: "x", links: links).markdown,
+                       "Gone\n")
+        XCTAssertFalse(MarkdownWriter.write(linked("", "Gone", .note(id: UUID(), heading: nil)), title: "x").markdown.contains("noteit:"))
+    }
+
+    func testHTMLRelativeLinkAndAnchor() throws {
+        let work = notebook("Work", 0), home = notebook("Home", 1)
+        let a = meta("Trip Plan", in: work, created: 1), b = meta("Maps & Routes", in: home, created: 1), c = meta("Notes", in: work, created: 2)
+        let bodies: [UUID: NSAttributedString] = [
+            a.id: linked("", "routes", .note(id: b.id, heading: "Day One!")),
+            b.id: { let m = NSMutableAttributedString(attributedString: EditorStyle.paragraph("Day One!", kind: .heading))
+                    m.append(EditorStyle.paragraph("Day One!", kind: .heading)); return m }(),
+            c.id: linked("", "plan", .note(id: a.id, heading: nil)),
+        ]
+        let result = try NoteExporter.exportAll(notebooks: [work, home], notes: [a, b, c], format: .html, to: folder) { bodies[$0]! }
+        let html = try String(contentsOf: result.folder.appendingPathComponent("Work/Trip Plan.html"), encoding: .utf8)
+        XCTAssertTrue(html.contains("<a href=\"../Home/Maps%20&amp;%20Routes.html#day-one\">routes</a>"), html)
+        let notes = try String(contentsOf: result.folder.appendingPathComponent("Work/Notes.html"), encoding: .utf8)
+        XCTAssertTrue(notes.contains("<a href=\"Trip%20Plan.html\">plan</a>"), notes)
+        let maps = try String(contentsOf: result.folder.appendingPathComponent("Home/Maps & Routes.html"), encoding: .utf8)
+        XCTAssertTrue(maps.contains("<h2 id=\"day-one\">") && maps.contains("<h2 id=\"day-one-2\">"), maps)
+        let single = HTMLWriter.write(linked("", "away", .note(id: UUID(), heading: nil)), title: "x")
+        XCTAssertTrue(single.contains("<span class=\"note-link\">away</span>"), single)
+    }
+
+    func testPlainTextKeepsDisplayText() {
+        let text = linked("See ", "the plan", .note(id: UUID(), heading: "Top"), ".")
+        XCTAssertEqual(NoteExporter.plainText(text), "See the plan.\n")
+    }
 }
+

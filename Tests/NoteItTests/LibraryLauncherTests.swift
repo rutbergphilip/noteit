@@ -9,11 +9,19 @@ final class LibraryLauncherTests: XCTestCase {
     private var base: URL!
     private let fm = FileManager.default
     private var logged: [String] = []
+    private var missingAlerts: [URL] = []
+    private var refusals: [String?] = []
+    private var located: [URL] = []
+    private var unreadableAlerts: [String] = []
 
     override func setUpWithError() throws {
         base = fm.temporaryDirectory.appendingPathComponent("noteit-launch-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: base, withIntermediateDirectories: true)
         logged = []
+        missingAlerts = []
+        refusals = []
+        located = []
+        unreadableAlerts = []
     }
 
     override func tearDownWithError() throws {
@@ -35,13 +43,19 @@ final class LibraryLauncherTests: XCTestCase {
             baseDirectory: { base },
             isLegacyAppRunning: running,
             quitLegacyApp: quit,
-            log: { [weak self] in self?.logged.append($0) }
+            log: { [weak self] in self?.logged.append($0) },
+            showContentRootMissing: { [weak self] url, refused in
+                self?.missingAlerts.append(url)
+                self?.refusals.append(refused)
+                return self?.located.isEmpty == false ? self?.located.removeFirst() : nil
+            },
+            showLibraryLocationUnreadable: { [weak self] in self?.unreadableAlerts.append($0) }
         )
     }
 
     /// Launches through the real store; fails the test if NoteIt was told to quit.
     private func launchStore(_ launcher: LibraryLauncher, file: StaticString = #filePath, line: UInt = #line) -> NoteStore? {
-        launcher.launch(open: { NoteStore(location: $0) }, quit: { XCTFail("unexpected quit", file: file, line: line) })
+        launcher.launch(open: { NoteStore.opened(location: $0) }, quit: { XCTFail("unexpected quit", file: file, line: line) })
     }
 
     /// A genuine library written by the store itself, with one note of our own.
@@ -77,6 +91,16 @@ final class LibraryLauncherTests: XCTestCase {
         let store = launchStore(launcher)
         XCTAssertTrue(titles(store).contains("Welcome to NoteIt"))
         XCTAssertEqual(store?.rootURL, current)
+    }
+
+    func testSeedCreatesInboxIdeasAndOnePinnedWelcomeNote() throws {
+        let store = try XCTUnwrap(NoteStore.opened(location: LibraryLocation(url: current, seedsFreshLibrary: true)))
+        XCTAssertEqual(store.notebooks.map(\.name), ["Inbox", "Ideas"])
+        XCTAssertEqual(store.notes.count, 1)
+        let welcome = try XCTUnwrap(store.notes.first)
+        XCTAssertEqual(welcome.title, "Welcome to NoteIt")
+        XCTAssertTrue(welcome.isPinned)
+        XCTAssertEqual(welcome.notebookID, store.notebooks.first?.id)
     }
 
     func testExistingNoteItLibraryIsOpenedWithoutSeeding() throws {
@@ -129,6 +153,44 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertFalse(fm.fileExists(atPath: current.path))
     }
 
+    func testAnInterruptedConversionThatDoesntFinishAtLaunchOpensNothingUntilItHas() throws {
+        try fm.createDirectory(at: current, withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: LibraryConversionJournal.url(dataDir: current))
+        let before = try snapshot()
+        let gate = DispatchGroup()
+        gate.enter()
+        var released = false
+        func release() {
+            guard !released else { return }
+            released = true
+            gate.leave()
+        }
+        defer { release() }
+        var launcher = launcher(override: current.path)
+        launcher.finishInterruptedConversion = { _ in _ = gate.wait(timeout: .now() + 10) }
+        var shown = 0
+        launcher.showConversionPending = { _, _ in
+            shown += 1
+            return false
+        }
+        var quit = false
+        let start = Date()
+        let store: NoteStore? = launcher.launch(open: { location -> NoteStore in XCTFail("opened"); return NoteStore.opened(location: location) }, quit: { quit = true })
+        XCTAssertLessThan(Date().timeIntervalSince(start), 3, "the main thread doesn't wait for the folder")
+        XCTAssertNil(store)
+        XCTAssertEqual(shown, 1)
+        XCTAssertTrue(quit)
+        XCTAssertEqual(try snapshot(), before, "nothing is seeded or set aside")
+
+        launcher.showConversionPending = { _, finishing in
+            release()
+            return finishing.wait(timeout: 10)
+        }
+        var opened: LibraryLocation?
+        _ = launcher.launch(open: { opened = $0 }, quit: { XCTFail("quit") })
+        XCTAssertEqual(opened, LibraryLocation(url: current, seedsFreshLibrary: false))
+    }
+
     func testQuitNoteItNeverTouchesTheDisk() throws {
         makeLibrary(at: legacy, title: "From Inkwell")
         try fm.createDirectory(at: current, withIntermediateDirectories: true)
@@ -136,7 +198,7 @@ final class LibraryLauncherTests: XCTestCase {
         let before = try snapshot()
         var asked = 0, quitCalled = 0, opened = 0
         let launcher = launcher(running: { true }, quit: { asked += 1; return false })
-        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore(location: $0) }, quit: { quitCalled += 1 })
+        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore.opened(location: $0) }, quit: { quitCalled += 1 })
         XCTAssertNil(store)
         XCTAssertEqual(asked, 1)
         XCTAssertEqual(quitCalled, 1)
@@ -179,21 +241,310 @@ final class LibraryLauncherTests: XCTestCase {
         XCTAssertEqual(titles(again), expected, "nothing seeded on top")
     }
 
+    // MARK: - library-location.json
+
+    private var dataDir: URL { base.appendingPathComponent("data", isDirectory: true) }
+
+    private func writeLocationFile(_ file: LibraryLocationFile) throws {
+        try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        try file.write(dataDir: dataDir)
+    }
+
+    private func markdownFile(at folder: URL, bookmark: Data? = nil) -> LibraryLocationFile {
+        LibraryLocationFile(format: .markdown, path: LibraryLocationFile.displayPath(folder), bookmark: bookmark,
+                            libraryID: UUID())
+    }
+
+    func testMissingLocationFileOpensRTFDInDataFolder() {
+        XCTAssertEqual(launcher(override: dataDir.path).decide(),
+                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: true, format: .rtfd, contentRootURL: nil)))
+        XCTAssertTrue(logged.isEmpty)
+    }
+
+    func testMarkdownLocationFileOpensContentFolder() throws {
+        let content = base.appendingPathComponent("Markdown Notes", isDirectory: true)
+        try fm.createDirectory(at: content, withIntermediateDirectories: true)
+        try writeLocationFile(markdownFile(at: content))
+        XCTAssertEqual(launcher(override: dataDir.path).decide(),
+                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: false, format: .markdown, contentRootURL: content)))
+    }
+
+    func testMarkdownRootOverrideOpensAFreshDataFolderAsMarkdownOnly() throws {
+        let content = base.appendingPathComponent("md", isDirectory: true)
+        var subject = launcher(override: dataDir.path)
+        subject.markdownRootOverride = { content.path }
+        XCTAssertEqual(subject.decide(),
+                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: false, format: .markdown, contentRootURL: content)))
+        XCTAssertTrue(fm.fileExists(atPath: content.path))
+        XCTAssertFalse(fm.fileExists(atPath: LibraryLocationFile.url(dataDir: dataDir).path))
+
+        _ = makeLibrary(at: dataDir, title: "RTFD")
+        XCTAssertEqual(subject.decide(),
+                       .open(LibraryLocation(url: dataDir, seedsFreshLibrary: true, format: .rtfd, contentRootURL: nil)))
+        XCTAssertTrue(logged.contains { $0.contains("ignoring NOTEIT_MARKDOWN_ROOT") })
+    }
+
+    func testRenameFilesOnTitleChangeDefaultsToTrue() throws {
+        let json = #"{"version":1,"format":"markdown","path":"~/Documents/NoteIt","libraryID":"6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11"}"#
+        let file = try JSONDecoder().decode(LibraryLocationFile.self, from: Data(json.utf8))
+        XCTAssertTrue(file.renameFilesOnTitleChange)
+        XCTAssertNil(file.bookmark)
+        XCTAssertEqual(file.contentRootURL.path, NSHomeDirectory() + "/Documents/NoteIt")
+    }
+
+    func testBookmarkFollowsMovedFolderAndUpdatesPath() throws {
+        let original = base.appendingPathComponent("Notes", isDirectory: true)
+        try fm.createDirectory(at: original, withIntermediateDirectories: true)
+        let bookmark = try original.bookmarkData()
+        try writeLocationFile(markdownFile(at: original, bookmark: bookmark))
+        let moved = base.appendingPathComponent("Renamed Notes", isDirectory: true)
+        try fm.moveItem(at: original, to: moved)
+
+        guard case .open(let location) = launcher(override: dataDir.path).decide() else { return XCTFail("not opened") }
+        XCTAssertEqual(location.format, .markdown)
+        XCTAssertEqual(location.contentRootURL?.resolvingSymlinksInPath().path, moved.resolvingSymlinksInPath().path)
+        guard case .loaded(let saved) = LibraryLocationFile.load(dataDir: dataDir) else { return XCTFail("not saved") }
+        XCTAssertEqual(saved.contentRootURL.resolvingSymlinksInPath().path, moved.resolvingSymlinksInPath().path)
+    }
+
+    func testMissingContentFolderIsReportedAndNothingIsOpened() throws {
+        let content = base.appendingPathComponent("Gone", isDirectory: true)
+        try writeLocationFile(markdownFile(at: content))
+        let launcher = launcher(override: dataDir.path)
+        XCTAssertEqual(launcher.decide(), .contentRootMissing(content, dataDir: dataDir))
+
+        let before = try snapshot()
+        var quitCalled = 0, opened = 0
+        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore.opened(location: $0) }, quit: { quitCalled += 1 })
+        XCTAssertNil(store)
+        XCTAssertEqual(opened, 0)
+        XCTAssertEqual(quitCalled, 1)
+        XCTAssertEqual(missingAlerts, [content])
+        XCTAssertEqual(try snapshot(), before, "no library created in its place")
+    }
+
+    func testLocateRefusesWrongFoldersThenOpensTheChosenOne() throws {
+        let gone = base.appendingPathComponent("Gone", isDirectory: true)
+        let moved = base.appendingPathComponent("Elsewhere", isDirectory: true)
+        let other = base.appendingPathComponent("Other", isDirectory: true)
+        try fm.createDirectory(at: moved.appendingPathComponent("Work"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: other, withIntermediateDirectories: true)
+        let planID = UUID()
+        try Data("---\nid: \(planID.uuidString)\n---\n# Plan\n".utf8).write(to: moved.appendingPathComponent("Work/Plan.md"))
+        try Data("# Unrelated\n".utf8).write(to: other.appendingPathComponent("Unrelated.md"))
+        try fm.createDirectory(at: dataDir.appendingPathComponent("notes"), withIntermediateDirectories: true)
+        let index = MarkdownPathIndex(dataDir: dataDir)
+        index.set(MarkdownFileEntry(path: "Work/Plan.md"), for: planID)
+        try index.save()
+        try writeLocationFile(markdownFile(at: gone))
+
+        located = [other, dataDir.appendingPathComponent("notes"), moved]
+        var quitCalled = 0
+        let opened: LibraryLocation? = launcher(override: dataDir.path).launch(open: { $0 }, quit: { quitCalled += 1 })
+        XCTAssertEqual(opened?.contentRootURL?.standardizedFileURL, moved.standardizedFileURL)
+        XCTAssertEqual(quitCalled, 0)
+        XCTAssertEqual(missingAlerts.count, 3)
+        XCTAssertNil(refusals[0])
+        XCTAssertTrue(refusals[1]?.contains("doesn’t have the notes of your library") == true)
+        XCTAssertTrue(refusals[2]?.contains("NoteIt’s own library files") == true)
+        guard case .loaded(let saved) = LibraryLocationFile.load(dataDir: dataDir) else { return XCTFail("not saved") }
+        XCTAssertEqual(saved.contentRootURL.standardizedFileURL, moved.standardizedFileURL)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: other.path), ["Unrelated.md"], "a refused folder isn't touched")
+    }
+
+    private func note(_ id: UUID?, _ name: String, in folder: URL) throws {
+        try fm.createDirectory(at: folder.appendingPathComponent(name).deletingLastPathComponent(), withIntermediateDirectories: true)
+        let front = id.map { "---\nid: \($0.uuidString)\n---\n" } ?? ""
+        try Data((front + "# Note\n").utf8).write(to: folder.appendingPathComponent(name))
+    }
+
+    private func libraryFile(_ id: UUID, in folder: URL) throws {
+        try fm.createDirectory(at: LibraryConverter.libraryFileURL(in: folder).deletingLastPathComponent(), withIntermediateDirectories: true)
+        try LibraryConverter.libraryFileData(libraryID: id).write(to: LibraryConverter.libraryFileURL(in: folder))
+    }
+
+    /// A Markdown library in a folder that went away, with `ids` on record.
+    private func lostLibrary(_ ids: [UUID: String]) throws -> LibraryLocationFile {
+        try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let index = MarkdownPathIndex(dataDir: dataDir)
+        for (id, path) in ids { index.set(MarkdownFileEntry(path: path), for: id) }
+        try index.save()
+        let file = markdownFile(at: base.appendingPathComponent("Gone", isDirectory: true))
+        try writeLocationFile(file)
+        return file
+    }
+
+    func testLocateNeedsMostOfTheLibrarysNoteIDsNotJustAMatchingPath() throws {
+        let welcome = UUID(), plan = UUID(), ideas = UUID()
+        let file = try lostLibrary([welcome: "Welcome to NoteIt.md", plan: "Plan.md", ideas: "Ideas.md"])
+        let foreign = base.appendingPathComponent("Foreign", isDirectory: true)
+        try note(nil, "Welcome to NoteIt.md", in: foreign)
+        try note(UUID(), "Plan.md", in: foreign)
+        let some = base.appendingPathComponent("Some", isDirectory: true)
+        try note(welcome, "Welcome to NoteIt.md", in: some)
+        let mine = base.appendingPathComponent("Mine", isDirectory: true)
+        try note(welcome, "Renamed.md", in: mine)
+        try note(plan, "Work/Plan.md", in: mine)
+        let foreignBefore = try snapshot()
+
+        XCTAssertNotNil(LibraryLauncher.relocate(to: foreign, dataDir: dataDir))
+        XCTAssertNotNil(LibraryLauncher.relocate(to: some, dataDir: dataDir), "one note of three is not a clear majority")
+        XCTAssertEqual(try snapshot(), foreignBefore, "nothing is written for a refused folder")
+        XCTAssertNil(LibraryLauncher.relocate(to: mine, dataDir: dataDir))
+        guard case .loaded(let saved) = LibraryLocationFile.load(dataDir: dataDir) else { return XCTFail("not saved") }
+        XCTAssertEqual(saved.contentRootURL.standardizedFileURL, mine.standardizedFileURL)
+        XCTAssertEqual(saved.libraryID, file.libraryID)
+    }
+
+    func testLocateRefusesAnotherLibrarysFolder() throws {
+        let plan = UUID()
+        _ = try lostLibrary([plan: "Plan.md"])
+        let other = base.appendingPathComponent("Other Library", isDirectory: true)
+        try note(plan, "Plan.md", in: other)
+        try libraryFile(UUID(), in: other)
+
+        XCTAssertTrue(LibraryLauncher.relocate(to: other, dataDir: dataDir)?.contains("another NoteIt library") == true)
+    }
+
+    func testLocateWithNoNotesOnRecordNeedsTheLibraryIDOrConfirmation() throws {
+        let file = try lostLibrary([:])
+        let unmarked = base.appendingPathComponent("Unmarked", isDirectory: true)
+        try note(nil, "Anything.md", in: unmarked)
+        var asked: [URL] = []
+
+        XCTAssertNotNil(LibraryLauncher.relocate(to: unmarked, dataDir: dataDir, confirmUnverified: { asked.append($0); return false }))
+        XCTAssertEqual(asked.count, 1)
+        XCTAssertNil(LibraryLauncher.relocate(to: unmarked, dataDir: dataDir, confirmUnverified: { _ in true }))
+
+        let marked = base.appendingPathComponent("Marked", isDirectory: true)
+        try libraryFile(file.libraryID, in: marked)
+        XCTAssertNil(LibraryLauncher.relocate(to: marked, dataDir: dataDir, confirmUnverified: { _ in XCTFail("asked"); return false }))
+    }
+
+    func testLocateStopsReadingOnceTheLibraryIDMatches() throws {
+        let ids = (0..<6).map { _ in UUID() }
+        let file = try lostLibrary(Dictionary(uniqueKeysWithValues: ids.enumerated().map { ($1, "Note \($0).md") }))
+        let large = base.appendingPathComponent("Large", isDirectory: true)
+        for (number, id) in ids.enumerated() { try note(id, "Note \(number).md", in: large) }
+        try libraryFile(file.libraryID, in: large)
+        let reads = Counter()
+        let slowNAS: @Sendable (URL) -> Data? = { url in
+            reads.add()
+            Thread.sleep(forTimeInterval: 0.2)
+            return try? Data(contentsOf: url)
+        }
+
+        XCTAssertNil(LibraryLauncher.relocate(to: large, dataDir: dataDir, timeout: 0.5, readFile: slowNAS))
+        XCTAssertEqual(reads.value, 0, "the library id decides; no note is read")
+    }
+
+    func testLocateCanBeRetriedWhileAnEarlierCheckIsStillStuck() throws {
+        let plan = UUID(), ideas = UUID()
+        _ = try lostLibrary([plan: "Plan.md", ideas: "Ideas.md"])
+        let mine = base.appendingPathComponent("Mine", isDirectory: true)
+        try note(plan, "Plan.md", in: mine)
+        try note(ideas, "Ideas.md", in: mine)
+        let stuck = DispatchSemaphore(value: 0)
+        defer { stuck.signal() }
+
+        let first = LibraryLauncher.relocate(to: mine, dataDir: dataDir, timeout: 0.2, readFile: { url in
+            _ = stuck.wait(timeout: .now() + 5)
+            return try? Data(contentsOf: url)
+        })
+        XCTAssertTrue(first?.contains("didn’t respond") == true)
+        XCTAssertNil(LibraryLauncher.relocate(to: mine, dataDir: dataDir, timeout: 2), "a retry doesn't wait for the stuck check")
+    }
+
+    func testUnresponsiveContentFolderOpensTheLibraryWhileItIsCheckedWithoutHangingLaunch() throws {
+        let content = base.appendingPathComponent("NAS Notes", isDirectory: true)
+        try fm.createDirectory(at: content, withIntermediateDirectories: true)
+        try writeLocationFile(markdownFile(at: content))
+        let release = DispatchSemaphore(value: 0)
+        defer { release.signal() }
+        let access = BoundedFileAccess()
+        var launcher = launcher(override: dataDir.path)
+        launcher.checkContentRoot = { file in
+            access.runBlocking(key: "root", timeout: 0.2) {
+                release.wait()
+                return LibraryLauncher.inspectContentRoot(file)
+            }
+        }
+
+        let started = Date()
+        let store: NoteStore? = launcher.launch(open: { NoteStore(location: $0) }, quit: { XCTFail("unexpected quit") })
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        XCTAssertEqual(store?.markdownStorage?.contentRootURL, content.standardizedFileURL)
+        XCTAssertEqual(missingAlerts, [], "a folder that is slow to answer isn't reported missing")
+    }
+
+    func testCorruptLocationFileOpensRTFDWithoutSeedingAndIsSetAside() throws {
+        try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let url = dataDir.appendingPathComponent(LibraryLocationFile.fileName)
+        try Data("earlier".utf8).write(to: url.appendingPathExtension("bad"))
+        let noLibraryID = #"{"version":1,"format":"markdown","path":"~/Notes"}"#
+        for (index, contents) in ["{ not json", noLibraryID, #"{"format":"markdown"}"#].enumerated() {
+            logged = []
+            try Data(contents.utf8).write(to: url)
+            XCTAssertEqual(launcher(override: dataDir.path).decide(), .open(LibraryLocation(url: dataDir, seedsFreshLibrary: false)))
+            XCTAssertEqual(logged.count, 1, contents)
+            XCTAssertFalse(fm.fileExists(atPath: url.path))
+            XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("bad-\(index + 2)")), Data(contents.utf8))
+        }
+        XCTAssertEqual(try Data(contentsOf: url.appendingPathExtension("bad")), Data("earlier".utf8))
+        XCTAssertEqual(unreadableAlerts, [])
+    }
+
+    private func assertUnreadableQuitsAndKeepsFile(_ contents: String?, file: StaticString = #filePath, line: UInt = #line) throws {
+        try fm.createDirectory(at: dataDir, withIntermediateDirectories: true)
+        let url = dataDir.appendingPathComponent(LibraryLocationFile.fileName)
+        if let contents { try Data(contents.utf8).write(to: url) }
+        let before = try fm.contentsOfDirectory(atPath: dataDir.path)
+        let launcher = launcher(override: dataDir.path)
+        guard case .libraryLocationUnreadable(let reason) = launcher.decide() else {
+            return XCTFail("not reported", file: file, line: line)
+        }
+        var quitCalled = 0, opened = 0
+        let store: NoteStore? = launcher.launch(open: { opened += 1; return NoteStore.opened(location: $0) }, quit: { quitCalled += 1 })
+        XCTAssertNil(store, file: file, line: line)
+        XCTAssertEqual(opened, 0, file: file, line: line)
+        XCTAssertEqual(quitCalled, 1, file: file, line: line)
+        XCTAssertEqual(unreadableAlerts, [reason], file: file, line: line)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: dataDir.path), before, "nothing renamed or created", file: file, line: line)
+    }
+
+    func testNewerVersionIsReportedAndLeftInPlace() throws {
+        try assertUnreadableQuitsAndKeepsFile(#"{"version":2,"format":"markdown","path":"~/Notes","libraryID":"6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11"}"#)
+        XCTAssertTrue(unreadableAlerts.first?.contains("version 2") == true, "\(unreadableAlerts)")
+    }
+
+    func testUnknownFormatIsReportedAndLeftInPlace() throws {
+        try assertUnreadableQuitsAndKeepsFile(#"{"version":1,"format":"sqlite","path":"~/Notes","libraryID":"6F1C2E9A-6B0D-4E43-9B5C-1E0F5D7B9A11"}"#)
+        XCTAssertTrue(unreadableAlerts.first?.contains("sqlite") == true, "\(unreadableAlerts)")
+    }
+
+    func testUnreadableFileIsReportedAndLeftInPlace() throws {
+        let url = dataDir.appendingPathComponent(LibraryLocationFile.fileName)
+        try writeLocationFile(markdownFile(at: base))
+        try fm.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path) }
+        try assertUnreadableQuitsAndKeepsFile(nil)
+    }
+
     // MARK: - Store seed decision
 
     func testStoreSeedsOnlyWhenAllowed() {
         let notAllowed = base.appendingPathComponent("a", isDirectory: true)
-        XCTAssertTrue(NoteStore(location: LibraryLocation(url: notAllowed, seedsFreshLibrary: false)).notes.isEmpty)
+        XCTAssertTrue(NoteStore.opened(location: LibraryLocation(url: notAllowed, seedsFreshLibrary: false)).notes.isEmpty)
         XCTAssertFalse(fm.fileExists(atPath: notAllowed.appendingPathComponent("seed-manifest.json").path))
 
         let allowed = base.appendingPathComponent("b", isDirectory: true)
-        XCTAssertTrue(titles(NoteStore(location: LibraryLocation(url: allowed, seedsFreshLibrary: true))).contains("Welcome to NoteIt"))
+        XCTAssertTrue(titles(NoteStore.opened(location: LibraryLocation(url: allowed, seedsFreshLibrary: true))).contains("Welcome to NoteIt"))
     }
 
     func testStoreNeverSeedsOverAnExistingLibrary() {
         makeLibrary(at: current, title: "Mine")
         let expected = titles(NoteStore(rootURL: current))
-        XCTAssertEqual(titles(NoteStore(location: LibraryLocation(url: current, seedsFreshLibrary: true))), expected)
+        XCTAssertEqual(titles(NoteStore.opened(location: LibraryLocation(url: current, seedsFreshLibrary: true))), expected)
     }
 }
 
@@ -258,4 +609,11 @@ final class LegacyAppMonitorTests: XCTestCase {
         let deadline = Date().addingTimeInterval(0.5)
         while Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
     }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int { lock.withLock { count } }
+    func add() { lock.withLock { count += 1 } }
 }

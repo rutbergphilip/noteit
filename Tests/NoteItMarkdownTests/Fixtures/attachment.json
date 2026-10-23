@@ -1,0 +1,23 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "content": [
+          {
+            "attrs": {
+              "mime": "application/pdf",
+              "name": "report.pdf",
+              "sha": "_attachments/9b01e4aa52c7-report.pdf"
+            },
+            "type": "attachment"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

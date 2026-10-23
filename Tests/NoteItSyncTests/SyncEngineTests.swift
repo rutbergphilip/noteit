@@ -131,6 +131,78 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertFalse(keys.contains(RemoteLayout.body(nb)))
     }
 
+    func testARecordTheStoreDefersIsSkippedQuietlyAndAppliedOnALaterPass() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "v2")
+        try await sync(a)
+        await b.store.deferRecords([id])
+
+        let deferred = try await sync(b)[0]
+        XCTAssertEqual(deferred.pulled, 0)
+        XCTAssertTrue(deferred.errors.isEmpty, "\(deferred.errors)")
+        let before = await b.store.title(id)
+        XCTAssertEqual(before, "v1")
+
+        await b.store.deferRecords([])
+        let report = try await sync(b)[0]
+        XCTAssertEqual(report.pulled, 1)
+        let title = await b.store.title(id)
+        XCTAssertEqual(title, "v2")
+    }
+
+    func testARemoteNoteTheStoreRefusesIsNotFetchedAgainUntilItChanges() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "Big")
+        try await sync(a)
+        await b.store.refuse(["Big"])
+
+        let first = try await sync(b)[0]
+        XCTAssertEqual(first.pulled, 0)
+        XCTAssertTrue(first.errors.contains { $0.contains("“Big” is too large") }, "\(first.errors)")
+        let fetchesAfterFirst = await faulty.gotKeys.filter { $0.contains(id.uuidString) }.count
+
+        let again = try await sync(b)[0]
+        let fetchesAfterAgain = await faulty.gotKeys.filter { $0.contains(id.uuidString) }.count
+        XCTAssertEqual(fetchesAfterAgain, fetchesAfterFirst, "an unchanged refused note must not be downloaded again")
+        XCTAssertTrue(again.errors.contains { $0.contains("“Big” is too large") }, "the reason stays visible")
+        let attempts = await b.store.refusedCount
+        XCTAssertEqual(attempts, 1)
+        let onB = await b.store.title(id)
+        XCTAssertNil(onB)
+
+        await a.store.edit(id, title: "Small")
+        try await sync(a)
+        let report = try await sync(b)[0]
+        XCTAssertEqual(report.pulled, 1)
+        XCTAssertTrue(report.errors.isEmpty, "\(report.errors)")
+        let title = await b.store.title(id)
+        XCTAssertEqual(title, "Small")
+    }
+
+    func testAConflictWhoseRemoteCopyIsRefusedKeepsTheLocalEditAndIsNotRetriedUntilTheRemoteChanges() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "Big")
+        try await sync(a)
+        await b.store.edit(id, title: "local edit")
+        await b.store.refuse(["Big"])
+
+        let first = try await sync(b)[0]
+        XCTAssertTrue(first.errors.contains { $0.contains("“Big” is too large") }, "\(first.errors)")
+        let fetches = await faulty.gotKeys.filter { $0.contains(id.uuidString) }.count
+        try await sync(b)
+        let fetchesAgain = await faulty.gotKeys.filter { $0.contains(id.uuidString) }.count
+        XCTAssertEqual(fetchesAgain, fetches)
+        let onB = await b.store.title(id)
+        XCTAssertEqual(onB, "local edit")
+        let remote = try await sealedEnvelope(id)
+        let remoteTitle = try JSONDecoder().decode(FakeLocalStore.Meta.self, from: remote.meta).title
+        XCTAssertEqual(remoteTitle, "Big", "the refused remote version is never overwritten")
+    }
+
     // MARK: Conflicts
 
     func testConcurrentEditKeepsBothAndConverges() async throws {
@@ -202,6 +274,61 @@ final class SyncEngineTests: XCTestCase {
         await assertConverged(a, b)
         let title2 = await b.store.title(nb)
         XCTAssertEqual(title2, "A later")
+    }
+
+    // MARK: Smart folders
+
+    func testSmartFolderCreateAndDeleteReachB() async throws {
+        let a = device("A"), b = device("B")
+        let folder = await a.store.create(kind: .smartFolder, title: "Due soon")
+        try await sync(a, b)
+        let keys = try await remoteKeys()
+        XCTAssertTrue(keys.contains(RemoteLayout.root + "smart-folders/\(folder.uuidString).json"))
+        let title = await b.store.title(folder)
+        XCTAssertEqual(title, "Due soon")
+
+        await a.store.delete(folder)
+        try await sync(a, b)
+        let gone = await b.store.title(folder)
+        XCTAssertNil(gone)
+        let after = try await remoteKeys()
+        XCTAssertFalse(after.contains(RemoteLayout.root + "smart-folders/\(folder.uuidString).json"))
+        XCTAssertTrue(after.contains(RemoteLayout.tombstone(folder)))
+        await assertConverged(a, b)
+    }
+
+    func testConcurrentSmartFolderEditsLastWriterWins() async throws {
+        let a = device("A"), b = device("B")
+        let folder = await a.store.create(kind: .smartFolder, title: "Work")
+        try await sync(a, b)
+        await a.store.edit(folder, title: "From A")
+        try await Task.sleep(nanoseconds: 5_000_000)
+        await b.store.edit(folder, title: "From B (later)")
+        try await sync(a, b, a)
+        await assertConverged(a, b)
+        let title = await a.store.title(folder)
+        XCTAssertEqual(title, "From B (later)")
+        let copies = await a.store.conflictCopies().count
+        XCTAssertEqual(copies, 0)
+    }
+
+    /// The folder switch of NoteIt 0.2's `RemoteIndex`: smart folder records and their folder are never listed.
+    func testLegacyIndexIgnoresSmartFolders() {
+        let id = UUID()
+        let keys = [RemoteLayout.meta(.smartFolder, id), RemoteLayout.root + "smart-folders/\(id.uuidString) 2.json"]
+        var legacyMetas: [UUID: RecordKind] = [:]
+        for key in keys {
+            let parts = key.dropFirst(RemoteLayout.root.count).split(separator: "/", maxSplits: 1).map(String.init)
+            switch parts[0] {
+            case "notebooks": if parts[1].hasSuffix(".json") { legacyMetas[id] = .notebook }
+            case "notes": if parts[1].hasSuffix(".meta") { legacyMetas[id] = .note }
+            default: break
+            }
+        }
+        XCTAssertTrue(legacyMetas.isEmpty)
+        let index = RemoteIndex(keys.map { RemoteObject(key: $0, etag: "e", size: 1) })
+        XCTAssertEqual(index.metas[id]?.kind, .smartFolder)
+        XCTAssertEqual(index.sidecars.map(\.role), [.meta(.smartFolder)])
     }
 
     func testRepushAfterPreconditionFailed() async throws {

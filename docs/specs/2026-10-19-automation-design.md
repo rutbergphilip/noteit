@@ -58,7 +58,7 @@ Rules for every write:
 - While the library is still loading, operations return `notReady`.
 - Body changes go through `editBody`, which handles a note open in an editor (main window, floating note or cheat sheet), keeps undo working, and marks the note for saving. Automation doesn't call `handOverPendingEdits` or `updateBody` itself.
 - Writes are normal local changes: they bump `revision`, post `noteItLocalChange` (edits through `editBody` and note creation or deletion also post `localNoteChange`) and sync like typing.
-- Text limits: 1 MB of text per write, 25 MB per attachment (the same cap as Markdown import images).
+- Text limits: 1 MB of text per write (title, body and tags together, checked before any parsing), 25 MB per attachment (the same cap as Markdown import images).
 
 Errors are one enum, `AutomationError`, mapped per surface: HTTP status + code (from `APIErrorCode`) for the Local API, `errorCode`/`errorMessage` for x-callback-url, a localized message for Shortcuts and the Share extension.
 
@@ -94,15 +94,20 @@ x-callback-url: the same actions under `noteit://x-callback-url/<action>?…&x-s
 - `x-error` receives `errorCode` (the `AutomationError` code, such as `not_found`) and `errorMessage`.
 - `x-cancel` is called when the user answers **Don't Allow** to a confirmation.
 - Callbacks with the scheme `http` or `https` never receive a note id, title or link: `x-success` is called with no added parameters, and `x-error` gets only `errorCode`.
+- A web page never learns whether a note or notebook exists, or is locked, without the user's consent. When the user answers **Allow**, the outcome is revealed: the page sees whether the note was created or changed. When any callback has the scheme `http` or `https`:
+  - `new` and `append` always ask, even with **Allow links to change notes without asking** on.
+  - A `new` or `append` link whose target can't be used (a missing note, notebook or daily note, a locked, deleted or unreadable note, a library still loading) asks its question anyway, worded only from what the link says (**A link wants to add text to a note.** for an id, the title or notebook name as given otherwise). **Don't Allow** calls `x-cancel` as usual. **Allow** calls `x-error` with `errorCode` `not_changed`, and NoteIt always shows the user the real reason in a notice. Errors that depend only on the link itself, such as `too_large` or an invalid parameter, keep their code.
+  - Links that only show something (`open`, `note`, `search`) call `x-success` with no parameters whether or not the note exists, and never call `x-error` with `not_found`. A missing id shows the usual notice; a missing title opens the search field.
+- Links whose callbacks are all other schemes get the detailed `errorCode` and `errorMessage` without being asked.
 - Callback URLs with the schemes `javascript`, `file`, `data` or `noteit` are ignored.
 
 Safety:
 
-- **Links that change notes ask first.** `new` shows **A link wants to create a note in “<notebook>”.** and `append` (by id, by title or to the daily note) shows **A link wants to add text to “<title>”.**, each with **Allow** and **Don't Allow**. Settings › Integrations › Links › **Allow links to change notes without asking** (off by default) skips the question.
+- **Links that change notes ask first.** `new` shows **A link wants to create a note in “<notebook>”.** and `append` (by id, by title or to the daily note) shows **A link wants to add text to “<title>”.**, each with **Allow** and **Don't Allow**. Settings › Integrations › Links › **Allow links to change notes without asking** (off by default) skips the question, except for links with an `http` or `https` callback.
 - **Links that only open or show something never ask:** `open`, `note`, `search`, `daily` (open) and `settings`.
 - **The Share extension's link doesn't ask.** `new?inbox=<UUID>` imports only an item that the Share extension wrote into the app group inbox after the user pressed **Save** (§10), so the user has already confirmed it. Any other `new` link asks as above.
 - No URL action deletes, moves or overwrites anything.
-- `text` is limited to 100 KB in a URL.
+- A link's parameter values (`text`, `title`, `notebook`, `tags` and the rest) are limited to 100 KB together.
 
 ### 4. Shortcuts actions (App Intents)
 
@@ -133,7 +138,7 @@ Build: SwiftPM doesn't run Xcode's App Intents metadata step. `scripts/build_app
 - Indexing runs off the main actor in batches of 100. Plain text is read on the main actor one note at a time and handed over, so a 5,000-note library never blocks typing for more than one note read.
 - **A derived index.** `SpotlightIndexer` registers with organise's `DerivedIndex` registry like every other indexer (link index, image text, semantic index, tasks). `noteChanged` (a body change or a new note) reindexes the note, `noteRemoved` removes it (it is also called when a note is locked), `metadataChanged` (metadata-only changes, which never call `noteChanged`) reindexes or removes it after a pin, notebook move, tag change, move to Recently Deleted or restore from Recently Deleted, `rebuild` re-adds every note, and `flush` hands pending batches to Core Spotlight. Automation adds no hook to `NoteStore.swift`.
 - Spotlight doesn't subscribe to `LibraryChangeFeed`; every change arrives through the registry hooks above. Notebook rename updates nothing (Spotlight shows the notebook only through the domain).
-- Full rebuild when the setting is turned on, when **Rebuild Spotlight Index** is pressed, and when `spotlightIndexVersion` (UserDefaults, currently `1`) differs from the stored version.
+- Full rebuild when the setting is turned on, when **Rebuild Spotlight Index** is pressed, and when `spotlightIndexVersion` (UserDefaults, currently `1`) differs from the stored version, or at launch when `spotlightIndexDirty` shows a change may not have reached Spotlight (a quit before the hand-over or a failed Core Spotlight call).
 - Turning **Show notes in Spotlight** off calls `deleteAllSearchableItems`.
 - Opening a result arrives as an `NSUserActivity` of type `CSSearchableItemActionType`. `AppDelegate.application(_:continue:restorationHandler:)` reveals the note with `NoteStore.reveal(_:)`.
 - Exclusions (`SpotlightItemBuilder.shouldIndex(_:)`): Recently Deleted; locked notes (`NoteMeta.isLocked`; locking a note removes its item through the registry); unbundled runs (`swift run`, no bundle identifier), where the indexer stays off.
@@ -241,8 +246,8 @@ Token buckets per client (by token; unauthenticated routes share one global buck
 - JSON in and out, UTF-8, `camelCase` keys. Dates are ISO 8601 UTC with milliseconds. Ids are UUID strings (accepted in any case, returned uppercase like `UUID.uuidString`).
 - Errors: `{"error":{"code":"not_found","message":"No note with that id."}}`. Codes: `bad_request` 400, `unauthorized` 401, `token_revoked` 401, `forbidden_scope` 403, `origin_not_allowed` 403, `read_only` 403 (a note in a shared notebook the user can only read), `pairing_denied` 403, `pairing_failed` 403, `not_found` 404, `note_deleted` 409, `note_unreadable` 409, `editor_required` 409 (plugins only: the change needs an open editor), `pairing_in_progress` 409, `cursor_expired` 410, `length_required` 411, `revision_mismatch` 412, `too_large` 413, `unsupported_media_type` 415, `misdirected` 421, `note_locked` 423 (any body read or write of a locked note), `rate_limited` 429, `internal` 500, `not_implemented` 501 (not built into this version yet: daily notes while `DailyNotes.isAvailable` is false, the tag tree before `organise` registers it, a body format before its sub-project ships), `not_available` 501 (built but turned off, such as a search mode), `not_ready` 503 (the library is still loading), `api_disabled` 503 (sent only on connections still open while the API turns off).
 - Every error, including those from routes other sub-projects register, uses a code from `APIErrorCode` in this nested body. A sub-project that needs a new code adds it here first.
-- Concurrency: `PATCH /v1/notes/{id}` accepts `If-Match: "<revision>"`. A different current revision gives `412 revision_mismatch` with the current note in the body. Notes created before sync existed get revisions assigned on API start (`assignMissingRevisions`).
-- Pagination: `cursor` is opaque; responses have `nextCursor` (null at the end). Order is the note list order (pinned first, then last edited).
+- Concurrency: `PATCH /v1/notes/{id}` accepts `If-Match: "<revision>"`. A different current revision gives `412 revision_mismatch` with the current note in the body. Notes created before sync existed get revisions assigned when the API starts (`AutomationService.assignMissingRevisionsForLocalAPI()`, which hashes bodies off the main actor), never at app launch; a note still without one gets it just before an `If-Match` or `ifRevision` comparison, hashing only that note off the main actor. API responses never have a null `revision`; in-process callers (URL scheme, App Intents) may get a note from before sync with no revision until the API has started.
+- Pagination: `cursor` is opaque; responses have `nextCursor` (null at the end). Order is the note list order (pinned first, then last edited). The cursor holds the sort position (pinned, last edited to the millisecond, id) of the last note on the page, and the next page starts after that position, so a note edited, moved or deleted between pages never makes another note repeat or go missing.
 
 #### 6.9 Resources
 
@@ -356,6 +361,7 @@ Other sub-projects add routes without touching the server core:
 | `noteit watch` | Stream changes as JSON lines |
 | `noteit api METHOD PATH [--data JSON\|@file]` | Raw request for scripting |
 | `noteit auth login\|logout\|status`, `noteit status`, `noteit --version`, `noteit help [COMMAND]` | Housekeeping |
+| `noteit completion zsh\|bash\|fish` | Print a tab completion script. Installing the tool from Settings also links all three where the shells look for them; note ids, notebooks and tags are completed live from the Local API when NoteIt is running and you're signed in |
 | `noteit mcp …` | The whole `mcp` command tree belongs to `private-ai` (wave 2); automation only reserves the name. In wave 1 it prints "noteit mcp isn't in this version of NoteIt." and exits 2 |
 
 - `--json` on any read command prints the API JSON unchanged. Exit codes: 0 ok, 1 error, 2 usage, 3 app not reachable or API off, 4 not paired or token revoked, 5 not found, 6 revision conflict.
@@ -373,7 +379,7 @@ The **Integrations** tab, position 8 in the program's frozen Settings table, aft
 | Share | Footnote: "Share → NoteIt saves text, links and images from any app as a new note. Turn it on in System Settings › Extensions › Sharing." |
 | Spotlight | **Show notes in Spotlight** (on), **Include note text** (on), **Rebuild Spotlight Index**. |
 
-UserDefaults keys (in `PrefKey`): `localAPIEnabled`, `localAPIPort` (0 = automatic), `localAPIClientLastUsed`, `urlSchemeChangesWithoutAsking` (false), `spotlightEnabled`, `spotlightIncludesText`, `spotlightIndexVersion`.
+UserDefaults keys (in `PrefKey`): `localAPIEnabled`, `localAPIPort` (0 = automatic), `localAPIClientLastUsed`, `urlSchemeChangesWithoutAsking` (false), `spotlightEnabled`, `spotlightIncludesText`, `spotlightIndexVersion`, `spotlightIndexDirty`.
 
 ### 9. Menu and command palette
 

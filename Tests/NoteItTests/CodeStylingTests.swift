@@ -468,6 +468,30 @@ final class CodeStylingTests: XCTestCase {
         XCTAssertEqual(inlineCodeRuns(saved), ["git"])
     }
 
+    func testLinkColorSurvivesTypingAndCodeRestyle() {
+        let (_, textView) = NoteItTextView.make()
+        let text = NSMutableAttributedString(string: "See site and more\n", attributes: EditorStyle.bodyAttributes)
+        let link = (text.string as NSString).range(of: "site")
+        text.addAttribute(.link, value: URL(string: "https://example.com")!, range: link)
+        textView.storage.setAttributedString(text)
+        textView.codeStyler.restyleAll()
+        textView.linkStyler.restyleAll()
+        func linkColor() -> NSColor? {
+            textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: link.location, effectiveRange: nil) as? NSColor
+        }
+        XCTAssertEqual(linkColor(), .linkColor)
+
+        textView.setSelectedRange(NSRange(location: 17, length: 0))
+        textView.insertText("!", replacementRange: textView.selectedRange())
+        XCTAssertEqual(textView.string, "See site and more!\n")
+        XCTAssertEqual(linkColor(), .linkColor, "while typing in the paragraph")
+
+        textView.storage.addAttribute(.link, value: URL(string: "https://example.org")!, range: NSRange(location: 0, length: 3))
+        textView.codeStyler.restyleAll()
+        XCTAssertEqual(textView.layoutManager?.temporaryAttribute(.foregroundColor, atCharacterIndex: 0, effectiveRange: nil) as? NSColor,
+                       .linkColor, "after a code style change")
+    }
+
     func testCopiedInlineCodeStaysCode() throws {
         let defaults = UserDefaults.standard
         let old = defaults.object(forKey: PrefKey.inlineCodeFont)

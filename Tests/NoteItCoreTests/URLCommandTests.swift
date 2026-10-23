@@ -157,6 +157,10 @@ final class URLCommandTests: XCTestCase {
         XCTAssertEqual(error("noteit://append?title=Hi&text=\(ok)a"), .tooLarge)
         let multibyte = String(repeating: "%C3%A9", count: URLCommand.maxTextBytes / 2 + 1)
         XCTAssertEqual(error("noteit://new?text=\(multibyte)"), .tooLarge, "the limit counts UTF-8 bytes")
+        let half = String(repeating: "a", count: URLCommand.maxTextBytes / 2 + 1)
+        XCTAssertEqual(error("noteit://new?title=\(half)&text=\(half)"), .tooLarge, "the limit counts every parameter")
+        XCTAssertEqual(error("noteit://new?text=a&tags=\(half),\(half)"), .tooLarge)
+        XCTAssertEqual(error("noteit://x-callback-url/append?title=\(half)&text=\(half)"), .tooLarge)
     }
 
     func testPercentEncodedPlusAndUnicode() throws {

@@ -6,6 +6,14 @@ public typealias LocalAPIHandler = @Sendable (LocalAPIContext) async -> HTTPResp
 public typealias SearchModeHandler = @Sendable (_ query: SearchQuery, _ context: LocalAPIContext) async
     -> Result<[SearchResultDTO], APIErrorCode>
 
+/// Organise's tag tree for `GET /v1/tags?tree=1`.
+public typealias TagTreeProvider = @MainActor @Sendable () -> [TagNodeDTO]
+
+/// Fills extra fields of each `NotebookDTO` before it is sent (organise: `parentID` and `path`).
+public protocol NotebookDTOExtending: AnyObject, Sendable {
+    @MainActor func extend(_ dto: inout NotebookDTO, notebookID: UUID)
+}
+
 public struct SearchQuery: Sendable {
     public var q: String
     public var notebook: String?
@@ -30,6 +38,8 @@ public final class LocalAPIRouteRegistry: @unchecked Sendable {
     private var registeredRoutes: [(spec: RouteSpec, handler: LocalAPIHandler)] = []
     private var registeredSearchModes: [(name: String, handler: SearchModeHandler)] = []
     private var capabilitySet: Set<String> = []
+    private var tagTreeProviders: [TagTreeProvider] = []
+    private var extenders: [NotebookDTOExtending] = []
 
     /// Tests use their own instance.
     public convenience init() {
@@ -72,6 +82,24 @@ public final class LocalAPIRouteRegistry: @unchecked Sendable {
         _ = locked { capabilitySet.remove(name) }
     }
 
+    /// Traps on a second provider.
+    public func extendTags(treeProvider: @escaping TagTreeProvider) {
+        locked {
+            check(Self.tagTreeProblems(count: tagTreeProviders.count + 1))
+            tagTreeProviders.append(treeProvider)
+        }
+    }
+
+    /// nil means `GET /v1/tags?tree=1` is `501 not_implemented`.
+    public var tagTreeProvider: TagTreeProvider? { locked { tagTreeProviders.first } }
+
+    public func extendNotebooks(with extender: NotebookDTOExtending) {
+        locked { extenders.append(extender) }
+    }
+
+    /// In registration order.
+    public var notebookExtenders: [NotebookDTOExtending] { locked { extenders } }
+
     public var routes: [RouteSpec] { locked { registeredRoutes.map(\.spec) } }
 
     /// Sorted.
@@ -101,6 +129,7 @@ public final class LocalAPIRouteRegistry: @unchecked Sendable {
             for name in capabilitySet.sorted() {
                 problems += Self.capabilityProblems(name)
             }
+            problems += Self.tagTreeProblems(count: tagTreeProviders.count)
             return problems
         }
     }
@@ -144,6 +173,10 @@ public final class LocalAPIRouteRegistry: @unchecked Sendable {
 
     static func capabilityProblems(_ name: String) -> [String] {
         matches(name, kebabCase) ? [] : ["Capability \(name): not kebab-case"]
+    }
+
+    static func tagTreeProblems(count: Int) -> [String] {
+        count > 1 ? ["Tag tree provider: registered \(count) times; only one is allowed"] : []
     }
 
     private static let kebabCase = "^[a-z0-9]+(-[a-z0-9]+)*$"

@@ -489,7 +489,8 @@ final class AppleNotesImporter {
             guard let src = dataURL.firstMatch(in: tag, range: NSRange(location: 0, length: tagNS.length)) else { continue }
             let subtype = tagNS.substring(with: src.range(at: 1)).lowercased()
             let base64 = tagNS.substring(with: src.range(at: 2)).replacingOccurrences(of: "&#10;", with: "")
-            guard let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters) else { continue }
+            guard let data = Data(base64Encoded: base64, options: .ignoreUnknownCharacters),
+                  AttachmentLimit.allows(byteCount: data.count) else { continue }
             let ext = ["jpeg": "jpg", "svg+xml": "svg"][subtype] ?? subtype
             images.append((data, ext))
             result += "\u{E000}\(images.count - 1)\u{E001}"

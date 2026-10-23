@@ -1,0 +1,163 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#DB332E"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "Red",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#E6730D"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "Orange",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#C29400"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "Yellow",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#299945"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "Green",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#0D8C9E"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "Teal",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#1A6BE6"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "Blue",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#8C45D9"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "Purple",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#E03885"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "Pink",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "color": "#808087"
+                },
+                "type": "textColor"
+              }
+            ],
+            "text": "Gray",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

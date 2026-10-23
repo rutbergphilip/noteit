@@ -1,11 +1,14 @@
 import AppKit
+import NoteItDocAppKit
 
 /// Converts a NoteIt note body to a self-contained HTML page. Images are embedded as data URLs, and
 /// colors, highlights, underline and alignment are kept.
 @MainActor
 enum HTMLWriter {
-    static func write(_ text: NSAttributedString, title: String, code: CodeStyleSettings = .current) -> String {
+    static func write(_ text: NSAttributedString, title: String, code: CodeStyleSettings = .current,
+                      links: ExportLinkContext = .titlesOnly) -> String {
         var body = ""
+        var slugs = HeadingSlug.Unique()
         /// Open lists, innermost last. Each has an unclosed `<li>`.
         var lists: [(key: String, tag: String, level: Int)] = []
 
@@ -19,7 +22,7 @@ enum HTMLWriter {
         for block in NoteBlocks.parse(text) {
             guard case .listItem(let marker, let level, let alignment, let runs) = block else {
                 closeLists(above: -1)
-                body += html(for: block, code: code) + "\n"
+                body += html(for: block, code: code, links: links, slugs: &slugs) + "\n"
                 continue
             }
             let tag: String, key: String
@@ -50,9 +53,9 @@ enum HTMLWriter {
                 lists.append((key, tag, level))
             }
             if case .checkbox(true) = marker {
-                body += item + "<span class=\"done\">" + inline(runs) + "</span>"
+                body += item + "<span class=\"done\">" + inline(runs, links: links) + "</span>"
             } else {
-                body += item + inline(runs)
+                body += item + inline(runs, links: links)
             }
         }
         closeLists(above: -1)
@@ -79,16 +82,21 @@ enum HTMLWriter {
         """
     }
 
-    private static func html(for block: NoteBlock, code settings: CodeStyleSettings) -> String {
+    private static func html(for block: NoteBlock, code settings: CodeStyleSettings, links: ExportLinkContext,
+                             slugs: inout HeadingSlug.Unique) -> String {
         switch block {
         case .paragraph(let kind, let alignment, let runs):
             let style = alignmentStyle(alignment)
+            func heading(_ tag: String) -> String {
+                let id = slugs.next(NoteBlocks.plainText(runs))
+                return "<\(tag) id=\"\(escape(id))\"\(style)>\(inline(runs, links: links))</\(tag)>"
+            }
             switch kind {
-            case .title: return "<h1\(style)>\(inline(runs))</h1>"
-            case .heading: return "<h2\(style)>\(inline(runs))</h2>"
-            case .subheading: return "<h3\(style)>\(inline(runs))</h3>"
-            case .quote: return "<blockquote><p\(style)>\(inline(runs))</p></blockquote>"
-            default: return "<p\(style)>\(inline(runs))</p>"
+            case .title: return heading("h1")
+            case .heading: return heading("h2")
+            case .subheading: return heading("h3")
+            case .quote: return "<blockquote><p\(style)>\(inline(runs, links: links))</p></blockquote>"
+            default: return "<p\(style)>\(inline(runs, links: links))</p>"
             }
         case .listItem:
             return ""
@@ -101,7 +109,7 @@ enum HTMLWriter {
             var out = "<table>\n"
             for (r, row) in rows.enumerated() {
                 let cell = r == 0 ? "th" : "td"
-                out += "<tr>" + row.map { "<\(cell)>\(inline($0))</\(cell)>" }.joined() + "</tr>\n"
+                out += "<tr>" + row.map { "<\(cell)>\(inline($0, links: links))</\(cell)>" }.joined() + "</tr>\n"
             }
             return out + "</table>"
         }
@@ -118,7 +126,7 @@ enum HTMLWriter {
 
     // MARK: Inline
 
-    static func inline(_ runs: [InlineRun]) -> String {
+    static func inline(_ runs: [InlineRun], links: ExportLinkContext = .titlesOnly) -> String {
         var out = ""
         for run in runs {
             if let attachment = run.attachment {
@@ -138,6 +146,13 @@ enum HTMLWriter {
             }
             if !styles.isEmpty { s = "<span style=\"\(styles.joined(separator: "; "))\">\(s)</span>" }
             if let link = run.link, ExportLinks.isSafe(link) { s = "<a href=\"\(escape(link.absoluteString))\">\(s)</a>" }
+            if let noteLink = run.noteLink {
+                if let href = links.href(for: noteLink, fileExtension: "html") {
+                    s = "<a href=\"\(escape(href))\">\(s)</a>"
+                } else {
+                    s = "<span class=\"note-link\">\(s)</span>"
+                }
+            }
             out += s
         }
         return out
@@ -157,6 +172,7 @@ enum HTMLWriter {
 
     /// Black and near-black text is the default ink; leaving it out keeps it readable in dark mode.
     private static func isDefaultTextColor(_ color: NSColor) -> Bool {
+        if DocParagraphModel.isSystemTextColor(color) { return true }
         guard let rgb = color.usingColorSpace(.sRGB) else { return false }
         return max(rgb.redComponent, rgb.greenComponent, rgb.blueComponent) < 0.2
     }

@@ -73,6 +73,7 @@
           "id" : "432F35A9-1533-47B0-898F-B41726DFC163",
           "modifiedAt" : "2026-01-01T01:00:00Z",
           "name" : "Home/Work",
+          "parent" : null,
           "revision" : "5CCC5200-33A8-445A-99FD-C4E20B4B2D25",
           "sortIndex" : 2,
           "symbol" : "folder"
@@ -83,8 +84,34 @@
       "key" : "noteit/v1/notebooks/432F35A9-1533-47B0-898F-B41726DFC163.json",
       "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
       "name" : "notebook-envelope",
-      "plaintextJSON" : "{\"deviceID\":\"device-2\",\"deviceName\":\"Laptop\",\"id\":\"432F35A9-1533-47B0-898F-B41726DFC163\",\"kind\":\"notebook\",\"meta\":\"ewogICJjb2xvckhleCIgOiAiIzM0NzhGNiIsCiAgImlkIiA6ICI0MzJGMzVBOS0xNTMzLTQ3QjAtODk4Ri1CNDE3MjZERkMxNjMiLAogICJtb2RpZmllZEF0IiA6ICIyMDI2LTAxLTAxVDAxOjAwOjAwWiIsCiAgIm5hbWUiIDogIkhvbWVcL1dvcmsiLAogICJyZXZpc2lvbiIgOiAiNUNDQzUyMDAtMzNBOC00NDVBLTk5RkQtQzRFMjBCNEIyRDI1IiwKICAic29ydEluZGV4IiA6IDIsCiAgInN5bWJvbCIgOiAiZm9sZGVyIgp9\",\"modifiedAt\":788922000,\"revision\":\"5CCC5200-33A8-445A-99FD-C4E20B4B2D25\"}",
-      "sealed" : "7SouzSdLF0qn2Gsdq3XBvRaDnk2lqW4JFSao/265wuMYNKNARGU73b3/GQ0IlWT25LSujyqbHLd7/lnUjYWYkTbHFXN9xl70SlwnBkbFuUQ2WRWbK28ZvzSLnzPUNLsNjzQb0XyBEXefU99nNzR2XugivVUDL7DI9RedoC7kzqYjNK3obvIa8hFLOqnnFQ4VBXFM3Qc+iDIO+AVAiM11+gUvnOYa7tXQERy1tEeuvlI9RcpEeHYgd+zjUPEKkH3Cse7ayCHREDARUhAf/4Ebw1j5EDDtZS7IIQPwUTyazO0RIe2ys7xi4F5+NMt3gyvOXujBNv0psoUCEmBeWTvTtkUWKecRZwdZK/CxKojk4gRlrEhEgD8j1NLPah0JqwNsr7U5LqcqNAH4aoUW+vqzRkI82qSTY9RP1ibx8bPDzbQaFs49xPKCv6iFdTDLs0Qo7DEpWTko9zak6HaZ3QQKTe/dvhI5ZORFJMhr6zLIXGQvUR955ax/v6kXrpzrPyqC8Il8r1rr3fNvRS5CY8/aq0wZuxm/F7GrXxdEsiyqED6xjoPwcvmDZwfICDGLuvp5kR6ALArw6WW7ZDe4UGP7KsP1gd7qEyuYV3XF+LxCbt0YJkHniXqAoTwmLTMYT0PG5/ZNvjExb1+traJ/FPhsst7G7S4CZdy0DiRl4a9JjvY+nsp6YaUcO3mzha4nCzrqY+9LudlC8ORZtA=="
+      "plaintextJSON" : "{\"deviceID\":\"device-2\",\"deviceName\":\"Laptop\",\"id\":\"432F35A9-1533-47B0-898F-B41726DFC163\",\"kind\":\"notebook\",\"meta\":\"ewogICJjb2xvckhleCIgOiAiIzM0NzhGNiIsCiAgImlkIiA6ICI0MzJGMzVBOS0xNTMzLTQ3QjAtODk4Ri1CNDE3MjZERkMxNjMiLAogICJtb2RpZmllZEF0IiA6ICIyMDI2LTAxLTAxVDAxOjAwOjAwWiIsCiAgIm5hbWUiIDogIkhvbWVcL1dvcmsiLAogICJwYXJlbnQiIDogbnVsbCwKICAicmV2aXNpb24iIDogIjVDQ0M1MjAwLTMzQTgtNDQ1QS05OUZELUM0RTIwQjRCMkQyNSIsCiAgInNvcnRJbmRleCIgOiAyLAogICJzeW1ib2wiIDogImZvbGRlciIKfQ==\",\"modifiedAt\":788922000,\"revision\":\"5CCC5200-33A8-445A-99FD-C4E20B4B2D25\"}",
+      "sealed" : "KHr3Ej+qv6OBcwchzFwXu0n9nN857kKujrEFz0WmlmaFB+UDVNnt7DhmMz9NXIVWxA5WwcwoMFv86b87aPFdAGBFN00QOcc8gBY3F6zD0ZASw4trqLD8w8+OKAlsJaCViiE4ARBUeWhvlvMnBqGLzqTVHk/Jrzc5KlbbnOH9LoG+gVX9A0pGXPaMjVaetzTpWZtwceKPH8OXpxD1sIDfjynz/+WTLWFvj9Y9/IppVlNJNbPqhJdjc2Wihd354FbJBvJ8ioZKGeEf75fQnAgTGJ/ledz0xCmjhW4EVSyRBOcMt5iVi5vKl6NPuaovDIjdwWSjlaFmaY367kl29e+yyZhPUAIREjiJLB/tF42Mr42Ht8lp7WrISryE6ya2q8PWsqvJB1Txz3H40iT/rmw6bhUZ1Bn+gr78bjTHT18LkybiCz3X3x9YMFkUBR00gmgk/Zwp2OizpwWM4JWOTh9+hImgip4anbdgkyVu/1eJ0As9jqbglv6X2RcoyFt/lQn+lPIfW70nfYzaxCIh1YZm+ZSLS0E4jGvp5t4oEDy4yBG7fXn6i3omGlnN+Tb9/GjPqVJlK5OYQOcPn2a2s2mbwf972mqucMu7yW9fpltVZlRoEoI7oxD3C5BGrgg3EgVVGE0PwWFdeTTtX3qpKSLKU/4pWHLHlYc7xnHp/jDAOamLcbG0Sym26BI5RW+z5f3MDlAVT69WSIchRX6e06I+uRxOi7vg0PM72wrTH7tyarf8tpaKVE4="
+    },
+    {
+      "context" : "notebooks/8A8D5D4F-7BE0-498A-9434-2A17E9925637.json",
+      "decoded" : {
+        "deviceID" : "device-2",
+        "deviceName" : "Laptop",
+        "id" : "8A8D5D4F-7BE0-498A-9434-2A17E9925637",
+        "kind" : "notebook",
+        "meta" : {
+          "colorHex" : "#34C759",
+          "id" : "8A8D5D4F-7BE0-498A-9434-2A17E9925637",
+          "modifiedAt" : "2026-01-01T01:01:00Z",
+          "name" : "Clients",
+          "parent" : "432F35A9-1533-47B0-898F-B41726DFC163",
+          "revision" : "A279712A-3830-48FC-A78F-47D2CC320F2D",
+          "sortIndex" : 0,
+          "symbol" : "folder"
+        },
+        "modifiedAt" : 788922060,
+        "revision" : "A279712A-3830-48FC-A78F-47D2CC320F2D"
+      },
+      "key" : "noteit/v1/notebooks/8A8D5D4F-7BE0-498A-9434-2A17E9925637.json",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "notebook-envelope-nested",
+      "plaintextJSON" : "{\"deviceID\":\"device-2\",\"deviceName\":\"Laptop\",\"id\":\"8A8D5D4F-7BE0-498A-9434-2A17E9925637\",\"kind\":\"notebook\",\"meta\":\"ewogICJjb2xvckhleCIgOiAiIzM0Qzc1OSIsCiAgImlkIiA6ICI4QThENUQ0Ri03QkUwLTQ5OEEtOTQzNC0yQTE3RTk5MjU2MzciLAogICJtb2RpZmllZEF0IiA6ICIyMDI2LTAxLTAxVDAxOjAxOjAwWiIsCiAgIm5hbWUiIDogIkNsaWVudHMiLAogICJwYXJlbnQiIDogIjQzMkYzNUE5LTE1MzMtNDdCMC04OThGLUI0MTcyNkRGQzE2MyIsCiAgInJldmlzaW9uIiA6ICJBMjc5NzEyQS0zODMwLTQ4RkMtQTc4Ri00N0QyQ0MzMjBGMkQiLAogICJzb3J0SW5kZXgiIDogMCwKICAic3ltYm9sIiA6ICJmb2xkZXIiCn0=\",\"modifiedAt\":788922060,\"revision\":\"A279712A-3830-48FC-A78F-47D2CC320F2D\"}",
+      "sealed" : "T5/BlHrMQVJR2+dM9A5zt87J2i4TNlbrqzlXoKSPPz4liy6gNjz4gROmHjoZWpdgGjGpeTkybi33EaRVILEUoqI0+oPnswXTyjdeTVU/fAoa1HpaBF8Yhau+jfWlw+Iogm4TT3UJ2WFqy+GeuyzSFYEv3JWopAPoGbWHRugAydHdvI7MhNLRcyPCU//KloxAEcYgFa9n6UhRmIlED9+OOL2tRK1AoOpIn7Ukam/btWPtmuSmnBsxtPmLJOE8cYFbemkpNdbpqpwWGifsZDQW494AjsWeZREcHw0Zgqd8s4IzvKtNiOmim8MT4rvocSDapcT32FiNzvZV/q2ZZSfkII/0w7tVaPonUmUXtA9j6xiELU9LrOZf68QcL0+NNl9/F2ZW64MJ56wCdWKLHjXrwNwjH1j70xqEtri9EFLjNf21o6AWlnzBBTfOuNNqBzpiL4YKOVUoPITuel4lCS91fEEej+0upDF88CVEfPvu4LB6AMR/2B2gFqN1MWl+sTiwU6YpiF8l9b9GPsPFotjPwSreLyZWDEh7fd+AgT+WpZNkVUVJfrY7A8eymyYwaOQHcj3gZZbYHMVSbi/MHY+S7HEX0R8XmtX/w+7hjRrge2DVQ5YR3gXaUrPPpJwANgrFJosaTf5EDVfD0Lrfj6CmI/91dnVlRO8rh3JIF9T4zc/hhrE4V2wxSc/Vy5rMML/gjHUMZmZ3riD4+L+v75EZAfjpYdZZhTsiwkqYKPmczXfrLyUCGaXxW6zk6utbPdXKFyy9Gt5IbQCzpbj8s2YzXvUtZV4IuPCeLL5fwIr6"
     },
     {
       "context" : "tombstones/430742D2-5082-469B-9F71-FF2B36718F0D.json",

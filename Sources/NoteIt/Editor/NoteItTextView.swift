@@ -13,6 +13,12 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     private var isNormalizing = false
     private var lineBreakEditLocation: Int?
     private(set) lazy var codeStyler = CodeStyler(textView: self)
+    private(set) lazy var linkStyler = LinkStyler(textView: self)
+    private(set) lazy var tokenStyler = TokenStyler(textView: self)
+    private(set) lazy var inlineCompletion = InlineCompletionController(textView: self)
+    weak var linkHost: (any NoteLinkHost)?
+    /// A click on a `@due` or `@remind` token, with the token's range.
+    var onDateToken: ((NSRange) -> Void)?
     private var hoverTrackingArea: NSTrackingArea?
 
     // MARK: Setup
@@ -65,11 +71,8 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         smartInsertDeleteEnabled = true
         displaysLinkToolTips = true
         usesFontPanel = true
-        linkTextAttributes = [
-            .foregroundColor: NSColor.linkColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-            .cursor: NSCursor.pointingHand,
-        ]
+        // Colors come from LinkStyler's temporary attributes.
+        linkTextAttributes = [.cursor: NSCursor.pointingHand]
         (layoutManager as? NoteItLayoutManager)?.codeSettings = codeStyler.settings
     }
 
@@ -105,12 +108,57 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         super.writablePasteboardTypes + [Self.ownCopyType]
     }
 
+    /// Shows why an attachment wasn't added; an alert by default.
+    var onAttachmentRefused: ((String) -> Void)?
+
     override func paste(_ sender: Any?) {
         if !pasteMarkdown(from: .general) { super.paste(sender) }
     }
 
     override func pasteAsPlainText(_ sender: Any?) {
         if !pastePlainText(from: .general) { super.pasteAsPlainText(sender) }
+    }
+
+    /// Pastes and drops end here; attachments over `AttachmentLimit` are refused instead of added.
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        if let name = Self.oversizedAttachmentName(in: pboard, type: type) {
+            refuseAttachment(named: name)
+            return false
+        }
+        return super.readSelection(from: pboard, type: type)
+    }
+
+    func refuseAttachment(named name: String) {
+        let message = AttachmentLimit.tooLargeMessage(name: name)
+        if let onAttachmentRefused { return onAttachmentRefused(message) }
+        NSSound.beep()
+        guard let window else { return }
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.beginSheetModal(for: window)
+    }
+
+    static func isOversized(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey]),
+              values.isRegularFile == true, let size = values.fileSize else { return false }
+        return !AttachmentLimit.allows(byteCount: size)
+    }
+
+    static func oversizedAttachmentName(in pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> String? {
+        switch type {
+        case .string, .rtf, .html, .URL, ownCopyType:
+            return nil
+        case .fileURL, NSPasteboard.PasteboardType("NSFilenamesPboardType"):
+            let urls = pboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] ?? []
+            return urls.first(where: isOversized)?.lastPathComponent
+        case .rtfd:
+            guard let data = pboard.data(forType: type), !AttachmentLimit.allows(byteCount: data.count),
+                  let text = NSAttributedString(rtfd: data, documentAttributes: nil) else { return nil }
+            return NoteStore.oversizedAttachmentName(in: text)
+        default:
+            guard let data = pboard.data(forType: type), !AttachmentLimit.allows(byteCount: data.count) else { return nil }
+            return "Pasted image"
+        }
     }
 
     // MARK: Layout
@@ -179,6 +227,17 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         return true
     }
 
+    override func resignFirstResponder() -> Bool {
+        guard super.resignFirstResponder() else { return false }
+        inlineCompletion.cancel()
+        return true
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { inlineCompletion.cancel() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override func didChangeText() {
         normalizePendingEdits()
         codeStyler.flush(typing: true)
@@ -225,6 +284,12 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         storage.endEditing()
     }
 
+    /// Never carries `noteItSoftBreak`: text and line breaks the user types are not soft breaks read from a file.
+    override var typingAttributes: [NSAttributedString.Key: Any] {
+        get { EditorStyle.forInsertion(super.typingAttributes) }
+        set { super.typingAttributes = EditorStyle.forInsertion(newValue) }
+    }
+
     override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
         super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
         if !stillSelecting { formattingDidChange?() }
@@ -242,6 +307,10 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             guard !isNormalizing, !codeStyler.isApplying else { return }
             let r = NSRange(location: editedRange.location, length: max(editedRange.length, 0))
             codeStyler.noteEdit(r)
+            if editedMask.contains(.editedAttributes) || editedMask.contains(.editedCharacters) {
+                linkStyler.noteEdit(r)
+                tokenStyler.noteEdit(r)
+            }
             pendingNormalizeRange = pendingNormalizeRange.map { NSUnionRange($0, r) } ?? r
             if let p = pendingNormalizeRange, NSMaxRange(p) > textStorage.length {
                 pendingNormalizeRange = NSRange(location: min(p.location, textStorage.length), length: textStorage.length - min(p.location, textStorage.length))
@@ -535,6 +604,11 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         guard let text, !hasMarkedText(), replacementRange.location == NSNotFound,
               selectedRange().length == 0, handleMarkdownTrigger(text, dryRun: true) else {
             super.insertText(string, replacementRange: replacementRange)
+            if let text {
+                beginLinkCompletionIfNeeded(afterTyping: text)
+                beginTagCompletionIfNeeded(afterTyping: text)
+                if text == ")" { scheduleDateTokenFormat() }
+            }
             return
         }
         // Type the character first, then convert on the next run-loop turn: the conversion becomes
@@ -546,6 +620,17 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             guard let self, self.selectedRange() == caret, self.storage.length == length, caret.location > 0,
                   self.nsString.substring(with: NSRange(location: caret.location - 1, length: 1)) == text,
                   self.handleMarkdownTriggerAfterTyping(text, at: caret.location - 1) else { return }
+        }
+    }
+
+    /// Like the Markdown shortcuts, the rewrite runs on the next turn so ⌘Z restores what was typed.
+    private func scheduleDateTokenFormat() {
+        let caret = selectedRange()
+        let length = storage.length
+        guard caret.length == 0 else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.selectedRange() == caret, self.storage.length == length else { return }
+            self.formatDateTokenAfterTyping(at: caret.location)
         }
     }
 
@@ -659,6 +744,7 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
             toggleCheckbox(atParagraphStart: index)
             return
         }
+        if handleTokenClick(at: point, event: event) { return }
         super.mouseDown(with: event)
     }
 
@@ -766,7 +852,32 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
         ]
         for (i, group) in groups.enumerated() {
             if i > 0 { format.addItem(.separator()) }
-            for cmd in group { format.addItem(menuItem(for: cmd)) }
+            for cmd in group {
+                format.addItem(menuItem(for: cmd))
+                if case .link = cmd, canInsertNoteLink {
+                    let item = NSMenuItem(title: "Link to Note…", action: #selector(linkToNote(_:)), keyEquivalent: "")
+                    item.target = self
+                    item.image = NSImage(systemSymbolName: "link.badge.plus", accessibilityDescription: nil)
+                    format.addItem(item)
+                }
+            }
+        }
+        if isEditable, lineRange(at: selectedRange().location).length > 0 {
+            let task = NSMenu(title: "Task")
+            if taskLineRange(at: selectedRange().location) != nil {
+                let due = NSMenuItem(title: "Set Due Date…", action: #selector(setDueDate(_:)), keyEquivalent: "")
+                due.target = self
+                due.image = NSImage(systemSymbolName: "calendar.badge.clock", accessibilityDescription: nil)
+                task.addItem(due)
+            }
+            let remind = NSMenuItem(title: "Add Reminder…", action: #selector(addReminder(_:)), keyEquivalent: "")
+            remind.target = self
+            remind.image = NSImage(systemSymbolName: "bell", accessibilityDescription: nil)
+            task.addItem(remind)
+            let taskItem = NSMenuItem(title: "Task", action: nil, keyEquivalent: "")
+            taskItem.submenu = task
+            format.addItem(.separator())
+            format.addItem(taskItem)
         }
         let formatItem = NSMenuItem(title: "Format", action: nil, keyEquivalent: "")
         formatItem.submenu = format
@@ -903,6 +1014,7 @@ final class NoteItLayoutManager: NSLayoutManager {
                 }
             } else if para.location < NSMaxRange(chars) && NSMaxRange(para) > chars.location {
                 drawInlineCodePills(in: para, storage: ts, origin: origin)
+                drawTokenChips(in: para, origin: origin)
             }
             if NSMaxRange(para) <= loc { break }
             loc = NSMaxRange(para)
@@ -997,6 +1109,33 @@ final class NoteItLayoutManager: NSLayoutManager {
                 let p = Self.pillPadding
                 let rect = NSRect(x: box.minX - p + origin.x, y: top + origin.y, width: box.width + p * 2, height: bottom - top)
                 let radius = min(rect.height / 2, 5.5)
+                fill.setFill()
+                NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
+            }
+        }
+    }
+
+    // MARK: Token chips
+
+    private func drawTokenChips(in para: NSRange, origin: NSPoint) {
+        guard let tc = textContainers.first, let ts = textStorage else { return }
+        var cursor = para.location
+        while cursor < NSMaxRange(para) {
+            var run = NSRange()
+            let value = temporaryAttribute(.tokenChip, atCharacterIndex: cursor, longestEffectiveRange: &run, in: para)
+            cursor = max(NSMaxRange(run), cursor + 1)
+            guard let fill = value as? NSColor, run.length > 0, NSMaxRange(run) <= ts.length else { continue }
+            let font = (ts.attribute(.font, at: run.location, effectiveRange: nil) as? NSFont) ?? .systemFont(ofSize: NSFont.systemFontSize)
+            let glyphs = glyphRange(forCharacterRange: run, actualCharacterRange: nil)
+            enumerateLineFragments(forGlyphRange: glyphs) { lineRect, _, _, lineGlyphs, _ in
+                let sub = NSIntersectionRange(lineGlyphs, glyphs)
+                guard sub.length > 0 else { return }
+                let box = self.boundingRect(forGlyphRange: sub, in: tc)
+                let baseline = lineRect.minY + self.location(forGlyphAt: sub.location).y
+                let top = baseline - font.ascender - 1
+                let bottom = baseline - font.descender + 1
+                let rect = NSRect(x: box.minX - 2 + origin.x, y: top + origin.y, width: box.width + 4, height: bottom - top)
+                let radius = min(rect.height / 2, 5)
                 fill.setFill()
                 NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius).fill()
             }

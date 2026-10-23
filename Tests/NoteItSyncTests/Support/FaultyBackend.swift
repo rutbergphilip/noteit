@@ -35,7 +35,10 @@ actor FaultyBackend: StorageBackend {
 
     func list(prefix: String) async throws -> [RemoteObject] { try await inner.list(prefix: prefix) }
 
+    private(set) var gotKeys: [String] = []
+
     func get(_ key: String) async throws -> (data: Data, etag: String) {
+        gotKeys.append(key)
         if let getError { throw getError }
         return try await inner.get(key)
     }

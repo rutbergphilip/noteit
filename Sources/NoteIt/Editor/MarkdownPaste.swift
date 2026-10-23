@@ -421,7 +421,7 @@ extension NoteItTextView {
             if !hasTextAfter, let m = EditorStyle.listMarker(in: before), m.length == (before as NSString).length {
                 range = NSRange(location: startPara.location, length: NSMaxRange(sel) - startPara.location)
             } else {
-                var attrs = storage.attributes(at: sel.location - 1, effectiveRange: nil)
+                var attrs = EditorStyle.forInsertion(storage.attributes(at: sel.location - 1, effectiveRange: nil))
                 attrs[.link] = nil
                 attrs[.attachment] = nil
                 out.append(NSAttributedString(string: "\n", attributes: attrs))

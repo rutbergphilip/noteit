@@ -27,7 +27,7 @@ public struct HTTPHeaders: Sendable, Equatable {
     }
 }
 
-public struct HTTPRequest: Sendable {
+public struct HTTPRequest: Sendable, Equatable {
     public var method: String
     public var path: String
     public var query: [String: String]

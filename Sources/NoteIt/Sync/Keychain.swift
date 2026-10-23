@@ -48,8 +48,16 @@ enum Keychain {
     }
 }
 
+/// A `SecretStore` that names the items it adds, as Keychain Access shows them, and tells a missing item apart
+/// from one it couldn't read.
+protocol LabeledSecretStore: SecretStore {
+    func write(_ value: String, service: String, account: String, label: String) throws
+    /// nil only when there is no such item; throws when the item couldn't be read.
+    func readExisting(service: String, account: String) throws -> String?
+}
+
 /// `SecretStore` over the login keychain's generic passwords.
-struct SecItemStore: SecretStore {
+struct SecItemStore: LabeledSecretStore {
     func read(service: String, account: String) -> String? {
         var query = Self.baseQuery(service: service, account: account)
         query[kSecReturnData as String] = true
@@ -59,7 +67,24 @@ struct SecItemStore: SecretStore {
         return String(data: data, encoding: .utf8)
     }
 
+    func readExisting(service: String, account: String) throws -> String? {
+        var query = Self.baseQuery(service: service, account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess, let data = item as? Data, let text = String(data: data, encoding: .utf8) else {
+            throw Keychain.Failure(status: status == errSecSuccess ? errSecDecode : status)
+        }
+        return text
+    }
+
     func write(_ value: String, service: String, account: String) throws {
+        try write(value, service: service, account: account, label: "NoteIt Sync")
+    }
+
+    func write(_ value: String, service: String, account: String, label: String) throws {
         let query = Self.baseQuery(service: service, account: account)
         let update: [String: Any] = [
             kSecValueData as String: Data(value.utf8),
@@ -69,7 +94,7 @@ struct SecItemStore: SecretStore {
         if status == errSecItemNotFound {
             var add = query
             add.merge(update) { _, new in new }
-            add[kSecAttrLabel as String] = "NoteIt Sync"
+            add[kSecAttrLabel as String] = label
             status = SecItemAdd(add as CFDictionary, nil)
         }
         guard status == errSecSuccess else { throw Keychain.Failure(status: status) }

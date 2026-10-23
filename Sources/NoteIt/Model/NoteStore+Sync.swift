@@ -4,12 +4,28 @@ import NoteItSync
 enum NoteStoreSyncError: Error, Equatable {
     case notFound(UUID)
     case unreadableBody(UUID)
+    /// Edits that couldn't be written to the note's file; they sync once they are saved.
+    case unsavedBody(UUID)
     case missingBody(UUID)
     case invalidPayload(String)
 }
 
+/// A note held because the edit recovered for it couldn't be read: it syncs once it's retried or discarded.
+struct RecoveredEditUnreadable: Error, CustomStringConvertible {
+    var id: UUID
+    var description: String { "the edit recovered for this note couldn’t be read; open the note to retry or discard it" }
+}
+
 /// Record-level API used by `NoteStoreSyncAdapter`. Remote applies never assign new revisions.
 extension NoteStore {
+    /// A note held until its edit in `recovery/` is restored waits quietly for a later pass, unless its copies
+    /// couldn't be read, which is reported.
+    func markdownRecoveryHoldError(_ id: UUID) -> Error {
+        markdownRecoveryUnreadable.contains(id)
+            ? RecoveredEditUnreadable(id: id)
+            : SyncRecordDeferred(reason: "its recovered edit isn’t restored yet")
+    }
+
     func syncRecords() -> [LocalRecord] {
         assignMissingRevisions()
         let books = notebooks.compactMap { nb in
@@ -18,7 +34,10 @@ extension NoteStore {
         let metas = notes.compactMap { meta in
             meta.revision.map { LocalRecord(id: meta.id, kind: .note, revision: $0, modifiedAt: meta.updatedAt) }
         }
-        return books + metas
+        let folders = smartFolders.compactMap { folder in
+            folder.revision.map { LocalRecord(id: folder.id, kind: .smartFolder, revision: $0, modifiedAt: folder.modifiedAt ?? .distantPast) }
+        }
+        return books + folders + metas
     }
 
     /// Journaled deletions of records that are really gone (stale entries are dropped).
@@ -26,7 +45,7 @@ extension NoteStore {
         for id in syncDeletionJournal.keys where note(with: id) != nil || notebook(with: id) != nil {
             clearSyncDeletion(id)
         }
-        return syncDeletionJournal
+        return syncDeletionJournal.merging(smartFolderSyncDeletions) { journal, _ in journal }
     }
 
     /// O(1): the engine checks this right before every apply.
@@ -34,6 +53,7 @@ extension NoteStore {
         switch kind {
         case .note: note(with: id)?.revision
         case .notebook: notebook(with: id)?.revision
+        case .smartFolder: smartFolder(with: id)?.revision
         }
     }
 
@@ -53,14 +73,24 @@ extension NoteStore {
                 .merged(with: try Self.encoder.encode(nb), ownedKeys: Notebook.ownedCodingKeys)
             return (RecordPayload(id: id, kind: .notebook, revision: revision, modifiedAt: nb.modifiedAt ?? .distantPast,
                                   deviceID: deviceID, meta: meta), nil)
+        case .smartFolder:
+            guard let folder = smartFolder(with: id), let revision = folder.revision else { throw NoteStoreSyncError.notFound(id) }
+            let meta = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .smartFolders))
+                .merged(with: try Self.encoder.encode(folder), ownedKeys: SmartFolder.ownedCodingKeys)
+            return (RecordPayload(id: id, kind: .smartFolder, revision: revision, modifiedAt: folder.modifiedAt ?? .distantPast,
+                                  deviceID: deviceID, meta: meta), nil)
         case .note:
             guard let meta = note(with: id), let revision = meta.revision else { throw NoteStoreSyncError.notFound(id) }
             // An unreadable body loads as empty; never push that over a good remote copy.
             if hasUnreadableBody(id) { throw NoteStoreSyncError.unreadableBody(id) }
+            // The library keeps the saved revision for it, so after a relaunch that older version would look like a
+            // newer local change and be pushed over this one.
+            if markdownRecoveryPending.contains(id) { throw markdownRecoveryHoldError(id) }
+            if hasBodyThatCantBeSaved(id) { throw NoteStoreSyncError.unsavedBody(id) }
             let merged = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .notes))
                 .merged(with: try Self.encoder.encode(meta), ownedKeys: NoteMeta.ownedCodingKeys)
             return (RecordPayload(id: id, kind: .note, revision: revision, modifiedAt: meta.updatedAt,
-                                  deviceID: deviceID, meta: merged), exportBodySource(id))
+                                  deviceID: deviceID, meta: merged), try exportBodySource(id))
         }
     }
 
@@ -92,9 +122,20 @@ extension NoteStore {
             nb.modifiedAt = payload.modifiedAt
             // The raw copy goes first; if it can't be written the record isn't applied, and the next pass retries.
             try setLastRemoteMeta(RawMeta(sourceRevision: payload.revision, meta: payload.meta), for: nb.id, kind: .notebooks)
-            applyRemoteNotebook(nb)
+            applyRemoteNotebook(nb, hasParentKey: Notebook.recordHasParentKey(payload.meta))
+        case .smartFolder:
+            var folder = try Self.decodeMeta(SmartFolder.self, payload)
+            folder.revision = payload.revision
+            folder.modifiedAt = payload.modifiedAt
+            try setLastRemoteMeta(RawMeta(sourceRevision: payload.revision, meta: payload.meta), for: folder.id, kind: .smartFolders)
+            applyRemoteSmartFolder(folder)
         case .note:
-            try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, storage: bodyStorage))
+            if let markdownStorage {
+                let prepared = try runMarkdownIONow(markdownStorage) { try Self.prepareRemoteNote(payload, storage: $0) }
+                try applyPreparedRemoteNote(prepared)
+            } else {
+                try applyPreparedRemoteNote(Self.prepareRemoteNote(payload, storage: bodyStorage))
+            }
         }
     }
 
@@ -102,6 +143,8 @@ extension NoteStore {
         switch kind {
         case .notebook:
             removeNotebookForRemote(id)
+        case .smartFolder:
+            removeSmartFolderForRemote(id)
         case .note:
             clearSyncDeletion(id)
             removeNote(id, remote: true)
@@ -109,14 +152,17 @@ extension NoteStore {
     }
 
     /// Imports a remote note as a new note (new id and revision) whose title carries a conflict suffix.
-    /// Notebook conflicts are resolved last-writer-wins by the engine and never reach here.
+    /// Notebook and smart folder conflicts are resolved last-writer-wins by the engine and never reach here.
     @discardableResult
     func importConflictCopy(_ payload: RecordPayload, fromDevice name: String) throws -> NoteMeta {
-        guard payload.kind == .note else { throw NoteStoreSyncError.invalidPayload("conflict copy of a notebook") }
+        guard payload.kind == .note else { throw NoteStoreSyncError.invalidPayload("conflict copy of a \(payload.kind.rawValue)") }
         let remote = try Self.decodeMeta(NoteMeta.self, payload)
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
         let suffix = " (conflict — \(name), \(Self.conflictDateFormatter.string(from: payload.modifiedAt)))"
         let body = Self.appendingToTitleLine(try Self.deserializeBody(data), suffix)
+        if markdownStorage != nil, let name = Self.oversizedAttachmentName(in: body) {
+            throw AttachmentStore.StoreError.tooLarge(name)
+        }
         let created = createNote(in: remote.notebookID, initial: body, postsLocalChange: false)
         updateSyncCreatedNote(created.id) { meta in
             meta.isPinned = remote.isPinned
@@ -126,6 +172,18 @@ extension NoteStore {
             meta.conflictOriginalID = payload.id
         }
         return note(with: created.id) ?? created
+    }
+
+    /// The first attachment over `AttachmentLimit`, which a Markdown library can't store.
+    nonisolated static func oversizedAttachmentName(in text: NSAttributedString) -> String? {
+        var name: String?
+        text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, stop in
+            guard let wrapper = (value as? NSTextAttachment)?.fileWrapper, wrapper.isRegularFile,
+                  let contents = wrapper.regularFileContents, !AttachmentLimit.allows(byteCount: contents.count) else { return }
+            name = wrapper.preferredFilename ?? wrapper.filename ?? "Attachment"
+            stop.pointee = true
+        }
+        return name
     }
 
     // MARK: Body transport

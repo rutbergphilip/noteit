@@ -78,7 +78,7 @@ private struct MenuShortcutRow: View {
     }
 
     private func resetHelp(_ blocker: MenuShortcutCommand?) -> String {
-        let shortcut = command.defaultShortcut.display
+        guard let shortcut = command.defaultShortcut?.display else { return "Remove the shortcut" }
         guard let blocker else { return "Restore \(shortcut)" }
         return "\(shortcut) is used for “\(blocker.title)”."
     }
@@ -119,6 +119,8 @@ private struct HotkeyRow: View {
         case .openQuickly: Tokens.Color.tileOpenQuickly
         case .commandPalette: Tokens.Color.tileCommandPalette
         case .captureSelection: Tokens.Color.tileCaptureSelection
+        case .openToday: Tokens.Color.tileOpenToday
+        case .showTasks: Tokens.Color.tileShowTasks
         }
     }
 }

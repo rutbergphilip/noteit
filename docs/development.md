@@ -13,7 +13,7 @@ This page covers building NoteIt, running it against a scratch library, and the 
 
 ```sh
 swift build                 # debug build
-swift run NoteIt            # run unbundled; launch at login and updates are unavailable this way
+swift run NoteIt            # run unbundled; launch at login, updates and reminder notifications are unavailable this way
 ./scripts/build_app.sh      # release build: build/NoteIt.app → ~/Applications/NoteIt.app
 ```
 
@@ -45,6 +45,14 @@ NOTEIT_DATA_DIR=~/scratch/noteit swift run NoteIt
 ```
 
 The older `INKWELL_*` names of all `NOTEIT_*` variables still work as a fallback.
+
+To try the organise routes of the Local API against a scratch library, run with `NOTEIT_LOCAL_API_DEBUG=1` and use the token it prints (the port is 47600 unless it was changed):
+
+```sh
+curl -s -H "Authorization: Bearer $NOTEIT_LOCAL_API_TOKEN" "http://127.0.0.1:47600/v1/tasks?includeCompleted=1"
+curl -s -H "Authorization: Bearer $NOTEIT_LOCAL_API_TOKEN" -H 'Content-Type: application/json' \
+     -d '{"from":"work","to":"job"}' http://127.0.0.1:47600/v1/tags/rename
+```
 
 ## Tests
 
@@ -93,13 +101,15 @@ Debug builds only:
 | `NOTEIT_EDITOR_SELFTEST_DARK=1` | With the above, forces dark mode |
 | `NOTEIT_EDITOR_SELFTEST_SHOW=<title prefix>` | With the above, only opens the matching note, for screenshots |
 | `NOTEIT_EDITOR_SELFTEST_NARROW=1` | With the above, shrinks the window to 900 pt wide |
+| `NOTEIT_MARKDOWN_ROOT=<folder>` | Debug builds only. Opens the library with its notes as Markdown files in `<folder>` (created when missing; `~` is expanded), keeping app data in the data folder. Refused, with a log line, when the data folder already has a library location file or RTFD notes. Use with `NOTEIT_DATA_DIR` |
 | `NOTEIT_STORE_SELFTEST=1` | Forces body write failures and checks that the library and search index stay consistent, then quits. `newnote` checks a new note whose first save fails, then simulates a crash; `quit` logs the files on disk after launch and quits. Logs `STORETEST` lines. Use with `NOTEIT_DATA_DIR` |
 | `NOTEIT_STORE_CRASHPOINT=<name>` | Exits immediately when the store reaches the named point, to simulate a crash |
-| `NOTEIT_SYNC_SELFTEST=1` | Runs the sync self-test against scratch stores inside `NOTEIT_DATA_DIR` (required), logs `SYNCTEST` lines and exits non-zero on failure. `NOTEIT_SYNC_SELFTEST_LIBRARY=<path>` also loads a copy of that `library.json` |
+| `NOTEIT_SYNC_SELFTEST=1` | Runs the sync self-test against scratch stores inside `NOTEIT_DATA_DIR` (required), logs `SYNCTEST` lines and exits non-zero on failure. `NOTEIT_SYNC_SELFTEST_LIBRARY=<path>` also loads a copy of that `library.json`; `NOTEIT_SYNC_SELFTEST_MARKDOWN=1` gives the second device of each pair a Markdown library |
 | `NOTEIT_SYNC_CONFIG=<json>` | Connects sync at launch without the UI. The JSON is a `SyncConfiguration` (`provider`, `folderPath` or `s3`, `encrypted`, `deviceName`, …) plus optional `passphrase`, `accessKey` and `secret`. Nothing is written to `UserDefaults` or the Keychain, and a missing `folderPath` is created. When the data folder already has sync state for this config, it resumes like a normal launch instead of reconnecting, so relaunches keep their sync state |
 | `NOTEIT_SYNC_INTERVAL=<seconds>` | Replaces both sync intervals and the 15 s backoff base, and logs each pass that changed something |
 | `NOTEIT_DEBUG_EDIT_AFTER=<seconds>` | After the delay, appends "Edited on *device* at *time*" to the selected or first note, as if typed. Handy for testing two instances |
 | `NOTEIT_DEBUG_UPDATE_CREDENTIALS=<seconds>:<accessKey>:<secret>` | After the delay, runs *Update Credentials…* without the UI |
+| `NOTEIT_LOCAL_API_DEBUG=1` | With `NOTEIT_DATA_DIR`, turns the Local API on without touching `UserDefaults`, keeps paired clients in memory instead of the Keychain, and prints one token with every scope to stderr as `NOTEIT_LOCAL_API_TOKEN=nit_…`. `local-api.json` goes in the data folder |
 | `NOTEIT_APP_SUPPORT_DIR=<folder>` | Stands in for `~/Library/Application Support`, to try the Inkwell → NoteIt migration safely |
 | `NOTEIT_DEBUG_LEGACY_BUNDLE_ID=<bundle id>` | Treats another running app as Inkwell, to test the "Quit Inkwell" prompt |
 

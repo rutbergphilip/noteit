@@ -32,6 +32,26 @@ public struct LocalDeletion: Sendable, Equatable {
     }
 }
 
+/// Thrown by `SyncLocalStore.apply` or `importConflictCopy` for a remote record this device can't keep. The engine
+/// reports `reason` and doesn't fetch that remote version again; the record syncs again once the remote changes.
+public struct SyncRecordRefused: Error, Sendable, Equatable {
+    public var reason: String
+
+    public init(reason: String) {
+        self.reason = reason
+    }
+}
+
+/// Thrown by `SyncLocalStore` for a record it can't export or apply yet. The engine skips it quietly, without an
+/// error, and tries it again on the next pass.
+public struct SyncRecordDeferred: Error, Sendable, Equatable {
+    public var reason: String
+
+    public init(reason: String) {
+        self.reason = reason
+    }
+}
+
 public struct SyncReport: Sendable, Equatable {
     public var pushed = 0, pulled = 0, deleted = 0, conflicts = 0, skipped = 0
     public var errors: [String] = []
@@ -96,15 +116,15 @@ public actor SyncEngine {
     /// The highest `formatVersion` this build opens (foundations step 3).
     public static let maxFormatVersion = 2
 
-    private let backend: StorageBackend
-    private let session: StoreSessionRef
+    let backend: StorageBackend
+    let session: StoreSessionRef
     private let local: SyncLocalStore
     private let stateURL: URL
-    private let deviceID: String
+    let deviceID: String
     private let deviceName: String
     private let appVersion: String?
     private let platform: DevicePlatform
-    private let now: @Sendable () -> Date
+    let now: @Sendable () -> Date
 
     private var state = SyncState()
     private var tail: Task<Void, Never>?
@@ -142,7 +162,7 @@ public actor SyncEngine {
         self.now = now
     }
 
-    /// Throws only fatal errors (unauthorized, clock skew, blocked plain HTTP, listing failures, missing manifest).
+    /// Throws only fatal errors (unauthorized, clock skew, blocked plain HTTP, unreachable storage, listing failures, missing manifest).
     public func sync() async throws -> SyncReport {
         let previous = tail
         let pass = Task { () async throws -> SyncReport in
@@ -299,7 +319,11 @@ public actor SyncEngine {
 
     private func ordered(_ ids: Set<UUID>, _ pass: Pass) -> [UUID] {
         func rank(_ id: UUID) -> Int {
-            (pass.records[id]?.kind ?? pass.deletions[id]?.kind ?? pass.index.metas[id]?.kind) == .notebook ? 0 : 1
+            switch pass.records[id]?.kind ?? pass.deletions[id]?.kind ?? pass.index.metas[id]?.kind {
+            case .notebook: 0
+            case .smartFolder: 1
+            case .note, nil: 2
+            }
         }
         return ids.sorted { (rank($0), $0.uuidString) < (rank($1), $1.uuidString) }
     }
@@ -307,6 +331,8 @@ public actor SyncEngine {
     private func guarded(_ pass: Pass, _ work: () async throws -> Void) async throws {
         do {
             try await work()
+        } catch is SyncRecordDeferred {
+            pass.report.skipped += 1
         } catch let error as StorageError {
             if Self.isFatal(error) { throw error }
             pass.report.errors.append(String(describing: error))
@@ -318,7 +344,7 @@ public actor SyncEngine {
     /// Errors that would fail every request, so the pass stops instead of collecting one per record.
     static func isFatal(_ error: StorageError) -> Bool {
         switch error {
-        case .unauthorized, .clockSkew, .insecureConnectionBlocked: return true
+        case .unauthorized, .clockSkew, .insecureConnectionBlocked, .unavailable, .storeMissing: return true
         default: return false
         }
     }
@@ -327,6 +353,8 @@ public actor SyncEngine {
         pass.seen.insert(id)
         do {
             try await process(id, pass)
+        } catch is SyncRecordDeferred {
+            pass.report.skipped += 1
         } catch let error as StorageError {
             if Self.isFatal(error) { throw error }
             pass.report.errors.append("\(id.uuidString): \(error)")
@@ -386,6 +414,17 @@ public actor SyncEngine {
             remote: RemoteInfo(metaETag: metaETag, tombstone: tombstone),
             base: base
         )
+
+        if let refused = state.refusedRemotes[id] {
+            if refused.metaETag != metaETag {
+                state.refusedRemotes[id] = nil
+                try saveState()
+            } else if action == .pull || action == .conflict {
+                pass.report.skipped += 1
+                pass.report.errors.append("\(id.uuidString): \(refused.reason)")
+                return
+            }
+        }
 
         switch action {
         case .none:
@@ -476,9 +515,21 @@ public actor SyncEngine {
             pass.report.skipped += 1
             return false
         }
-        try await adopt(payload, etag: remote.etag)
+        do {
+            try await adopt(payload, etag: remote.etag)
+        } catch let refusal as SyncRecordRefused {
+            try refuse(id, metaETag: remote.etag, refusal, pass)
+            return false
+        }
         pass.report.pulled += 1
         return true
+    }
+
+    private func refuse(_ id: UUID, metaETag: String, _ refusal: SyncRecordRefused, _ pass: Pass) throws {
+        state.refusedRemotes[id] = .init(metaETag: metaETag, reason: refusal.reason)
+        try saveState()
+        pass.report.skipped += 1
+        pass.report.errors.append("\(id.uuidString): \(refusal.reason)")
     }
 
     private func adopt(_ payload: RecordPayload, etag: String) async throws {
@@ -528,7 +579,7 @@ public actor SyncEngine {
             return
         }
 
-        if kind == .notebook {
+        if kind.usesLastWriterWins {
             let remoteWins = envelope.modifiedAt != localRecord.modifiedAt
                 ? envelope.modifiedAt > localRecord.modifiedAt
                 : envelope.deviceID > deviceID
@@ -538,7 +589,12 @@ public actor SyncEngine {
                     pass.report.skipped += 1
                     return
                 }
-                try await adopt(payload, etag: remote.etag)
+                do {
+                    try await adopt(payload, etag: remote.etag)
+                } catch let refusal as SyncRecordRefused {
+                    try refuse(id, metaETag: remote.etag, refusal, pass)
+                    return
+                }
                 pass.report.pulled += 1
             } else {
                 try await push(id, kind: kind, remoteETag: remote.etag, pass)
@@ -550,7 +606,12 @@ public actor SyncEngine {
             pass.report.skipped += 1
             return
         }
-        try await local.importConflictCopy(payload, fromDevice: envelope.deviceName)
+        do {
+            try await local.importConflictCopy(payload, fromDevice: envelope.deviceName)
+        } catch let refusal as SyncRecordRefused {
+            try refuse(id, metaETag: remote.etag, refusal, pass)
+            return
+        }
         // Base becomes the remote version we just preserved, so the next pass sees a plain push
         // (ΔL, !ΔR) and never copies this remote revision again.
         state.bases[id] = .init(revision: envelope.revision, remoteMetaETag: remote.etag)
@@ -648,7 +709,7 @@ public actor SyncEngine {
             id: id, kind: kind, revision: envelope.revision, modifiedAt: envelope.modifiedAt,
             deviceID: envelope.deviceID, meta: envelope.meta, body: body
         )
-        if kind == .notebook {
+        if kind.usesLastWriterWins {
             // Notebooks have no conflict copies; like resolveConflict, the newer edit wins.
             let localRecord = await local.records().first { $0.id == id && $0.kind == kind }
             guard let localRecord, localRecord.revision == localRevision else { return [] }
@@ -800,8 +861,10 @@ public actor SyncEngine {
     }
 
     private func currentRevision(_ id: UUID) async -> UUID? {
-        if let revision = await local.revision(of: id, kind: .note) { return revision }
-        return await local.revision(of: id, kind: .notebook)
+        for kind in [RecordKind.note, .notebook, .smartFolder] {
+            if let revision = await local.revision(of: id, kind: kind) { return revision }
+        }
+        return nil
     }
 
     private func seal(_ plain: Data, key: String) throws -> Data {
@@ -881,6 +944,9 @@ struct RemoteIndex {
                 if let id = id(".meta") { metas[id] = (.note, object.etag) }
                 else if let id = id(".body") { bodies[id] = object.etag }
                 else { sidecar(name.hasSuffix(".meta") ? .meta(.note) : name.contains(".body") ? .body : .other) }
+            case "smart-folders":
+                if let id = id(".json") { metas[id] = (.smartFolder, object.etag) }
+                else { sidecar(name.hasSuffix(".json") ? .meta(.smartFolder) : .other) }
             case "tombstones":
                 if let id = id(".json") { tombstones[id] = object.etag }
             case "keys":

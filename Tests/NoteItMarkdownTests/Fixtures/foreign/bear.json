@@ -1,0 +1,113 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "attrs": {
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "Groceries",
+            "type": "text"
+          }
+        ],
+        "type": "heading"
+      },
+      {
+        "content": [
+          {
+            "text": "Things to buy #shopping",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "Milk",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 0
+        },
+        "content": [
+          {
+            "text": "Bread",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 1
+        },
+        "content": [
+          {
+            "text": "Wholegrain",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "content": [
+          {
+            "text": "::highlighted::",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      },
+      {
+        "type": "horizontalRule"
+      },
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "type": "bold"
+              }
+            ],
+            "text": "Note:",
+            "type": "text"
+          },
+          {
+            "text": " check the ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "type": "strike"
+              }
+            ],
+            "text": "old",
+            "type": "text"
+          },
+          {
+            "text": " new list",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

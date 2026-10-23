@@ -1,0 +1,36 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 2
+        },
+        "content": [
+          {
+            "text": "deep",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      },
+      {
+        "attrs": {
+          "kind": "bullet",
+          "level": 3
+        },
+        "content": [
+          {
+            "text": "deeper",
+            "type": "text"
+          }
+        ],
+        "type": "listItem"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

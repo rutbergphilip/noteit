@@ -17,6 +17,8 @@ public enum ListKind: String, Codable, Sendable {
 /// Inline content of a paragraph, heading, code block or list item.
 public enum Inline: Codable, Hashable, Sendable {
     case text(String, marks: [Mark]), hardBreak
+    /// A line break read from a plain newline in Markdown; shown like `hardBreak`, written back as a plain newline.
+    case softBreak
     case image(sha: String, name: String, mime: String, width: Double?)
     case attachment(sha: String, name: String, mime: String)
 
@@ -153,7 +155,7 @@ extension Inline {
             let marks = try fields.array("marks").map(Mark.init(json:))
             self = .text(try fields.string("text"), marks: marks)
         case "hardBreak":
-            self = .hardBreak
+            self = try fields.attrs().optionalBool("soft") == true ? .softBreak : .hardBreak
         case "image":
             let attrs = try fields.attrs()
             self = .image(sha: try attrs.string("sha"), name: try attrs.string("name"), mime: try attrs.string("mime"),
@@ -176,6 +178,9 @@ extension Inline {
                 if !marks.isEmpty { object.set("marks", .array(try marks.map { try $0.json })) }
             case .hardBreak:
                 object.set("type", .string("hardBreak"))
+            case .softBreak:
+                object.set("type", .string("hardBreak"))
+                object.set("attrs", .object(["soft": .bool(true)]))
             case .image(let sha, let name, let mime, let width):
                 var attrs = JSONObjectBuilder()
                 attrs.set("sha", .string(sha))

@@ -22,6 +22,15 @@ final class HotkeyActionTests: XCTestCase {
         }
     }
 
+    func testOpenTodayIsSeventh() {
+        XCTAssertEqual(HotkeyAction.openToday.rawValue, "openToday")
+        XCTAssertEqual(HotkeyAction.openToday.hotkeyID, 7)
+    }
+
+    func testShowTasksIsEighth() {
+        XCTAssertEqual(HotkeyAction.showTasks.hotkeyID, 8)
+    }
+
     func testCasesFollowFrozenOrder() {
         var remaining = HotkeyOrder.rawValues[...]
         for action in HotkeyAction.allCases {

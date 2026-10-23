@@ -1,0 +1,91 @@
+{
+  "attachments": {},
+  "doc": {
+    "content": [
+      {
+        "content": [
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "href": "noteit://note/8F14E45F-CEEA-467A-9575-5E4F0C6B7A21"
+                },
+                "type": "link"
+              }
+            ],
+            "text": "Plan",
+            "type": "text"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "href": "noteit://note/8F14E45F-CEEA-467A-9575-5E4F0C6B7A21"
+                },
+                "type": "link"
+              }
+            ],
+            "text": "shown text",
+            "type": "text"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "href": "noteit://note/8F14E45F-CEEA-467A-9575-5E4F0C6B7A21?heading=Intro"
+                },
+                "type": "link"
+              }
+            ],
+            "text": "Plan",
+            "type": "text"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "href": "noteit://note/1C2B3A49-5D6E-4F70-8192-A3B4C5D6E7F8"
+                },
+                "type": "link"
+              }
+            ],
+            "text": "Work/Plan",
+            "type": "text"
+          },
+          {
+            "text": " ",
+            "type": "text"
+          },
+          {
+            "marks": [
+              {
+                "attrs": {
+                  "href": "noteit://note?title=Missing%20note"
+                },
+                "type": "link"
+              }
+            ],
+            "text": "Missing note",
+            "type": "text"
+          }
+        ],
+        "type": "paragraph"
+      }
+    ],
+    "type": "doc"
+  },
+  "format": "noteit-doc",
+  "version": 1
+}

@@ -92,8 +92,11 @@ A library has one **format**. Two folders are involved:
 | `library-location.json` | New. `{"version":1,"format":"markdown","path":"~/Documents/NoteIt","bookmark":"<base64>","libraryID":"<uuid>","renameFilesOnTitleChange":true}`. Missing file = `rtfd` in `<data>`, which is today's behaviour. |
 | `library.json` | Unchanged schema (`LibraryFile` version 1). For Markdown it is a cache of notebooks and `NoteMeta` (titles, previews, tags, revisions), rebuilt from the folder if missing. Revisions are only ever stored here. |
 | `markdown-files.json` | New, Markdown only. Per note: `{"path":"Work/Plan.md","sha256":"…","size":1234,"mtimeNs":…,"inode":…,"frontMatterExtra":"…","formerPaths":["Work/Old plan.md"]}`. It is also the path → id map used to resolve wiki links (3.4). |
+| `markdown-held-deletions.json` | New, Markdown only, present only while the mass-deletion guard (3.5) holds a batch. `{"ids":["<uuid>",…]}`: the notes whose files disappeared, so the question is asked again at the next launch. |
 | `tombstones.json`, `sync-deletions.json`, `sync-state-*.json`, `recovery/`, `history/` | Unchanged role. |
 | `backups/` | New. Temporary staging for backup ZIPs and safety backups made before a conversion. |
+| `library-conversion.json` | New, present only while a conversion (3.6) runs or after one was interrupted: what it moved and created, so the next launch finishes or undoes it. |
+| `Previous Library <date>/` | New. The RTFD bodies (`notes/`, `body-extras/`) kept after converting to Markdown, with `previous-library.json` (`{"createdAt":…,"keep":false}`); NoteIt asks after 30 days whether to move it to the Trash. |
 
 Files owned by other sub-projects stay in the data folder too and are listed in program §7: `search-index.json` (organise, v2 format), `link-index.json`, `attachment-text.json`, `semantic-index/`, `smart-folders.json`, `library-settings.json`, `lock-keys.json`, `shares.json`, `spaces.json`, `sites/`.
 
@@ -140,7 +143,7 @@ Base: **CommonMark 0.31 + GitHub Flavored Markdown** (tables, task lists, `~~str
 |---|---|
 | Title / Heading / Subheading | `# `, `## `, `### `. `####`–`######` read as Subheading. |
 | Body paragraph | plain text; paragraphs separated by one blank line |
-| Line break inside a paragraph | `\` at end of line |
+| Line break inside a paragraph | `\` at end of line; a soft break read from a file stays a plain newline (below) |
 | Bold, italic, strikethrough, inline code | `**…**`, `*…*`, `~~…~~`, `` `…` `` |
 | Underline | `<u>…</u>` |
 | Highlight, default yellow | `==…==` (as Obsidian, iA Writer, Typora) |
@@ -157,6 +160,8 @@ Base: **CommonMark 0.31 + GitHub Flavored Markdown** (tables, task lists, `~~str
 | Table | GFM pipe table; column widths in a block comment (below) |
 | Image | `![photo.jpg|480](_attachments/3f9a1c2b7d10-photo.jpg)`; `|480` is the display width in points, omitted at natural size |
 | Other attachment | `[report.pdf](_attachments/9b01e4aa52c7-report.pdf)` |
+
+**Line breaks.** CommonMark has two: a hard break (`\` or two spaces at the end of a line) and a soft break (a plain newline inside a paragraph, which renderers show as a space). NoteIt shows a soft break as a line break, as Obsidian does, but keeps it apart: the reader makes a plain newline a `softBreak` inline (stored in `noteit-doc` as `{"type": "hardBreak", "attrs": {"soft": true}}`, so a reader that doesn't know the attribute sees a hard break), and the editor carries it as U+2028 with the `noteItSoftBreak` attribute. The writer writes a soft break back as a plain newline and a hard break as `\` + newline, so editing a hard-wrapped paragraph adds no backslashes. A line break the user types has no soft mark and is written as `\`. Where a plain newline can't stand — at the start or end of a paragraph or list item, next to another break, or in a heading, code block or table cell — a soft break is read and written as a hard one.
 
 Colours are written as uppercase `#RRGGBB` sRGB. The editor's palettes (`EditorStyle.textColors`, `EditorStyle.highlightColors`) map to their exact hex values, so a Yellow highlight is always `==…==` and other highlights always use the same hex.
 
@@ -179,6 +184,8 @@ let x = 1
 ~~~
 
 The payload is base64url JSON of that one `DocNode`. When reading, the payload is used only if its plain text equals the text of the Markdown block that follows it. If someone edited the block in another app, the texts differ, the payload is ignored and the visible Markdown wins. Fallback comments are expected to be rare; the plan's corpus test fails if more than 1% of blocks in the sample library need one.
+
+A block type this NoteIt doesn't know (`DocNode.unknown`, written by a newer client) has no visible rendering. In the `library` profile it is written as the comment alone, `<!-- noteit: doc=… -->` holding its raw JSON, and the reader turns that comment back into the same unknown block with no text check, so a note survives a round trip through an older NoteIt. The `portable` profile (export) drops unknown blocks, since other apps couldn't show them.
 
 **Escaping.** The writer escapes only where needed (`*`, `_`, `` ` ``, `[`, `<`, `#` at line start, `1.` at line start, `|` in tables, `==`). Wiki links are written as raw `[[…]]`, never escaped, except inside a table cell, where the `|` between file name and shown text is written as `\|` (`[[File name\|shown text]]`, program §11) so it doesn't split the cell; the reader accepts both forms. Literal text that happens to contain `[[` is escaped as `\[[` so it doesn't turn into a link. After writing a block the writer parses the result again; if the parse is not equal to the block, it escapes every Markdown-significant character in that block except wiki links. Markdown that NoteIt doesn't model (footnotes, math, HTML other than the tags above) is kept as literal text and written back byte for byte.
 
