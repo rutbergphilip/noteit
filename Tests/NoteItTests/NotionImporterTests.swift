@@ -152,6 +152,7 @@ final class NotionImporterTests: XCTestCase {
         XCTAssertEqual(store.notebooks.filter { $0.name == "Projects 2" }.count, 1)
         XCTAssertTrue(store.notes.allSatisfy { $0.notebookID != existing.id })
 
+        store.importLedger = ImportLedger(url: nil)   // forget the first import so the same export is imported again
         _ = try await NotionImporter.importExport(export, into: store)
         XCTAssertEqual(Set(store.notebooks.map(\.name)), ["Projects", "Projects 2", "Projects 3", "Notion", "Notion 2"])
     }

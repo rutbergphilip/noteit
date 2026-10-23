@@ -28,7 +28,7 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 
 ## Import
 
-- **Importing twice makes duplicates.** NoteIt doesn't recognize notes it has already imported.
+- **Importing again skips unchanged notes only.** NoteIt recognizes a note it already imported by its source (a file path, an Apple Notes id, an Evernote title and creation time, a Notion page's place in the export) and a fingerprint of its content. If the source changed, the note is imported again as a new note rather than updating the old one, and the summary says how many. A note you've deleted for good is imported again; one in Recently Deleted still counts as imported. The record lives on this Mac and isn't synced, so a second Mac that imports the same source makes its own copies.
 - **Apple Notes checklists become bulleted lists**, and ticked items aren't marked as done.
 - **Apple Notes attachments other than images are skipped** (PDFs, drawings, scans, audio and so on), and so are locked notes. The summary at the end counts both.
 - **Apple Notes formatting is approximate.** Headings are recognized by font size, and fonts and text colors are dropped.

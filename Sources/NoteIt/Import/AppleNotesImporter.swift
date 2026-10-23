@@ -212,11 +212,14 @@ final class AppleNotesImporter {
                 continue
             }
             progress(ImportProgress(completed: index, total: plan.count, currentName: note.name))
+            let identity = ImportIdentity(source: "applenotes:" + id, content: note.name + "\n" + note.html)
+            if store.shouldSkipImport(identity, report: &report) { continue }
             let converted = Self.convert(html: note.html, title: note.name)
             report.attachmentsSkipped += max(0, note.attachmentCount - converted.images)
             let notebook = store.notebookForImport(named: item.folder)
-            store.createImportedNote(body: converted.body, title: note.name, notebookID: notebook.id,
-                                     createdAt: note.created, updatedAt: note.modified)
+            let meta = store.createImportedNote(body: converted.body, title: note.name, notebookID: notebook.id,
+                                                createdAt: note.created, updatedAt: note.modified)
+            store.importLedger.record(identity, noteID: meta.id)
             report.notesImported += 1
             report.notebookIDs.insert(notebook.id)
         }
@@ -224,6 +227,7 @@ final class AppleNotesImporter {
     }
 
     private func finish(_ report: ImportReport) -> ImportReport {
+        store.importLedger.save()
         store.flush()
         return report
     }

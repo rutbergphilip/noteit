@@ -49,6 +49,8 @@ final class NoteStore: ObservableObject {
     static let bodyCacheLimit = 20
 
     nonisolated let rootURL: URL
+    /// Notes made by earlier imports, so importing a source again skips what is already here (ImportLedger).
+    lazy var importLedger = ImportLedger(url: rootURL.appendingPathComponent(ImportLedger.fileName))
     /// Where the note bodies live (Task 4.1): `RTFDBodyStorage(rootURL:)` in wave 0.
     nonisolated let bodyStorage: NoteBodyStorage
     nonisolated var notesURL: URL { bodyStorage.contentRootURL }
