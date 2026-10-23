@@ -38,6 +38,7 @@ export function webCommands(): WebCommand[] {
     { id: 'insertTemplate', title: 'Insert Template…', icon: 'i-lucide-files', keywords: ['template', 'snippet'], available: editable, run: () => (state.templatePicker = 'insert') },
     { id: 'newTemplate', title: 'New Template', icon: 'i-lucide-file-plus-2', keywords: ['template'], available: always, run: () => void n.newTemplate() },
     { id: 'openToday', title: "Today's Note", icon: 'i-lucide-calendar', keys: ['ctrl+mod+t'], keywords: ['daily', 'journal'], available: always, run: () => void n.openToday() },
+    { id: 'dailyNoteForDate', title: 'Daily Note for Date…', icon: 'i-lucide-calendar-days', keywords: ['daily', 'journal', 'calendar'], available: always, run: () => (state.dailyPicker = true) },
     { id: 'newNotebook', title: 'New Notebook…', icon: 'i-lucide-folder-plus', keys: ['shift+mod+n', 'alt+shift+mod+b'], keywords: ['folder'], available: always, run: () => (state.notebookDialog = { mode: 'create' }) },
     { id: 'newSmartFolder', title: 'New Smart Folder…', icon: 'i-lucide-folder-search', keywords: ['saved search', 'filter'], available: always, run: () => (state.smartFolderDialog = { mode: 'create' }) },
     {
@@ -62,6 +63,8 @@ export function webCommands(): WebCommand[] {
     { id: 'setDueDate', title: 'Set Due Date…', icon: 'i-lucide-calendar-clock', keys: ['shift+mod+d'], keywords: ['due', 'deadline', 'task'], available: editable, run: () => void (state.dueDate += 1) },
     { id: 'addReminder', title: 'Add Reminder…', icon: 'i-lucide-bell-plus', keys: ['ctrl+mod+r'], keywords: ['remind', 'alarm', 'notification'], available: editable, run: () => void (state.addReminder += 1) },
     { id: 'linkToNote', title: 'Link to Note…', icon: 'i-lucide-link', keys: ['shift+mod+k'], keywords: ['wiki', 'reference', '[['], available: editable, run: () => void (state.linkToNote += 1) },
+    { id: 'goBack', title: 'Go Back', icon: 'i-lucide-arrow-left', keys: ['ctrl+mod+arrowleft'], keywords: ['previous', 'history'], available: () => n.canGoBack(), run: () => n.goBack() },
+    { id: 'goForward', title: 'Go Forward', icon: 'i-lucide-arrow-right', keys: ['ctrl+mod+arrowright'], keywords: ['next', 'history'], available: () => n.canGoForward(), run: () => n.goForward() },
     { id: 'showBacklinks', title: 'Show Backlinks', icon: 'i-lucide-link-2', keys: ['alt+mod+i'], keywords: ['links', 'references'], available: live, run: () => inspector('links') },
     { id: 'showOutline', title: 'Show Outline', icon: 'i-lucide-list-tree', keywords: ['headings', 'toc'], available: live, run: () => inspector('outline') },
     { id: 'showNoteInfo', title: 'Show Note Info', icon: 'i-lucide-info', keys: ['ctrl+mod+i'], keywords: ['word count', 'characters', 'reading time', 'statistics'], available: live, run: () => inspector('info') },

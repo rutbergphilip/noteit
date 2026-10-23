@@ -30,6 +30,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Find and replace in a note in the web app (⌥⌘F, ⇧⌘F), with Match Case, Whole Word and regular expressions, as on the Mac. ⌘E now uses the selection for find, and inline code is ⇧⌘E, as on the Mac.
 - Due dates in the web app: Set Due Date… (⇧⌘D) for a checklist item, and `@due(fri)`, `@due(+3d)` or `@remind(tomorrow 9am)` turn into full dates as you type the `)`, as on the Mac.
 - Reminders ring in the web app while it's open in a tab, as a browser notification once you allow it in Settings › General. Like the Mac it claims each reminder first, so only one of your devices rings. Add Reminder… (⌃⌘R) is there too.
+- In the web app: Go Back and Go Forward (⌃⌘← ⌃⌘→) between the notes you opened, Daily Note for Date… with ‹ › on a daily note to the days around it, and Unlinked Mentions in the Links tab, with Link and Link All.
 - Pasting Markdown in the web app brings it in formatted, by the same rules as the Mac: only text that's clearly Markdown source, never inside a code block, and ⇧⌘V pastes plain text.
 
 ### Changed

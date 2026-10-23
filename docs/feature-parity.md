@@ -61,18 +61,19 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | `noteit://note` links between notes | Yes | Yes; clicking one opens the note, or creates it for a link by title | Parity |
 | `[[` note suggestions, `[[Title]]` as you type, Link to Note… (`linkToNote`, ⇧⌘K) | Yes | Yes: the same title resolution and link URLs; headings after `#` aren't suggested | Parity |
 | Backlinks and links in this note (`showBacklinks`) | ⌥⌘I | ⌥⌘I, Links tab | Parity |
-| Unlinked mentions, update links on rename | Yes | — | Web gap |
+| Unlinked mentions | Yes | Yes, in the Links tab: the same matching rules, Link and Link All | Parity |
+| Update links on rename | Yes | — (links by id keep working; links by title aren't rewritten when a note is renamed on the web) | Web gap |
 | Outline of headings (`showOutline`) | Yes | Outline tab; click to jump | Parity |
 | Note info: words, characters, reading time, dates, notebook, tags (`showNoteInfo`) | ⌃⌘I | ⌃⌘I, Info tab; the same counts (shared vectors) | Parity |
 | Copy Note Link (`copyNoteLink`) | ⌃⌘L | ⌃⌘L | Parity |
-| Go Back / Go Forward | ⌃⌘← ⌃⌘→ | — | Web gap |
+| Go Back / Go Forward (`goBack`, `goForward`) | ⌃⌘← ⌃⌘→ | ⌃⌘← ⌃⌘→, through the notes opened in this tab | Parity |
 
 ## Daily notes, templates, tasks and reminders
 
 | Feature | Mac | Web | Status |
 |---|---|---|---|
 | Today's note (`openToday`) | ⌃⌘T, sidebar | ⌃⌘T, Today in the sidebar; finds the same note by title | Parity |
-| Daily Note for Date… calendar, ‹ › between days (`dailyNoteForDate`) | Yes | — | Web gap |
+| Daily Note for Date… calendar, ‹ › between days (`dailyNoteForDate`) | Yes | A day picker (arrow keys move by a day or a week) and ‹ › on a daily note | Parity |
 | Daily note notebook, title format and template | Settings › Editor | Native's defaults (Daily Notes, yyyy-MM-dd, no template) | Native-only (local data): Mac preferences |
 | New Note from Template… (`newNoteFromTemplate`) | ⌥⌘N | ⌥⇧⌘N (⌥⌘N is New Note on the web) | Parity |
 | Insert Template… (`insertTemplate`), New Template (`newTemplate`) | Yes | Yes | Parity |

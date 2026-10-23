@@ -12,8 +12,14 @@ const { state, client, openNote, createNote } = useNoteit();
 
 const row = computed(() => state.notes.find((n) => n.id === props.noteId));
 const links = ref<Awaited<ReturnType<ReturnType<typeof client>['links']>>>({ backlinks: [], outgoing: [] });
+const mentions = ref<Awaited<ReturnType<ReturnType<typeof client>['unlinkedMentions']>>>([]);
 async function loadLinks(): Promise<void> {
   links.value = await client().links(props.noteId);
+  mentions.value = await client().unlinkedMentions(props.noteId);
+}
+async function linkMentions(sources: string[]): Promise<void> {
+  await client().linkMentions(props.noteId, sources);
+  await loadLinks();
 }
 watch(() => [props.noteId, row.value?.updatedAt, state.notes.length], () => void loadLinks(), { immediate: true });
 
@@ -45,6 +51,21 @@ async function follow(l: { id?: string; title: string; exists: boolean }): Promi
     </div>
 
     <template v-if="tab === 'links'">
+      <section v-if="mentions.length">
+        <div class="mb-1 flex items-center justify-between">
+          <h3 class="text-[11px] font-semibold text-muted">Unlinked mentions</h3>
+          <UButton v-if="mentions.length > 1" color="neutral" variant="link" size="xs" class="p-0" label="Link All" @click="linkMentions(mentions.map((m) => m.id))" />
+        </div>
+        <ul class="flex flex-col gap-1">
+          <li v-for="m in mentions" :key="m.id" class="flex items-start gap-1">
+            <button type="button" class="min-w-0 flex-1 cursor-pointer rounded-md px-2 py-1.5 text-left hover:bg-(--fill)" @click="openNote(m.id)">
+              <span class="block truncate text-sm font-medium">{{ m.title || 'Untitled' }}<span v-if="m.count > 1" class="text-xs text-muted"> · {{ m.count }}</span></span>
+              <span class="line-clamp-2 text-xs text-muted">{{ m.contexts[0] }}</span>
+            </button>
+            <UButton color="neutral" variant="ghost" size="xs" label="Link" class="mt-1" @click="linkMentions([m.id])" />
+          </li>
+        </ul>
+      </section>
       <section>
         <h3 class="mb-1 text-[11px] font-semibold text-muted">Backlinks</h3>
         <p v-if="!links.backlinks.length" class="text-[13px] text-muted">No notes link here yet. Link this note from another one with a <code>noteit://note</code> link.</p>

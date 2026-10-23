@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
-import { localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS } from '@noteit/doc';
+import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS } from '@noteit/doc';
 import { fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
@@ -14,7 +14,7 @@ import { comboKbds } from '~/utils/shortcuts';
 import type { OpenedNote } from '~/worker/types';
 
 const props = defineProps<{ noteId: string }>();
-const { state, client, toast, refresh, openNote, createNote, trashNote } = useNoteit();
+const { state, client, toast, refresh, openNote, createNote, trashNote, openDaily } = useNoteit();
 const confirm = useConfirm();
 
 const note = shallowRef<OpenedNote>();
@@ -318,6 +318,16 @@ async function load(): Promise<void> {
 
 const row = computed(() => state.notes.find((n) => n.id === props.noteId) ?? note.value?.row);
 const notebook = computed(() => state.notebooks.find((n) => n.id === row.value?.notebookID));
+/** A daily note (titled with its day, in the daily notebook) gets ‹ › to the days around it. */
+const dailyDay = computed(() => {
+  const r = row.value;
+  if (!r || r.deletedAt || r.notebookID !== dailyNotebook(state.notebooks, state.notes)) return undefined;
+  return parseDailyTitle(r.title);
+});
+function openDailyOffset(days: number): void {
+  const d = dailyDay.value;
+  if (d) void openDaily(new Date(d.year, d.month - 1, d.day + days, 12));
+}
 const edited = computed(() => (row.value ? formatDateTime(row.value.updatedAt) : ''));
 
 function scheduleSave(): void {
@@ -598,6 +608,10 @@ onBeforeUnmount(() => {
         <template #leading><span class="size-2 rounded-full" :style="{ background: notebook ? safeHex(notebook.colorHex) : 'var(--ink3)' }" /></template>
       </USelect>
       <span class="text-xs text-muted">Edited {{ edited }}</span>
+      <span v-if="dailyDay" class="flex items-center">
+        <UTooltip text="Previous day"><UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-chevron-left" aria-label="Previous day's note" @click="openDailyOffset(-1)" /></UTooltip>
+        <UTooltip text="Next day"><UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-chevron-right" aria-label="Next day's note" @click="openDailyOffset(1)" /></UTooltip>
+      </span>
       <div class="ms-auto flex gap-1">
         <template v-if="row?.deletedAt">
           <UButton color="neutral" variant="soft" size="sm" icon="i-lucide-rotate-ccw" label="Recover" @click="recover" />

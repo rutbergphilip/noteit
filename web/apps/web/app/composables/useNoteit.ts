@@ -63,6 +63,8 @@ const state = reactive({
   dueDate: 0,
   /** Add Reminder… (⌃⌘R): likewise. */
   addReminder: 0,
+  /** Daily Note for Date…: the picker is open. */
+  dailyPicker: false,
   /** Rename Tag… for this tag. */
   tagRename: undefined as string | undefined,
   /** Link to Note… (⇧⌘K): bumped to ask the open editor to start a `[[` link. */
@@ -249,6 +251,33 @@ watch(
   () => void refreshSmartHits(),
 );
 
+// Go Back / Go Forward (native ⌃⌘← ⌃⌘→): the notes opened in this tab, like a browser's history.
+const history = reactive({ back: [] as string[], forward: [] as string[] });
+let travelling = false;
+watch(
+  () => state.selectedId,
+  (id, before) => {
+    if (travelling || !before || id === before) return;
+    history.back.push(before);
+    if (history.back.length > 100) history.back.shift();
+    history.forward = [];
+  },
+  { flush: 'sync' },
+);
+function travel(dir: 'back' | 'forward'): void {
+  const from = dir === 'back' ? history.back : history.forward;
+  const to = dir === 'back' ? history.forward : history.back;
+  let id = from.pop();
+  while (id && !state.notes.some((n) => n.id === id)) id = from.pop();
+  if (!id) return;
+  if (state.selectedId) to.push(state.selectedId);
+  travelling = true;
+  openNote(id);
+  travelling = false;
+}
+const canGoBack = () => history.back.some((id) => state.notes.some((n) => n.id === id));
+const canGoForward = () => history.forward.some((id) => state.notes.some((n) => n.id === id));
+
 // Choosing another notebook, tag or list closes a note that isn't in it, rather than leaving it open beside a list
 // that doesn't show it.
 watch(
@@ -343,7 +372,12 @@ async function newTemplate(): Promise<void> {
 
 /** Today's note in "Daily Notes", created (titled yyyy-MM-dd, native's default) the first time. */
 async function openToday(): Promise<void> {
-  const day = dayKey(new Date());
+  return openDaily(new Date());
+}
+
+/** The daily note for a day (Daily Note for Date…, and ‹ › between days), created the first time. */
+async function openDaily(date: Date): Promise<void> {
+  const day = dayKey(date);
   let nb = dailyNotebook(state.notebooks, state.notes);
   const existing = nb ? findDailyNote(state.notes, nb, day) : undefined;
   if (existing) return openNote(existing);
@@ -373,6 +407,10 @@ export function useNoteit() {
     tags,
     createNote,
     trashNote,
+    goBack: () => travel('back'),
+    goForward: () => travel('forward'),
+    canGoBack,
+    canGoForward,
     descendants,
     openNote,
     templates,
@@ -381,5 +419,6 @@ export function useNoteit() {
     newTemplate,
     expandedTemplate,
     openToday,
+    openDaily,
   };
 }

@@ -53,6 +53,10 @@ import {
   parseTasks,
   maskedText,
   pruneAttachments,
+  findMentions,
+  linkMentions,
+  mentionsAreSearched,
+  noteLink,
   reminderId,
   renameTagInQuery,
   rewriteTags,
@@ -321,6 +325,44 @@ export class WebLocalStore implements SyncLocalStore {
       outgoing.push({ ...(row ? { id: row.id } : {}), title: row?.title ?? l.title ?? l.text, text: l.text, exists: !!row && !row.deletedAt });
     }
     return { backlinks: backlinks.sort((a, b) => a.title.localeCompare(b.title)), outgoing };
+  }
+
+  /** Live notes that mention this note's title in plain text and don't link to it, newest first (native). */
+  unlinkedMentions(id: Uuid): { id: Uuid; title: string; contexts: string[]; count: number }[] {
+    const target = this.derived.get(id)?.row;
+    if (!target || target.deletedAt || !mentionsAreSearched(target.title)) return [];
+    const linking = new Set(this.links(id).backlinks.map((b) => b.id));
+    const folded = searchFold(target.title.trim());
+    const templates = this.snapshot().notebooks.find((n) => n.name.trim().toLowerCase() === 'templates')?.id;
+    const out: { id: Uuid; title: string; contexts: string[]; count: number; updatedAt: string }[] = [];
+    for (const d of this.derived.values()) {
+      const r = d.row;
+      if (r.id === id || r.deletedAt || r.kind !== 'doc' || linking.has(r.id) || (templates && r.notebookID === templates) || !d.search.includes(folded)) continue;
+      const doc = this.getNote(r.id)?.container?.doc;
+      if (!doc) continue;
+      const found = findMentions(doc, target.title);
+      if (found.count) out.push({ id: r.id, title: r.title, ...found, updatedAt: r.updatedAt });
+    }
+    return out.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).map(({ updatedAt: _u, ...m }) => m);
+  }
+
+  /** Turns the mentions of `id`'s title in each source into links to it, keeping the text. */
+  linkMentions(id: Uuid, sources: Uuid[]): Promise<number> {
+    return this.exclusive(async () => {
+      await this.ensureFresh();
+      const target = this.derived.get(id)?.row;
+      if (!target) return 0;
+      let changed = 0;
+      for (const source of sources) {
+        const opened = this.getNote(source);
+        if (!opened?.container || opened.readOnly) continue;
+        const doc = linkMentions(opened.container.doc, target.title, noteLink(id));
+        if (!doc) continue;
+        await this.saveNoteLocked(source, { ...opened.container, doc });
+        changed += 1;
+      }
+      return changed;
+    });
   }
 
   /** Every checklist item in live, editable notes (the Tasks view). */

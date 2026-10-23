@@ -106,6 +106,7 @@ onBeforeUnmount(() => {
         <NotebookDialog />
         <SmartFolderDialog />
         <TagRenameDialog />
+        <DailyPicker />
         <TemplatePicker />
       </template>
     </div>

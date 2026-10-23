@@ -303,6 +303,8 @@ const api = {
   createSmartFolder: async (opts: { name: string; query: string; symbol?: string }) => needLocal().createSmartFolder(opts),
   updateSmartFolder: async (id: string, change: { name?: string; query?: string; symbol?: string }) => needLocal().updateSmartFolder(id, change),
   deleteSmartFolder: async (id: string) => needLocal().deleteSmartFolder(id),
+  unlinkedMentions: async (id: string) => needLocal().unlinkedMentions(id),
+  linkMentions: async (id: string, sources: string[]) => needLocal().linkMentions(id, sources),
   liveReminders: async () => needLocal().liveReminders(),
   /** Without sync (no engine yet) the reminder is shown: a duplicate is better than a missed one. */
   claimReminder: async (id: string, at: number) => (engine ? engine.claimReminder(id, new Date(at)) : 'unavailable'),

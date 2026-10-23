@@ -276,3 +276,16 @@ describe('tag rename, merge and delete', () => {
     await expect(s.editTag({ type: 'rename', from: 'x', to: 'bad name' })).rejects.toThrow(/letters/);
   });
 });
+
+describe('unlinked mentions', () => {
+  it('lists notes that mention the title without linking it, and links them', async () => {
+    const { s } = await store();
+    const target = await s.createNote({ container: text('Grocery Plan\nlist') });
+    const mention = await s.createNote({ container: text('Monday\nsee the grocery plan today') });
+    await s.createNote({ container: text('Unrelated\nnothing') });
+    expect(s.unlinkedMentions(target).map((m) => m.id)).toEqual([mention]);
+    expect(await s.linkMentions(target, [mention])).toBe(1);
+    expect(s.unlinkedMentions(target)).toEqual([]);
+    expect(s.links(target).backlinks.map((b) => b.id)).toEqual([mention]);
+  });
+});
