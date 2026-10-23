@@ -6,6 +6,7 @@
  */
 import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
+import { pickImport } from '~/utils/importing';
 
 export interface WebCommand {
   id: string;
@@ -50,6 +51,8 @@ export function webCommands(): WebCommand[] {
     { id: 'showTasks', title: 'Show Tasks', icon: 'i-lucide-list-checks', keys: ['shift+mod+t', 'alt+shift+mod+t'], keywords: ['todo', 'checkbox', 'due'], available: always, run: () => ((state.view = { kind: 'tasks' }), (state.pane = 'list')) },
     { id: 'searchNotes', title: 'Search Notes', icon: 'i-lucide-search', keys: ['mod+f'], keywords: ['find', 'filter'], available: always, run: () => document.querySelector<HTMLInputElement>('input[aria-label="Search notes"]')?.focus() },
     { id: 'export', title: 'Export Note as Markdown', icon: 'i-lucide-file-down', keys: ['shift+mod+s'], keywords: ['save', 'markdown', 'download'], available: () => !!note(), run: () => exportNote(state.selectedId!, 'markdown') },
+    { id: 'import', title: 'Import Markdown Files…', icon: 'i-lucide-file-up', keywords: ['markdown', 'obsidian', 'text', 'md'], available: always, run: () => pickImport(false) },
+    { id: 'importFolder', title: 'Import Markdown Folder…', icon: 'i-lucide-folder-up', keywords: ['markdown', 'obsidian', 'vault', 'md'], available: always, run: () => pickImport(true) },
     { id: 'exportHTML', title: 'Export Note as HTML', icon: 'i-lucide-file-code', keywords: ['save', 'html', 'download'], available: () => !!note(), run: () => exportNote(state.selectedId!, 'html') },
     { id: 'print', title: 'Print…', icon: 'i-lucide-printer', keys: ['mod+p'], keywords: ['pdf'], available: () => !!note(), run: () => printNote(state.selectedId!) },
     { id: 'copyMarkdown', title: 'Copy as Markdown', icon: 'i-lucide-clipboard-copy', keys: ['alt+shift+mod+c'], keywords: ['clipboard'], available: () => !!note(), run: () => copyMarkdown(state.selectedId!) },

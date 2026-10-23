@@ -293,7 +293,7 @@ const api = {
   links: async (id: string) => needLocal().links(id),
   tasks: async () => needLocal().tasks(),
   setTaskChecked: async (id: string, block: number, checked: boolean) => needLocal().setTaskChecked(id, block, checked),
-  createNote: async (opts: { notebookID?: string; container?: BodyContainer }) => needLocal().createNote(opts),
+  createNote: async (opts: { notebookID?: string; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }) => needLocal().createNote(opts),
   saveNote: async (id: string, container: BodyContainer, baseRevision?: string) => needLocal().saveNote(id, container, baseRevision),
   updateNoteMeta: async (id: string, change: { isPinned?: boolean; notebookID?: string | null; trashed?: boolean }) => needLocal().updateNoteMeta(id, change),
   deleteForever: async (id: string) => needLocal().deleteForever(id),
@@ -303,6 +303,7 @@ const api = {
   createSmartFolder: async (opts: { name: string; query: string; symbol?: string }) => needLocal().createSmartFolder(opts),
   updateSmartFolder: async (id: string, change: { name?: string; query?: string; symbol?: string }) => needLocal().updateSmartFolder(id, change),
   deleteSmartFolder: async (id: string) => needLocal().deleteSmartFolder(id),
+  editTag: async (edit: { type: 'rename'; from: string; to: string } | { type: 'delete'; tag: string }) => needLocal().editTag(edit),
   devices: async (): Promise<DeviceView[]> => {
     if (!engine) return [];
     return (await engine.devices()).map((d) => ({ deviceID: d.deviceID, name: d.name, lastSync: (d.lastSync + 978307200) * 1000, ...(d.platform ? { platform: d.platform } : {}), current: d.deviceID === deviceID }));

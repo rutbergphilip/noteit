@@ -53,7 +53,11 @@ import {
   parseTasks,
   maskedText,
   pruneAttachments,
+  renameTagInQuery,
+  rewriteTags,
   searchFold,
+  type TagEdit,
+  tagRenameProblem,
   searchableText,
   withConflictSuffix,
 } from '@noteit/doc';
@@ -390,16 +394,18 @@ export class WebLocalStore implements SyncLocalStore {
     this.onChange();
   }
 
-  createNote(opts: { notebookID?: Uuid; container?: BodyContainer } = {}): Promise<Uuid> {
+  /** A new note; an import passes the source's dates and pin. */
+  createNote(opts: { notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean } = {}): Promise<Uuid> {
     return this.exclusive(() => this.createNoteLocked(opts));
   }
 
-  private async createNoteLocked(opts: { notebookID?: Uuid; container?: BodyContainer }): Promise<Uuid> {
+  private async createNoteLocked(opts: { notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }): Promise<Uuid> {
     const id = newUuid();
     const container = opts.container ?? emptyContainer();
     const now = toIsoSeconds(this.now());
     const { title, preview } = deriveTitleAndPreview(container.doc);
-    const meta: NoteMeta = { id, title, preview, tags: deriveTags(container.doc), isPinned: false, createdAt: now, updatedAt: now };
+    const createdAt = opts.createdAt ?? now;
+    const meta: NoteMeta = { id, title, preview, tags: deriveTags(container.doc), isPinned: !!opts.isPinned, createdAt, updatedAt: opts.updatedAt ?? createdAt };
     if (opts.notebookID) meta.notebookID = opts.notebookID;
     await this.writeNote(id, meta, { container });
     return id;
@@ -552,6 +558,51 @@ export class WebLocalStore implements SyncLocalStore {
     this.onChange();
   }
 
+  // MARK: tags (native renameTag / deleteTag)
+
+  /**
+   * Renames (merging into a tag in use) or deletes a tag and the tags nested in it in every note outside Recently
+   * Deleted that this browser can edit; a rename also rewrites smart folder searches.
+   */
+  editTag(edit: TagEdit): Promise<{ changed: number; skipped: number; inTrash: number }> {
+    return this.exclusive(async () => {
+      await this.ensureFresh();
+      if (edit.type === 'rename') {
+        const inUse = [...new Set([...this.derived.values()].filter((d) => !d.row.deletedAt && d.row.kind !== 'locked').flatMap((d) => d.row.tags))];
+        const problem = tagRenameProblem(edit.from, edit.to, inUse);
+        if (problem) throw new Error(problem);
+      }
+      const name = edit.type === 'rename' ? edit.from : edit.tag;
+      const tagged = (d: Derived) => d.row.tags.some((t) => t === name.toLowerCase() || t.startsWith(`${name.toLowerCase()}/`));
+      let changed = 0;
+      let skipped = 0;
+      let inTrash = 0;
+      for (const d of [...this.derived.values()]) {
+        if (!tagged(d)) continue;
+        if (d.row.deletedAt) {
+          inTrash += 1;
+          continue;
+        }
+        const opened = this.getNote(d.row.id);
+        if (!opened?.container || opened.readOnly) {
+          skipped += 1;
+          continue;
+        }
+        const doc = rewriteTags(opened.container.doc, edit);
+        if (!doc) continue;
+        await this.saveNoteLocked(d.row.id, { ...opened.container, doc });
+        changed += 1;
+      }
+      if (edit.type === 'rename') {
+        for (const f of this.snapshot().smartFolders) {
+          const query = renameTagInQuery(edit.from, edit.to, f.query);
+          if (query !== f.query) await this.updateSmartFolderLocked(f.id, { query });
+        }
+      }
+      return { changed, skipped, inTrash };
+    });
+  }
+
   // MARK: smart folders (organise; synced as `smart-folders/<ID>.json`, native SmartFolder)
 
   private static checkSmartFolder(name: string, query: string): void {
@@ -580,6 +631,12 @@ export class WebLocalStore implements SyncLocalStore {
   updateSmartFolder(id: Uuid, change: { name?: string; query?: string; symbol?: string }): Promise<void> {
     return this.exclusive(async () => {
       await this.ensureFresh();
+      await this.updateSmartFolderLocked(id, change);
+    });
+  }
+
+  private async updateSmartFolderLocked(id: Uuid, change: { name?: string; query?: string; symbol?: string }): Promise<void> {
+    {
       const r = this.records_.get(id);
       if (!r || r.kind !== 'smartFolder') throw new Error('No such smart folder');
       const meta = decodeSmartFolderMeta(utf8(r.meta));
@@ -591,7 +648,7 @@ export class WebLocalStore implements SyncLocalStore {
       meta.modifiedAt = toIsoSeconds(this.now());
       await this.persist({ ...r, revision: meta.revision, modifiedAt: this.now().getTime(), meta: fromUtf8(patchMeta(utf8(r.meta), meta, SMART_FOLDER_META_OWNED_KEYS)), writer: this.deviceName });
       this.onChange();
-    });
+    }
   }
 
   deleteSmartFolder(id: Uuid): Promise<void> {

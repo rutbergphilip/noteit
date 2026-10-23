@@ -258,3 +258,21 @@ describe('notebook parent (interop with native Notebook)', () => {
     await expect(s.updateNotebook(top, { parent: child })).rejects.toThrow(/inside itself/);
   });
 });
+
+describe('tag rename, merge and delete', () => {
+  it('rewrites every editable note and smart folder searches; trash is left alone', async () => {
+    const { s } = await store();
+    const a = await s.createNote({ container: text('A #work/acme') });
+    await s.createNote({ container: text('B #job and #work') });
+    const trashed = await s.createNote({ container: text('C #work') });
+    await s.updateNoteMeta(trashed, { trashed: true });
+    const folder = await s.createSmartFolder({ name: 'Work', query: 'tag:work is:todo' });
+    expect(await s.editTag({ type: 'rename', from: 'work', to: 'job' })).toEqual({ changed: 2, skipped: 0, inTrash: 1 });
+    const tags = s.snapshot().notes.filter((n) => !n.deletedAt).flatMap((n) => n.tags).sort();
+    expect(tags).toEqual(['job', 'job/acme']); // B's #job and #work merged
+    expect(s.snapshot().smartFolders.find((f) => f.id === folder)?.query).toBe('tag:job is:todo');
+    await s.editTag({ type: 'delete', tag: 'job' });
+    expect(s.getNote(a)!.row.title).toBe('A');
+    await expect(s.editTag({ type: 'rename', from: 'x', to: 'bad name' })).rejects.toThrow(/letters/);
+  });
+});

@@ -98,6 +98,7 @@ onBeforeUnmount(() => {
         <QuickCapture />
         <NotebookDialog />
         <SmartFolderDialog />
+        <TagRenameDialog />
         <TemplatePicker />
       </template>
     </div>

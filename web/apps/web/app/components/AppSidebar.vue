@@ -2,11 +2,13 @@
 import { computed } from 'vue';
 import type { ContextMenuItem } from '@nuxt/ui';
 import { useNoteit, type View } from '~/composables/useNoteit';
+import { useConfirm } from '~/lib/confirm';
 import { relativeTime } from '~/utils/format';
 import { notebookIcon, safeHex } from '~/utils/notebooks';
 import type { NotebookRow } from '~/worker/types';
 
-const { state, tags, createNote, openToday } = useNoteit();
+const { state, tags, createNote, openToday, client, refresh, toast } = useNoteit();
+const confirm = useConfirm();
 
 const live = computed(() => state.notes.filter((n) => !n.deletedAt));
 const counts = computed(() => {
@@ -57,6 +59,24 @@ const notebookMenu = (nb: NotebookRow): ContextMenuItem[][] => [
   ],
   [{ label: 'Edit Notebook…', icon: 'i-lucide-pencil', onSelect: () => (state.notebookDialog = { mode: 'edit', id: nb.id }) }],
 ];
+const tagMenu = (tag: string): ContextMenuItem[][] => [
+  [
+    { label: 'Rename Tag…', icon: 'i-lucide-pencil', onSelect: () => (state.tagRename = tag) },
+    { label: 'Delete Tag…', icon: 'i-lucide-trash-2', color: 'error' as const, onSelect: () => void deleteTag(tag) },
+  ],
+];
+async function deleteTag(tag: string): Promise<void> {
+  const ok = await confirm({ title: `Delete #${tag}?`, description: `Removes #${tag} and the tags inside it from every note. The notes stay.`, confirmLabel: 'Delete Tag', danger: true });
+  if (!ok) return;
+  try {
+    const r = await client().editTag({ type: 'delete', tag });
+    if (state.view.kind === 'tag' && (state.view.tag === tag || state.view.tag.startsWith(`${tag}/`))) state.view = { kind: 'all' };
+    await refresh();
+    toast(`Removed #${tag} from ${r.changed} note${r.changed === 1 ? '' : 's'}${r.skipped ? ` (${r.skipped} can't be edited here)` : ''}`);
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e), 'error');
+  }
+}
 const smartFolderMenu = (id: string): ContextMenuItem[][] => [[{ label: 'Edit Smart Folder…', icon: 'i-lucide-pencil', onSelect: () => (state.smartFolderDialog = { mode: 'edit', id }) }]];
 const item = (active: boolean) => [
   'w-full justify-start gap-2.5 px-2.5 min-h-[34px] text-sm font-normal text-default',
@@ -141,16 +161,16 @@ const item = (active: boolean) => [
       <template v-if="tags.length">
         <div class="px-2.5 pt-4 pb-1.5 text-[11px] font-semibold text-muted">Tags</div>
         <div class="flex flex-wrap gap-1.5 px-2.5">
-          <UButton
-            v-for="t in tags.slice(0, 30)"
-            :key="t.tag"
-            size="xs"
-            :color="isActive({ kind: 'tag', tag: t.tag }) ? 'primary' : 'neutral'"
-            variant="soft"
-            class="rounded-full px-2.5"
-            :label="`#${t.tag}`"
-            @click="go({ kind: 'tag', tag: t.tag })"
-          />
+          <UContextMenu v-for="t in tags.slice(0, 30)" :key="t.tag" :items="tagMenu(t.tag)">
+            <UButton
+              size="xs"
+              :color="isActive({ kind: 'tag', tag: t.tag }) ? 'primary' : 'neutral'"
+              variant="soft"
+              class="rounded-full px-2.5"
+              :label="`#${t.tag}`"
+              @click="go({ kind: 'tag', tag: t.tag })"
+            />
+          </UContextMenu>
         </div>
       </template>
     </nav>

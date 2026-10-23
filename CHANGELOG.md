@@ -25,6 +25,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - A [feature parity](docs/feature-parity.md) page lists every feature of the Mac and web apps and where each stands.
 - Smart folders in the web app: New Smart Folder… and Save Search as Smart Folder… make a saved search in the sidebar, and smart folders made on a Mac show up on the web and the other way round.
 - Note links as you type in the web app: `[[` lists your notes as you type, `[[Title]]`, `[[Title#Heading]]` and `[[Title|text]]` become links as on the Mac, and Link to Note… (⇧⌘K) starts one.
+- Import Markdown in the web app: choose `.md` or `.txt` files, or a whole folder such as an Obsidian vault. Titles, front matter dates and tags, and images come in as on the Mac, and subfolders become nested notebooks.
+- Rename, merge and delete tags in the web app: right-click a tag in the sidebar. Tags inside it change too, and smart folder searches follow a rename.
 - Pasting Markdown in the web app brings it in formatted, by the same rules as the Mac: only text that's clearly Markdown source, never inside a code block, and ⇧⌘V pastes plain text.
 
 ### Changed

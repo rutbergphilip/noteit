@@ -47,7 +47,7 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | `#tags` and nested `#tags/sub` in note text | Yes | Yes, the same parser (shared vectors) | Parity |
 | Tag list in the sidebar, choosing a tag shows its children's notes | Tree | Chips; nesting is matched but not drawn as a tree | Parity |
 | Tag suggestions after `#` | Yes | — | Web gap |
-| Rename, merge and delete tags everywhere | Yes | — | Web gap |
+| Rename, merge and delete tags everywhere | Yes | Right-click a tag: the same rewrite rules (nested tags, code and links left alone) and smart folder searches renamed; no Undo | Parity |
 | Search: words, "phrases", `-word`, `OR`, brackets (`searchNotes`) | ⌘F | ⌘F; the same parser and evaluator (shared vectors) | Parity |
 | Search filters `tag:` `notebook:`/`in:` `title:` `is:` `has:` `edited:` `created:` `due:` | Yes | Yes, with a warning for a filter it can't read | Parity |
 | Search ranking, snippets and highlights in the note | Yes | Matching notes in edit order | Web gap |
@@ -97,7 +97,8 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Print, Save as PDF (`print`) | ⌘P | ⌘P, the browser's print dialog | Parity |
 | Copy as Markdown (`copyMarkdown`) | ⌥⇧⌘C | ⌥⇧⌘C (whole note) | Parity |
 | Export a notebook or everything as folders | Yes | One note at a time | Web gap |
-| Import Markdown, Obsidian, Evernote, Notion (`import`) | Yes | — | Web gap |
+| Import Markdown and text files, or a folder such as an Obsidian vault (`import`, `importFolder`) | Yes | Yes: the same reader, titles, front matter dates and tags, folders as nested notebooks, images from the chosen files. `[[links]]` to notes in the same import link by title | Parity |
+| Import Evernote (.enex), Notion, TextBundle | Yes | — (the Mac's importers aren't ported; about a day each) | Web gap |
 | Import from Apple Notes | Yes | — | Native-only by design (reads the Mac's Notes database) |
 | Import ledger (no duplicates on re-import) | Yes | — | Native-only (local data) |
 

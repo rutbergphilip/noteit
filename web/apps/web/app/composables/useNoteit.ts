@@ -57,6 +57,8 @@ const state = reactive({
   templatePicker: undefined as undefined | 'new' | 'insert',
   /** An expanded template for the open editor to insert at the caret. */
   pendingInsert: undefined as BodyContainer | undefined,
+  /** Rename Tag… for this tag. */
+  tagRename: undefined as string | undefined,
   /** Link to Note… (⇧⌘K): bumped to ask the open editor to start a `[[` link. */
   linkToNote: 0,
   sort: 'edited' as 'edited' | 'created' | 'title',

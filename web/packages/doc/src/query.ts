@@ -40,7 +40,7 @@ const IS_FILTERS: readonly IsFilter[] = ['pinned', 'todo', 'done', 'untagged', '
 const HAS_FILTERS: readonly HasFilter[] = ['due', 'reminder', 'attachment'];
 const KEYS = new Set(['tag', 'notebook', 'in', 'title', 'is', 'has', 'edited', 'created', 'due']);
 
-interface Lexeme {
+export interface Lexeme {
   kind: 'open' | 'close' | 'or' | 'minus' | 'term';
   start: number;
   end: number;
@@ -55,6 +55,11 @@ function quoted(text: string, open: number): { end: number; value: string } {
   const start = open + 1;
   const close = text.indexOf('"', start);
   return close >= 0 ? { end: close + 1, value: text.slice(start, close) } : { end: text.length, value: text.slice(start) };
+}
+
+/** The query's lexemes with their positions (QueryLexer.lex), for rewriting a query in place. */
+export function lexQuery(text: string): readonly Readonly<Lexeme>[] {
+  return lex(text);
 }
 
 function lex(text: string): Lexeme[] {
