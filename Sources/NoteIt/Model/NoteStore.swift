@@ -66,6 +66,8 @@ final class NoteStore: ObservableObject {
     private var firstLaunchMarkerURL: URL { rootURL.appendingPathComponent(".initialized") }
     /// False when migration didn't report a fresh install (see `LibraryMigration.Outcome.allowsSeeding`).
     private let seedsFreshLibrary: Bool
+    /// True when this launch created the sample notes, which is when the first-run guide shows.
+    private(set) var seededOnLaunch = false
 
     private var bodyCache: [UUID: NSAttributedString] = [:]
     private var bodyAccessOrder: [UUID] = []
@@ -1635,6 +1637,7 @@ final class NoteStore: ObservableObject {
             rebuildFromBodies(recovered: nil)
         } else if seedsFreshLibrary, !fm.fileExists(atPath: firstLaunchMarkerURL.path) {
             SeedData.seed(into: self)
+            seededOnLaunch = true
             recordSeedManifest()
         }
         libraryDirty = true

@@ -158,6 +158,9 @@ enum PaletteCommandRegistry {
                 store.selection = .recentlyDeleted
                 WindowRouter.showMainWindow()
             },
+            command("showWelcome", "Welcome to NoteIt…", symbol: "hand.wave", shortcut: nil, keywords: ["guide", "setup", "first run", "onboarding", "help"]) {
+                WelcomeWindow.shared.show()
+            },
             command("import", "Import…", symbol: "square.and.arrow.down", shortcut: nil, keywords: ["markdown", "apple notes", "evernote", "enex", "notion"]) {
                 ImportSheetPresenter.show()
             },

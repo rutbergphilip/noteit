@@ -124,6 +124,10 @@ File › Import… (`ImportCommands`) opens `ImportSheet` on the main window. Im
 - **No duplicates.** `ImportLedger` (`import-ledger.json`, local only) maps a source identity to the notes made from it, keyed by a SHA-256 of the content: the file path for Markdown, the note id for Apple Notes, the title and creation time for Evernote (an export has no ids and moves around), the page's path in the export for Notion. `NoteStore.shouldSkipImport` is called by every importer before converting a note: the same identity and content is skipped and counted in `ImportReport.notesAlreadyImported`, a known identity with new content is imported as a new note and counted in `notesChanged`. Entries whose note was deleted for good are ignored.
 - **Sources.** `MarkdownImporter` walks folders (skipping hidden ones such as `.obsidian` and `.trash`), opens `.textbundle` folders, and unzips `.textpack` files with `ditto` into a temporary folder. `AppleNotesImporter` asks for Automation permission with `AEDeterminePermissionToAutomateTarget`, then reads folders and notes with `NSAppleScript`. The scripting is behind a protocol so tests use canned data. The app is signed with `Resources/NoteIt.entitlements` (Apple Events) for this.
 
+## First-run guide
+
+`WelcomeFlow.swift` holds `OnboardingFlow` (the pages of each path and when the guide shows: only on the launch where `NoteStore.seededOnLaunch` is true and `onboardingCompletedVersion` is below `OnboardingFlow.currentVersion`), `WelcomeWindow` (a plain `NSWindow` hosting `WelcomeView`; closing or Skip Setup records the version) and the view. Help › Welcome to NoteIt… and the palette's `showWelcome` open it again. Design: [specs/2026-10-19-surfaces-polish-design.md](specs/2026-10-19-surfaces-polish-design.md) §6.
+
 ## Global hotkeys
 
 Global hotkeys use Carbon's `RegisterEventHotKey`, so they work from any app without Accessibility permission. `HotkeyManager` registers the bindings saved in `UserDefaults` and reports combinations that another app already owns. None are bound by default. `ShortcutRecorder` is the Settings control that records them.

@@ -160,7 +160,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
 
         let expected: Set<String> = [
             "newNote", "newNoteFromTemplate", "newTemplate", "openToday", "dailyNoteForDate", "newNotebook", "newSmartFolder", "showTasks", "showCompletedTasks", "searchNotes", "find", "findReplace", "export",
-            "print", "copyMarkdown", "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn",
+            "print", "copyMarkdown", "deleteNote", "showRecentlyDeleted", "import", "settings", "integrationsSettings", "localAPIOn", "showWelcome",
         ]
         XCTAssertEqual(availableIDs(store), expected)
         XCTAssertEqual(try XCTUnwrap(command("deleteNote", in: store)).info.title, "Delete Now…")

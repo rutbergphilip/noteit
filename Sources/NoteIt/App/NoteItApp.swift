@@ -153,6 +153,10 @@ struct NoteItCommands: Commands {
                 .menuShortcut(.goForward)
         }
 
+        CommandGroup(after: .help) {
+            Button("Welcome to NoteIt…") { WelcomeWindow.shared.show() }
+        }
+
         CommandGroup(after: .windowArrangement) {
             Button("NoteIt Notes") { WindowRouter.showMainWindow() }
                 .keyboardShortcut("0", modifiers: .command)

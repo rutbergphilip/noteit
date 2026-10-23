@@ -53,6 +53,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
   - About 30 keyboard shortcuts. See the [shortcut reference](docs/keyboard-shortcuts.md).
   - Menu shortcuts such as New Note, Find… and Print… can be changed in Settings › Shortcuts.
 - **Native and local-first**
+  - A short **first-run guide** (Help › Welcome to NoteIt…) helps set up hotkeys, the menu bar, imports and sync.
   - Light and dark mode, system accent color, and standard menus and Settings.
   - Notes are stored as RTFD in `~/Library/Application Support/NoteIt/`, with autosave and atomic writes.
 - **Optional sync** between Macs through storage you own, end-to-end encrypted by default. See below.

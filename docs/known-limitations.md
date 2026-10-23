@@ -40,5 +40,5 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 
 ## Setup and distribution
 
-- **No first-run guide.** New users get sample notes only. Global hotkeys are unbound by default and are set up in Settings › Shortcuts.
+- **The first-run guide is short.** It shows once, on a fresh library, and Help › Welcome to NoteIt… brings it back. Hotkeys recorded in it are saved right away rather than on Continue, the Apple Notes, Evernote and Notion imports run from the usual Import… sheet instead of inside the guide, and choosing *I use NoteIt on another Mac* doesn't remove the sample notes before the first sync. Global hotkeys stay unbound until you record them.
 - **Accessibility hasn't been audited** yet. Only some controls have VoiceOver labels.
