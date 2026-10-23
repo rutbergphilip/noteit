@@ -5,7 +5,8 @@ import NoteItSync
 /// Debug-only sync-store exercise (`NOTEIT_SYNC_SELFTEST=1` with `NOTEIT_DATA_DIR`): runs scratch stores in
 /// subfolders of the data dir (never `NoteStore.shared`), prints `SYNCTEST` lines and exits non-zero on failure.
 /// `NOTEIT_SYNC_SELFTEST_LIBRARY=<path>`: a library.json copied (read-only) into a scratch store to check that
-/// files without revisions still load.
+/// files without revisions still load. `NOTEIT_SYNC_SELFTEST_MARKDOWN=1`: the second device of each pair keeps its notes
+/// as Markdown files.
 @MainActor
 enum SyncSelfTest {
     private static var failures = 0
@@ -16,11 +17,15 @@ enum SyncSelfTest {
             return 2
         }
         let base = URL(fileURLWithPath: (dir as NSString).expandingTildeInPath, isDirectory: true)
-        for sub in ["legacy", "a", "b", "perf-src", "perf-dst", "copy-1", "copy-2", "att", "nb-a", "nb-b", "sf-a", "sf-b"] { try? FileManager.default.removeItem(at: base.appendingPathComponent(sub)) }
+        for sub in ["legacy", "a", "b", "perf-src", "perf-dst", "copy-1", "copy-2", "att", "nb-a", "nb-b", "sf-a", "sf-b"] {
+            try? FileManager.default.removeItem(at: base.appendingPathComponent(sub))
+            try? FileManager.default.removeItem(at: base.appendingPathComponent(sub + "-md"))
+        }
+        if markdown { log("second devices use Markdown libraries") }
 
         legacyLibrary(base)
-        let a = NoteStore(rootURL: base.appendingPathComponent("a", isDirectory: true))
-        let b = NoteStore(rootURL: base.appendingPathComponent("b", isDirectory: true))
+        let a = store(base, "a")
+        let b = store(base, "b")
         revisions(a)
         roundTrip(a, b, base)
         conflictCopy(a, b)
@@ -39,6 +44,24 @@ enum SyncSelfTest {
 
         log(failures == 0 ? "PASS all checks" : "FAIL \(failures) check(s) failed")
         return failures == 0 ? 0 : 1
+    }
+
+    private static let markdown = AppEnvironment.value("SYNC_SELFTEST_MARKDOWN") == "1"
+    private static let markdownDevices: Set<String> = ["b", "perf-dst", "nb-b", "sf-b"]
+
+    private static func store(_ base: URL, _ name: String) -> NoteStore {
+        let root = base.appendingPathComponent(name, isDirectory: true)
+        guard markdown, markdownDevices.contains(name) else { return NoteStore(rootURL: root) }
+        let content = base.appendingPathComponent(name + "-md", isDirectory: true)
+        try? FileManager.default.createDirectory(at: content, withIntermediateDirectories: true)
+        let store = NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false, format: .markdown, contentRootURL: content))
+        store.markdownFlushWait = 10
+        let deadline = Date().addingTimeInterval(20)
+        while store.markdownFolderChecking, Date() < deadline {
+            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.01))
+        }
+        check(!store.markdownFolderChecking, "\(name): launch scan of the Markdown folder finished")
+        return store
     }
 
     // MARK: Cases
@@ -128,7 +151,7 @@ enum SyncSelfTest {
         check(applied?.revision == payload.revision, "roundtrip: applyRemote keeps payload revision")
         check(applied?.title == a.note(with: id)?.title, "roundtrip: title \(applied?.title.debugDescription ?? "nil")")
         check(applied?.tags == ["synctag"], "roundtrip: tags derived \(applied?.tags ?? [])")
-        check(b.body(for: id).string == text.string, "roundtrip: body text equal")
+        check(b.body(for: id).string == text.string, "roundtrip: body text equal \(b.body(for: id).string.debugDescription) vs \(text.string.debugDescription)")
         let gotSentinels = paragraphSentinels(b.body(for: id))
         check(gotSentinels == sentinels, "roundtrip: paragraph sentinels \(gotSentinels)")
         check(b.externallyUpdatedNoteID == id, "roundtrip: externallyUpdatedNoteID set")
@@ -136,7 +159,7 @@ enum SyncSelfTest {
         let search = b.notes(for: .allNotes, search: "emoji synctag").map(\.id)
         check(search.contains(id), "roundtrip: search index refreshed")
 
-        let reloaded = NoteStore(rootURL: base.appendingPathComponent("b", isDirectory: true))
+        let reloaded = store(base, "b")
         check(reloaded.note(with: id)?.revision == payload.revision, "roundtrip: revision persisted in library.json")
         check(paragraphSentinels(reloaded.body(for: id)) == sentinels && reloaded.body(for: id).string == text.string,
               "roundtrip: body persisted through the RTFD write path")
@@ -182,7 +205,7 @@ enum SyncSelfTest {
         let journal = a.syncDeletions()
         check(journal[second]?.kind == .note && journal[nb.id]?.kind == .notebook && journal[first] == nil,
               "journal: enabled -> note + notebook journaled")
-        let reloaded = NoteStore(rootURL: base.appendingPathComponent("a", isDirectory: true))
+        let reloaded = store(base, "a")
         let persisted = reloaded.syncDeletions()
         check(persisted.count == journal.count && journal.allSatisfy { id, entry in
             persisted[id].map { $0.kind == entry.kind && abs($0.deletedAt.timeIntervalSince(entry.deletedAt)) < 1 } ?? false
@@ -198,7 +221,7 @@ enum SyncSelfTest {
             let tombstones = (try? String(contentsOf: a.tombstonesURL, encoding: .utf8)) ?? ""
             check(a.note(with: second) != nil && a.syncDeletions()[second] == nil && !tombstones.contains(second.uuidString),
                   "journal: remote apply resurrects a locally deleted note")
-            let again = NoteStore(rootURL: base.appendingPathComponent("a", isDirectory: true))
+            let again = store(base, "a")
             check(again.note(with: second) != nil && !again.body(for: second).string.isEmpty, "journal: resurrection survives reload")
         }
     }
@@ -218,7 +241,9 @@ enum SyncSelfTest {
         guard let note = b.notes.first?.id else { return }
         b.applyRemoteDeletion(note, kind: .note)
         b.flush()
-        let trashed = ((try? FileManager.default.contentsOfDirectory(atPath: b.trashURL.path)) ?? []).contains { $0.hasPrefix(note.uuidString) }
+        let trashed = b.bodyStorage.kind == .rtfd
+            ? ((try? FileManager.default.contentsOfDirectory(atPath: b.trashURL.path)) ?? []).contains { $0.hasPrefix(note.uuidString) }
+            : (try? b.bodyStorage.recover(note)) != nil
         check(b.note(with: note) == nil && trashed, "remote delete: note removed, body in .trash")
         check(b.syncDeletions().isEmpty, "remote delete: not journaled")
     }
@@ -356,7 +381,7 @@ enum SyncSelfTest {
 
     /// RTFD with an image attachment survives the off-main serialize/parse path used by export and apply.
     private static func attachments(_ base: URL) {
-        let store = NoteStore(rootURL: base.appendingPathComponent("att", isDirectory: true))
+        let store = store(base, "att")
         let image = NSImage(size: NSSize(width: 24, height: 16), flipped: false) { rect in
             NSColor.systemOrange.setFill(); rect.fill(); return true
         }
@@ -412,7 +437,7 @@ enum SyncSelfTest {
 
     /// A1: applies 500 remote notes through the adapter and reports main-actor time per apply.
     private static func bulkApply(_ base: URL) {
-        let source = NoteStore(rootURL: base.appendingPathComponent("perf-src", isDirectory: true))
+        let source = store(base, "perf-src")
         for i in 0..<500 {
             _ = source.createNote(in: nil, initial: styledBody(title: "Bulk \(i)", line: String(repeating: "lorem ipsum \(i) ", count: 40)))
         }
@@ -425,7 +450,7 @@ enum SyncSelfTest {
             return out
         }, timeout: 120) else { return check(false, "bulk: export") }
 
-        let target = NoteStore(rootURL: base.appendingPathComponent("perf-dst", isDirectory: true))
+        let target = store(base, "perf-dst")
         let adapter = NoteStoreSyncAdapter(store: target, deviceID: "dst")
         _ = runAsync { await adapter.records() }
         let start = Date()
@@ -446,7 +471,7 @@ enum SyncSelfTest {
         } else {
             check(false, "bulk: \(result)")
         }
-        let reloaded = NoteStore(rootURL: target.rootURL)
+        let reloaded = store(base, "perf-dst")
         check(reloaded.notes.count == target.notes.count, "bulk: every apply persisted in library.json before returning")
         _ = runAsync { await adapter.passDidFinish() }
         let index = (try? Data(contentsOf: target.searchIndexURL)).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
@@ -464,8 +489,8 @@ enum SyncSelfTest {
 
     /// A nests a notebook, B applies it, an older client strips `parent` while renaming, and A keeps and repairs it.
     private static func nestedNotebooks(_ base: URL) {
-        let a = NoteStore(rootURL: base.appendingPathComponent("nb-a", isDirectory: true))
-        let b = NoteStore(rootURL: base.appendingPathComponent("nb-b", isDirectory: true))
+        let a = store(base, "nb-a")
+        let b = store(base, "nb-b")
         let parent = a.createNotebook(name: "Work", symbol: "folder", colorHex: "#0A84FF")
         let child = a.createNotebook(name: "Clients", symbol: "folder", colorHex: "#0A84FF", parentID: parent.id)
         let countA = a.notebooks.count, countB = b.notebooks.count + 2
@@ -498,8 +523,8 @@ enum SyncSelfTest {
     }
 
     private static func smartFolders(_ base: URL) {
-        let a = NoteStore(rootURL: base.appendingPathComponent("sf-a", isDirectory: true))
-        let b = NoteStore(rootURL: base.appendingPathComponent("sf-b", isDirectory: true))
+        let a = store(base, "sf-a")
+        let b = store(base, "sf-b")
         let notesB = b.notes.count
         do {
             let folder = try a.createSmartFolder(name: "Synced", query: "is:pinned")

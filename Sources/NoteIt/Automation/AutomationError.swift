@@ -7,7 +7,7 @@ enum AutomationError: Error, Equatable {
     case notFound, noteTitleNotFound, noteDeleted, noteUnreadable, noteLocked, notReady, notebookNotFound, notebookNameNotFound,
          invalidInput(String),
          revisionMismatch(current: UUID?), formatUnavailable(String), tooLarge, dailyNotesUnavailable, cancelled,
-         versionNotSaved, notChanged
+         versionNotSaved, notChanged, folderNotAvailable(String)
 
     var apiCode: APIErrorCode {
         switch self {
@@ -15,7 +15,7 @@ enum AutomationError: Error, Equatable {
         case .noteDeleted: .noteDeleted
         case .noteUnreadable: .noteUnreadable
         case .noteLocked: .noteLocked
-        case .notReady: .notReady
+        case .notReady, .folderNotAvailable: .notReady
         case .invalidInput, .cancelled, .notChanged: .badRequest
         case .revisionMismatch: .revisionMismatch
         case .formatUnavailable, .dailyNotesUnavailable: .notImplemented
@@ -49,6 +49,7 @@ enum AutomationError: Error, Equatable {
         case .cancelled: "Cancelled."
         case .versionNotSaved: "Couldn't save a version of the note, so it wasn't changed."
         case .notChanged: "NoteIt couldn't make that change."
+        case .folderNotAvailable(let folder): BodyEditError.folderNotAvailableMessage(folder)
         }
     }
 }

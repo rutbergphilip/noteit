@@ -8,8 +8,9 @@ struct NoteVersion: Identifiable, Hashable {
     var id: URL { url }
 }
 
-/// Earlier bodies of each note, at `history/<note UUID>/<yyyyMMdd'T'HHmmss'Z'>.rtfd`. Versions stay on
-/// this Mac: they aren't synced, indexed for search or listed in library.json.
+/// Earlier bodies of each note, at `history/<note UUID>/<yyyyMMdd'T'HHmmss'Z'>.rtfd`, or `.noteitdoc` for a Markdown
+/// library (its `.md` files aren't a lossless copy of the editor text). Both kinds are listed and restored, whichever
+/// the library writes now. Versions stay on this Mac: they aren't synced, indexed for search or listed in library.json.
 final class VersionHistory {
     /// A saved body is kept only when the newest version is older than this.
     static let minimumInterval: TimeInterval = 10 * 60
@@ -17,12 +18,18 @@ final class VersionHistory {
     static let maxAge: TimeInterval = 30 * 24 * 60 * 60
 
     let rootURL: URL
+    /// `.rtfd` or `.noteItDoc`: what new versions are written as.
+    let format: BodyCodec
     /// Replaced in tests.
     var now: () -> Date = Date.init
 
-    init(rootURL: URL) {
+    init(rootURL: URL, format: BodyCodec = .rtfd) {
+        precondition(format != .markdown, "versions are kept losslessly")
         self.rootURL = rootURL
+        self.format = format
     }
+
+    private static let versionExtensions: Set<String> = [BodyCodec.rtfd.fileExtension, BodyCodec.noteItDoc.fileExtension]
 
     static let fileNameFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -40,7 +47,7 @@ final class VersionHistory {
     func versions(of id: UUID) -> [NoteVersion] {
         let items = (try? FileManager.default.contentsOfDirectory(at: directory(for: id), includingPropertiesForKeys: nil)) ?? []
         return items.compactMap { url -> NoteVersion? in
-            guard url.pathExtension == "rtfd",
+            guard Self.versionExtensions.contains(url.pathExtension),
                   let date = Self.fileNameFormatter.date(from: url.deletingPathExtension().lastPathComponent) else { return nil }
             return NoteVersion(noteID: id, date: date, url: url)
         }
@@ -64,9 +71,26 @@ final class VersionHistory {
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
             try fm.copyItem(at: bodyURL, to: temp)
-            return try install(temp, extras: extras(), of: id, at: date)
+            return try install(temp, extras: extras(), of: id, at: date, as: .rtfd)
         } catch {
             try? fm.removeItem(at: temp)
+            NSLog("NoteIt: failed to keep a version of note \(id): \(error)")
+            return nil
+        }
+    }
+
+    /// `recordSavedBody` for a library whose body files aren't versions themselves: `read` loads the saved body
+    /// and is only called when a version is kept. A body that can't be read is not kept.
+    @discardableResult
+    func recordSavedBody(reading read: () throws -> StoredBody?, of id: UUID, force: Bool = false) -> NoteVersion? {
+        let date = now()
+        if !force, let newest = versions(of: id).first, date.timeIntervalSince(newest.date) <= Self.minimumInterval {
+            return nil
+        }
+        do {
+            guard let stored = try read(), stored.readOnlyReason == nil else { return nil }
+            return try record(stored.text, extras: stored.extras, of: id, at: date)
+        } catch {
             NSLog("NoteIt: failed to keep a version of note \(id): \(error)")
             return nil
         }
@@ -76,13 +100,21 @@ final class VersionHistory {
     /// yet (editBody records the current body this way).
     @discardableResult
     func record(_ text: NSAttributedString, extras: ContainerExtras, of id: UUID) -> NoteVersion? {
+        if format == .noteItDoc {
+            do {
+                return try record(text, extras: extras, of: id, at: now())
+            } catch {
+                NSLog("NoteIt: failed to keep a version of note \(id): \(error)")
+                return nil
+            }
+        }
         var temp: URL?
         do {
             let written = try NoteStore.writeTempBody(text, in: directory(for: id))
             temp = written
             let entry = BodyExtrasEntry(bodySHA256: try RTFDBodyStorage.packageDigest(at: written), extras: extras,
                                         codeLanguageIDs: NoteStore.codeLanguageIDs(of: text))
-            return try install(written, extras: entry, of: id, at: now())
+            return try install(written, extras: entry, of: id, at: now(), as: .rtfd)
         } catch {
             if let temp { try? FileManager.default.removeItem(at: temp) }
             NSLog("NoteIt: failed to keep a version of note \(id): \(error)")
@@ -90,10 +122,28 @@ final class VersionHistory {
         }
     }
 
+    /// A `.noteitdoc` version: the document holds its extras and code languages, so no extras file is written.
+    private func record(_ text: NSAttributedString, extras: ContainerExtras, of id: UUID, at date: Date) throws -> NoteVersion {
+        let dir = directory(for: id)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let temp = dir.appendingPathComponent(".\(UUID().uuidString).noteitdoc.tmp")
+        do {
+            try BodyCodec.noteItDoc.data(of: text, extras: extras).write(to: temp, options: .atomic)
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+            throw error
+        }
+        return try install(temp, extras: nil, of: id, at: date, as: .noteItDoc)
+    }
+
     /// The version's text, and its extras (nil for a version from before extras support, which has no extras
     /// file). Stored code-language IDs are set on the code paragraphs by position when the counts match. Throws
     /// when the extras file exists but can't be read or decoded.
     func load(_ version: NoteVersion) throws -> (text: NSAttributedString, extras: ContainerExtras?) {
+        if version.url.pathExtension == BodyCodec.noteItDoc.fileExtension {
+            let stored = try BodyCodec.noteItDoc.read(at: version.url)
+            return (stored.text, stored.extras)
+        }
         let text = try NoteStore.readBody(at: version.url)
         let url = Self.extrasURL(of: version.url)
         guard FileManager.default.fileExists(atPath: url.path) else { return (text, nil) }
@@ -168,18 +218,18 @@ final class VersionHistory {
 
     /// Picks a free per-second stamp (a clash moves on to the next one), writes the extras file atomically, then
     /// renames the finished temp package into place. If either step fails, nothing of the version is left.
-    private func install(_ temp: URL, extras: BodyExtrasEntry, of id: UUID, at date: Date) throws -> NoteVersion {
+    private func install(_ temp: URL, extras: BodyExtrasEntry?, of id: UUID, at date: Date, as format: BodyCodec) throws -> NoteVersion {
         let fm = FileManager.default
         var stamp = Date(timeIntervalSince1970: floor(date.timeIntervalSince1970))
-        var url = versionURL(id, stamp)
-        while fm.fileExists(atPath: url.path) || fm.fileExists(atPath: Self.extrasURL(of: url).path) {
+        var url = versionURL(id, stamp, format)
+        while isTaken(id, stamp) {
             stamp.addTimeInterval(1)
-            url = versionURL(id, stamp)
+            url = versionURL(id, stamp, format)
         }
         let extrasURL = Self.extrasURL(of: url)
         do {
             if failsExtrasWrite { throw CocoaError(.fileWriteUnknown) }
-            try extras.json.encoded().write(to: extrasURL, options: .atomic)
+            if let extras { try extras.json.encoded().write(to: extrasURL, options: .atomic) }
         } catch {
             try? fm.removeItem(at: temp)
             throw error
@@ -195,8 +245,16 @@ final class VersionHistory {
         return NoteVersion(noteID: id, date: stamp, url: url)
     }
 
-    private func versionURL(_ id: UUID, _ date: Date) -> URL {
-        directory(for: id).appendingPathComponent("\(Self.fileNameFormatter.string(from: date)).rtfd", isDirectory: true)
+    private func versionURL(_ id: UUID, _ date: Date, _ format: BodyCodec) -> URL {
+        directory(for: id).appendingPathComponent("\(Self.fileNameFormatter.string(from: date)).\(format.fileExtension)",
+                                                  isDirectory: format == .rtfd)
+    }
+
+    private func isTaken(_ id: UUID, _ date: Date) -> Bool {
+        let fm = FileManager.default
+        let rtfd = versionURL(id, date, .rtfd)
+        return fm.fileExists(atPath: rtfd.path) || fm.fileExists(atPath: Self.extrasURL(of: rtfd).path)
+            || fm.fileExists(atPath: versionURL(id, date, .noteItDoc).path)
     }
 }
 

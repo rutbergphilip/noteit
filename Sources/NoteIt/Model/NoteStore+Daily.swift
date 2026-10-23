@@ -73,7 +73,7 @@ extension NoteStore {
         let title = DailyNoteTitle.title(for: day, format: format, locale: locale)
         if let template = dailyNoteTemplateID,
            let date = day.date(calendar: DayKey.dailyCalendar(timeZone: systemCalendar.timeZone), hour: 9),
-           let expansion = expandedTemplate(template, title: title, date: date, readsClipboard: interactive) {
+           let expansion = try expandedTemplate(template, title: title, date: date, readsClipboard: interactive) {
             // The title line must stay the date, or the note would never be found again.
             let text = NSMutableAttributedString(attributedString: expansion.text)
             var caret = expansion.caret

@@ -18,6 +18,15 @@ public actor FakeLocalStore: SyncLocalStore {
     public private(set) var entries: [UUID: Entry] = [:]
     private var journal: [UUID: LocalDeletion] = [:]
     public private(set) var applyCount = 0
+    /// Titles this store can't keep; applying or copying them throws `SyncRecordRefused`.
+    public var refusedTitles: Set<String> = []
+    public private(set) var refusedCount = 0
+
+    public func refuse(_ titles: Set<String>) { refusedTitles = titles }
+    /// Notes this store can't export or apply yet; they throw `SyncRecordDeferred`.
+    public private(set) var deferredIDs: Set<UUID> = []
+
+    public func deferRecords(_ ids: Set<UUID>) { deferredIDs = ids }
 
     public init() {}
 
@@ -68,6 +77,7 @@ public actor FakeLocalStore: SyncLocalStore {
     public func deletions() -> [UUID: LocalDeletion] { journal }
 
     public func export(_ id: UUID, kind: RecordKind) throws -> RecordPayload {
+        if deferredIDs.contains(id) { throw SyncRecordDeferred(reason: "not ready") }
         guard let entry = entries[id], entry.record.kind == kind else { throw StorageError.notFound("local \(id)") }
         let meta = try JSONEncoder().encode(Meta(title: entry.title, conflictSource: entry.conflictSource))
         return RecordPayload(id: id, kind: kind, revision: entry.record.revision, modifiedAt: entry.record.modifiedAt,
@@ -75,7 +85,9 @@ public actor FakeLocalStore: SyncLocalStore {
     }
 
     public func apply(_ payload: RecordPayload) throws {
+        if deferredIDs.contains(payload.id) { throw SyncRecordDeferred(reason: "not ready") }
         let meta = try JSONDecoder().decode(Meta.self, from: payload.meta)
+        try refuseIfNeeded(meta.title)
         applyCount += 1
         entries[payload.id] = Entry(
             record: LocalRecord(id: payload.id, kind: payload.kind, revision: payload.revision, modifiedAt: payload.modifiedAt),
@@ -89,11 +101,18 @@ public actor FakeLocalStore: SyncLocalStore {
 
     public func importConflictCopy(_ payload: RecordPayload, fromDevice name: String) throws {
         let meta = try JSONDecoder().decode(Meta.self, from: payload.meta)
+        try refuseIfNeeded(meta.title)
         let id = UUID()
         entries[id] = Entry(
             record: LocalRecord(id: id, kind: payload.kind, revision: UUID(), modifiedAt: Date()),
             title: "\(meta.title) (conflict — \(name))", body: payload.body, conflictSource: name
         )
+    }
+
+    private func refuseIfNeeded(_ title: String) throws {
+        guard refusedTitles.contains(title) else { return }
+        refusedCount += 1
+        throw SyncRecordRefused(reason: "“\(title)” is too large")
     }
 
     public func clearDeletion(_ id: UUID) {

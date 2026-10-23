@@ -136,7 +136,9 @@ extension NoteStore {
         if let extras = bodyExtras[id] { return extras.frontMatter }
         switch bodyStorage.kind {
         case .rtfd: return (try? readBodyExtrasSidecar(id))??.current.extras.frontMatter
-        case .markdown: return (try? BodyCodec.markdownFrontMatterExtra(at: bodyStorage.fileURL(for: id))) ?? nil
+        case .markdown:
+            if let markdownStorage { return markdownStorage.index.entry(id)?.frontMatterExtra }
+            return (try? BodyCodec.markdownFrontMatterExtra(at: bodyStorage.fileURL(for: id))) ?? nil
         }
     }
 
@@ -178,39 +180,55 @@ extension NoteStore {
     /// `bodyStorage.read`, plus on an RTFD store the sidecar: its extras and code language IDs. An unreadable
     /// sidecar sets `readOnlyReason` and leaves the extras empty; nothing is deleted or rewritten.
     func readStoredBody(_ id: UUID) throws -> StoredBody {
-        var stored = try bodyStorage.read(id)
-        guard bodyStorage.kind == .rtfd else { return stored }
+        var notices: [(BodyExtrasNotice, String)] = []
+        defer { reportBodyExtrasNotices(id, notices) }
+        return try Self.readStoredBody(id, from: bodyStorage, extrasURL: bodyExtrasFileURL(id), notices: &notices)
+    }
+
+    func reportBodyExtrasNotices(_ id: UUID, _ notices: [(BodyExtrasNotice, String)]) {
+        for (notice, message) in notices { noteBodyExtras(id, notice, message) }
+    }
+
+    /// `readStoredBody` without the store, for reading off the main thread; `notices` are for `noteBodyExtras`.
+    nonisolated static func readStoredBody(_ id: UUID, from storage: NoteBodyStorage, extrasURL: URL,
+                                           notices: inout [(BodyExtrasNotice, String)]) throws -> StoredBody {
+        var stored = try storage.read(id)
+        guard storage.kind == .rtfd else { return stored }
         let sidecar: BodyExtrasSidecar?
         do {
-            sidecar = try readBodyExtrasSidecar(id)
+            sidecar = FileManager.default.fileExists(atPath: extrasURL.path)
+                ? try BodyExtrasSidecar.decode(Data(contentsOf: extrasURL)) : nil
         } catch {
-            noteBodyExtras(id, .unreadable, "its body-extras file is unreadable (\(error)); writes are disabled")
+            notices.append((.unreadable, "its body-extras file is unreadable (\(error)); writes are disabled"))
             stored.readOnlyReason = StoredBody.bodyExtrasUnreadable
             return stored
         }
         guard let sidecar else { return stored }
         let entry: BodyExtrasEntry
-        if let digest = try? RTFDBodyStorage.packageDigest(at: bodyStorage.fileURL(for: id)),
+        if let digest = try? RTFDBodyStorage.packageDigest(at: storage.fileURL(for: id)),
            let match = sidecar.matchingEntry(forBodySHA256: digest) {
             entry = match
         } else {
             entry = sidecar.current
-            noteBodyExtras(id, .digestMismatch, "its body changed outside NoteIt; using the latest body extras")
+            notices.append((.digestMismatch, "its body changed outside NoteIt; using the latest body extras"))
         }
         stored.extras = entry.extras
-        stored.text = applyingCodeLanguageIDs(entry.codeLanguageIDs, to: stored.text, of: id)
+        if let applied = applyingCodeLanguageIDs(entry.codeLanguageIDs, to: stored.text) {
+            stored.text = applied
+        } else {
+            let count = codeParagraphRanges(in: stored.text).count
+            let ids = entry.codeLanguageIDs
+            notices.append((.codeCountMismatch(text: count, entry: ids.count),
+                            "\(count) code paragraph(s) but \(ids.count) stored language ID(s); IDs dropped"))
+        }
         return stored
     }
 
-    /// Sets the IDs on the code paragraphs by position, only when the counts match.
-    private func applyingCodeLanguageIDs(_ ids: [String?], to text: NSAttributedString, of id: UUID) -> NSAttributedString {
+    /// nil when the number of code paragraphs doesn't match `ids`.
+    nonisolated static func applyingCodeLanguageIDs(_ ids: [String?], to text: NSAttributedString) -> NSAttributedString? {
         guard ids.contains(where: { $0 != nil }) else { return text }
-        let ranges = Self.codeParagraphRanges(in: text)
-        guard ranges.count == ids.count else {
-            noteBodyExtras(id, .codeCountMismatch(text: ranges.count, entry: ids.count),
-                           "\(ranges.count) code paragraph(s) but \(ids.count) stored language ID(s); IDs dropped")
-            return text
-        }
+        let ranges = codeParagraphRanges(in: text)
+        guard ranges.count == ids.count else { return nil }
         let result = NSMutableAttributedString(attributedString: text)
         for (range, language) in zip(ranges, ids) {
             guard let language else { continue }

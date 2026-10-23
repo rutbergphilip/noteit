@@ -81,7 +81,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
             }
             return
         }
-        let prepared = try NoteStore.prepareRemoteNote(payload, storage: bodyStorage)
+        let prepared = try Self.refusingOversized { try NoteStore.prepareRemoteNote(payload, storage: bodyStorage) }
         do {
             try await onMain {
                 try requireActive()
@@ -109,7 +109,17 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
     func importConflictCopy(_ payload: RecordPayload, fromDevice name: String) async throws {
         _ = try await MainActor.run {
             try requireActive()
-            return try store.importConflictCopy(payload, fromDevice: name)
+            return try Self.refusingOversized { try store.importConflictCopy(payload, fromDevice: name) }
+        }
+    }
+
+    /// A note with an attachment over 25 MB can't be written to a Markdown library; the engine then stops fetching
+    /// that remote version instead of downloading and failing on every pass.
+    private static func refusingOversized<T>(_ work: () throws -> T) throws -> T {
+        do {
+            return try work()
+        } catch AttachmentStore.StoreError.tooLarge(let name) {
+            throw SyncRecordRefused(reason: NoteStore.attachmentTooLargeToSync(name))
         }
     }
 
@@ -122,7 +132,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
     }
 
     @MainActor private func requireActive() throws {
-        guard isActive else { throw AdapterError.inactive }
+        guard isActive, !store.isClosedForLibrarySwitch else { throw AdapterError.inactive }
     }
 
     /// The engine records a base right after an apply returns, so the change must be on disk by then.
@@ -133,6 +143,8 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
 
     @MainActor private func settleLocalEdits(_ id: UUID, kind: RecordKind) throws {
         guard kind == .note else { return }
+        // A note with an edit still in recovery/ waits for the launch scan to restore it.
+        if store.markdownRecoveryPending.contains(id) { throw store.markdownRecoveryHoldError(id) }
         store.commitStagedEditorBody(id)
         NotificationCenter.default.post(name: .noteItSyncWillApplyRemote, object: id)
         let current = store.note(with: id)?.revision

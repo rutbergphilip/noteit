@@ -22,7 +22,7 @@ final class OrganiseIndexer: DerivedIndex {
     private(set) var hasRebuilt = false
     private var changedDuringRebuild: Set<UUID> = []
     /// Entries built off the main actor for a body about to be applied (see `prime`).
-    private var primed: [UUID: (body: ObjectIdentifier, entry: SearchIndexEntry)] = [:]
+    private var primed: [UUID: (body: WeakSnapshot, entry: SearchIndexEntry)] = [:]
 
     init(fileURL: URL) {
         self.fileURL = fileURL
@@ -49,7 +49,7 @@ final class OrganiseIndexer: DerivedIndex {
 
     /// Lets the next `noteChanged` for exactly this body reuse an entry built off the main actor.
     func prime(_ id: UUID, body: NSAttributedString, entry: SearchIndexEntry) {
-        primed[id] = (ObjectIdentifier(body), entry)
+        primed[id] = (WeakSnapshot(body), entry)
     }
 
     /// Indexes one note without notifying other indexes (a body read for the first time).
@@ -71,7 +71,7 @@ final class OrganiseIndexer: DerivedIndex {
 
     func noteChanged(_ note: NoteMeta, body: NSAttributedString) {
         var entry: SearchIndexEntry
-        if let ready = primed.removeValue(forKey: note.id), ready.body == ObjectIdentifier(body) {
+        if let ready = primed.removeValue(forKey: note.id), ready.body.text === body {
             entry = ready.entry
         } else {
             entry = Self.makeEntry(body, updatedAt: note.updatedAt)

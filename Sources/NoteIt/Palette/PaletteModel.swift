@@ -220,7 +220,7 @@ final class PaletteModel: ObservableObject {
         guard !title.isEmpty else { return nil }
         let text = NSMutableAttributedString(attributedString: NoteStore.capturedText(title: title, body: ""))
         text.append(NSAttributedString(string: "\n", attributes: EditorStyle.bodyAttributes))
-        let meta = store.createNoteInCurrentContext(initial: text)
+        guard let meta = store.createNoteInCurrentContext(initial: text) else { return nil }
         RichTextEditor.pendingCaret[meta.id] = text.length
         host.showMainWindow()
         host.focusEditor()

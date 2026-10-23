@@ -20,6 +20,8 @@ enum LocalNoteChangeKind: String, Sendable {
 /// Version History. Owned by the organise plan; built in foundations Task 4.5.
 enum BodyEditError: Error, Equatable, LocalizedError {
     case noteMissing, inTrash, locked, writeBlocked, taskChanged, versionNotSaved
+    /// The note's Markdown file hasn't been read yet: its folder is still being checked or doesn't answer.
+    case folderNotAvailable(String)
 
     var errorDescription: String? {
         switch self {
@@ -29,7 +31,18 @@ enum BodyEditError: Error, Equatable, LocalizedError {
         case .writeBlocked: "The note can't be changed because its files couldn't be read."
         case .taskChanged: "The task changed before it could be updated."
         case .versionNotSaved: "The current version couldn't be saved, so the note wasn't changed."
+        case .folderNotAvailable(let folder): Self.folderNotAvailableMessage(folder)
         }
+    }
+
+    static func folderNotAvailableMessage(_ folder: String) -> String {
+        "“\(folder)” isn't answering yet, so NoteIt can't read or change this note. Try again when the folder is back."
+    }
+
+    static let templateUnreadableMessage = "The template’s file couldn’t be read, so nothing was created."
+
+    static func templateNotReadMessage(_ folder: String) -> String {
+        "“\(folder)” isn't answering yet, so NoteIt can't read the template. Nothing was created; try again when the folder is back."
     }
 }
 
@@ -68,6 +81,7 @@ extension NoteStore {
         guard !meta.isLocked else { throw BodyEditError.locked }
         // Reading the body is what finds an unreadable body or sidecar, which blocks writes.
         _ = body(for: id)
+        if let error = bodyNotReadError(id) { throw error }
         guard !isBodyWriteBlocked(id) else { throw BodyEditError.writeBlocked }
 
         if let view = OpenEditorRegistry.shared.textView(for: id), view.isEditable,

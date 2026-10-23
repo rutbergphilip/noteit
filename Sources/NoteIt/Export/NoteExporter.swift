@@ -137,26 +137,28 @@ enum NoteExporter {
         /// Notes written. Less than `totalCount` when the export was stopped.
         var noteCount: Int
         var totalCount: Int
+        /// Titles of notes not written because their body couldn't be read.
+        var skipped: [String] = []
     }
 
     /// Writes one notebook as a folder named after it, inside `destination`, with its nested notebooks
     /// (from `notebooks`) as subfolders.
     static func exportNotebook(_ notebook: Notebook, notebooks: [Notebook] = [], notes: [NoteMeta], format: ExportFormat,
-                               to destination: URL, body: @escaping (UUID) -> NSAttributedString) throws -> Result {
+                               to destination: URL, body: @escaping (UUID) -> NSAttributedString?) throws -> Result {
         try prepareNotebook(notebook, notebooks: notebooks, notes: notes, format: format, to: destination, body: body).writeAll()
     }
 
     /// Writes every notebook as a folder inside a new `NoteIt Export` folder in `destination`, nested
     /// notebooks as subfolders. Notes without a notebook go in `No Notebook`.
     static func exportAll(notebooks: [Notebook], notes: [NoteMeta], format: ExportFormat, to destination: URL,
-                          body: @escaping (UUID) -> NSAttributedString) throws -> Result {
+                          body: @escaping (UUID) -> NSAttributedString?) throws -> Result {
         try prepareAll(notebooks: notebooks, notes: notes, format: format, to: destination, body: body).writeAll()
     }
 
     /// Creates the notebook's folder and its nested notebooks' folders, and returns the export, ready to
     /// write its notes.
     static func prepareNotebook(_ notebook: Notebook, notebooks: [Notebook] = [], notes: [NoteMeta], format: ExportFormat,
-                                to destination: URL, body: @escaping (UUID) -> NSAttributedString) throws -> NotesExport {
+                                to destination: URL, body: @escaping (UUID) -> NSAttributedString?) throws -> NotesExport {
         let name = ExportNaming.uniqueOnDisk(ExportNaming.sanitized(notebook.name, fallback: "Notebook"), extension: "", in: destination)
         let folder = destination.appendingPathComponent(name, isDirectory: true)
         let all = notebooks.contains { $0.id == notebook.id } ? notebooks : notebooks + [notebook]
@@ -168,7 +170,7 @@ enum NoteExporter {
     /// Creates the `NoteIt Export` folder and a folder per notebook, nested like the notebooks, and
     /// returns the export, ready to write the notes.
     static func prepareAll(notebooks: [Notebook], notes: [NoteMeta], format: ExportFormat, to destination: URL,
-                           body: @escaping (UUID) -> NSAttributedString) throws -> NotesExport {
+                           body: @escaping (UUID) -> NSAttributedString?) throws -> NotesExport {
         let root = destination.appendingPathComponent(
             ExportNaming.uniqueOnDisk(allNotesFolderName, extension: "", in: destination), isDirectory: true)
         let allNotes = notes
@@ -338,11 +340,17 @@ final class NotesExport {
     let folder: URL
     let format: ExportFormat
     private let files: [File]
-    private let body: (UUID) -> NSAttributedString
+    private let body: (UUID) -> NSAttributedString?
+    /// Used by `write(slice:progress:)` instead of `body`: may wait (suspended) for a read still running.
+    /// The second argument says whether the export was cancelled meanwhile.
+    var bodyWhenRead: ((UUID, () -> Bool) async -> NSAttributedString?)?
+    /// Checked while `bodyWhenRead` waits, so a cancel doesn't wait for a slow read.
+    var isCancelled: () -> Bool = { false }
     private let links: ExportLinkContext
     private(set) var written = 0
+    private(set) var skipped: [String] = []
 
-    init(folder: URL, format: ExportFormat, files: [File], body: @escaping (UUID) -> NSAttributedString,
+    init(folder: URL, format: ExportFormat, files: [File], body: @escaping (UUID) -> NSAttributedString?,
          links: ExportLinkContext = .titlesOnly) {
         self.folder = folder
         self.format = format
@@ -352,15 +360,27 @@ final class NotesExport {
     }
 
     var total: Int { files.count }
-    var isFinished: Bool { written == files.count }
-    var result: NoteExporter.Result { .init(folder: folder, noteCount: written, totalCount: total) }
+    /// Notes written or skipped.
+    private(set) var next = 0
+    var isFinished: Bool { next == files.count }
+    var result: NoteExporter.Result { .init(folder: folder, noteCount: written, totalCount: total, skipped: skipped) }
 
     func writeNext() throws {
         guard !isFinished else { return }
-        let file = files[written]
-        try NoteExporter.write(body(file.note.id), title: file.note.displayTitle, format: format, to: file.url,
+        try write(body(files[next].note.id))
+    }
+
+    private func write(_ text: NSAttributedString?) throws {
+        let file = files[next]
+        guard let text else {
+            skipped.append(file.note.displayTitle)
+            next += 1
+            return
+        }
+        try NoteExporter.write(text, title: file.note.displayTitle, format: format, to: file.url,
                                links: links.from(file.note.id))
         written += 1
+        next += 1
     }
 
     func writeAll() throws -> NoteExporter.Result {
@@ -374,7 +394,15 @@ final class NotesExport {
         let clock = ContinuousClock()
         while !isFinished {
             let start = clock.now
-            repeat { try writeNext() } while !isFinished && clock.now - start < slice
+            repeat {
+                if let bodyWhenRead {
+                    let text = await bodyWhenRead(files[next].note.id, isCancelled)
+                    if isCancelled() { return result }
+                    try write(text)
+                } else {
+                    try writeNext()
+                }
+            } while !isFinished && clock.now - start < slice
             guard progress(self), !isFinished else { break }
             try? await Task.sleep(for: .milliseconds(1))
         }

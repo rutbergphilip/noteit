@@ -23,7 +23,9 @@ struct EditorContainerView: View {
     private var content: some View {
         if let id = store.selectedNoteID, let note = store.note(with: id) {
             let writeBlocked = store.isBodyWriteBlocked(id)
-            let readOnly = writeBlocked || note.deletedAt != nil
+            let readOnly = writeBlocked || note.deletedAt != nil || store.libraryConversionInProgress
+                || store.markdownFolderUnavailable || store.isMarkdownBodyLoading(id) || store.isMarkdownBodyUnread(id)
+                || store.isMarkdownBodyMissing(id)
             VStack(spacing: 0) {
                 EditorHeader(note: note)
                 LinkRenameBanner(tracker: renames)
@@ -38,8 +40,59 @@ struct EditorContainerView: View {
                 if let deletedAt = note.deletedAt {
                     DeletedNoteBanner(note: note, deletedAt: deletedAt)
                 }
+                if store.libraryConversionInProgress {
+                    Text("Converting your library…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.markdownFolderUnavailable, let folder = store.markdownStorage?.contentRootURL {
+                    Text(store.markdownFolderChecking
+                         ? "Checking “\(folder.lastPathComponent)”… Notes are read-only until it answers."
+                         : "“\(folder.lastPathComponent)” isn’t responding. Notes are read-only until it’s back.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.isMarkdownBodyLoading(id), !store.markdownFolderUnavailable,
+                   let folder = store.markdownStorage?.contentRootURL {
+                    Text("Reading this note from “\(folder.lastPathComponent)”…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.isRecoveredEditUnreadable(id) {
+                    LoadErrorBanner(message: "This note’s recovered edit couldn’t be read from the Recovery folder. Retry, or discard the edit to keep the note without it; the edit is set aside, not deleted.",
+                                    file: store.recoveryURL, readOnly: true, retry: { store.retryMarkdownRecovery(of: [id]) },
+                                    secondary: ("Discard Recovered Edit", { store.discardRecoveredEdit(id) }))
+                } else if store.isMarkdownRecoveryHeld(id), note.deletedAt == nil, !store.markdownFolderUnavailable {
+                    Text("Restoring this note’s recovered edit…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.isMarkdownBodyUnread(id), !store.isMarkdownBodyLoading(id), !store.markdownFolderUnavailable,
+                   !store.isMarkdownRecoveryHeld(id), let folder = store.markdownStorage?.contentRootURL {
+                    Text("This note hasn’t been read from “\(folder.lastPathComponent)” yet, so it’s read-only.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
+                if store.isMarkdownBodyMissing(id), let folder = store.markdownStorage?.contentRootURL {
+                    LoadErrorBanner(message: "This note’s file is missing from “\(folder.lastPathComponent)”. If it doesn’t come back, the note moves to Recently Deleted with its last text.",
+                                    file: nil, readOnly: true, retry: { store.retryReadingBody(id) })
+                }
                 if let message = store.loadError(for: id) {
-                    LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked)
+                    LoadErrorBanner(message: message, file: store.loadErrorFile(for: id), readOnly: writeBlocked,
+                                    retry: store.canRetryReadingBody(id) ? { store.retryReadingBody(id) } : nil)
+                }
+                if let notice = store.bodySaveNotice(for: id) {
+                    LoadErrorBanner(message: notice, file: nil, readOnly: false, title: "This note isn’t saved")
                 }
                 FormattingToolbar(controller: editor)
                     .disabled(readOnly)
@@ -244,6 +297,9 @@ struct LoadErrorBanner: View {
     let message: String
     let file: URL?
     let readOnly: Bool
+    var title: String? = nil
+    var retry: (() -> Void)? = nil
+    var secondary: (title: String, action: () -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -252,7 +308,7 @@ struct LoadErrorBanner: View {
                 .foregroundStyle(.orange)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 3) {
-                Text(readOnly ? "This note is read-only" : "This note couldn’t be opened")
+                Text(title ?? (readOnly ? "This note is read-only" : "This note couldn’t be opened"))
                     .font(.system(size: 12, weight: .semibold))
                 Text(message)
                     .font(.system(size: 11))
@@ -261,6 +317,14 @@ struct LoadErrorBanner: View {
                     .help(message)
             }
             Spacer(minLength: 8)
+            if let retry {
+                Button("Retry", action: retry)
+                    .controlSize(.small)
+            }
+            if let secondary {
+                Button(secondary.title, action: secondary.action)
+                    .controlSize(.small)
+            }
             if let file {
                 Button("Show in Finder") {
                     NSWorkspace.shared.activateFileViewerSelecting([file])

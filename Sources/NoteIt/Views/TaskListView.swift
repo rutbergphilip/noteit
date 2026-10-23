@@ -234,6 +234,7 @@ struct TaskListView: View {
         case .inTrash: "This note is in Recently Deleted."
         case .writeBlocked: "This note can't be changed right now."
         case .versionNotSaved: "The note's current version couldn't be saved, so it wasn't changed."
+        case .folderNotAvailable(let folder): BodyEditError.folderNotAvailableMessage(folder)
         case nil: error.localizedDescription
         }
     }

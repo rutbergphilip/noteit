@@ -92,8 +92,11 @@ A library has one **format**. Two folders are involved:
 | `library-location.json` | New. `{"version":1,"format":"markdown","path":"~/Documents/NoteIt","bookmark":"<base64>","libraryID":"<uuid>","renameFilesOnTitleChange":true}`. Missing file = `rtfd` in `<data>`, which is today's behaviour. |
 | `library.json` | Unchanged schema (`LibraryFile` version 1). For Markdown it is a cache of notebooks and `NoteMeta` (titles, previews, tags, revisions), rebuilt from the folder if missing. Revisions are only ever stored here. |
 | `markdown-files.json` | New, Markdown only. Per note: `{"path":"Work/Plan.md","sha256":"…","size":1234,"mtimeNs":…,"inode":…,"frontMatterExtra":"…","formerPaths":["Work/Old plan.md"]}`. It is also the path → id map used to resolve wiki links (3.4). |
+| `markdown-held-deletions.json` | New, Markdown only, present only while the mass-deletion guard (3.5) holds a batch. `{"ids":["<uuid>",…]}`: the notes whose files disappeared, so the question is asked again at the next launch. |
 | `tombstones.json`, `sync-deletions.json`, `sync-state-*.json`, `recovery/`, `history/` | Unchanged role. |
 | `backups/` | New. Temporary staging for backup ZIPs and safety backups made before a conversion. |
+| `library-conversion.json` | New, present only while a conversion (3.6) runs or after one was interrupted: what it moved and created, so the next launch finishes or undoes it. |
+| `Previous Library <date>/` | New. The RTFD bodies (`notes/`, `body-extras/`) kept after converting to Markdown, with `previous-library.json` (`{"createdAt":…,"keep":false}`); NoteIt asks after 30 days whether to move it to the Trash. |
 
 Files owned by other sub-projects stay in the data folder too and are listed in program §7: `search-index.json` (organise, v2 format), `link-index.json`, `attachment-text.json`, `semantic-index/`, `smart-folders.json`, `library-settings.json`, `lock-keys.json`, `shares.json`, `spaces.json`, `sites/`.
 

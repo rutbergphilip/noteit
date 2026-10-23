@@ -509,7 +509,7 @@ final class BodyExtrasTests: XCTestCase {
     }
 
     private func makeStore(storage: NoteBodyStorage? = nil) -> NoteStore {
-        NoteStore(location: LibraryLocation(url: root, seedsFreshLibrary: false), bodyStorage: storage)
+        NoteStore.opened(location: LibraryLocation(url: root, seedsFreshLibrary: false), bodyStorage: storage)
     }
 
     /// Sync apply of a noteit-doc body with `extras`, or of an RTFD body (which has none).

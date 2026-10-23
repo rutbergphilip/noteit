@@ -127,8 +127,12 @@ struct TemplatePickerSheet: View {
         switch request.mode {
         case .newNote:
             let title = Self.title(typed: query, templateName: NoteStore.templateName(template))
-            store.createNoteFromTemplateInCurrentContext(id, title: title)
-            WindowRouter.focusEditor()
+            do {
+                try store.createNoteFromTemplateInCurrentContext(id, title: title)
+                WindowRouter.focusEditor()
+            } catch {
+                store.reportTemplateNotRead(error)
+            }
         case .insert(let box):
             guard let textView = box.textView else { return }
             DispatchQueue.main.async { textView.insertTemplate(id) }

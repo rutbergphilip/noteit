@@ -55,14 +55,16 @@ struct LibraryLocationFile: Codable, Equatable {
         /// No file: an RTFD library in the data folder.
         case missing
         case loaded(LibraryLocationFile)
-        /// A damaged file; it has been logged and set aside as `library-location.json.bad`.
+        /// A damaged file; it has been logged and, unless the caller asked otherwise, set aside as
+        /// `library-location.json.bad`.
         case corrupt
         /// A file NoteIt can't use now (a newer version or format, or a read error); left untouched. The reason is
         /// for the user.
         case unreadable(String)
     }
 
-    static func load(dataDir: URL, fileManager: FileManager = .default,
+    /// `setsAsideDamaged: false` reads without changing anything, for callers that only look.
+    static func load(dataDir: URL, fileManager: FileManager = .default, setsAsideDamaged: Bool = true,
                      log: (String) -> Void = { NSLog("%@", $0) }) -> LoadResult {
         let url = url(dataDir: dataDir)
         guard fileManager.fileExists(atPath: url.path) else { return .missing }
@@ -88,6 +90,10 @@ struct LibraryLocationFile: Codable, Equatable {
         do {
             return .loaded(try JSONDecoder().decode(LibraryLocationFile.self, from: data))
         } catch {
+            guard setsAsideDamaged else {
+                log("NoteIt: \(fileName) is damaged (\(error))")
+                return .corrupt
+            }
             log("NoteIt: \(fileName) is damaged (\(error)); setting it aside and opening the library in the data folder")
             setAside(url, fileManager: fileManager, log: log)
             return .corrupt

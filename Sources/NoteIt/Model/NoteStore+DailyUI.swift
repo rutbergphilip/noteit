@@ -57,7 +57,15 @@ extension NoteStore {
 
     /// Opens (creating if needed) the day's note: selects its notebook and the note, caret at `{{cursor}}` or the end.
     func openDailyNote(for date: Date) {
-        guard let meta = try? dailyNote(for: date, createIfMissing: true, interactive: true) else { return }
+        let found: NoteMeta?
+        do {
+            found = try dailyNote(for: date, createIfMissing: true, interactive: true)
+        } catch let error as BodyEditError {
+            return reportTemplateNotRead(error)
+        } catch {
+            found = nil
+        }
+        guard let meta = found else { return }
         searchText = ""
         if let notebookID = meta.notebookID { selection = .notebook(notebookID) }
         if RichTextEditor.pendingCaret[meta.id] == nil, !meta.isLocked {

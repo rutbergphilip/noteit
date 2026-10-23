@@ -9,6 +9,7 @@ struct LibraryLocation: Equatable {
     var seedsFreshLibrary: Bool
     var format: LibraryFormatKind = .rtfd
     var contentRootURL: URL? = nil
+    var renameFilesOnTitleChange: Bool = true
 }
 
 /// Decides, at launch, which library NoteStore opens: the `NOTEIT_DATA_DIR` override, or
@@ -21,28 +22,47 @@ struct LibraryLauncher {
         case open(LibraryLocation)
         /// Inkwell is running and the user chose to quit NoteIt: nothing may be opened or written.
         case quitNoteIt
-        /// The Markdown library's content folder isn't there: nothing may be opened or written.
-        case contentRootMissing(URL)
+        /// The Markdown library's content folder isn't there: nothing may be opened or written until the user
+        /// locates it.
+        case contentRootMissing(URL, dataDir: URL)
+        /// A library conversion was interrupted and finishing or undoing it hasn't ended within
+        /// `conversionLaunchWait` (its folder may hang): nothing may be opened, seeded or set aside until it has.
+        case conversionPending(dataDir: URL, PendingConversion)
         /// `library-location.json` is there but can't be used (newer version or format, read error): nothing may be
         /// opened or written. The reason is shown to the user.
         case libraryLocationUnreadable(String)
     }
 
     var dataDirectoryOverride: () -> String?
+    /// Debug builds: a content folder that opens the `NOTEIT_DATA_DIR` library as Markdown without a location file.
+    var markdownRootOverride: () -> String? = { nil }
     var baseDirectory: () -> URL
     var isLegacyAppRunning: () -> Bool
     var quitLegacyApp: () -> Bool
     var fileManager: FileManager = .default
     var log: (String) -> Void = { NSLog("%@", $0) }
-    var showContentRootMissing: (URL) -> Void = { LibraryLauncher.presentContentRootMissing($0) }
+    /// Shows the missing folder with the reason the last choice was refused, if any; returns the folder the user
+    /// located, or nil for Quit.
+    var showContentRootMissing: (URL, String?) -> URL? = { LibraryLauncher.presentContentRootMissing($0, refused: $1) }
     var showLibraryLocationUnreadable: (String) -> Void = { LibraryLauncher.presentLibraryLocationUnreadable($0) }
-    /// Inspects the Markdown content folder, which may be on a NAS that went away: nil when it didn't answer in time.
+    /// Asked before a located folder that can't be shown to be this library is used; false refuses it.
+    var confirmUnverifiedFolder: (URL) -> Bool = { LibraryLauncher.presentConfirmUnverifiedFolder($0) }
+    /// Inspects the Markdown content folder, which may be on a NAS that went away: nil when it didn't answer within
+    /// `contentRootLaunchWait`. The library then opens at the recorded path and its first scan finds out.
     var checkContentRoot: (LibraryLocationFile) -> ContentRootCheck? = { file in
-        BoundedFileAccess.shared.runBlocking(key: "content-root:\(file.path)", timeout: LibraryLauncher.contentRootTimeout) {
+        BoundedFileAccess.shared.runBlocking(key: "content-root:\(file.path)", timeout: LibraryLauncher.contentRootLaunchWait) {
             LibraryLauncher.inspectContentRoot(file)
         }
     }
 
+    /// Finishes or rolls back an interrupted library conversion. It runs off the main thread: it reads and moves
+    /// files in a content folder that may be on a volume that hangs.
+    var finishInterruptedConversion: @Sendable (URL) -> Void = { LibraryConverter.finishInterrupted(dataDir: $0) }
+    /// Shown while that hasn't ended; returns true once it has, false for Quit.
+    var showConversionPending: (URL, PendingConversion) -> Bool = { LibraryLauncher.presentConversionPending($0, $1) }
+
+    nonisolated static let contentRootLaunchWait: TimeInterval = 1
+    nonisolated static let conversionLaunchWait: TimeInterval = 1
     nonisolated static let contentRootTimeout: TimeInterval = 10
 
     struct ContentRootCheck: Equatable {
@@ -61,6 +81,9 @@ struct LibraryLauncher {
     func decide() -> Decision {
         if let override = dataDirectoryOverride() {
             let url = URL(fileURLWithPath: (override as NSString).expandingTildeInPath, isDirectory: true)
+            if let markdown = markdownRootOverride(), let location = markdownOverride(markdown, dataDir: url) {
+                return .open(location)
+            }
             return applyingLocationFile(to: LibraryLocation(url: url, seedsFreshLibrary: true))
         }
         let result = LibraryMigration.resolve(
@@ -74,12 +97,40 @@ struct LibraryLauncher {
         return applyingLocationFile(to: LibraryLocation(url: result.directory, seedsFreshLibrary: result.outcome.allowsSeeding))
     }
 
+    /// The data folder opened as a Markdown library in `root`; nil (with a log line) when the data folder already
+    /// holds RTFD notes or has a location file of its own, or the folder can't be created.
+    private func markdownOverride(_ root: String, dataDir: URL) -> LibraryLocation? {
+        let content = URL(fileURLWithPath: (root as NSString).expandingTildeInPath, isDirectory: true).standardizedFileURL
+        let notes = dataDir.appendingPathComponent("notes", isDirectory: true)
+        let rtfd = ((try? fileManager.contentsOfDirectory(atPath: notes.path)) ?? []).contains { $0.hasSuffix(".rtfd") }
+        if rtfd || fileManager.fileExists(atPath: LibraryLocationFile.url(dataDir: dataDir).path) {
+            log("NoteIt: ignoring NOTEIT_MARKDOWN_ROOT; \(dataDir.path) already holds a library")
+            return nil
+        }
+        do {
+            try fileManager.createDirectory(at: content, withIntermediateDirectories: true)
+        } catch {
+            log("NoteIt: ignoring NOTEIT_MARKDOWN_ROOT; can't create \(content.path): \(error)")
+            return nil
+        }
+        return LibraryLocation(url: dataDir, seedsFreshLibrary: false, format: .markdown, contentRootURL: content)
+    }
+
     /// A Markdown library is never seeded, and neither is a data folder whose location file is damaged.
     private func applyingLocationFile(to location: LibraryLocation) -> Decision {
-        LibraryConverter.finishInterrupted(dataDir: location.url)
+        if fileManager.fileExists(atPath: LibraryConversionJournal.url(dataDir: location.url).path) {
+            let finishing = PendingConversion(dataDir: location.url, work: finishInterruptedConversion)
+            guard finishing.wait(timeout: Self.conversionLaunchWait) else {
+                log("NoteIt: an interrupted library conversion is still being finished; waiting for it")
+                return .conversionPending(dataDir: location.url, finishing)
+            }
+        }
+        // A conversion that couldn't be finished or undone: nothing is set aside or seeded until it is.
+        let conversionPending = fileManager.fileExists(atPath: LibraryConversionJournal.url(dataDir: location.url).path)
         var file: LibraryLocationFile
-        switch LibraryLocationFile.load(dataDir: location.url, fileManager: fileManager, log: log) {
+        switch LibraryLocationFile.load(dataDir: location.url, fileManager: fileManager, setsAsideDamaged: !conversionPending, log: log) {
         case .missing:
+            if conversionPending { return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false)) }
             return .open(location)
         case .corrupt:
             return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false))
@@ -90,12 +141,14 @@ struct LibraryLauncher {
         }
         guard file.format == .markdown else { return .open(location) }
         guard let check = checkContentRoot(file) else {
-            log("NoteIt: the library folder \(file.path) didn't respond")
-            return .contentRootMissing(file.contentRootURL)
+            log("NoteIt: the library folder \(file.path) didn't respond yet; opening it while it is checked")
+            return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false, format: .markdown,
+                                         contentRootURL: file.contentRootURL, renameFilesOnTitleChange: file.renameFilesOnTitleChange))
         }
         record(check, in: &file, dataDir: location.url)
-        guard check.isFolder else { return .contentRootMissing(check.root) }
-        return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false, format: .markdown, contentRootURL: check.root))
+        guard check.isFolder else { return .contentRootMissing(check.root, dataDir: location.url) }
+        return .open(LibraryLocation(url: location.url, seedsFreshLibrary: false, format: .markdown, contentRootURL: check.root,
+                                     renameFilesOnTitleChange: file.renameFilesOnTitleChange))
     }
 
     /// Records a moved folder's new path and a recreated bookmark.
@@ -145,9 +198,21 @@ struct LibraryLauncher {
             log("NoteIt: quitting; Inkwell must quit before its notes can move")
             quit()
             return nil
-        case .contentRootMissing(let url):
+        case .contentRootMissing(let url, let dataDir):
+            var refused: String?
+            while let chosen = showContentRootMissing(url, refused) {
+                refused = Self.relocate(to: chosen, dataDir: dataDir, fileManager: fileManager, confirmUnverified: confirmUnverifiedFolder)
+                if refused == nil {
+                    log("NoteIt: library folder located at \(chosen.path)")
+                    return launch(open: open, quit: quit)
+                }
+            }
             log("NoteIt: quitting; the library folder \(url.path) is missing")
-            showContentRootMissing(url)
+            quit()
+            return nil
+        case .conversionPending(let dataDir, let finishing):
+            if showConversionPending(dataDir, finishing) { return launch(open: open, quit: quit) }
+            log("NoteIt: quitting; an interrupted library conversion hasn't finished")
             quit()
             return nil
         case .libraryLocationUnreadable(let reason):
@@ -158,16 +223,137 @@ struct LibraryLauncher {
         }
     }
 
-    /// Locate… comes with the folder watcher (markdown-storage Task 4.2).
-    static func presentContentRootMissing(_ url: URL) {
+    /// Points `library-location.json` at `folder` after checking that it holds this library: its `.noteit/library.json`
+    /// has this library's id, or (without one) more than half of the note ids on record are in its files' front
+    /// matter. A folder of another library is refused; with no notes on record, a folder without the library id
+    /// needs `confirmUnverified`. Returns why it was refused, or nil. Nothing else is written, so a wrong choice
+    /// changes nothing.
+    nonisolated static func relocate(to folder: URL, dataDir: URL, fileManager: FileManager = .default,
+                                     timeout: TimeInterval = contentRootTimeout,
+                                     readFile: @escaping @Sendable (URL) -> Data? = { try? Data(contentsOf: $0) },
+                                     confirmUnverified: (URL) -> Bool = { _ in false }) -> String? {
+        let folder = folder.standardizedFileURL
+        if LibraryConverter.overlapsLibrary(folder, dataDir: dataDir) {
+            return "This folder holds NoteIt’s own library files. Choose a folder outside them."
+        }
+        guard case .loaded(var file) = LibraryLocationFile.load(dataDir: dataDir, fileManager: fileManager, setsAsideDamaged: false),
+              file.format == .markdown else {
+            return "NoteIt can’t read its library settings."
+        }
+        let known = Set(MarkdownPathIndex(dataDir: dataDir).allEntries.filter { !FolderScanner.isTrash($0.value.path) }.keys)
+        let name = LibraryLocationFile.displayPath(folder)
+        // Each try has its own key, so a retry doesn't wait for a walk still stuck on the volume; that walk stops at
+        // its next file.
+        let stop = LibraryEvidence.Cancellation()
+        defer { stop.cancel() }
+        guard let checked = BoundedFileAccess.shared.runBlocking(key: "locate:\(folder.path):\(UUID().uuidString)", timeout: timeout, {
+            () -> LibraryEvidence? in
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: folder.path, isDirectory: &isDirectory), isDirectory.boolValue else { return nil }
+            return LibraryEvidence.collect(in: folder, knownIDs: known, readFile: readFile, isCancelled: stop.isCancelled)
+        }) else {
+            return "\(name) didn’t respond. If it’s on a disk or NAS, check that it’s connected and try again."
+        }
+        guard let evidence = checked else { return "Choose a folder." }
+        if let other = evidence.libraryID, other != file.libraryID {
+            return "\(name) holds another NoteIt library. Choose the folder that holds this library’s notes."
+        }
+        if evidence.libraryID == nil {
+            if known.isEmpty {
+                guard confirmUnverified(folder) else {
+                    return "\(name) isn’t marked as your library. Choose the folder that holds your notes."
+                }
+            } else if evidence.foundIDs * 2 <= known.count {
+                return "\(name) doesn’t have the notes of your library. Choose the folder that holds them."
+            }
+        }
+        file.path = LibraryLocationFile.displayPath(folder)
+        file.bookmark = try? folder.bookmarkData()
+        do {
+            try file.write(dataDir: dataDir)
+        } catch {
+            return "NoteIt couldn’t save the new location: \(error.localizedDescription)"
+        }
+        return nil
+    }
+
+    static let contentRootMissingTitle = "Your Markdown folder can’t be found"
+
+    /// "Your Markdown folder can't be found" with **Locate…** and **Quit** (spec §3.5).
+    static func presentContentRootMissing(_ url: URL, refused: String?) -> URL? {
         _ = NSApplication.shared
         NSApp.activate(ignoringOtherApps: true)
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "NoteIt can't find your library folder"
-        alert.informativeText = "Your notes are kept in \(LibraryLocationFile.displayPath(url)), which NoteIt can't reach. If it's on a disk or NAS that isn't connected, connect it and open NoteIt again."
+        alert.messageText = contentRootMissingTitle
+        alert.informativeText = refused ?? "Your notes are kept in \(LibraryLocationFile.displayPath(url)), which NoteIt can’t reach. If it’s on a disk or NAS that isn’t connected, connect it and choose Locate…, or find the folder if you moved it."
+        alert.addButton(withTitle: "Locate…")
         alert.addButton(withTitle: "Quit")
-        alert.runModal()
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        panel.message = "Choose the folder that holds your notes."
+        let parent = url.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: parent.path) { panel.directoryURL = parent }
+        return panel.runModal() == .OK ? panel.url : nil
+    }
+
+    /// The folder went away while NoteIt was open. Locate… saves the new place and relaunches; Quit quits.
+    static func contentRootLost(_ url: URL, dataDir: URL) {
+        var refused: String?
+        while let chosen = presentContentRootMissing(url, refused: refused) {
+            refused = relocate(to: chosen, dataDir: dataDir, confirmUnverified: presentConfirmUnverifiedFolder)
+            if refused == nil {
+                relaunch()
+                return
+            }
+        }
+        NSApp.terminate(nil)
+    }
+
+    /// Quits and opens the app again once this process has exited. Outside an app bundle it only quits.
+    static func relaunch() {
+        let bundle = Bundle.main.bundleURL
+        if bundle.pathExtension == "app" {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/bin/sh")
+            task.arguments = ["-c", "while kill -0 \(ProcessInfo.processInfo.processIdentifier) 2>/dev/null; do sleep 0.2; done; /usr/bin/open \"$0\"",
+                              bundle.path]
+            try? task.run()
+        }
+        NSApp.terminate(nil)
+    }
+
+    static func presentConfirmUnverifiedFolder(_ folder: URL) -> Bool {
+        _ = NSApplication.shared
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Use “\(folder.lastPathComponent)” for your notes?"
+        alert.informativeText = "NoteIt can’t tell whether \(LibraryLocationFile.displayPath(folder)) holds your library. If you use it, the Markdown files in it become your notes."
+        alert.addButton(withTitle: "Use Folder")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Waits for `finishing` with a Quit button; the alert closes by itself once it has ended.
+    static func presentConversionPending(_ dataDir: URL, _ finishing: PendingConversion) -> Bool {
+        _ = NSApplication.shared
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Finishing the library conversion…"
+        alert.informativeText = "NoteIt was converting your library when it last quit, and the library folder isn’t responding. Your notes open once the conversion is finished; nothing is changed meanwhile. If the folder is on a disk or NAS, check that it’s connected."
+        alert.addButton(withTitle: "Quit")
+        let timer = Timer(timeInterval: 0.25, repeats: true) { _ in
+            if finishing.wait(timeout: 0) { NSApp.stopModal(withCode: .OK) }
+        }
+        RunLoop.main.add(timer, forMode: .modalPanel)
+        defer { timer.invalidate() }
+        return alert.runModal() == .OK || finishing.wait(timeout: 0)
     }
 
     static func presentLibraryLocationUnreadable(_ reason: String) {
@@ -183,6 +369,13 @@ struct LibraryLauncher {
 
     static let live = LibraryLauncher(
         dataDirectoryOverride: { AppEnvironment.nonEmpty("DATA_DIR") },
+        markdownRootOverride: {
+            #if DEBUG
+            return AppEnvironment.nonEmpty("MARKDOWN_ROOT")
+            #else
+            return nil
+            #endif
+        },
         baseDirectory: {
             #if DEBUG
             // Debug-only: stand-in for Application Support, to exercise the migration against fake folders.
@@ -196,4 +389,72 @@ struct LibraryLauncher {
         isLegacyAppRunning: { LegacyAppQuitter.isRunning() },
         quitLegacyApp: { LegacyAppQuitter.quit(reason: .moveNotes) }
     )
+}
+
+/// What a located folder shows about which library it holds.
+struct LibraryEvidence: Sendable {
+    /// The id in its `.noteit/library.json`, if any.
+    var libraryID: UUID?
+    /// How many of the known note ids its Markdown files carry.
+    var foundIDs = 0
+
+    final class Cancellation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var cancelled = false
+        func cancel() { lock.withLock { cancelled = true } }
+        func isCancelled() -> Bool { lock.withLock { cancelled } }
+    }
+
+    /// A folder with a library id is decided by it alone; otherwise reads front matter until more than half of
+    /// `knownIDs` are found, or `isCancelled`. Skips hidden folders, links and large files.
+    nonisolated static func collect(in folder: URL, knownIDs: Set<UUID>,
+                                    readFile: (URL) -> Data? = { try? Data(contentsOf: $0) },
+                                    isCancelled: () -> Bool = { false }) -> LibraryEvidence {
+        var evidence = LibraryEvidence(libraryID: LibraryConverter.libraryFileID(in: folder))
+        guard evidence.libraryID == nil, !knownIDs.isEmpty else { return evidence }
+        var found = Set<UUID>()
+        func walk(_ url: URL, depth: Int) {
+            guard depth <= NotebookFolders.maxDepth + 1, found.count * 2 <= knownIDs.count, !isCancelled(),
+                  let names = try? FileManager.default.contentsOfDirectory(atPath: url.path) else { return }
+            for name in names.sorted() where !name.hasPrefix(".") {
+                guard found.count * 2 <= knownIDs.count, !isCancelled() else { return }
+                let item = url.appendingPathComponent(name)
+                var info = stat()
+                guard lstat(item.path, &info) == 0 else { continue }
+                switch info.st_mode & S_IFMT {
+                case S_IFDIR:
+                    walk(item, depth: depth + 1)
+                case S_IFREG where FolderScanner.isMarkdown(name) && Int64(info.st_size) <= FolderScanner.maxFileSize:
+                    if let data = readFile(item), let id = FolderScanner.frontMatterID(data), knownIDs.contains(id) {
+                        found.insert(id)
+                    }
+                default:
+                    continue
+                }
+            }
+        }
+        walk(folder, depth: 0)
+        evidence.foundIDs = found.count
+        return evidence
+    }
+}
+
+/// Finishing or undoing an interrupted library conversion, running off the main thread.
+final class PendingConversion: Equatable, @unchecked Sendable {
+    private let done = DispatchGroup()
+
+    init(dataDir: URL, work: @escaping @Sendable (URL) -> Void) {
+        done.enter()
+        DispatchQueue.global(qos: .userInitiated).async { [done] in
+            work(dataDir)
+            done.leave()
+        }
+    }
+
+    /// Whether it has ended, waiting up to `timeout`.
+    func wait(timeout: TimeInterval) -> Bool {
+        done.wait(timeout: .now() + timeout) == .success
+    }
+
+    static func == (lhs: PendingConversion, rhs: PendingConversion) -> Bool { lhs === rhs }
 }

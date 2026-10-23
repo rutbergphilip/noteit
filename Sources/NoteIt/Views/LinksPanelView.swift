@@ -358,7 +358,7 @@ private struct OutgoingRow: View {
             .buttonStyle(.plain)
             if case .unresolved(let title) = resolution {
                 Button("Create") {
-                    let meta = store.createNoteForLink(title: title, from: source)
+                    guard let meta = store.createNoteForLink(title: title, from: source) else { return }
                     if let link { store.rewriteLinks(in: source, matching: link, to: meta.id) }
                 }
                 .controlSize(.small)

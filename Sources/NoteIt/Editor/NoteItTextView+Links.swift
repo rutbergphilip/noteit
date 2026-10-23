@@ -110,9 +110,14 @@ extension NoteItTextView {
 
     /// Inserts the expanded template at the caret as one undo step; `{{title}}` is this note's title.
     func insertTemplate(_ templateID: UUID) {
-        guard isEditable, let host = linkHost,
-              let expansion = host.store.expandedTemplate(templateID, title: host.store.note(with: host.noteID)?.title ?? "", date: Date())
-        else { return }
+        guard isEditable, let host = linkHost else { return }
+        let expansion: TemplateExpansion?
+        do {
+            expansion = try host.store.expandedTemplate(templateID, title: host.store.note(with: host.noteID)?.title ?? "", date: Date())
+        } catch {
+            return host.store.reportTemplateNotRead(error)
+        }
+        guard let expansion else { return }
         let selection = selectedRange()
         let firstPara = paragraphRanges(for: NSRange(location: 0, length: 0)).first
         let onEmptyFirstLine = selection.location == 0 && (firstPara.map { nsString.substring(with: $0).trimmingCharacters(in: .newlines).isEmpty } ?? true)

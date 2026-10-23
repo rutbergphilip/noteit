@@ -20,7 +20,8 @@ extension NoteStore {
         guard !title.isEmpty || !body.isEmpty else { return nil }
         if defaultTemplateID(for: notebookID) != nil {
             let content = NSAttributedString(string: body, attributes: [.font: NSFont.systemFont(ofSize: Self.capturedTextSize)])
-            if let initial = templatedBody(for: notebookID, title: title, content: content) {
+            // A template that wasn't read is left out rather than lose the captured text.
+            if let initial = try? templatedBody(for: notebookID, title: title, content: content) {
                 return createNote(in: notebookID, initial: initial)
             }
         }

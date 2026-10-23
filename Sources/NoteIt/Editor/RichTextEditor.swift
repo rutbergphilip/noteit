@@ -105,6 +105,8 @@ struct RichTextEditor: NSViewRepresentable {
         private var notesChanges: AnyCancellable?
         /// Edits not yet written to the store.
         private(set) var hasPendingChanges = false
+        /// The text was loaded from a placeholder, not the note's file: edits to it are never saved.
+        private var loadedPlaceholder = false
 
         static let commitDelay: TimeInterval = 0.3
         /// Number of `NoteStore.updateBody` calls made by editors (self-test instrumentation).
@@ -125,6 +127,7 @@ struct RichTextEditor: NSViewRepresentable {
             isLoading = true
             defer { isLoading = false }
             let body = store.body(for: noteID)
+            loadedPlaceholder = store.isShowingMarkdownPlaceholder(noteID)
             textView.storage.setAttributedString(body)
             NoteItTextView.refreshTableColors(in: textView.storage)
             NoteItTextView.normalize(textView.storage, around: NSRange(location: 0, length: textView.storage.length), chromeInsets: true)
@@ -170,6 +173,7 @@ struct RichTextEditor: NSViewRepresentable {
         func reloadIfStale() {
             guard let textView, !hasPendingChanges else { return }
             let body = store.body(for: noteID)
+            loadedPlaceholder = store.isShowingMarkdownPlaceholder(noteID)
             if body.isEqual(to: textView.attributedString()) { return }
             let scrollView = textView.enclosingScrollView
             let selection = textView.selectedRange()
@@ -205,9 +209,9 @@ struct RichTextEditor: NSViewRepresentable {
             let id = noteID
             let snapshot = NSAttributedString(attributedString: textView.attributedString())
             if deferred {
-                store.stageEditorCommit(id, snapshot)
+                store.stageEditorCommit(id, snapshot, basedOnPlaceholder: loadedPlaceholder)
             } else {
-                store.commitEditorBody(id, snapshot)
+                store.commitEditorBody(id, snapshot, basedOnPlaceholder: loadedPlaceholder)
             }
         }
 

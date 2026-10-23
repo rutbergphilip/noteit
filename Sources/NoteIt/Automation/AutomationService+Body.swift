@@ -21,7 +21,8 @@ extension AutomationService {
         case .markdown:
             let parsed: ParsedMarkdown
             do { parsed = try MarkdownCodec.parse(text) } catch { throw .invalidInput("That Markdown couldn't be read.") }
-            let attachments = sameNote.flatMap { id in store.note(with: id)?.isLocked == false ? attachmentFiles(of: id) : nil } ?? []
+            var attachments: [(name: String, data: Data)] = []
+            if let id = sameNote, store.note(with: id)?.isLocked == false { attachments = try attachmentFiles(of: id) }
             let imported = MarkdownCodec.resolvingAttachments(parsed) { path in
                 self.attachmentData(for: path, sameNote: sameNote, attachments: attachments)
             }
@@ -45,7 +46,7 @@ extension AutomationService {
     func bodyString(of id: UUID, format: BodyFormatDTO) throws(AutomationError) -> String {
         let meta = try existing(id)
         if meta.isLocked { throw .noteLocked }
-        let text = store.body(for: id)
+        let text = try outputBody(of: id)
         switch format {
         case .text:
             return store.plainText(for: id)
@@ -84,6 +85,7 @@ extension AutomationService {
             case .locked: throw .noteLocked
             case .writeBlocked, .taskChanged: throw .noteUnreadable
             case .versionNotSaved: throw .versionNotSaved
+            case .folderNotAvailable(let folder): throw .folderNotAvailable(folder)
             }
         } catch let error as AutomationError {
             throw error
@@ -142,7 +144,7 @@ extension AutomationService {
         try ensureReady()
         let meta = try existing(id)
         if meta.isLocked { throw .noteLocked }
-        return attachmentFiles(of: id).map {
+        return try attachmentFiles(of: id).map {
             AttachmentDTO(name: $0.name, contentType: Self.contentType(of: $0.name), size: $0.data.count)
         }
     }
@@ -151,7 +153,7 @@ extension AutomationService {
         try ensureReady()
         let meta = try existing(id)
         if meta.isLocked { throw .noteLocked }
-        guard let file = attachmentFiles(of: id).first(where: { $0.name == name }) else { throw .notFound }
+        guard let file = try attachmentFiles(of: id).first(where: { $0.name == name }) else { throw .notFound }
         return (Self.contentType(of: file.name), file.data)
     }
 
@@ -166,7 +168,7 @@ extension AutomationService {
         if (name as NSString).pathExtension.isEmpty, let ext = UTType(mimeType: contentType)?.preferredFilenameExtension {
             name += "." + ext
         }
-        let unique = Self.deduplicated(name, existing: Set(attachmentFiles(of: id).map(\.name)))
+        let unique = Self.deduplicated(name, existing: Set(try attachmentFiles(of: id).map(\.name)))
         try edit(id, actionName: "Add Attachment", versioning: .none) { storage in
             let wrapper = FileWrapper(regularFileWithContents: data)
             wrapper.preferredFilename = unique
@@ -203,8 +205,15 @@ extension AutomationService {
         UTType(filenameExtension: (name as NSString).pathExtension)?.preferredMIMEType ?? "application/octet-stream"
     }
 
-    private func attachmentFiles(of id: UUID) -> [(name: String, data: Data)] {
-        let text = store.body(for: id)
+    /// The note's body, or why it's only a placeholder: its file wasn't read yet, or couldn't be read.
+    private func outputBody(of id: UUID) throws(AutomationError) -> NSAttributedString {
+        if let text = store.bodyForOutput(id) { return text }
+        if let folder = store.unreadMarkdownFolder(of: id) { throw .folderNotAvailable(folder) }
+        throw .noteUnreadable
+    }
+
+    private func attachmentFiles(of id: UUID) throws(AutomationError) -> [(name: String, data: Data)] {
+        let text = try outputBody(of: id)
         var files: [(name: String, data: Data)] = []
         text.enumerateAttribute(.attachment, in: NSRange(location: 0, length: text.length)) { value, _, _ in
             guard let wrapper = (value as? NSTextAttachment)?.fileWrapper, wrapper.isRegularFile,

@@ -194,9 +194,11 @@ enum MarkdownReader {
         imageExtensions.contains((path as NSString).pathExtension.lowercased())
     }
 
-    /// An image attachment like the editor's Insert Image makes.
+    /// An image attachment like the editor's Insert Image makes; nil for files over `AttachmentLimit`.
     static func attachment(for url: URL) -> NSTextAttachment? {
-        guard let wrapper = try? FileWrapper(url: url, options: .immediate) else { return nil }
+        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize,
+              AttachmentLimit.allows(byteCount: size),
+              let wrapper = try? FileWrapper(url: url, options: .immediate) else { return nil }
         wrapper.preferredFilename = url.lastPathComponent
         return NSTextAttachment(fileWrapper: wrapper)
     }

@@ -99,7 +99,13 @@ enum LinkingAPIRoutes {
                 return .json(Items(items: store.outgoingLinks(from: meta.id).map { linkDTO($0, from: meta.id, store: store) }))
             case "linking.outline":
                 let meta = try readableNote(context, store: store)
-                let items = OutlineExtractor.items(in: store.body(for: meta.id)).map { item in
+                guard let body = store.bodyForOutput(meta.id) else {
+                    guard let folder = store.unreadMarkdownFolder(of: meta.id) else {
+                        throw Failure(code: .noteUnreadable, message: AutomationError.noteUnreadable.message)
+                    }
+                    throw Failure(code: .notReady, message: BodyEditError.folderNotAvailableMessage(folder))
+                }
+                let items = OutlineExtractor.items(in: body).map { item in
                     OutlineItemDTO(level: item.level, text: item.text,
                                    url: NoteLink.note(id: meta.id, heading: item.level == 0 ? nil : item.text).clamped.url.absoluteString)
                 }
@@ -144,7 +150,15 @@ enum LinkingAPIRoutes {
             let fallback = store.defaultNotebookIDForNewNotes
             notebookID = fallback == store.templatesNotebookIDIfSet ? nil : fallback
         }
-        let meta = store.createNote(fromTemplate: templateID, title: request.title ?? "", in: notebookID, readsClipboard: false)
+        let meta: NoteMeta
+        do {
+            meta = try store.createNote(fromTemplate: templateID, title: request.title ?? "", in: notebookID, readsClipboard: false)
+        } catch {
+            guard case .folderNotAvailable(let folder) = error else {
+                throw Failure(code: .noteUnreadable, message: BodyEditError.templateUnreadableMessage)
+            }
+            throw Failure(code: .notReady, message: BodyEditError.templateNotReadMessage(folder))
+        }
         RichTextEditor.pendingCaret[meta.id] = nil
         let created = store.note(with: meta.id) ?? meta
         return .json(NoteSummaryDTO(id: created.id, title: created.title, notebookID: created.notebookID,
