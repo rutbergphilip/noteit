@@ -953,6 +953,7 @@ public actor SyncEngine {
             return
         }
         pass.touchedTombstones.insert(id)
+        var metaGone = metaETag == nil
         if let metaETag, pass.atomicDeletes {
             do {
                 try await backend.delete(RemoteLayout.meta(deletion.kind, id), ifMatch: metaETag)
@@ -962,13 +963,30 @@ public actor SyncEngine {
                 pass.report.skipped += 1
                 return
             }
+            metaGone = true
+        } else if let metaETag {
+            metaGone = try await deleteMetaBestEffort(RemoteLayout.meta(deletion.kind, id), listedETag: metaETag)
         }
-        if deletion.kind == .note, pass.atomicWrites, pass.atomicDeletes {
+        // Deleted content doesn't stay in storage (security review): once the meta is gone, so is every body of the
+        // note this pass listed. Versioned keys are immutable, so a plain delete removes exactly the listed version;
+        // a version uploaded after the listing (a resurrection) isn't touched. If the meta moved on, nothing is
+        // deleted: the tombstone loses to the edit.
+        if deletion.kind == .note, metaGone {
             if let bodyETag = pass.index.bodies[id] {
-                try await deleteIfUnchanged(RemoteLayout.body(id), listedETag: bodyETag)
+                if pass.atomicDeletes {
+                    try await deleteIfUnchanged(RemoteLayout.body(id), listedETag: bodyETag)
+                } else {
+                    try await deleteBestEffort(RemoteLayout.body(id))
+                }
             }
-            if let version = state.bases[id]?.bodyVersion, let object = pass.index.docBodies[id]?[version] {
-                try await deleteIfUnchanged(object.object.key, listedETag: object.object.etag)
+            let pending = state.pendingBodyVersions[id]?.version
+            for (version, body) in (pass.index.docBodies[id] ?? [:]).sorted(by: { $0.key.uuidString < $1.key.uuidString })
+            where version != pending {
+                if pass.atomicDeletes {
+                    try await deleteIfUnchanged(body.object.key, listedETag: body.object.etag)
+                } else {
+                    try await deleteBestEffort(body.object.key)
+                }
             }
         }
         state.tombstoneDates[id] = deletion.deletedAt
@@ -1097,6 +1115,38 @@ public actor SyncEngine {
     /// Deletes `key` only while it still has the ETag this pass listed (spec §3.4 item 10). Gone or changed: left for
     /// the next pass. Callers check `atomicDeletes` first; without it nothing whose safety depends on the condition
     /// is deleted.
+    /// A user delete's meta on a store without atomic conditional deletes, as the v1 engine did it there: the
+    /// backend's own check (a folder's lock) or a re-read of the ETag, then the delete. Deviation from spec §3.4.9,
+    /// which keeps the meta; asked for by the security review so deleted notes don't stay in storage. A write that
+    /// lands between the check and the delete is still protected: the tombstone names the meta it deleted, so the
+    /// writer's next pass resurrects its edit (`SyncPlanner` row 11 with a base). Returns whether the meta is gone.
+    private func deleteMetaBestEffort(_ key: String, listedETag: String) async throws -> Bool {
+        do {
+            try await backend.delete(key, ifMatch: listedETag)
+            return true
+        } catch StorageError.notFound {
+            return true
+        } catch StorageError.preconditionFailed {
+            return false
+        } catch StorageError.conditionalDeleteUnsupported {
+            let current: String
+            do {
+                current = try await backend.get(key).etag
+            } catch StorageError.notFound {
+                return true
+            }
+            guard Self.unquoted(current) == Self.unquoted(listedETag) else { return false }
+            try await deleteBestEffort(key)
+            return true
+        }
+    }
+
+    private func deleteBestEffort(_ key: String) async throws {
+        do {
+            try await backend.delete(key)
+        } catch StorageError.notFound {}
+    }
+
     func deleteIfUnchanged(_ key: String, listedETag: String) async throws {
         do {
             try await backend.delete(key, ifMatch: listedETag)

@@ -623,8 +623,8 @@ final class SyncEngineTests: XCTestCase {
         await assertConverged(a, b)
     }
 
-    /// A provider that ignores If-Match on DELETE reports no atomic conditional deletes, so the deleter writes only
-    /// its tombstone (spec §3.4.9) and B's edit, which moved the meta on, wins over it.
+    /// A provider that ignores If-Match on DELETE removes B's edit (the deleter deletes best-effort there, as v1 did);
+    /// the tombstone tells B the deleter never saw it, so B resurrects it.
     func testIgnoredConditionalDeleteStillKeepsTheEdit() async throws {
         let a = device("A"), b = device("B", backend: memory)
         let id = await a.store.create(title: "v1")
@@ -638,7 +638,7 @@ final class SyncEngineTests: XCTestCase {
         }))
         _ = try await a.engine.sync()
         let midway = try await remoteKeys()
-        XCTAssertTrue(midway.contains(RemoteLayout.meta(.note, id)), "no delete whose safety depends on its condition")
+        XCTAssertFalse(midway.contains(RemoteLayout.meta(.note, id)), "the unconditional delete removed B's edit")
 
         try await sync(b, a, b, a)
         let onA = await a.store.title(id)

@@ -808,35 +808,55 @@ final class FormatV2Tests: XCTestCase {
         try await sync(a)
         let left = try await keys(memory, "bodies/")
         XCTAssertFalse(left.contains(stray))
-        XCTAssertTrue(left.contains(superseded))
-        XCTAssertTrue(left.contains(tombstoned))
-        try await assertEqualAsync(try await bodyKeys(memory, id).count, 2, "a deleted note's body stays too")
+        XCTAssertTrue(left.contains(tombstoned), "the sweep deletes no body without atomic writes")
+        try await assertEqualAsync(try await bodyKeys(memory, id), [], "the deleter removes the deleted note's versions itself")
     }
 
     // MARK: - Stores without atomic conditional deletes
 
-    func testWithoutAtomicDeletesAUserDeleteWritesOnlyTheTombstone() async throws {
+    /// Security review: deleting a note removes its meta and the body versions this device knows, also on stores
+    /// without atomic conditional deletes (every folder, GCS-style S3), as the v1 engine did.
+    func testWithoutAtomicDeletesADeleteRemovesTheNotesContent() async throws {
         for backend: StorageBackend in [InMemoryBackend(atomic: false, atomicDelete: false),
                                         try folderBackend()] {
             let a = try await device("A", backend, initial: [.noteItDoc])
             let b = try await device("B", backend)
             let id = await a.store.create(title: "doomed")
             try await sync(a, b)
+            await a.store.edit(id, title: "doomed, edited")
+            try await sync(a, b)
             await a.store.delete(id)
             try await sync(a, b)
             let gone = await b.store.title(id)
             XCTAssertNil(gone, "deleted on B")
             let keys = try await keys(backend, "")
-            XCTAssertTrue(keys.contains(RemoteLayout.meta(.note, id)))
+            XCTAssertFalse(keys.contains(RemoteLayout.meta(.note, id)), "the encrypted meta is gone")
             XCTAssertTrue(keys.contains(RemoteLayout.tombstone(id)))
-            try await assertEqualAsync(try await bodyKeys(backend, id).count, 1)
+            let left = try await bodyKeys(backend, id)
+            XCTAssertEqual(left, [], "every listed version of the note, the earlier one included")
             try await sync(a, b)
             let stillGone = await b.store.title(id)
             XCTAssertNil(stillGone)
-            XCTAssertNotNil(b.state.tombstoneBindings[id], "the next pass needs no tombstone GET")
             let againA = await a.store.title(id)
             XCTAssertNil(againA)
         }
+    }
+
+    /// A leftover meta + tombstone pair (a deleter that crashed before its meta delete) still reads as deleted.
+    func testWithoutAtomicDeletesALeftoverPairReadsAsDeleted() async throws {
+        let memory = InMemoryBackend(atomic: false, atomicDelete: false)
+        let backend = ScriptedBackend(memory)
+        let a = try await device("A", backend, initial: [.noteItDoc])
+        let b = try await device("B", backend)
+        let id = await a.store.create(title: "doomed")
+        try await sync(a, b)
+        await a.store.delete(id)
+        await backend.on(.delete, RemoteLayout.meta(.note, id), .crashDuring)
+        do { try await sync(a) } catch {}
+        try await sync(b, b)
+        let gone = await b.store.title(id)
+        XCTAssertNil(gone)
+        XCTAssertNotNil(b.state.tombstoneBindings[id], "the next pass needs no tombstone GET")
     }
 
     func testWithoutAtomicDeletesAnEditRacingADeleteWins() async throws {
@@ -858,11 +878,12 @@ final class FormatV2Tests: XCTestCase {
         let onB = await b.store.title(id)
         XCTAssertEqual(onA, "B's edit")
         XCTAssertEqual(onB, "B's edit")
-        let deletes = await backend.ops(.delete)
-        XCTAssertTrue(deletes.allSatisfy { $0.ifMatch == nil && $0.key.hasPrefix(RemoteLayout.bodiesPrefix) }, "\(deletes)")
+        // The meta delete is checked against the listed ETag first; B's edit moved it on, so nothing was deleted.
+        let plainMetaDeletes = await backend.ops(.delete, containing: RemoteLayout.meta(.note, id)).filter { $0.ifMatch == nil }
+        XCTAssertTrue(plainMetaDeletes.isEmpty, "\(plainMetaDeletes)")
     }
 
-    func testAtomicDeletesWithoutAtomicWritesDeleteTheMetaAndKeepTheBody() async throws {
+    func testAtomicDeletesWithoutAtomicWritesDeleteTheMetaAndTheBody() async throws {
         let memory = InMemoryBackend(atomic: false, atomicDelete: true)
         let a = try await device("A", memory, initial: [.noteItDoc])
         let id = await a.store.create(title: "doomed")
@@ -871,7 +892,7 @@ final class FormatV2Tests: XCTestCase {
         try await sync(a)
         let keys = try await keys(memory, "")
         XCTAssertFalse(keys.contains(RemoteLayout.meta(.note, id)))
-        try await assertEqualAsync(try await bodyKeys(memory, id).count, 1)
+        try await assertEqualAsync(try await bodyKeys(memory, id), [])
     }
 
     // MARK: - Repair
