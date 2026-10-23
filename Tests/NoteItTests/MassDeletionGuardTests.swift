@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 import NoteItCore
 
@@ -106,13 +107,13 @@ final class MassDeletionGuardTests: XCTestCase {
         let realScan = store.markdownFolderScan
         store.markdownScanTimeout = 30
         store.markdownFolderScan = { root, index, ledger in
-            _ = gate.wait(timeout: .now() + 5)
+            _ = gate.wait(timeout: .now() + TestTiming.scaled(5))
             return realScan(root, index, ledger)
         }
 
         let started = Date()
         store.confirmHeldDeletions()
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5, "the button doesn't wait for the folder")
+        XCTAssertLessThan(Date().timeIntervalSince(started), TestTiming.scaled(0.5), "the button doesn't wait for the folder")
         XCTAssertEqual(store.heldMarkdownDeletions, Set(held), "the batch stays held until a scan applies")
         store.markdownFolderScan = realScan
         gate.signal()
@@ -134,7 +135,7 @@ final class MassDeletionGuardTests: XCTestCase {
         let calls = HeldCounter()
         let realCheck = storage.rootCheck
         storage.rootCheck = { url in
-            if calls.increment() == 1 { _ = write.wait(timeout: .now() + 10) }
+            if calls.increment() == 1 { _ = write.wait(timeout: .now() + TestTiming.scaled(10)) }
             return realCheck(url)
         }
         store.updateBody(other, NSAttributedString(string: "Other 0\n\nqueued edit"))

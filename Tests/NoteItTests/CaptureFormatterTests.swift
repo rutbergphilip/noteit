@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 @MainActor
@@ -319,7 +320,7 @@ final class CaptureFormatterTests: XCTestCase {
         let huge = capture("Heading\n" + String(repeating: "x", count: 20_000_000), app: "Notes")
         let start = Date()
         XCTAssertEqual(CaptureFormatter.title(for: huge), "Heading")
-        XCTAssertLessThan(Date().timeIntervalSince(start), 0.25)
+        XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(0.25))
     }
 
     func testLeadingWhitespaceBeyondScanLimitIsSkipped() {

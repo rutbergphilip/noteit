@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 @MainActor
@@ -398,9 +399,8 @@ final class FindReplaceModelTests: XCTestCase {
         model.query = "cat"
         textView.setSelectedRange(NSRange(location: textView.storage.length, length: 0))
         textView.insertText(" cat", replacementRange: textView.selectedRange())
-        let done = expectation(description: "recomputed")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { done.fulfill() }
-        wait(for: [done], timeout: 2)
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(2))
+        while model.matchCount != 4, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
         XCTAssertEqual(model.matchCount, 4)
     }
 

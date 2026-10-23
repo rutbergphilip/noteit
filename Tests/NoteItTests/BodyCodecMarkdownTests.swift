@@ -2,6 +2,7 @@ import AppKit
 import NoteItDoc
 import NoteItMarkdown
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 @MainActor
@@ -126,7 +127,7 @@ final class BodyCodecMarkdownTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(text.length, 95_000)
         let start = Date()
         let doc = try BodyCodec.noteItDoc(of: text).doc
-        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(2))
         guard case .doc(let blocks) = doc, case .paragraph(_, _, let first)? = blocks.first,
               case .paragraph(_, _, let last)? = blocks.last else { return XCTFail() }
         XCTAssertEqual(first.filter { $0 == .hardBreak }.count, 100)

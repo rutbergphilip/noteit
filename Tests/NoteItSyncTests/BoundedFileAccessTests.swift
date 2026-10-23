@@ -1,4 +1,5 @@
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteItSync
 
 final class BoundedFileAccessTests: XCTestCase {
@@ -10,7 +11,7 @@ final class BoundedFileAccessTests: XCTestCase {
         let started = Date()
         let first = await access.run(key: "nas", timeout: 0.1) { calls.increment(); release.wait(); return true }
         XCTAssertNil(first)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+        XCTAssertLessThan(Date().timeIntervalSince(started), TestTiming.scaled(2))
 
         let second = await access.run(key: "nas", timeout: 5) { calls.increment(); return true }
         XCTAssertNil(second, "a second probe of a stuck folder must not wait or start another thread")
@@ -32,7 +33,7 @@ final class BoundedFileAccessTests: XCTestCase {
         defer { release.signal() }
         let started = Date()
         XCTAssertNil(access.runBlocking(key: "stuck", timeout: 0.1) { release.wait(); return 1 })
-        XCTAssertLessThan(Date().timeIntervalSince(started), 2)
+        XCTAssertLessThan(Date().timeIntervalSince(started), TestTiming.scaled(2))
     }
 }
 

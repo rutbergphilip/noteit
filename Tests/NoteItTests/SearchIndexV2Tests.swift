@@ -1,6 +1,7 @@
 import AppKit
 import NoteItCore
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 /// organise T3: search index v2, kept by the "search" derived index.
@@ -26,7 +27,8 @@ final class SearchIndexV2Tests: XCTestCase {
     }
 
     private func waitUntil(_ condition: @escaping () -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
-        for _ in 0..<500 where !condition() { try? await Task.sleep(nanoseconds: 10_000_000) }
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
+        while !condition(), Date() < deadline { try? await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertTrue(condition(), "timed out", file: file, line: line)
     }
 

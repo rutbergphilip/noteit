@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 import NoteItAPI
 import NoteItCore
 @testable import NoteIt
@@ -749,7 +750,8 @@ final class LocalAPIHandlersTests: XCTestCase {
         let start = controller.hub.currentCursor
         let id = addNote(store, "Fresh")
         var changes: [ChangeDTO] = []
-        for _ in 0..<40 {
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
+        while Date() < deadline {
             if case .success(let page) = controller.hub.changes(since: start, limit: 50), !page.changes.isEmpty {
                 changes = page.changes
                 break

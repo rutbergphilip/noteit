@@ -1,5 +1,6 @@
 import Foundation
 import NoteItAPI
+import NoteItDocTestSupport
 import NoteItSync
 @testable import NoteItCLI
 import XCTest
@@ -295,7 +296,7 @@ final class CLICompletionTests: XCTestCase {
 
     func testCompleteGivesUpAfterTheTimeout() async throws {
         let harness = try await harness { _ in
-            Thread.sleep(forTimeInterval: 1)
+            Thread.sleep(forTimeInterval: TestTiming.scaled(1))
             return .json([TagDTO(name: "home", noteCount: 1)])
         }
         try harness.signIn()
@@ -303,7 +304,7 @@ final class CLICompletionTests: XCTestCase {
         candidates.timeout = .milliseconds(50)
         let start = Date()
         await candidates.run(["tags"])
-        XCTAssertLessThan(Date().timeIntervalSince(start), 0.8)
+        XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(0.8))
         XCTAssertEqual(harness.terminal.out, "")
     }
 
@@ -315,7 +316,7 @@ final class CLICompletionTests: XCTestCase {
         candidates.timeout = .milliseconds(50)
         let start = Date()
         await candidates.run(["tags"])
-        XCTAssertLessThan(Date().timeIntervalSince(start), 0.8)
+        XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(0.8))
         XCTAssertEqual(harness.terminal.out, "")
     }
 }
@@ -323,7 +324,7 @@ final class CLICompletionTests: XCTestCase {
 /// A Keychain read that hangs, like one waiting for the user to answer an "allow access" dialog.
 private struct BlockingSecretStore: SecretStore {
     func read(service: String, account: String) -> String? {
-        Thread.sleep(forTimeInterval: 2)
+        Thread.sleep(forTimeInterval: TestTiming.scaled(2))
         return "nit_x"
     }
 

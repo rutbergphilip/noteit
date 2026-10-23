@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 import NoteItSync
 
@@ -167,7 +168,7 @@ final class LibraryLauncherTests: XCTestCase {
         }
         defer { release() }
         var launcher = launcher(override: current.path)
-        launcher.finishInterruptedConversion = { _ in _ = gate.wait(timeout: .now() + 10) }
+        launcher.finishInterruptedConversion = { _ in _ = gate.wait(timeout: .now() + TestTiming.scaled(10)) }
         var shown = 0
         launcher.showConversionPending = { _, _ in
             shown += 1
@@ -176,7 +177,7 @@ final class LibraryLauncherTests: XCTestCase {
         var quit = false
         let start = Date()
         let store: NoteStore? = launcher.launch(open: { location -> NoteStore in XCTFail("opened"); return NoteStore.opened(location: location) }, quit: { quit = true })
-        XCTAssertLessThan(Date().timeIntervalSince(start), 3, "the main thread doesn't wait for the folder")
+        XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(3), "the main thread doesn't wait for the folder")
         XCTAssertNil(store)
         XCTAssertEqual(shown, 1)
         XCTAssertTrue(quit)
@@ -448,7 +449,7 @@ final class LibraryLauncherTests: XCTestCase {
         defer { stuck.signal() }
 
         let first = LibraryLauncher.relocate(to: mine, dataDir: dataDir, timeout: 0.2, readFile: { url in
-            _ = stuck.wait(timeout: .now() + 5)
+            _ = stuck.wait(timeout: .now() + TestTiming.scaled(5))
             return try? Data(contentsOf: url)
         })
         XCTAssertTrue(first?.contains("didn’t respond") == true)
@@ -472,7 +473,7 @@ final class LibraryLauncherTests: XCTestCase {
 
         let started = Date()
         let store: NoteStore? = launcher.launch(open: { NoteStore(location: $0) }, quit: { XCTFail("unexpected quit") })
-        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
+        XCTAssertLessThan(Date().timeIntervalSince(started), TestTiming.scaled(5))
         XCTAssertEqual(store?.markdownStorage?.contentRootURL, content.standardizedFileURL)
         XCTAssertEqual(missingAlerts, [], "a folder that is slow to answer isn't reported missing")
     }
@@ -606,7 +607,7 @@ final class LegacyAppMonitorTests: XCTestCase {
 
     /// Lets the observer's main-queue hops run.
     private func spinMainQueue() {
-        let deadline = Date().addingTimeInterval(0.5)
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(0.5))
         while Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
     }
 }

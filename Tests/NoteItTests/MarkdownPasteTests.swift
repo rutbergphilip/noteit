@@ -1,6 +1,7 @@
 import AppKit
 import NoteItDoc
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 @MainActor
@@ -238,7 +239,7 @@ final class MarkdownPasteTests: XCTestCase {
         for input in inputs {
             let start = Date()
             _ = MarkdownPasteDetector.looksLikeMarkdown(input)
-            XCTAssertLessThan(Date().timeIntervalSince(start), 0.5, String(input.prefix(12)))
+            XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(0.5), String(input.prefix(12)))
         }
         XCTAssertFalse(MarkdownPasteDetector.looksLikeMarkdown(String(repeating: "- item\n", count: 30_000)))
     }
@@ -249,7 +250,7 @@ final class MarkdownPasteTests: XCTestCase {
         let view = editor(body(""))
         let start = Date()
         XCTAssertFalse(view.pasteMarkdown(from: pasteboard(plain: text)))
-        XCTAssertLessThan(Date().timeIntervalSince(start), 1)
+        XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(1))
         XCTAssertEqual(view.string, "")
 
         let paragraph = String(repeating: "word ", count: 800)

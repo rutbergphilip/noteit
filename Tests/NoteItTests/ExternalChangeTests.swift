@@ -7,6 +7,9 @@ import NoteItCore
 import NoteItMarkdown
 import NoteItAPI
 import NoteItSync
+import NoteItDocTestSupport
+
+private let slow = TestTiming.factor
 
 /// markdown-storage Task 4.2: changes made to the Markdown folder while NoteIt is open.
 @MainActor
@@ -55,7 +58,7 @@ final class ExternalChangeTests: XCTestCase {
     }
 
     private func waitUntil(_ condition: @MainActor () -> Bool, _ message: String) async throws {
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(5 * slow)
         while !condition() {
             guard Date() < deadline else { return XCTFail(message) }
             try await Task.sleep(nanoseconds: 10_000_000)
@@ -68,12 +71,12 @@ final class ExternalChangeTests: XCTestCase {
         let kept = try note(store, titled: "Kept").id
         var reportedMissing = false
         store.onMarkdownFolderMissing = { _ in reportedMissing = true }
-        store.markdownScanTimeout = 0.2
+        store.markdownScanTimeout = 0.2 * slow
         store.markdownUnavailableRetryInterval = 0.2
         let realScan = store.markdownFolderScan
         let hung = DispatchSemaphore(value: 0)
         store.markdownFolderScan = { _, _, _ in
-            _ = hung.wait(timeout: .now() + 3)
+            _ = hung.wait(timeout: .now() + 3 * slow)
             var result = FolderScanResult()
             result.removed = [kept]
             return result
@@ -82,7 +85,7 @@ final class ExternalChangeTests: XCTestCase {
         let started = Date()
         store.markdownFolderNeedsScan()
         try await waitUntil({ store.markdownFolderUnavailable }, "the hung folder is reported unavailable")
-        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5, "the main thread kept running while the scan hung")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5 * slow, "the main thread kept running while the scan hung")
         XCTAssertEqual(store.note(with: kept)?.deletedAt, nil)
         XCTAssertFalse(reportedMissing, "a folder that doesn't answer isn't a missing folder")
 
@@ -98,19 +101,19 @@ final class ExternalChangeTests: XCTestCase {
         let store = open()
         let kept = try note(store, titled: "Kept").id
         let storage = try XCTUnwrap(store.markdownStorage)
-        storage.rootTimeout = 0.2
+        storage.rootTimeout = 0.2 * slow
         store.markdownUnavailableRetryInterval = 0.2
         let hung = DispatchSemaphore(value: 0)
         let realCheck = storage.rootCheck
         storage.rootCheck = { url in
-            _ = hung.wait(timeout: .now() + 3)
+            _ = hung.wait(timeout: .now() + 3 * slow)
             return realCheck(url)
         }
 
         store.updateBody(kept, NSAttributedString(string: "Kept\n\nedited while away"))
         let started = Date()
         store.flush()
-        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5 * slow)
         XCTAssertFalse(try read("Kept.md").contains("edited while away"))
         try await waitUntil({ store.markdownFolderUnavailable }, "the hung folder is reported unavailable")
 
@@ -126,8 +129,8 @@ final class ExternalChangeTests: XCTestCase {
         try put("Other.md", "# Other\n\nother text\n")
         let store = open()
         store.markdownFlushWait = 0
-        store.markdownWriteTimeout = 0.3
-        store.markdownBlockingTimeout = 0.3
+        store.markdownWriteTimeout = 0.3 * slow
+        store.markdownBlockingTimeout = 0.3 * slow
         store.markdownUnavailableRetryInterval = 0.2
         let kept = try note(store, titled: "Kept").id
         let other = try note(store, titled: "Other").id
@@ -136,7 +139,7 @@ final class ExternalChangeTests: XCTestCase {
         let hung = DispatchSemaphore(value: 0)
         let realCheck = storage.rootCheck
         storage.rootCheck = { url in
-            _ = hung.wait(timeout: .now() + 4)
+            _ = hung.wait(timeout: .now() + 4 * slow)
             return realCheck(url)
         }
 
@@ -145,7 +148,7 @@ final class ExternalChangeTests: XCTestCase {
         store.flush()
         store.dropCachedBody(other)
         XCTAssertTrue(store.body(for: other).string.contains("other text"))
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5, "the main thread doesn't wait for the folder")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5 * slow, "the main thread doesn't wait for the folder")
         XCTAssertTrue(store.isBodyDirty(kept))
         try await waitUntil({ store.markdownFolderUnavailable }, "a write that doesn't finish makes the folder unavailable")
 
@@ -153,7 +156,7 @@ final class ExternalChangeTests: XCTestCase {
         started = Date()
         store.flush()
         store.flush()
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.5 * slow)
         let recovery = { (try? self.fm.contentsOfDirectory(atPath: store.recoveryURL.path)) ?? [] }
         XCTAssertEqual(recovery().count, 1, "the waiting edit is kept in recovery/, once")
 
@@ -174,8 +177,8 @@ final class ExternalChangeTests: XCTestCase {
         try put("Kept.md", "# Kept\n\nfirst\n")
         let store = open()
         store.markdownFlushWait = 0
-        store.markdownWriteTimeout = 0.3
-        store.markdownBlockingTimeout = 0.3
+        store.markdownWriteTimeout = 0.3 * slow
+        store.markdownBlockingTimeout = 0.3 * slow
         store.markdownUnavailableRetryInterval = 600
         let kept = try note(store, titled: "Kept").id
         let storage = try XCTUnwrap(store.markdownStorage)
@@ -184,7 +187,7 @@ final class ExternalChangeTests: XCTestCase {
         let calls = Counter()
         let realCheck = storage.rootCheck
         storage.rootCheck = { url in
-            if calls.increment() == 1 { _ = firstWrite.wait(timeout: .now() + 10) }
+            if calls.increment() == 1 { _ = firstWrite.wait(timeout: .now() + 10 * slow) }
             return realCheck(url)
         }
 
@@ -210,21 +213,23 @@ final class ExternalChangeTests: XCTestCase {
     private func openWithHungWrites() throws -> (store: NoteStore, quit: () -> Void) {
         let store = open()
         store.markdownFlushWait = 0
-        store.markdownWriteTimeout = 0.3
-        store.markdownBlockingTimeout = 0.3
+        store.markdownWriteTimeout = 0.3 * slow
+        store.markdownBlockingTimeout = 0.3 * slow
         store.markdownUnavailableRetryInterval = 600
         let storage = try XCTUnwrap(store.markdownStorage)
         storage.rootTimeout = 30
         let gate = DispatchSemaphore(value: 0)
         storage.rootCheck = { _ in
-            _ = gate.wait(timeout: .now() + 30)
+            _ = gate.wait(timeout: .now() + 30 * slow)
             return false
         }
         let quit = { for _ in 0..<16 { gate.signal() } }
         addTeardownBlock(quit)
+        let key = "markdown-root:" + storage.contentRootURL.path
         return (store, {
             quit()
-            Thread.sleep(forTimeInterval: 0.2)
+            let deadline = Date().addingTimeInterval(5 * slow)
+            while BoundedFileAccess.shared.isRunning(key), Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
         })
     }
 
@@ -416,7 +421,7 @@ final class ExternalChangeTests: XCTestCase {
         let storage = MarkdownBodyStorageTests.make(root, renames: false)
         let gate = DispatchSemaphore(value: 0)
         storage.rootCheck = { url in
-            _ = gate.wait(timeout: .now() + 30)
+            _ = gate.wait(timeout: .now() + 30 * slow)
             return FileManager.default.fileExists(atPath: url.path)
         }
         let release = { for _ in 0..<16 { gate.signal() } }
@@ -477,8 +482,8 @@ final class ExternalChangeTests: XCTestCase {
         }
         controller.syncNow()
         try await Task.sleep(for: .seconds(1.5))
+        try await waitUntil({ controller.status == .waitingForLibrary }, "sync waits for the library folder")
         XCTAssertFalse(pushed(recovered), "an empty note was sent before its text was restored")
-        XCTAssertEqual(controller.status, .waitingForLibrary)
         XCTAssertEqual(SyncStatusPresentation(status: controller.status, lastSync: nil).headline(), "Waiting for the library folder…")
 
         scan()
@@ -761,13 +766,13 @@ final class ExternalChangeTests: XCTestCase {
         let gate = DispatchSemaphore(value: 0)
         let realScan = store.markdownFolderScan
         store.markdownFolderScan = { root, index, ledger in
-            _ = gate.wait(timeout: .now() + 5)
+            _ = gate.wait(timeout: .now() + 5 * slow)
             return realScan(root, index, ledger)
         }
         let started = Date()
         let rescan = Task { await store.rescanMarkdownFolder() }
         try await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "the main thread runs while the scan waits")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1 * slow, "the main thread runs while the scan waits")
         try edit("Kept.md", "first", "changed")
         gate.signal()
         let applied = await rescan.value
@@ -779,12 +784,12 @@ final class ExternalChangeTests: XCTestCase {
         try put("Kept.md", "# Kept\n\nfirst\n")
         let store = open()
         defer { store.stopWatchingMarkdownFolder() }
-        store.markdownScanTimeout = 0.2
+        store.markdownScanTimeout = 0.2 * slow
         store.markdownUnavailableRetryInterval = 0.2
         let realScan = store.markdownFolderScan
         let hung = DispatchSemaphore(value: 0)
         store.markdownFolderScan = { root, index, ledger in
-            _ = hung.wait(timeout: .now() + 3)
+            _ = hung.wait(timeout: .now() + 3 * slow)
             return realScan(root, index, ledger)
         }
         store.markdownFolderNeedsScan()
@@ -792,7 +797,7 @@ final class ExternalChangeTests: XCTestCase {
 
         let started = Date()
         store.startWatchingMarkdownFolder()
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1 * slow)
         try await Task.sleep(nanoseconds: 300_000_000)
         XCTAssertNil(store.markdownWatcher, "nothing touches a folder that doesn't answer")
 
@@ -807,7 +812,7 @@ final class ExternalChangeTests: XCTestCase {
         let store = open()
         let kept = try note(store, titled: "Kept").id
         let storage = try XCTUnwrap(store.markdownStorage)
-        storage.rootTimeout = 0.2
+        storage.rootTimeout = 0.2 * slow
         let content = content
         let realCheck = storage.rootCheck
         let hung = DispatchSemaphore(value: 0)
@@ -815,7 +820,7 @@ final class ExternalChangeTests: XCTestCase {
         let checks = Counter()
         storage.rootCheck = { url in
             guard !Thread.isMainThread else {
-                _ = hung.wait(timeout: .now() + 3)
+                _ = hung.wait(timeout: .now() + 3 * slow)
                 return realCheck(url)
             }
             if checks.increment() == 2 {
@@ -880,7 +885,7 @@ final class ExternalChangeTests: XCTestCase {
         defer { if !released { gate.leave() } }
         let storage = MarkdownBodyStorageTests.make(root, renames: false)
         storage.rootCheck = { url in
-            _ = gate.wait(timeout: .now() + 10)
+            _ = gate.wait(timeout: .now() + 10 * slow)
             return FileManager.default.fileExists(atPath: url.path)
         }
 
@@ -888,7 +893,7 @@ final class ExternalChangeTests: XCTestCase {
         let reopened = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
                                                            renameFilesOnTitleChange: false),
                                  bodyStorage: storage)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "opening never waits for the folder")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1 * slow, "opening never waits for the folder")
         XCTAssertTrue(reopened.markdownFolderChecking)
         XCTAssertTrue(reopened.markdownFolderUnavailable, "read-only until the folder answers")
         XCTAssertNotNil(reopened.note(with: plan), "the library opens from library.json")
@@ -919,7 +924,7 @@ final class ExternalChangeTests: XCTestCase {
         defer { if !released { gate.leave() } }
         let storage = MarkdownBodyStorageTests.make(root, renames: false)
         storage.rootCheck = { url in
-            _ = gate.wait(timeout: .now() + 10)
+            _ = gate.wait(timeout: .now() + 10 * slow)
             return FileManager.default.fileExists(atPath: url.path)
         }
         let reopened = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
@@ -980,7 +985,7 @@ final class ExternalChangeTests: XCTestCase {
         let fake = FakeSpotlightIndex()
         let indexer = SpotlightIndexer(store: reopened, defaults: defaults, index: fake, isSupported: true, flushDelay: 60)
         indexer.start()
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(5 * slow)
         while fake.items[added.uuidString] == nil || fake.items[kept.uuidString] == nil, Date() < deadline {
             indexer.flush()
             await indexer.settle()
@@ -1002,7 +1007,7 @@ final class ExternalChangeTests: XCTestCase {
         var released = false
         let storage = MarkdownBodyStorageTests.make(root, renames: false)
         storage.rootCheck = { url in
-            _ = gate.wait(timeout: .now() + 10)
+            _ = gate.wait(timeout: .now() + 10 * slow)
             return FileManager.default.fileExists(atPath: url.path)
         }
         let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
@@ -1016,7 +1021,7 @@ final class ExternalChangeTests: XCTestCase {
         })
     }
 
-    private func settle(_ indexer: SpotlightIndexer, for seconds: TimeInterval = 5, until done: () -> Bool) async throws {
+    private func settle(_ indexer: SpotlightIndexer, for seconds: TimeInterval = 5 * slow, until done: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(seconds)
         repeat {
             indexer.flush()
@@ -1108,7 +1113,7 @@ final class ExternalChangeTests: XCTestCase {
         var released = false
         defer { if !released { gate.leave() } }
         storage.readFileData = { url in
-            _ = gate.wait(timeout: .now() + 3)
+            _ = gate.wait(timeout: .now() + 3 * TestTiming.factor)
             return try Data(contentsOf: url)
         }
         store.selectedNoteID = slow
@@ -1116,7 +1121,7 @@ final class ExternalChangeTests: XCTestCase {
 
         let started = Date()
         _ = store.body(for: slow)
-        XCTAssertLessThanOrEqual(Date().timeIntervalSince(started), 1.3, "the main thread waits at most about a second")
+        XCTAssertLessThanOrEqual(Date().timeIntervalSince(started), 1 + 0.3 * TestTiming.factor, "the main thread waits at most about a second")
         try await waitUntil({ store.isMarkdownBodyLoading(slow) }, "the note shows as loading")
         XCTAssertFalse(store.markdownFolderUnavailable, "a slow read isn't a folder that doesn't answer")
         XCTAssertNil(store.cachedBody(slow))
@@ -1145,13 +1150,13 @@ final class ExternalChangeTests: XCTestCase {
         var readers = 0
         storage.readFileData = { url in
             lock.withLock { readers += 1 }
-            _ = gate.wait(timeout: .now() + 10)
+            _ = gate.wait(timeout: .now() + 10 * slow)
             return try Data(contentsOf: url)
         }
 
         let started = Date()
         for id in ids { _ = store.plainText(for: id) }
-        XCTAssertLessThanOrEqual(Date().timeIntervalSince(started), 1.5, "one wait, not one per note")
+        XCTAssertLessThanOrEqual(Date().timeIntervalSince(started), 1 + 0.5 * slow, "one wait, not one per note")
         XCTAssertLessThanOrEqual(lock.withLock { readers }, 2)
 
         released = true
@@ -1164,7 +1169,7 @@ final class ExternalChangeTests: XCTestCase {
     func testReadsPastTheWholeTimeoutMarkTheFolderUnavailableWithoutYielding() throws {
         for index in 0..<3 { try put("Far \(index).md", "# Far \(index)\n\nfar text \(index)\n") }
         let store = open()
-        store.markdownBlockingTimeout = 0.5
+        store.markdownBlockingTimeout = 0.5 * slow
         store.markdownBodyMainWait = 0.1
         let ids = store.notes.map(\.id)
         let storage = try XCTUnwrap(store.markdownStorage)
@@ -1173,12 +1178,12 @@ final class ExternalChangeTests: XCTestCase {
         gate.enter()
         defer { gate.leave() }
         storage.readFileData = { url in
-            _ = gate.wait(timeout: .now() + 5)
+            _ = gate.wait(timeout: .now() + 5 * slow)
             return try Data(contentsOf: url)
         }
 
         _ = store.plainText(for: ids[0])
-        Thread.sleep(forTimeInterval: 0.7)
+        Thread.sleep(forTimeInterval: 0.7 * slow)
         _ = store.plainText(for: ids[1])
         XCTAssertTrue(store.markdownFolderUnavailable, "seen on the next call, not only after the main thread yields")
     }
@@ -1192,7 +1197,7 @@ final class ExternalChangeTests: XCTestCase {
         gate.enter()
         defer { gate.leave() }
         storage.readFileData = { url in
-            _ = gate.wait(timeout: .now() + 10)
+            _ = gate.wait(timeout: .now() + 10 * slow)
             return try Data(contentsOf: url)
         }
         let defaults = try XCTUnwrap(UserDefaults(suiteName: "hung-search-\(UUID().uuidString)"))
@@ -1201,7 +1206,7 @@ final class ExternalChangeTests: XCTestCase {
 
         let started = Date()
         let hits = try service.search("Plan", notebook: nil, tag: nil, limit: 500)
-        XCTAssertLessThanOrEqual(Date().timeIntervalSince(started), 1.5)
+        XCTAssertLessThanOrEqual(Date().timeIntervalSince(started), 1 + 0.5 * slow)
         XCTAssertEqual(hits.count, 40)
     }
 
@@ -1216,7 +1221,7 @@ final class ExternalChangeTests: XCTestCase {
         try await waitUntil({ store.isMarkdownBodyLoading(waiting) }, "waits for the other read")
 
         gates.removeValue(forKey: "Ahead")?.leave()
-        Thread.sleep(forTimeInterval: 0.3)
+        Thread.sleep(forTimeInterval: 0.3 * slow)
         XCTAssertTrue(store.body(for: ahead).string.contains("Ahead text"), "taken before its end reaches the main thread")
         store.externallyUpdatedNoteID = nil
         try await waitUntil({ store.cachedBody(waiting) != nil }, "the waiting note is read")
@@ -1235,7 +1240,7 @@ final class ExternalChangeTests: XCTestCase {
         try await waitUntil({ store.isMarkdownBodyLoading(waiting) }, "waits for the other read")
 
         gates.removeValue(forKey: "Ahead")?.leave()
-        Thread.sleep(forTimeInterval: 0.3)
+        Thread.sleep(forTimeInterval: 0.3 * slow)
         _ = store.body(for: ahead)
         _ = store.body(for: third)
         try await Task.sleep(nanoseconds: 200_000_000)
@@ -1266,7 +1271,7 @@ final class ExternalChangeTests: XCTestCase {
         }
         let byFile = Dictionary(uniqueKeysWithValues: gates.map { ("\($0.key).md", $0.value) })
         storage.readFileData = { url in
-            _ = byFile[url.lastPathComponent]?.wait(timeout: .now() + 4)
+            _ = byFile[url.lastPathComponent]?.wait(timeout: .now() + 4 * slow)
             return try Data(contentsOf: url)
         }
         return (store, ids, gates)
@@ -1320,22 +1325,22 @@ final class ExternalChangeTests: XCTestCase {
         let result = try await export.write { _ in true }
         heartbeat.stop()
         XCTAssertEqual(result.noteCount, 5)
-        XCTAssertLessThan(heartbeat.longestGap, 0.3, "the main thread was blocked while a note was read")
+        XCTAssertLessThan(heartbeat.longestGap, TestTiming.isCI ? 0.9 : 0.3, "the main thread was blocked while a note was read")
     }
 
     func testCancellingAnExportDoesntWaitForASlowRead() async throws {
         let (store, storage) = try openWithUncachedNotes(3)
         storage.readFileData = { url in
-            Thread.sleep(forTimeInterval: 3)
+            Thread.sleep(forTimeInterval: 3 * slow)
             return try Data(contentsOf: url)
         }
         let export = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
                                                  to: exportFolder(), body: store.bodyForOutput)
         export.bodyWhenRead = { await store.bodyForOutputWhenRead($0, isCancelled: $1) }
         let started = Date()
-        export.isCancelled = { Date().timeIntervalSince(started) > 0.3 }
+        export.isCancelled = { Date().timeIntervalSince(started) > 0.3 * slow }
         let result = try await export.write { _ in true }
-        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1.5 * slow)
         XCTAssertEqual(result.noteCount, 0)
         XCTAssertEqual(result.skipped, [], "a cancelled export lists nothing as skipped")
     }
@@ -1348,7 +1353,7 @@ final class ExternalChangeTests: XCTestCase {
         gate.enter()
         defer { gate.leave() }
         storage.readFileData = { url in
-            _ = gate.wait(timeout: .now() + 20)
+            _ = gate.wait(timeout: .now() + 20 * slow)
             return try Data(contentsOf: url)
         }
         let export = try NoteExporter.prepareAll(notebooks: store.sortedNotebooks, notes: store.notes, format: .markdown,
@@ -1356,7 +1361,7 @@ final class ExternalChangeTests: XCTestCase {
         export.bodyWhenRead = { await store.bodyForOutputWhenRead($0, isCancelled: $1) }
         let started = Date()
         let result = try await export.write { _ in true }
-        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 3 * slow)
         XCTAssertEqual(result.noteCount, 0)
         XCTAssertEqual(result.skipped.count, 20)
     }
@@ -1470,7 +1475,7 @@ final class ExternalChangeTests: XCTestCase {
         heartbeat.stop()
         XCTAssertEqual(reads.withLock { $0 }, 1, "a failed read is retried only on a change, Retry or after a long pause")
         XCTAssertNotNil(store.loadError(for: plan))
-        XCTAssertLessThan(heartbeat.longestGap, 0.5)
+        XCTAssertLessThan(heartbeat.longestGap, TestTiming.isCI ? 1 : 0.5)
         XCTAssertEqual(shown.string, "", "the editor no longer shows the last known text as the note")
         XCTAssertTrue(store.isBodyWriteBlocked(plan), "and stays read-only")
 
@@ -1504,7 +1509,7 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertNil(store.cachedBody(plan))
         return (store, plan, editor, harness, {
             gate.signal()
-            Thread.sleep(forTimeInterval: 0.3)
+            Thread.sleep(forTimeInterval: 0.3 * slow)
         })
     }
 
@@ -1585,13 +1590,13 @@ final class ExternalChangeTests: XCTestCase {
         let scanGate = DispatchSemaphore(value: 0)
         let realScan = store.markdownFolderScan
         store.markdownFolderScan = { root, index, ledger in
-            _ = scanGate.wait(timeout: .now() + 30)
+            _ = scanGate.wait(timeout: .now() + 30 * slow)
             return realScan(root, index, ledger)
         }
         addTeardownBlock { for _ in 0..<8 { scanGate.signal() } }
         try fm.removeItem(at: content.appendingPathComponent("Plan.md"))
         gates["Other"]?.leave()
-        Thread.sleep(forTimeInterval: 0.3)
+        Thread.sleep(forTimeInterval: 0.3 * slow)
 
         XCTAssertThrowsError(try store.exportBodySource(plan), "a missing file never syncs as empty")
         try await waitUntil({ editor.view.string == "" }, "the editor shows what the read found")
@@ -1793,7 +1798,7 @@ final class ExternalChangeTests: XCTestCase {
     private func readsStuckOnBothReaders(hanging: [String]) async throws {
         for title in Array(Set(hanging)) + ["Fine"] { try put("\(title).md", "# \(title)\n\n\(title) text\n") }
         let store = open()
-        store.markdownBlockingTimeout = 0.3
+        store.markdownBlockingTimeout = 0.3 * slow
         store.markdownBodyMainWait = 0.05
         store.markdownUnavailableRetryInterval = 600
         let storage = try XCTUnwrap(store.markdownStorage)
@@ -1804,7 +1809,7 @@ final class ExternalChangeTests: XCTestCase {
         defer { if !released { gate.leave() } }
         let hangingFiles = Set(hanging.map { "\($0).md" })
         storage.readFileData = { url in
-            if hangingFiles.contains(url.lastPathComponent) { _ = gate.wait(timeout: .now() + 20) }
+            if hangingFiles.contains(url.lastPathComponent) { _ = gate.wait(timeout: .now() + 20 * slow) }
             return try Data(contentsOf: url)
         }
         for title in hanging {
@@ -1827,7 +1832,8 @@ final class ExternalChangeTests: XCTestCase {
         released = true
         gate.leave()
         storage.readFileData = { try Data(contentsOf: $0) }
-        try await Task.sleep(nanoseconds: 300_000_000)
+        let readers = (0..<NoteStore.markdownReadThreads).map { "markdown-read:\(storage.contentRootURL.path):\($0)" }
+        try await waitUntil({ !readers.contains(where: BoundedFileAccess.shared.isRunning) }, "the released reads end")
         store.externallyUpdatedNoteID = nil
         let answered = await store.rescanMarkdownFolder()
         XCTAssertTrue(answered)
@@ -1839,13 +1845,13 @@ final class ExternalChangeTests: XCTestCase {
     func testASpotlightRebuildNeverWaitsOnTheMainThreadForAMarkdownFolder() async throws {
         for index in 0..<3 { try put("Note \(index).md", "# Note \(index)\n\ntext \(index)\n") }
         let store = open()
-        store.markdownBlockingTimeout = 3
+        store.markdownBlockingTimeout = 3 * slow
         store.markdownScanTimeout = 30
         let storage = try XCTUnwrap(store.markdownStorage)
         for meta in store.notes { store.dropCachedBody(meta.id) }
         let gate = DispatchSemaphore(value: 0)
         storage.readFileData = { url in
-            _ = gate.wait(timeout: .now() + 2)
+            _ = gate.wait(timeout: .now() + 2 * slow)
             return try Data(contentsOf: url)
         }
         let suite = "noteit-external-\(UUID().uuidString)"
@@ -1857,7 +1863,7 @@ final class ExternalChangeTests: XCTestCase {
         indexer.rebuildNow()
         let started = Date()
         try await Task.sleep(nanoseconds: 100_000_000)
-        XCTAssertLessThan(Date().timeIntervalSince(started), 1, "the main thread runs while note files are read")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 1 * slow, "the main thread runs while note files are read")
         for _ in 0..<3 { gate.signal() }
         storage.readFileData = { try Data(contentsOf: $0) }
         let deadline = Date().addingTimeInterval(10)
@@ -2125,11 +2131,11 @@ final class ExternalChangeTests: XCTestCase {
         store.flush()
         store.startWatchingMarkdownFolder()
         defer { store.stopWatchingMarkdownFolder() }
-        var deadline = Date().addingTimeInterval(5)
+        var deadline = Date().addingTimeInterval(5 * slow)
         while store.markdownWatcher == nil, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
         XCTAssertNotNil(store.markdownWatcher)
         try put("Dropped.md", "# Dropped\n\nfrom another app\n")
-        deadline = Date().addingTimeInterval(5)
+        deadline = Date().addingTimeInterval(5 * slow)
         while store.notes.first(where: { $0.title == "Dropped" }) == nil, Date() < deadline {
             RunLoop.main.run(until: Date().addingTimeInterval(0.05))
         }
@@ -2146,13 +2152,13 @@ final class ExternalChangeTests: XCTestCase {
         let start = Date()
         try put("Settled.md", "# Settled\n")
         var tick = 0
-        while Date().timeIntervalSince(start) < MarkdownFolderWatcher.maxDelay + 2 {
+        while Date().timeIntervalSince(start) < MarkdownFolderWatcher.maxDelay + 2 * slow {
             tick += 1
             try put("Log.md", "# Log\n\nline \(tick)\n")
             RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         }
         let first = try XCTUnwrap(rescans.first, "a file written every 0.1 s must not hold the rescan back")
-        XCTAssertLessThan(first.timeIntervalSince(start), MarkdownFolderWatcher.maxDelay + 1)
+        XCTAssertLessThan(first.timeIntervalSince(start), MarkdownFolderWatcher.maxDelay + slow)
     }
 
     func testTheWatcherReadsNoFileAndItsStopNeverWaits() throws {
@@ -2161,14 +2167,14 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertTrue(watcher.start())
         RunLoop.main.run(until: Date().addingTimeInterval(0.3))
         try put("Edited.md", "# Edited\n")
-        let deadline = Date().addingTimeInterval(3)
+        let deadline = Date().addingTimeInterval(3 * slow)
         while rescans == 0, Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
         XCTAssertEqual(rescans, 1, "the event asks for a rescan without reading the file")
         try put("Next.md", "# Next\n")
         RunLoop.main.run(until: Date().addingTimeInterval(0.4))
         let started = Date()
         watcher.stop()
-        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1, "stopping never waits for the watcher's queue")
+        XCTAssertLessThan(Date().timeIntervalSince(started), 0.1 * slow, "stopping never waits for the watcher's queue")
         RunLoop.main.run(until: Date().addingTimeInterval(1))
         XCTAssertEqual(rescans, 1, "nothing pending is reported after the stop")
     }

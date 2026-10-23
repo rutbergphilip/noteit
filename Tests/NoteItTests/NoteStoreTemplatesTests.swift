@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 import NoteItCore
 
@@ -142,7 +143,8 @@ final class NoteStoreTemplatesTests: XCTestCase {
             return body
         }()).id
         XCTAssertTrue(store.isTemplate(linking))
-        for _ in 0..<100 where store.outgoingLinks(from: linking).isEmpty { try? await Task.sleep(nanoseconds: 10_000_000) }
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
+        while store.outgoingLinks(from: linking).isEmpty, Date() < deadline { try? await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertFalse(store.outgoingLinks(from: linking).isEmpty)
         XCTAssertTrue(store.backlinks(to: note).isEmpty)
     }
