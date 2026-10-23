@@ -129,7 +129,9 @@ private struct SyncSetupView: View {
         }
         TextField("Region", text: $region, prompt: Text(provider.defaultRegion))
         TextField("Bucket", text: $bucket, prompt: Text("my-notes"))
-        TextField("Folder inside bucket", text: $prefix, prompt: Text("Optional"))
+        if provider.allowsKeyPrefix {
+            TextField("Folder inside bucket", text: $prefix, prompt: Text("Optional"))
+        }
         Toggle("Path-style addressing", isOn: $pathStyle)
         TextField("Access key ID", text: $accessKey)
         SecureField("Secret access key", text: $secret)
@@ -270,7 +272,8 @@ private struct SyncSetupView: View {
                 region: region.trimmingCharacters(in: .whitespaces).isEmpty ? provider.defaultRegion : region.trimmingCharacters(in: .whitespaces),
                 bucket: bucket.trimmingCharacters(in: .whitespaces),
                 pathStyle: pathStyle,
-                prefix: prefix.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "/")))
+                prefix: provider.allowsKeyPrefix
+                    ? prefix.trimmingCharacters(in: CharacterSet.whitespaces.union(CharacterSet(charactersIn: "/"))) : ""
             )
         }
         return config

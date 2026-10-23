@@ -72,7 +72,10 @@ enum SyncProvider: String, Codable, CaseIterable, Identifiable, Sendable {
     var isS3: Bool { self != .folder }
 
     /// Self-hosted servers often only speak http on the local network; cloud providers always offer https.
-    var allowsPlainHTTP: Bool { self == .minio || self == .customS3 }
+    var allowsPlainHTTP: Bool { self == .minio || self == .customS3 || self == .noteItServer }
+
+    /// A NoteIt server keeps each person's store at the top of their own namespace and refuses other keys.
+    var allowsKeyPrefix: Bool { self != .noteItServer }
 
     var endpointTemplate: String {
         switch self {

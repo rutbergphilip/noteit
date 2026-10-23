@@ -16,8 +16,10 @@ final class LiveS3EmulatorTests: XCTestCase {
         let bucket = AppEnvironment.value("LIVE_S3_BUCKET") ?? "noteit-live"
         credentials = S3Credentials(accessKeyID: AppEnvironment.value("LIVE_S3_ACCESS_KEY") ?? "test",
                                     secretAccessKey: AppEnvironment.value("LIVE_S3_SECRET") ?? "test")
+        // A NoteIt server only accepts keys in the store layout, so it runs without a per-run prefix.
+        let prefix = AppEnvironment.value("LIVE_S3_NO_PREFIX") == nil ? "run-\(UUID().uuidString.prefix(8))" : ""
         config = S3Config(endpoint: endpoint, region: region, bucket: bucket,
-                          pathStyle: AppEnvironment.value("LIVE_S3_VIRTUAL_HOST") == nil, prefix: "run-\(UUID().uuidString.prefix(8))")
+                          pathStyle: AppEnvironment.value("LIVE_S3_VIRTUAL_HOST") == nil, prefix: prefix)
         if AppEnvironment.value("LIVE_S3_CREATE_BUCKET") != nil { try await createBucketIfNeeded() }
         dir = FileManager.default.temporaryDirectory.appendingPathComponent("live-s3-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

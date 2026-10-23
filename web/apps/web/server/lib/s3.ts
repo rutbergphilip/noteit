@@ -197,7 +197,7 @@ export function createS3Handler(ctx: ServerContext) {
       const { user, payloadHash } = await authenticate(event, ctx);
       const { bucket, key } = parsePath(url);
       if (bucket !== BUCKET) throw new S3Failure(404, 'NoSuchBucket', 'The only bucket is noteit');
-      if (key !== undefined && !isValidKey(key)) throw new S3Failure(400, 'InvalidArgument', 'Key is outside the NoteIt layout');
+      if (key !== undefined && !isValidKey(key)) throw new S3Failure(400, 'InvalidArgument', 'Key is outside the NoteIt layout. In NoteIt on your Mac, choose the NoteIt Server provider, or leave Folder inside bucket empty.');
       let body: Uint8Array = new Uint8Array();
       if (method === 'PUT') {
         try {
