@@ -2026,6 +2026,7 @@ final class ExternalChangeTests: XCTestCase {
         store.rescanNow()
         let fresh = try note(store, titled: "Fresh")
         XCTAssertEqual(fresh.preview, "still being written")
+        store.waitForMarkdownWrites(upTo: 10)
         XCTAssertTrue(try read("Fresh.md").contains("id: \(fresh.id.uuidString)"))
     }
 
