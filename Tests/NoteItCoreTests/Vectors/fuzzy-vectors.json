@@ -1,0 +1,320 @@
+{
+  "version": 1,
+  "about": "FuzzyMatcher (Swift) and web/packages/doc/src/fuzzy.ts must agree on every case.",
+  "cases": [
+    {
+      "query": "gn",
+      "candidate": "Grocery Notes",
+      "score": 47,
+      "indices": [
+        0,
+        8
+      ],
+      "exact": false
+    },
+    {
+      "query": "gn",
+      "candidate": "Ginger",
+      "score": 43,
+      "indices": [
+        0,
+        2
+      ],
+      "exact": false
+    },
+    {
+      "query": "xyz",
+      "candidate": "Grocery Notes",
+      "match": false
+    },
+    {
+      "query": "ab",
+      "candidate": "ba",
+      "match": false
+    },
+    {
+      "query": "",
+      "candidate": "Anything",
+      "score": 0,
+      "indices": [],
+      "exact": false
+    },
+    {
+      "query": "cafe",
+      "candidate": "Café",
+      "score": 1499,
+      "indices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "exact": true
+    },
+    {
+      "query": "CAFÉ",
+      "candidate": "cafe",
+      "score": 1499,
+      "indices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "exact": true
+    },
+    {
+      "query": "resume",
+      "candidate": "My Résumé",
+      "score": 243,
+      "indices": [
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "exact": false
+    },
+    {
+      "query": "cafe",
+      "candidate": "Café au lait",
+      "score": 277,
+      "indices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "exact": false
+    },
+    {
+      "query": "lait",
+      "candidate": "Café au lait",
+      "score": 167,
+      "indices": [
+        8,
+        9,
+        10,
+        11
+      ],
+      "exact": false
+    },
+    {
+      "query": "note",
+      "candidate": "ＮＯＴＥ",
+      "score": 1499,
+      "indices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "exact": true
+    },
+    {
+      "query": "grocery notes",
+      "candidate": "Grocery Notes",
+      "score": 2531,
+      "indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "exact": true
+    },
+    {
+      "query": "groc",
+      "candidate": "Grocery Notes",
+      "score": 277,
+      "indices": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "exact": false
+    },
+    {
+      "query": "notes groc",
+      "candidate": "Grocery Notes",
+      "score": 383,
+      "indices": [
+        0,
+        1,
+        2,
+        3,
+        8,
+        9,
+        10,
+        11,
+        12
+      ],
+      "exact": false
+    },
+    {
+      "query": "new note",
+      "candidate": "New Note",
+      "score": 1954,
+      "indices": [
+        0,
+        1,
+        2,
+        4,
+        5,
+        6,
+        7
+      ],
+      "exact": true
+    },
+    {
+      "query": "nn",
+      "candidate": "New Note",
+      "score": 52,
+      "indices": [
+        0,
+        4
+      ],
+      "exact": false
+    },
+    {
+      "query": "nn",
+      "candidate": "New Notebook…",
+      "score": 51,
+      "indices": [
+        0,
+        4
+      ],
+      "exact": false
+    },
+    {
+      "query": "set",
+      "candidate": "Settings…",
+      "score": 242,
+      "indices": [
+        0,
+        1,
+        2
+      ],
+      "exact": false
+    },
+    {
+      "query": "tsk",
+      "candidate": "Show Tasks",
+      "score": 55,
+      "indices": [
+        5,
+        7,
+        8
+      ],
+      "exact": false
+    },
+    {
+      "query": "camel",
+      "candidate": "myCamelCase",
+      "score": 208,
+      "indices": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "exact": false
+    },
+    {
+      "query": "mcc",
+      "candidate": "myCamelCase",
+      "score": 75,
+      "indices": [
+        0,
+        2,
+        7
+      ],
+      "exact": false
+    },
+    {
+      "query": "ab",
+      "candidate": "a-b_c",
+      "score": 55,
+      "indices": [
+        0,
+        2
+      ],
+      "exact": false
+    },
+    {
+      "query": "🍎",
+      "candidate": "Apple 🍎 pie",
+      "score": 20,
+      "indices": [
+        6
+      ],
+      "exact": false
+    },
+    {
+      "query": "ss",
+      "candidate": "Straße",
+      "score": 81,
+      "indices": [
+        4
+      ],
+      "exact": false
+    },
+    {
+      "query": "daily",
+      "candidate": "Daily Notes 2026-10-24",
+      "score": 311,
+      "indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "exact": false
+    },
+    {
+      "query": "2026",
+      "candidate": "Daily Notes 2026-10-24",
+      "score": 165,
+      "indices": [
+        12,
+        13,
+        14,
+        15
+      ],
+      "exact": false
+    },
+    {
+      "query": "ob",
+      "candidate": "obsidian Box",
+      "score": 205,
+      "indices": [
+        0,
+        1
+      ],
+      "exact": false
+    },
+    {
+      "query": "ox",
+      "candidate": "Obsidian Box",
+      "score": 77,
+      "indices": [
+        10,
+        11
+      ],
+      "exact": false
+    }
+  ]
+}
