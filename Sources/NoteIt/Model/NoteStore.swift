@@ -401,28 +401,9 @@ final class NoteStore: ObservableObject {
                 }
                 wait = 0
             }
-            switch readMarkdownBody(id, from: markdownStorage, wait: wait) {
-            case .read(let stored):
-                clearUnreadableMarkdownBody(id)
-                loaded = stored.text
-                setBodyExtras(stored.extras, for: id)
-                if let reason = stored.readOnlyReason { blockBodyWrites(id, reason: reason) }
-            case .missing:
-                clearUnreadableMarkdownBody(id)
-                if let held = heldMarkdownBody(id) {
-                    loaded = held.text
-                    setBodyExtras(held.extras, for: id)
-                }
-            case .failed(let error):
-                // Never cached: shown empty and read-only, never output or built on, and read again next time.
-                handleUnreadableMarkdownBody(id, at: url, error: error)
-                markdownFailedReadRetryAt[id] = Date().addingTimeInterval(markdownFailedReadRetryInterval)
-                gaveMarkdownBody(id, .failed)
-                return NSAttributedString()
-            case .unanswered:
-                // Shown as last known and read again once the folder answers; never cached, so never written.
-                gaveMarkdownBody(id, .lastKnown)
-                return markdownStorage.lastKnownBody(id)?.text ?? heldMarkdownBody(id)?.text ?? NSAttributedString()
+            switch takeMarkdownRead(id, readMarkdownBody(id, from: markdownStorage, wait: wait), from: markdownStorage) {
+            case .text(let text): loaded = text
+            case .placeholder(let placeholder): return placeholder
             }
         } else if FileManager.default.fileExists(atPath: url.path) {
             do {
@@ -437,6 +418,45 @@ final class NoteStore: ObservableObject {
             loaded = held.text
             setBodyExtras(held.extras, for: id)
         }
+        cacheLoadedBody(id, loaded)
+        return loaded
+    }
+
+    private enum TakenMarkdownRead {
+        /// The note's text, to cache.
+        case text(NSAttributedString)
+        /// Shown instead of the note's text; never cached, so never written or built on.
+        case placeholder(NSAttributedString)
+    }
+
+    /// The state a read's outcome leaves the note in, the same for every caller that takes a read (`body(for:)`,
+    /// sync's `exportBodySource`), since the read's own end does nothing once it was taken.
+    private func takeMarkdownRead(_ id: UUID, _ outcome: MarkdownBodyRead, from storage: MarkdownBodyStorage) -> TakenMarkdownRead {
+        switch outcome {
+        case .read(let stored):
+            clearUnreadableMarkdownBody(id)
+            setBodyExtras(stored.extras, for: id)
+            if let reason = stored.readOnlyReason { blockBodyWrites(id, reason: reason) }
+            return .text(stored.text)
+        case .missing:
+            clearUnreadableMarkdownBody(id)
+            guard let held = heldMarkdownBody(id) else { return .text(NSAttributedString()) }
+            setBodyExtras(held.extras, for: id)
+            return .text(held.text)
+        case .failed(let error):
+            // Shown empty and read-only, never output or built on, and read again after a pause.
+            handleUnreadableMarkdownBody(id, at: bodyURL(for: id), error: error)
+            markdownFailedReadRetryAt[id] = Date().addingTimeInterval(markdownFailedReadRetryInterval)
+            gaveMarkdownBody(id, .failed)
+            return .placeholder(NSAttributedString())
+        case .unanswered:
+            // Shown as last known and read again once the folder answers.
+            gaveMarkdownBody(id, .lastKnown)
+            return .placeholder(storage.lastKnownBody(id)?.text ?? heldMarkdownBody(id)?.text ?? NSAttributedString())
+        }
+    }
+
+    private func cacheLoadedBody(_ id: UUID, _ loaded: NSAttributedString) {
         bodyCache[id] = loaded
         touchBody(id)
         gaveMarkdownBody(id, nil)
@@ -444,7 +464,6 @@ final class NoteStore: ObservableObject {
             searchIndexer.indexIfMissing(meta, body: loaded)
         }
         trimBodyCache()
-        return loaded
     }
 
     /// The content folder's name while the note's Markdown file hasn't been read (the folder is being checked or
@@ -2419,18 +2438,19 @@ final class NoteStore: ObservableObject {
         }
         guard bodyStorage.kind != .rtfd else { return .file(bodyStorage.fileURL(for: id)) }
         guard let markdownStorage, markdownStorage.revisionInputURL(for: id) != nil else { return .text(NSAttributedString()) }
-        guard case .read(let stored) = readMarkdownBody(id, from: markdownStorage, wait: markdownBlockingTimeout) else {
+        // A note whose file failed to read isn't read again before its retry time, as in body(for:).
+        if loadErrors[id] != nil, let retry = markdownFailedReadRetryAt[id], Date() < retry {
             throw NoteStoreSyncError.unreadableBody(id)
         }
-        // Cached as body(for:) does, so an editor waiting for this read is reloaded with it.
-        clearUnreadableMarkdownBody(id)
-        setBodyExtras(stored.extras, for: id)
-        if let reason = stored.readOnlyReason { blockBodyWrites(id, reason: reason) }
-        bodyCache[id] = stored.text
-        touchBody(id)
-        gaveMarkdownBody(id, nil)
-        trimBodyCache()
-        return .text(stored.text.copy() as? NSAttributedString ?? NSAttributedString(attributedString: stored.text))
+        // Taken as body(for:) takes it, so the note (and an editor waiting for this read) ends in the same state.
+        let outcome = readMarkdownBody(id, from: markdownStorage, wait: markdownBlockingTimeout)
+        guard case .text(let text) = takeMarkdownRead(id, outcome, from: markdownStorage) else {
+            throw NoteStoreSyncError.unreadableBody(id)
+        }
+        cacheLoadedBody(id, text)
+        // A missing file is cached as body(for:) does, but never synced as an empty note.
+        guard case .read = outcome else { throw NoteStoreSyncError.unreadableBody(id) }
+        return .text(text.copy() as? NSAttributedString ?? NSAttributedString(attributedString: text))
     }
 
     /// Adjusts metadata of a note just created by sync (e.g. a conflict copy); counts as a local change.

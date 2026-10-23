@@ -933,7 +933,7 @@ final class ExternalChangeTests: XCTestCase {
     }
 
     /// An open editor showing Plan's last known text while a slow read runs; `finish` lets the read end with
-    /// `result`, and another caller (an export, the API, sync) takes the ended read before its own end is handled.
+    /// `result` without the main thread handling its end, so another caller can take it.
     private func openEditorOverASlowReadTakenByAnotherCaller(_ result: @escaping () throws -> Data)
         throws -> (store: NoteStore, plan: UUID, editor: EditorHarness.Editor, harness: EditorHarness, finish: () -> Void) {
         try put("Plan.md", "# Plan\n\nPlan text\n")
@@ -955,7 +955,6 @@ final class ExternalChangeTests: XCTestCase {
         return (store, plan, editor, harness, {
             gate.signal()
             Thread.sleep(forTimeInterval: 0.3)
-            _ = store.body(for: plan, wait: 0)
         })
     }
 
@@ -965,6 +964,7 @@ final class ExternalChangeTests: XCTestCase {
         }
         defer { harness.close() }
         finish()
+        _ = store.body(for: plan, wait: 0)
         XCTAssertEqual(store.cachedBody(plan)?.string, "Plan\nNew text")
         try await waitUntil({ editor.view.string == "Plan\nNew text" }, "the editor shows the text that was read")
     }
@@ -975,6 +975,7 @@ final class ExternalChangeTests: XCTestCase {
         }
         defer { harness.close() }
         finish()
+        _ = store.body(for: plan, wait: 0)
         XCTAssertNotNil(store.loadError(for: plan))
         try await waitUntil({ editor.view.string == "" }, "the editor no longer shows the last known text as the note")
         XCTAssertTrue(store.isBodyWriteBlocked(plan))
@@ -986,6 +987,7 @@ final class ExternalChangeTests: XCTestCase {
         }
         defer { harness.close() }
         finish()
+        _ = store.body(for: plan, wait: 0)
         // Before the editor's reload arrives, an edit lands on the placeholder it still shows.
         EditorHarness.type(" typed", in: editor.view)
         editor.coordinator.commit()
@@ -995,6 +997,45 @@ final class ExternalChangeTests: XCTestCase {
         store.waitForMarkdownWrites(upTo: 10)
         XCTAssertFalse(try read("Plan.md").contains("typed"))
         try await waitUntil({ editor.view.string == "Plan\nNew text" }, "the editor shows the note's real text")
+    }
+
+    func testSyncTakingAFailedReadLeavesTheNoteAsAFailedReadDoes() async throws {
+        let (store, plan, editor, harness, finish) = try openEditorOverASlowReadTakenByAnotherCaller {
+            throw POSIXError(.EIO)
+        }
+        defer { harness.close() }
+        finish()
+        XCTAssertThrowsError(try store.exportBodySource(plan))
+        XCTAssertNotNil(store.loadError(for: plan))
+        XCTAssertTrue(store.isBodyWriteBlocked(plan), "the editor stays read-only")
+        try await waitUntil({ editor.view.string == "" }, "the editor no longer shows the last known text as the note")
+
+        let reads = OSAllocatedUnfairLock(initialState: 0)
+        store.markdownStorage?.readFileData = { url in
+            reads.withLock { $0 += 1 }
+            return try Data(contentsOf: url)
+        }
+        XCTAssertThrowsError(try store.exportBodySource(plan))
+        _ = store.body(for: plan)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(reads.withLock { $0 }, 0, "not read again before the retry time")
+    }
+
+    func testSyncTakingAReadOfAMissingFileReloadsTheEditor() async throws {
+        let (store, ids, gates) = try openWithGatedReads(["Plan", "Other"], gated: ["Other"])
+        let plan = try XCTUnwrap(ids["Plan"]), other = try XCTUnwrap(ids["Other"])
+        _ = store.body(for: other)
+        // Open in a window, not selected: Plan waits for Other's read and shows its last known text.
+        let harness = EditorHarness()
+        defer { harness.close() }
+        let editor = harness.open(store, plan)
+        XCTAssertEqual(editor.view.string, "Plan\nPlan text")
+        try fm.removeItem(at: content.appendingPathComponent("Plan.md"))
+        gates["Other"]?.leave()
+        Thread.sleep(forTimeInterval: 0.3)
+
+        XCTAssertThrowsError(try store.exportBodySource(plan), "a missing file never syncs as empty")
+        try await waitUntil({ editor.view.string == "" }, "the editor shows what the read found")
     }
 
     func testANoteWhoseFileFailedToReadIsNeverOutputAsEmpty() async throws {
