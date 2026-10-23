@@ -1,6 +1,6 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
-import { Algorithm, hash, verify } from '@node-rs/argon2';
+import { hash, verify } from '@node-rs/argon2';
 import { Mutex, readIfExists, writeFileAtomic } from './files';
 
 export type Uuid = string;
@@ -62,7 +62,8 @@ export class ApiFailure extends Error {
 export const USERNAME_RE = /^[a-z0-9][a-z0-9._-]{1,31}$/;
 export const MIN_PASSWORD_LENGTH = 10;
 
-const ARGON = { algorithm: Algorithm.Argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 };
+// algorithm 2 = Argon2id (@node-rs/argon2's Algorithm is an ambient const enum, not importable as a value here).
+const ARGON = { algorithm: 2, memoryCost: 19456, timeCost: 2, parallelism: 1 };
 
 export function hashPassword(password: string): Promise<string> {
   return hash(password, ARGON);

@@ -1,0 +1,477 @@
+/* NoteIt web tokens, from the owner's design (design pNN templates). Components use token names only. */
+:root {
+  --bg: #ffffff;
+  --side: #f3f2f7;
+  --list: #fafafc;
+  --top: #ffffff;
+  --page: #f3f2f7;
+  --ink: #1d1d22;
+  --ink2: #62626e;
+  --ink3: #8c8c98;
+  --line: rgba(20, 20, 40, 0.1);
+  --line-strong: rgba(20, 20, 40, 0.14);
+  --fill: rgba(20, 20, 40, 0.05);
+  --acc: #6e5bff;
+  --acct: #5443db;
+  --onacc: #ffffff;
+  --sel: rgba(110, 91, 255, 0.12);
+  --code: #f4f3f8;
+  --chip: rgba(110, 91, 255, 0.12);
+  --scrim: rgba(18, 18, 40, 0.38);
+  --shadow-card: 0 1px 2px rgba(20, 20, 40, 0.06), 0 20px 50px rgba(20, 20, 40, 0.1);
+  --shadow-dialog: 0 30px 80px rgba(10, 10, 40, 0.35);
+  --pinned: #f08a00;
+  --recent: #1f9db4;
+  --success: #30a14e;
+  --success-bg: #e8f6ec;
+  --success-ink: #1e5e30;
+  --warn-bg: #fff4e0;
+  --warn-ink: #6b4300;
+  --danger: #ff3b30;
+  --danger-bg: #fdecea;
+  --danger-ink: #8a1c13;
+  --mark: rgba(255, 201, 60, 0.45);
+  --avatar: #1e2470;
+  --hero: linear-gradient(140deg, #6e5bff 0%, #3a3fd9 55%, #1e2470 100%);
+  --hero-accent: #c9c2ff;
+
+  --nb-blue: #0a84ff;
+  --nb-indigo: #5e5ce6;
+  --nb-purple: #bf5af2;
+  --nb-pink: #ff375f;
+  --nb-red: #ff453a;
+  --nb-orange: #ff9f0a;
+  --nb-yellow: #ffd60a;
+  --nb-green: #30d158;
+  --nb-teal: #64d2ff;
+  --nb-gray: #8e8e93;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+  --radius-sm: 7px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --reading-max: 760px;
+  --header-h: 56px;
+  color-scheme: light;
+}
+
+:root.dark {
+  --bg: #1b1b1f;
+  --side: #222227;
+  --list: #1f1f24;
+  --top: #1b1b1f;
+  --page: #151518;
+  --ink: #f1f1f4;
+  --ink2: #a9a9b5;
+  --ink3: #7d7d89;
+  --line: rgba(255, 255, 255, 0.1);
+  --line-strong: rgba(255, 255, 255, 0.16);
+  --fill: rgba(255, 255, 255, 0.06);
+  --acc: #8f80ff;
+  --acct: #ada3ff;
+  --onacc: #14142b;
+  --sel: rgba(143, 128, 255, 0.18);
+  --code: #26262c;
+  --chip: rgba(143, 128, 255, 0.18);
+  --scrim: rgba(0, 0, 0, 0.55);
+  --success-bg: #183322;
+  --success-ink: #a6e3b6;
+  --warn-bg: #3a2c12;
+  --warn-ink: #f5d58f;
+  --danger-bg: #3d1b18;
+  --danger-ink: #ffb4ab;
+  --mark: rgba(255, 201, 60, 0.35);
+  --avatar: #3a3fd9;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+a {
+  color: var(--acct);
+}
+a:hover {
+  color: var(--acc);
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid var(--acc);
+  outline-offset: 1px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Round checkboxes (design p01) */
+input[type='checkbox'].ni-check,
+.ni-li-task input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1.6px solid var(--ink3);
+  display: grid;
+  place-items: center;
+  background: transparent;
+  cursor: pointer;
+}
+input[type='checkbox'].ni-check:checked,
+.ni-li-task input[type='checkbox']:checked {
+  background: var(--acc);
+  border-color: var(--acc);
+}
+input[type='checkbox'].ni-check:checked::after,
+.ni-li-task input[type='checkbox']:checked::after {
+  content: '';
+  width: 4px;
+  height: 8px;
+  border: solid var(--onacc);
+  border-width: 0 2px 2px 0;
+  transform: translateY(-1px) rotate(45deg);
+}
+
+/* Switch (design p09) */
+input.ni-switch {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+  flex: none;
+  width: 44px;
+  height: 26px;
+  border-radius: 13px;
+  background: #c9c9d3;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+input.ni-switch::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  transition: left 0.15s;
+}
+input.ni-switch:checked {
+  background: var(--acc);
+}
+input.ni-switch:checked::after {
+  left: 21px;
+}
+
+/* Shared form pieces */
+.ni-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink2);
+}
+.ni-input,
+.ni-field input,
+.ni-field select,
+.ni-field textarea {
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: var(--bg);
+  font-size: 15px;
+  color: var(--ink);
+  width: 100%;
+}
+.ni-field textarea {
+  height: auto;
+  padding: 10px 14px;
+  resize: vertical;
+}
+.ni-hint {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink2);
+  line-height: 1.45;
+}
+.ni-btn {
+  height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--acc);
+  color: var(--onacc);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.ni-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.ni-btn.secondary {
+  background: var(--fill);
+  color: var(--ink);
+}
+.ni-btn.ghost {
+  background: transparent;
+  color: var(--ink2);
+}
+.ni-btn.danger {
+  background: var(--danger);
+  color: #fff;
+}
+.ni-btn.small {
+  height: 34px;
+  padding: 0 12px;
+  font-size: 13px;
+  border-radius: 9px;
+}
+.ni-alert {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ni-alert.warn {
+  background: var(--warn-bg);
+  color: var(--warn-ink);
+}
+.ni-alert.error {
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+}
+.ni-alert.ok {
+  background: var(--success-bg);
+  color: var(--success-ink);
+}
+.ni-wordmark {
+  font-weight: 800;
+  font-style: italic;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+.ni-wordmark span {
+  color: var(--acc);
+}
+
+/* Dialogs (design p03-p05) */
+.ni-scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  z-index: 50;
+}
+.ni-dialog {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 51;
+  width: min(460px, calc(100% - 32px));
+  max-height: calc(100vh - 140px);
+  overflow: auto;
+  border-radius: var(--radius-xl);
+  background: var(--bg);
+  box-shadow: var(--shadow-dialog);
+}
+
+/* Editor content (noteit-doc rendering) */
+.ni-prose {
+  max-width: var(--reading-max);
+  margin: 0 auto;
+  font-size: 16px;
+  line-height: 1.55;
+  outline: none;
+  min-height: 50vh;
+  word-wrap: break-word;
+}
+/* The editor itself is the text field; its focus is shown by the caret, not a ring. */
+.ni-prose:focus,
+.ni-prose:focus-visible {
+  outline: none;
+}
+.ni-prose > * + * {
+  margin-top: 0;
+}
+.ni-prose p {
+  margin: 0 0 10px;
+}
+.ni-prose h1 {
+  margin: 0 0 12px;
+  font-size: 30px;
+  line-height: 1.15;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.ni-prose h2 {
+  margin: 24px 0 10px;
+  font-size: 21px;
+  font-weight: 650;
+}
+.ni-prose h3 {
+  margin: 20px 0 8px;
+  font-size: 17px;
+  font-weight: 600;
+}
+.ni-prose pre.ni-code {
+  margin: 0;
+  padding: 2px 16px;
+  background: var(--code);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.ni-prose :not(pre.ni-code) + pre.ni-code {
+  margin-top: 4px;
+  padding-top: 14px;
+  border-top-left-radius: 10px;
+  border-top-right-radius: 10px;
+}
+.ni-prose pre.ni-code:not(:has(+ pre.ni-code)) {
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom-left-radius: 10px;
+  border-bottom-right-radius: 10px;
+}
+.ni-prose code {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  background: var(--code);
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+.ni-prose blockquote {
+  margin: 0 0 12px;
+  padding: 2px 0 2px 16px;
+  border-left: 3px solid var(--line-strong);
+  color: var(--ink2);
+}
+.ni-prose blockquote p {
+  margin: 0 0 4px;
+}
+.ni-prose hr {
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  margin: 18px 0;
+}
+.ni-prose a {
+  color: var(--acct);
+}
+.ni-prose mark {
+  color: inherit;
+  border-radius: 3px;
+}
+.ni-prose .ni-li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0 0 6px;
+}
+.ni-prose .ni-li-marker {
+  flex: none;
+  min-width: 18px;
+  text-align: right;
+  color: var(--ink2);
+  user-select: none;
+  padding-top: 1px;
+}
+.ni-prose .ni-li-task .ni-li-marker {
+  padding-top: 3px;
+}
+.ni-prose .ni-li-content {
+  flex: 1;
+  min-width: 0;
+}
+.ni-prose .ni-li-task.is-checked .ni-li-content {
+  color: var(--ink2);
+  text-decoration: line-through;
+}
+.ni-prose table.ni-table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 560px;
+  font-size: 15px;
+  margin: 0 0 20px;
+}
+.ni-prose th,
+.ni-prose td {
+  text-align: left;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  vertical-align: top;
+}
+.ni-prose th {
+  background: var(--fill);
+  font-weight: 600;
+}
+.ni-prose th p,
+.ni-prose td p {
+  margin: 0;
+}
+.ni-prose img.ni-image {
+  max-width: 100%;
+  border-radius: 8px;
+  vertical-align: bottom;
+}
+.ni-prose .ni-attachment {
+  display: inline-flex;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--fill);
+  font-size: 13px;
+  text-decoration: none;
+}
+.ni-prose .is-empty-doc::before {
+  content: attr(data-placeholder);
+  color: var(--ink3);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.ni-prose .tag-chip {
+  color: var(--acct);
+  font-weight: 500;
+}

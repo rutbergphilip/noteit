@@ -62,6 +62,11 @@ export function checkCsrf(event: H3Event, cfg: ServerConfig): void {
   if (origin !== expected) throw new ApiFailure(403, 'forbidden', 'Cross-origin request refused');
 }
 
+/** The CSP; the SPA page adds sha256 hashes of its own inline scripts (Nuxt's config and importmap). */
+export function contentSecurityPolicy(scriptHashes: string[] = []): string {
+  return CSP.replace("script-src 'self'", ["script-src 'self'", ...scriptHashes.map((h) => `'sha256-${h}'`)].join(' '));
+}
+
 const CSP = [
   "default-src 'self'",
   "script-src 'self'",

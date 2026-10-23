@@ -9,7 +9,7 @@
     "start": "node .output/server/index.mjs",
     "postinstall": "nuxt prepare",
     "test": "vitest run",
-    "typecheck": "vue-tsc --noEmit -p tsconfig.check.json",
+    "typecheck": "nuxt prepare >/dev/null && vue-tsc --noEmit -p tsconfig.check.json && tsc --noEmit -p tsconfig.server-check.json",
     "e2e": "playwright test"
   },
   "dependencies": {

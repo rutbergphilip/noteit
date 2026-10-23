@@ -198,7 +198,7 @@ export function createS3Handler(ctx: ServerContext) {
       const { bucket, key } = parsePath(url);
       if (bucket !== BUCKET) throw new S3Failure(404, 'NoSuchBucket', 'The only bucket is noteit');
       if (key !== undefined && !isValidKey(key)) throw new S3Failure(400, 'InvalidArgument', 'Key is outside the NoteIt layout');
-      let body = new Uint8Array();
+      let body: Uint8Array = new Uint8Array();
       if (method === 'PUT') {
         try {
           body = await readBodyLimited(event, cfg.maxObjectBytes);
@@ -242,7 +242,7 @@ export function createS3Handler(ctx: ServerContext) {
           setResponseHeader(event, 'Last-Modified', new Date(head.lastModified).toUTCString());
           setResponseHeader(event, 'Content-Type', 'application/octet-stream');
           if (method === 'HEAD') {
-            setResponseHeader(event, 'Content-Length', String(head.size));
+            setResponseHeader(event, 'Content-Length', head.size);
             return '';
           }
           const obj = await store.get(user.id, key);

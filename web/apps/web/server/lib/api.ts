@@ -143,7 +143,7 @@ export function createApiHandler(ctx: ServerContext) {
       if (!accounts.isEmpty) fail(404, 'notFound');
       const wait = ctx.setupLimiter.hit(clientIp(event, cfg));
       if (wait) {
-        setResponseHeader(event, 'Retry-After', String(wait));
+        setResponseHeader(event, 'Retry-After', wait);
         fail(429, 'rateLimited', 'Too many attempts.');
       }
       const body = await jsonBody(event);
@@ -174,7 +174,7 @@ export function createApiHandler(ctx: ServerContext) {
       const ip = clientIp(event, cfg);
       const wait = Math.max(ctx.loginLimiter.hit(`ip:${ip}`), ctx.loginLimiter.hit(`user:${username}`));
       if (wait) {
-        setResponseHeader(event, 'Retry-After', String(wait));
+        setResponseHeader(event, 'Retry-After', wait);
         setResponseStatus(event, 429);
         return { error: 'rateLimited', message: 'Too many attempts. Try again shortly.', retryAfter: wait };
       }

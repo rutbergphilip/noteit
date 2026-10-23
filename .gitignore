@@ -15,3 +15,4 @@ web/apps/web/.nuxt/
 web/apps/web/.output/
 web/apps/web/.data/
 web/**/test-results/
+.playwright-mcp/
