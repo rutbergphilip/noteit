@@ -31,7 +31,8 @@ final class S3ListParserTests: XCTestCase {
         XCTAssertTrue(page.isTruncated)
         XCTAssertEqual(page.nextContinuationToken, "1ueGcxLPRx1Tr/XYExHnhbYLgveDs2J/wm36Hy4vbOwM=")
         XCTAssertEqual(page.objects, [
-            RemoteObject(key: "noteit/v1/notes/a&b.meta", etag: "9b2cf535f27731c974343645a3985328", size: 42),
+            RemoteObject(key: "noteit/v1/notes/a&b.meta", etag: "9b2cf535f27731c974343645a3985328", size: 42,
+                         lastModified: ISO8601DateFormatter().date(from: "2026-10-12T10:00:00Z")),
             RemoteObject(key: "noteit/v1/manifest.json", etag: "abc-2", size: 7),
         ])
     }

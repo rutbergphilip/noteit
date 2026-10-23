@@ -41,6 +41,13 @@ public enum S3ListParser {
         return value
     }
 
+    /// `LastModified` is ISO 8601, with or without fractional seconds; anything else lists as nil.
+    static func date(_ text: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+    }
+
     private final class ListDelegate: NSObject, XMLParserDelegate {
         var objects: [RemoteObject] = []
         var isTruncated = false
@@ -52,6 +59,7 @@ public enum S3ListParser {
         private var key: String?
         private var etag: String?
         private var size = 0
+        private var lastModified: Date?
 
         func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes: [String: String] = [:]) {
             if path.isEmpty, elementName == "ListBucketResult" { sawRoot = true }
@@ -61,6 +69,7 @@ public enum S3ListParser {
                 key = nil
                 etag = nil
                 size = 0
+                lastModified = nil
             }
         }
 
@@ -74,8 +83,9 @@ public enum S3ListParser {
             case ("Contents", "Key"): key = text
             case ("Contents", "ETag"): etag = S3ListParser.stripQuotes(text)
             case ("Contents", "Size"): size = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            case ("Contents", "LastModified"): lastModified = S3ListParser.date(text.trimmingCharacters(in: .whitespacesAndNewlines))
             case ("ListBucketResult", "Contents"):
-                if let key { objects.append(RemoteObject(key: key, etag: etag ?? "", size: size)) }
+                if let key { objects.append(RemoteObject(key: key, etag: etag ?? "", size: size, lastModified: lastModified)) }
             case ("ListBucketResult", "IsTruncated"):
                 isTruncated = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "true"
             case ("ListBucketResult", "NextContinuationToken"):

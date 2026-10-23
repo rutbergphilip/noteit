@@ -181,6 +181,11 @@ public final class FolderBackend: StorageBackend, @unchecked Sendable {
         try await onIOQueue { try self.deleteSync(key, ifMatch: ifMatch) }
     }
 
+    /// False: the `.noteit-lock` flock serializes writers on one Mac only, not across a folder that a file-sync
+    /// service copies between Macs (sync-security Task 3.0).
+    public func atomicConditionalWrites() async -> Bool { false }
+    public func atomicConditionalDelete() async -> Bool { false }
+
     private func deleteSync(_ key: String, ifMatch: String?) throws {
         let url = try fileURL(for: key)
         try withStoreLock {

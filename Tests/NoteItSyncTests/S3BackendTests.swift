@@ -239,7 +239,7 @@ final class S3BackendTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests[0].request.value(forHTTPHeaderField: "If-Match"), "\"seen\"")
     }
 
-    func testConditionalDeleteNotImplementedFallsBackToHead() async throws {
+    func testConditionalDeleteNotImplementedHasNoFallback() async throws {
         StubURLProtocol.reset { request in
             switch request.httpMethod {
             case "DELETE" where request.value(forHTTPHeaderField: "If-Match") != nil:
@@ -251,14 +251,16 @@ final class S3BackendTests: XCTestCase {
         let backend = makeBackend()
         do {
             try await backend.delete("k", ifMatch: "stale")
-            XCTFail("Expected preconditionFailed")
+            XCTFail("Expected conditionalDeleteUnsupported")
         } catch let error as StorageError {
-            XCTAssertEqual(error, .preconditionFailed("k"))
+            XCTAssertEqual(error, .conditionalDeleteUnsupported("k"))
         }
-        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["DELETE", "HEAD"])
-        try await backend.delete("k", ifMatch: "current")
-        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["DELETE", "HEAD", "HEAD", "DELETE"], "unsupported conditional DELETE is remembered")
-        XCTAssertNil(StubURLProtocol.requests[3].request.value(forHTTPHeaderField: "If-Match"))
+        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["DELETE"])
+        do {
+            try await backend.delete("k", ifMatch: "current")
+            XCTFail("Expected conditionalDeleteUnsupported")
+        } catch StorageError.conditionalDeleteUnsupported {}
+        XCTAssertEqual(StubURLProtocol.requests.map { $0.request.httpMethod }, ["DELETE"], "unsupported conditional DELETE is remembered")
         XCTAssertFalse(backend.conditionalDeletesSupported)
         XCTAssertTrue(backend.conditionalWritesSupported, "a DELETE limitation must not disable conditional PUTs")
     }
@@ -333,9 +335,9 @@ final class S3BackendTests: XCTestCase {
         let backend = makeBackend()
         do {
             try await backend.put("k", data: Data([1]), ifMatch: nil, ifNoneMatch: true)
-            XCTFail("Expected preconditionFailed")
+            XCTFail("Expected an in-doubt network error")
         } catch let error as StorageError {
-            XCTAssertEqual(error, .preconditionFailed("k"))
+            XCTAssertEqual(error, .network("unverified conditional write"), "our PUT was sent, so the outcome is unknown")
         }
         XCTAssertFalse(backend.conditionalWritesSupported)
     }
@@ -379,7 +381,8 @@ final class S3BackendTests: XCTestCase {
         XCTAssertFalse(canary.isEmpty)
         let ifMatch = canary.compactMap { $0.request.value(forHTTPHeaderField: "If-Match") }
         XCTAssertFalse(ifMatch.isEmpty)
-        XCTAssertEqual(Set(ifMatch), ["\"noteit-canary-mismatch\""])
+        // The bogus precondition is the frozen value; the ETag steps send the server's own ETags.
+        XCTAssertEqual(Set(ifMatch).subtracting(["\"v1\"", "\"v2\""]), ["\"noteit-canary-mismatch\""])
     }
 
     func testCanaryKeepsConditionalsOnHonestServerAndCleansUp() async throws {
@@ -390,7 +393,8 @@ final class S3BackendTests: XCTestCase {
         XCTAssertTrue(backend.conditionalWritesSupported)
         XCTAssertTrue(backend.conditionalDeletesSupported)
         let canary = StubURLProtocol.requests.filter { $0.request.url!.path.contains("noteit/.canary/") }
-        XCTAssertEqual(canary.map { $0.request.httpMethod! }, ["PUT", "PUT", "PUT", "DELETE", "DELETE"], "probe runs once")
+        XCTAssertEqual(canary.map { $0.request.httpMethod! }, ["PUT", "PUT", "PUT", "PUT", "PUT", "DELETE", "HEAD", "DELETE", "HEAD"],
+                       "probe runs once")
         XCTAssertEqual(StubURLProtocol.requests.count, canary.count + 2)
     }
 
@@ -409,10 +413,10 @@ final class S3BackendTests: XCTestCase {
             XCTFail("fallback must catch the stale etag")
         } catch StorageError.preconditionFailed {}
         do {
-            try await backend.delete("k", ifMatch: "stale")
-            XCTFail("fallback must catch the stale delete")
-        } catch StorageError.preconditionFailed {}
-        try await backend.delete("k", ifMatch: first)
+            try await backend.delete("k", ifMatch: first)
+            XCTFail("conditional deletes have no fallback")
+        } catch StorageError.conditionalDeleteUnsupported {}
+        try await backend.delete("k")
     }
 
     func testCanaryNetworkFailureIsRetriedLater() async throws {

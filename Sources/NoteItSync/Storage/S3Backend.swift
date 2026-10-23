@@ -36,6 +36,9 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
     private let lock = NSLock()
     private var _conditionalWritesSupported = true
     private var _conditionalDeletesSupported = true
+    /// Set only when the canary's write steps (or delete steps) passed in this session (sync-security Task 3.0).
+    private var writePassed = false
+    private var deletePassed = false
     private let verifiesConditionals: Bool
     private var conditionalCheck: Task<Void, Never>?
 
@@ -84,7 +87,8 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
             let (data, _) = try await send(method: "GET", key: nil, query: query)
             let page = try S3ListParser.parse(data)
             for object in page.objects where object.key.hasPrefix(keyPrefix) {
-                results.append(RemoteObject(key: String(object.key.dropFirst(keyPrefix.count)), etag: object.etag, size: object.size))
+                results.append(RemoteObject(key: String(object.key.dropFirst(keyPrefix.count)), etag: object.etag, size: object.size,
+                                            lastModified: object.lastModified))
             }
             guard page.isTruncated else { break }
             guard let next = page.nextContinuationToken else {
@@ -125,20 +129,29 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
         _ = try await send(method: "DELETE", key: key)
     }
 
+    /// No HEAD-then-DELETE fallback: a check followed by a plain DELETE removes whatever landed in between, so a
+    /// store without conditional deletes gets nothing sent and `conditionalDeleteUnsupported` (web-app spec §3.4.9).
     public func delete(_ key: String, ifMatch: String?) async throws {
         guard let ifMatch else { return try await delete(key) }
         await ensureConditionalsVerified()
-        if conditionalDeletesSupported {
-            do {
-                _ = try await send(method: "DELETE", key: key, headers: ["If-Match": "\"\(ifMatch)\""], conditional: true)
-                return
-            } catch S3Failure.conditionalNotSupported {
-                // Some providers support conditional PUT but not DELETE; fall back without changing the PUT path.
-                markConditionalDeletesUnsupported()
-            }
+        guard conditionalDeletesSupported else { throw StorageError.conditionalDeleteUnsupported(key) }
+        do {
+            _ = try await send(method: "DELETE", key: key, headers: ["If-Match": "\"\(ifMatch)\""], conditional: true)
+        } catch S3Failure.conditionalNotSupported {
+            // Some providers support conditional PUT but not DELETE.
+            markConditionalDeletesUnsupported()
+            throw StorageError.conditionalDeleteUnsupported(key)
         }
-        try await checkPreconditions(key, ifMatch: ifMatch, ifNoneMatch: false)
-        try await delete(key)
+    }
+
+    public func atomicConditionalWrites() async -> Bool {
+        await ensureConditionalsVerified()
+        return lock.withLock { writePassed && _conditionalWritesSupported }
+    }
+
+    public func atomicConditionalDelete() async -> Bool {
+        await ensureConditionalsVerified()
+        return lock.withLock { deletePassed && _conditionalDeletesSupported }
     }
 
     public func probe() async throws {
@@ -162,23 +175,36 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
         await check.value
     }
 
+    /// Write steps: create with `If-None-Match`, then it and a bogus `If-Match` must get 412; an `If-Match` overwrite
+    /// with the first ETag must succeed with a different ETag, after which that ETag must get 412. Delete steps: a
+    /// bogus `If-Match` DELETE must get 412 and leave the object; a DELETE with the current ETag must remove it.
     private func runConditionalCanary() async {
         let key = RemoteLayout.canaryPrefix + UUID().uuidString
         let bogus = ["If-Match": "\"\(RemoteLayout.canaryMismatchETag)\""]
         do {
+            var writesHold = true
             do {
-                _ = try await upload(key, data: Data("canary".utf8), headers: ["If-None-Match": "*"])
+                let first = try await upload(key, data: Data("canary".utf8), headers: ["If-None-Match": "*"])
                 let ignoresNoneMatch = try await accepts { _ = try await self.upload(key, data: Data("again".utf8), headers: ["If-None-Match": "*"]) }
                 let ignoresMatch = try await accepts { _ = try await self.upload(key, data: Data("again".utf8), headers: bogus) }
-                if ignoresNoneMatch || ignoresMatch { markConditionalWritesUnsupported() }
+                if ignoresNoneMatch || ignoresMatch {
+                    writesHold = false
+                } else {
+                    writesHold = try await overwriteRetiresETag(key, first: first)
+                }
             } catch S3Failure.conditionalNotSupported {
-                markConditionalWritesUnsupported()
+                writesHold = false
                 _ = try await upload(key, data: Data("canary".utf8), headers: [:])
             }
-            if try await accepts({ _ = try await self.send(method: "DELETE", key: key, headers: bogus, conditional: true) }) {
-                markConditionalDeletesUnsupported()
+            let deletesHold = try await conditionalDeleteHolds(key, bogus: bogus)
+            if !writesHold { markConditionalWritesUnsupported() }
+            if !deletesHold { markConditionalDeletesUnsupported() }
+            lock.withLock {
+                writePassed = writesHold
+                deletePassed = deletesHold
             }
-            try? await delete(key)
+            // Passing delete steps removed the canary already.
+            if !deletesHold { try? await delete(key) }
             if !conditionalWritesSupported || !conditionalDeletesSupported {
                 NSLog("NoteItSync: %@ ignores conditional requests (writes=%d deletes=%d); using verified fallback",
                       config.endpoint.host ?? "endpoint", conditionalWritesSupported ? 1 : 0, conditionalDeletesSupported ? 1 : 0)
@@ -187,6 +213,42 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
             // Unreachable or unauthorized: real requests will surface the error; check again next time.
             try? await delete(key)
             lock.withLock { conditionalCheck = nil }
+        }
+    }
+
+    /// An `If-Match` overwrite with `first` succeeds with a new ETag, and `first` stops matching afterwards.
+    private func overwriteRetiresETag(_ key: String, first: String) async throws -> Bool {
+        let second: String
+        do {
+            second = try await upload(key, data: Data("canary-2".utf8), headers: ["If-Match": "\"\(first)\""])
+        } catch StorageError.preconditionFailed {
+            return false
+        } catch S3Failure.conditionalNotSupported {
+            return false
+        }
+        guard second != first else { return false }
+        return !(try await accepts { _ = try await self.upload(key, data: Data("canary-3".utf8), headers: ["If-Match": "\"\(first)\""]) })
+    }
+
+    /// The canary's delete steps; on success the canary is gone.
+    private func conditionalDeleteHolds(_ key: String, bogus: [String: String]) async throws -> Bool {
+        if try await accepts({ _ = try await self.send(method: "DELETE", key: key, headers: bogus, conditional: true) }) { return false }
+        guard let current = try await headETag(key) else { return false }
+        do {
+            _ = try await send(method: "DELETE", key: key, headers: ["If-Match": "\"\(current)\""], conditional: true)
+        } catch StorageError.preconditionFailed {
+            return false
+        } catch S3Failure.conditionalNotSupported {
+            return false
+        }
+        return try await headETag(key) == nil
+    }
+
+    private func headETag(_ key: String) async throws -> String? {
+        do {
+            return etag(from: try await send(method: "HEAD", key: key).1)
+        } catch StorageError.notFound {
+            return nil
         }
     }
 
@@ -226,15 +288,10 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
         if let ifMatch, current != ifMatch { throw StorageError.preconditionFailed(key) }
     }
 
-    /// HEAD+PUT isn't atomic: if another writer landed in between, report a lost race so the caller re-decides.
+    /// HEAD+PUT isn't atomic: if another writer landed in between, the outcome is unknown. Our PUT was sent, so this
+    /// is in doubt (`.network`), never a definite 412; only `checkPreconditions` gives one (web-app spec §3.4.9).
     private func verifyUnconditionalWrite(_ key: String, expected: String) async throws {
-        let current: String
-        do {
-            current = etag(from: try await send(method: "HEAD", key: key).1)
-        } catch StorageError.notFound {
-            throw StorageError.preconditionFailed(key)
-        }
-        if current != expected { throw StorageError.preconditionFailed(key) }
+        guard try await headETag(key) == expected else { throw StorageError.network("unverified conditional write") }
     }
 
     private func send(
@@ -274,7 +331,8 @@ public final class S3Backend: StorageBackend, @unchecked Sendable {
             case .success(let value):
                 return value
             case .failure(let error):
-                guard case .network = error, attempt < retryDelays.count else { throw error }
+                // A conditional request is sent once: a replay could land after a later decision (spec §3.4.9).
+                guard case .network = error, !conditional, attempt < retryDelays.count else { throw error }
                 let delay = retryDelays[attempt]
                 attempt += 1
                 if delay > 0 { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
