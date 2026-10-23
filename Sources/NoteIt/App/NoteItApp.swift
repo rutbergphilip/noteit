@@ -140,6 +140,8 @@ struct NoteItCommands: Commands {
         CommandGroup(after: .toolbar) {
             Divider()
             InspectorMenuButton()
+            Button("Show Note Info") { PaletteCommandRegistry.showInspector(.info, defaults: .standard) }
+                .menuShortcut(.showNoteInfo)
             Button("Tasks") {
                 WindowRouter.showMainWindow()
                 NoteStore.shared.showTasks()

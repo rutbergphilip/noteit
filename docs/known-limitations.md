@@ -24,7 +24,6 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 - **Search doesn't look inside attachments** such as PDFs. Best-match ranking applies only when the search has words; otherwise notes are sorted by last edit.
 - **Reminders need NoteIt running.** A reminder that comes due while NoteIt is closed shows the next time it opens, if that's within a day. Reminders need the app bundle, so they don't show when running with `swift run`.
 - **Reminders in locked notes don't ring**, and tasks in locked notes aren't listed in Tasks.
-- **No note info.** There's no word count or created date.
 - **One window.** Notes can't be opened in separate windows.
 
 ## Import

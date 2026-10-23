@@ -7,6 +7,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **Note info.** The Links and Outline panel has a new Info tab with the note's word count, character count, reading time, created and last edited dates, notebook and tags. Counts update as you type. Show it with Show Note Info in the View menu (⌃⌘I) or from the command palette.
+
 ## [0.6.2] - 2026-10-23
 
 ### Changed

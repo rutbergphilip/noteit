@@ -10,7 +10,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
 
     private let noteCommandIDs: Set<String> = [
         "find", "findReplace", "export", "print", "copyMarkdown", "versionHistory", "togglePin", "deleteNote",
-        "showBacklinks", "showOutline",
+        "showBacklinks", "showOutline", "showNoteInfo",
     ]
 
     private var shortcutSuite = ""
@@ -196,6 +196,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
             "showTasks": MenuShortcutCommand.showTasks.defaultShortcut,
             "setDueDate": MenuShortcutCommand.setDueDate.defaultShortcut,
             "addReminder": MenuShortcutCommand.addReminder.defaultShortcut,
+            "showNoteInfo": MenuShortcutCommand.showNoteInfo.defaultShortcut,
             "showCompletedTasks": nil,
         ]
         for (id, shortcut) in expected {
@@ -238,7 +239,7 @@ final class PaletteCommandRegistryTests: XCTestCase {
             .newNote: "newNote", .newNotebook: "newNotebook", .searchNotes: "searchNotes", .find: "find",
             .findAndReplace: "findReplace", .exportNote: "export", .print: "print", .copyAsMarkdown: "copyMarkdown",
             .copyNoteLink: "copyNoteLink", .versionHistory: "versionHistory", .deleteNote: "deleteNote",
-            .newNoteFromTemplate: "newNoteFromTemplate", .setDueDate: "setDueDate", .addReminder: "addReminder",
+            .newNoteFromTemplate: "newNoteFromTemplate", .setDueDate: "setDueDate", .addReminder: "addReminder", .showNoteInfo: "showNoteInfo",
         ]
         for (command, id) in paletteIDs {
             XCTAssertEqual(titles[id], command.title, id)

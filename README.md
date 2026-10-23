@@ -39,6 +39,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
 - **Link your notes**
   - Type `[[` to link to another note or one of its headings. Clicking a link to a note that doesn't exist yet creates it.
   - **Links and Outline** (⌥⌘I) shows the notes that link here, the links in this note, unlinked mentions of its title and its headings. Go Back and Go Forward (⌃⌘← / ⌃⌘→) retrace the notes you opened.
+  - **Note info** (⌃⌘I) opens the same panel on its Info tab, with word count, characters, reading time, created and last edited dates, notebook and tags.
   - Renaming a note offers to update the text of links to it.
   - **Daily notes.** ⌃⌘T opens today's note, Today in the sidebar does the same, and a calendar opens any day. There's an optional global hotkey too.
   - **Templates.** Notes in the Templates notebook can start new notes, with placeholders for the date, time, title and clipboard. A notebook can have a default template.
