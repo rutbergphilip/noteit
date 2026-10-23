@@ -10,6 +10,8 @@ enum SyncStatus: Equatable {
     case offline(String)
     case error(String)
     case needsPassphrase
+    /// The Markdown library folder hasn't answered or restored edits kept in `recovery/` yet.
+    case waitingForLibrary
 
     var isIdle: Bool {
         if case .idle = self { return true }
@@ -591,7 +593,10 @@ final class SyncController: ObservableObject {
     private func performPass() async -> TimeInterval? {
         guard let config = configuration, !suspendedForLibraryConversion else { return nil }
         // Edits kept in recovery/ are restored by the Markdown launch scan; nothing is sent or applied before.
-        if store.syncWaitsForMarkdownLaunchScan { return 1 }
+        if store.syncWaitsForMarkdownLaunchScan {
+            status = .waitingForLibrary
+            return 1
+        }
         let gen = generation
         lastPassStarted = Date()
         passInFlight = true

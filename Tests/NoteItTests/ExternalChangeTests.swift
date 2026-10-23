@@ -477,10 +477,13 @@ final class ExternalChangeTests: XCTestCase {
         controller.syncNow()
         try await Task.sleep(for: .seconds(1.5))
         XCTAssertFalse(pushed(recovered), "an empty note was sent before its text was restored")
+        XCTAssertEqual(controller.status, .waitingForLibrary)
+        XCTAssertEqual(SyncStatusPresentation(status: controller.status, lastSync: nil).headline(), "Waiting for the library folder…")
 
         scan()
         controller.syncNow()
         try await waitUntil({ pushed(recovered) }, "sent once it's restored and written")
+        try await waitUntil({ controller.status.isIdle }, "no longer waiting")
         await controller.disconnect()
     }
 
@@ -497,6 +500,34 @@ final class ExternalChangeTests: XCTestCase {
         early.waitForMarkdownWrites(upTo: 10)
         XCTAssertEqual(recoveryCopies(early), [])
         XCTAssertEqual(open().notes.filter { $0.conflictOriginalID == kept }.count, 1)
+    }
+
+    /// A note in Recently Deleted with an edit in recovery/, deleted for good by `delete` before the launch scan.
+    private func assertDeletedForGoodBeforeTheLaunchScanStaysDeleted(_ delete: (NoteStore) -> Void) async throws {
+        let (kept, quit, away) = try await keepEditInRecovery()
+        _ = away.moveToRecentlyDeleted([kept])
+        away.flush()
+        quit()
+        let (early, scan) = openBeforeTheLaunchScan()
+        delete(early)
+        XCTAssertNil(early.note(with: kept))
+        scan()
+        XCTAssertFalse(early.notes.contains { $0.conflictOriginalID == kept }, "a note deleted for good stays deleted")
+        XCTAssertEqual(recoveryCopies(early), [], "its copy is set aside")
+        let dismissed = early.recoveryURL.appendingPathComponent("dismissed")
+        XCTAssertTrue(((try? fm.contentsOfDirectory(atPath: dismissed.path)) ?? []).contains { $0.hasPrefix(kept.uuidString) },
+                      "not thrown away")
+        XCTAssertFalse(open().notes.contains { $0.conflictOriginalID == kept })
+    }
+
+    func testANoteWithAnEditInRecoveryPurgedAtLaunchBeforeTheScanIsntBroughtBack() async throws {
+        try await assertDeletedForGoodBeforeTheLaunchScanStaysDeleted { store in
+            XCTAssertEqual(store.purgeExpiredDeletedNotes(now: Date().addingTimeInterval(400 * 24 * 60 * 60)), 1)
+        }
+    }
+
+    func testANoteWithAnEditInRecoveryDeletedForGoodWhileCheckingIsntBroughtBack() async throws {
+        try await assertDeletedForGoodBeforeTheLaunchScanStaysDeleted { $0.emptyRecentlyDeleted() }
     }
 
     func testAnEditKeptInRecoveryForANoteDeletedForGoodFromRecentlyDeletedIsntBroughtBack() async throws {

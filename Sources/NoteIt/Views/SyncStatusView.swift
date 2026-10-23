@@ -13,6 +13,7 @@ struct SyncStatusPresentation {
         case .offline: "icloud.slash"
         case .error: "exclamationmark.icloud"
         case .needsPassphrase: "lock.icloud"
+        case .waitingForLibrary: "hourglass"
         }
     }
 
@@ -24,6 +25,7 @@ struct SyncStatusPresentation {
         case .offline: "Offline"
         case .error: "Sync Issue"
         case .needsPassphrase: "Locked"
+        case .waitingForLibrary: "Waiting"
         }
     }
 
@@ -48,6 +50,7 @@ struct SyncStatusPresentation {
         case .offline(let message): return "Offline — \(message)"
         case .error(let message): return message
         case .needsPassphrase: return "Enter your sync passphrase in Settings to keep syncing."
+        case .waitingForLibrary: return "Waiting for the library folder…"
         }
     }
 

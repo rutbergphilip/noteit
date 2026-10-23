@@ -200,6 +200,9 @@ final class NoteStore: ObservableObject {
     private var markdownRecoveryCopies: [UUID: [URL]] = [:]
     /// Copies left in `recovery/` at launch because their note is in Recently Deleted or locked.
     private var markdownRecoveryCopiesLeft: [UUID: [URL]] = [:]
+    /// Notes removed by a deletion from another device this session: copies of theirs still in `recovery/` become a
+    /// note of their own rather than being set aside.
+    private var remotelyRemovedNotes: Set<UUID> = []
     /// Notes whose body couldn't be read because the folder didn't answer; they are read again once it does.
     var markdownBodiesNotRead: Set<UUID> = [] {
         didSet { if markdownBodiesNotRead != oldValue { publishMarkdownBodiesNotRead() } }
@@ -1219,7 +1222,8 @@ final class NoteStore: ObservableObject {
             clearOversizedBody(id)
             appliedRemoteRevisions.notes[id.uuidString] = nil
             pendingTrash.insert(id)
-            dismissRecoveryCopies(of: id)
+            if remote { remotelyRemovedNotes.insert(id) }
+            dismissRecoveryCopies(of: id, includingUnrestored: !remote)
             dispatchDerivedIndexes(.removed(id))
         }
         bodyAccessOrder.removeAll { removed.contains($0) }
@@ -2107,7 +2111,11 @@ final class NoteStore: ObservableObject {
                 // A note already made from these copies is filled in whatever became of this one.
                 let recoveredID = Self.recoveredNoteID(of: id, copy: newest.url)
                 let gone = noteIndex(id) == nil
-                if noteIndex(recoveredID) != nil || byID[recoveredID] != nil || (gone && restored != nil) {
+                // Deleted here: its copies were set aside, unless moving them failed; that's tried again.
+                let deletedHere = gone && !remotelyRemovedNotes.contains(id) && (isTombstoned(id) || syncDeletionJournal[id] != nil)
+                if deletedHere {
+                    dismissRecoveryCopies(of: id, includingUnrestored: true)
+                } else if noteIndex(recoveredID) != nil || byID[recoveredID] != nil || (gone && restored != nil) {
                     restoreBeside(id, from: found, newest: newest, text: restored?.text, merged: byID, storage: storage)
                 } else {
                     markdownRecoveryCopiesLeft[id, default: []] += found.map(\.url)
@@ -2173,9 +2181,20 @@ final class NoteStore: ObservableObject {
 
     /// A note deleted for good no longer wants the copies its text came from: they're moved to `recovery/dismissed/`,
     /// which no launch restores from, so they can't bring it back (with the same id) and nothing is thrown away.
-    private func dismissRecoveryCopies(of id: UUID) {
+    /// `includingUnrestored`: also the copies in `recovery/` not restored yet (a deletion before the launch scan
+    /// answered): the note's own and those that would become it (`recoveredNoteID`).
+    private func dismissRecoveryCopies(of id: UUID, includingUnrestored: Bool = false) {
         var copies = (markdownRecoveryCopies.removeValue(forKey: id) ?? []) + (markdownRecoveryCopiesLeft.removeValue(forKey: id) ?? [])
         if let waiting = markdownWaitingCopies.removeValue(forKey: id) { copies.append(waiting) }
+        if includingUnrestored, markdownStorage != nil {
+            for (source, found) in Dictionary(grouping: MarkdownBodyStorage.recoveryCopies(in: recoveryURL), by: \.id) {
+                guard source == id || found.max(by: { $0.order < $1.order })
+                    .map({ Self.recoveredNoteID(of: source, copy: $0.url) == id }) == true else { continue }
+                copies += found.map(\.url)
+            }
+            markdownRecoveryPending.remove(id)
+        }
+        copies = Array(Set(copies))
         guard !copies.isEmpty else { return }
         let fm = FileManager.default
         let folder = recoveryURL.appendingPathComponent("dismissed", isDirectory: true)
