@@ -77,6 +77,8 @@ Sync is off until you connect it in **Settings › Sync**. Until then NoteIt mak
 - **Conflicts never lose data.** If a note changes on two Macs before they sync, the remote version is kept as a badged conflict copy and listed under a *Conflicts* filter.
 - **It's lightweight.** It runs a single listing per check, once a minute while you use NoteIt and every 10 minutes in the background, on a low-priority thread.
 
+**Self-hosted web app (preview).** [`web/`](web/README.md) holds a browser client and a small server for your homelab (one Docker image, one volume). The browser encrypts notes before upload, so the server only stores ciphertext; each person in a household gets an isolated store, and the Mac app can sync with the same server through its S3 backend (endpoint `https://<server>/s3`). It needs a library in the new `noteit-doc` note format.
+
 The full sync and encryption design is documented in [`docs/specs/2026-10-12-sync-design.md`](docs/specs/2026-10-12-sync-design.md). Its limitations are listed in [Known limitations](docs/known-limitations.md#sync). Folders synced by tools like Dropbox and S3 providers without conditional writes get best-effort race protection only.
 
 ## Install

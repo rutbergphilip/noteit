@@ -55,7 +55,7 @@ These can be built in parallel once wave 0 is done.
 
 ### Wave 3
 
-- [ ] **Web app.** A self-hostable web app that syncs with the Mac app and also works as an installable iPhone app ([spec](specs/2026-10-13-web-app-design.md), [plan](plans/2026-10-13-web-app.md)).
+- [ ] **Web app.** A self-hostable web app that syncs with the Mac app and also works as an installable iPhone app ([spec](specs/2026-10-13-web-app-design.md), [plan](plans/2026-10-13-web-app.md)). First version on the `wip/web` branch ([`web/`](../web/README.md)): the encrypted browser client, accounts and invites, the disk-backed server and the `/s3` door for the Mac. Still to come: upstream S3 storage, direct browser→S3 mode, OIDC, the signed release manifest and the interop harness.
 - [ ] **Locked notes.** Encrypt single notes with a notes password and unlock them with Touch ID, in both library formats (part of [sync and security](specs/2026-10-19-sync-security-design.md) and [Markdown storage](specs/2026-10-19-markdown-storage-design.md)).
 - [ ] **iPhone and iPad.** A native app that starts with fast capture and grows into reading, search and editing, synced through your own storage ([spec](specs/2026-10-19-mobile-design.md), [plan](plans/2026-10-19-mobile.md)).
 - [ ] **Sharing.** Send one note as an encrypted link, publish a notebook as a static website, and share a notebook with other people ([spec](specs/2026-10-19-sharing-design.md), [plan](plans/2026-10-19-sharing.md)).

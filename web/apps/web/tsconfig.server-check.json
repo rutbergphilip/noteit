@@ -1,0 +1,5 @@
+{
+  "extends": "./.nuxt/tsconfig.server.json",
+  "compilerOptions": { "noUncheckedIndexedAccess": true, "noEmit": true, "lib": ["ES2023", "DOM", "DOM.Iterable"] },
+  "include": ["./.nuxt/nuxt.d.ts", "./server/**/*", "./test/server/**/*"]
+}

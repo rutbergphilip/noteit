@@ -1,0 +1,20 @@
+# NoteIt web for a homelab. Put it behind a TLS reverse proxy (see README.md) and set NOTEIT_PUBLIC_URL to
+# the address people use. The first-admin setup token is printed in the logs: `docker compose logs noteit`.
+services:
+  noteit:
+    build: .
+    image: noteit-web:local
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    environment:
+      NOTEIT_PUBLIC_URL: "https://notes.example.lan"
+      # Behind a reverse proxy that sets X-Forwarded-For (one hop):
+      NOTEIT_TRUST_PROXY: "true"
+      NOTEIT_TRUSTED_PROXY_HOPS: "1"
+      # Optional: NOTEIT_SETUP_TOKEN, NOTEIT_DEFAULT_QUOTA_MB, NOTEIT_MAX_OBJECT_MB, NOTEIT_SESSION_SECRET_FILE …
+    volumes:
+      - noteit-data:/data
+
+volumes:
+  noteit-data:

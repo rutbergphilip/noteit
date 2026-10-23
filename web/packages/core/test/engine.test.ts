@@ -1,0 +1,170 @@
+import { describe, expect, it } from 'vitest';
+import {
+  b64decode,
+  b64encode,
+  decide,
+  decodeManifest,
+  encodeJson,
+  fromUtf8,
+  IdentityCipher,
+  InMemoryBackend,
+  keys,
+  MemoryStateStore,
+  openSession,
+  type StoreSession,
+  StorageError,
+  SyncEngine,
+  utf8,
+  type SyncAction,
+} from '../src/index.js';
+import { FakeLocal } from './fake-local.js';
+import { golden } from './golden.js';
+
+interface PlannerCase {
+  local?: { revision: string; modifiedAt: string };
+  localDeletedAt?: string;
+  remote: { metaETag?: string; tombstone?: { deletedAt: string; deletedMetaETag?: string } };
+  base?: { revision: string; remoteMetaETag: string; replacedMetaETag?: string };
+  expect: SyncAction;
+}
+
+describe('planner vectors', () => {
+  const cases = golden<PlannerCase>('planner.json').cases;
+  it(`matches all ${cases.length} cases`, () => {
+    expect(cases.length).toBeGreaterThan(600);
+    for (const c of cases) {
+      const remote = {
+        ...(c.remote.metaETag ? { metaETag: c.remote.metaETag } : {}),
+        ...(c.remote.tombstone
+          ? { tombstone: { deletedAt: new Date(c.remote.tombstone.deletedAt), ...(c.remote.tombstone.deletedMetaETag ? { deletedMetaETag: c.remote.tombstone.deletedMetaETag } : {}) } }
+          : {}),
+      };
+      const got = decide(
+        c.local ? { revision: c.local.revision, modifiedAt: new Date(c.local.modifiedAt) } : undefined,
+        c.localDeletedAt ? new Date(c.localDeletedAt) : undefined,
+        remote,
+        c.base,
+      );
+      expect(got, JSON.stringify(c)).toBe(c.expect);
+    }
+  });
+});
+
+interface Step { device: string; op: string; args: Record<string, unknown> }
+interface Scenario { name: string; steps: Step[]; expectRemoteKeys: string[]; expectLocal: Record<string, Record<string, unknown>[]> }
+
+async function plainSession(backend: InMemoryBackend, now: Date): Promise<StoreSession> {
+  const etag = await backend.put(keys.manifest, encodeJson({ createdAt: now.getTime() / 1000 - 978307200, formatVersion: 1 }), { ifNoneMatch: true });
+  return openSession(decodeManifest((await backend.get(keys.manifest)).data), etag, { allowPlaintext: true });
+}
+
+describe('engine scenario vectors (v1 bodies)', () => {
+  for (const sc of golden<Scenario>('engine-scenarios.json').cases) {
+    it(sc.name, async () => {
+      let clock = new Date('2026-01-01T00:00:00.000Z');
+      const backend = new InMemoryBackend({ now: () => clock });
+      const session = await plainSession(backend, clock);
+      expect(session.cipher).toBeInstanceOf(IdentityCipher);
+      const devices = new Map<string, { local: FakeLocal; engine: SyncEngine }>();
+      const device = (name: string) => {
+        let d = devices.get(name);
+        if (!d) {
+          const local = new FakeLocal(`device-${name}`);
+          const engine = new SyncEngine({ backend, session, local, state: new MemoryStateStore(), deviceID: `device-${name}`, deviceName: name, now: () => clock });
+          d = { local, engine };
+          devices.set(name, d);
+        }
+        return d;
+      };
+      const known = new Set<string>();
+      for (const step of sc.steps) {
+        const d = device(step.device);
+        const a = step.args;
+        if (typeof a.at === 'string') clock = new Date(a.at);
+        if (typeof a.id === 'string') known.add(a.id);
+        if (typeof a.revision === 'string') known.add(a.revision);
+        switch (step.op) {
+          case 'create':
+          case 'edit': {
+            const existing = d.local.items.get(a.id as string);
+            const kind = (a.kind as 'note' | 'notebook' | undefined) ?? existing?.kind ?? 'note';
+            d.local.upsert({
+              id: a.id as string,
+              kind,
+              revision: a.revision as string,
+              modifiedAt: clock,
+              meta: { title: a.title },
+              ...(kind === 'note' ? { body: utf8(`Body of ${String(a.title)}`) } : {}),
+            });
+            break;
+          }
+          case 'delete':
+            d.local.remove(a.id as string, clock);
+            break;
+          case 'sync':
+            await d.engine.sync();
+            break;
+          case 'failNextPuts':
+            for (let i = 0; i < (a.count as number); i++) backend.failNext('put', new StorageError('network', 'injected'));
+            break;
+          case 'advanceClock':
+            clock = new Date(clock.getTime() + (a.seconds as number) * 1000);
+            break;
+          default:
+            throw new Error(`unknown op ${step.op}`);
+        }
+      }
+      const uuidRe = /[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/g;
+      const placeholder = (s: string) => s.replace(uuidRe, (u) => (known.has(u) ? u : 'new'));
+      expect([...backend.objects.keys()].map(placeholder).sort()).toEqual([...sc.expectRemoteKeys].sort());
+      for (const [name, expected] of Object.entries(sc.expectLocal)) {
+        const got = [...device(name).local.items.values()].map((r) => {
+          const out: Record<string, unknown> = { id: placeholder(r.id), kind: r.kind, revision: placeholder(r.revision), title: r.meta.title };
+          if (r.body) out.body = fromUtf8(r.body);
+          if (r.meta.conflictSource) out.conflictSource = r.meta.conflictSource;
+          return out;
+        });
+        const sort = (xs: Record<string, unknown>[]) => [...xs].sort((x, y) => String(x.id).localeCompare(String(y.id)));
+        expect(sort(got)).toEqual(sort(expected));
+      }
+    });
+  }
+});
+
+interface SnapshotCase { passphrase: string; objects: { key: string; etag: string; data: string }[]; expectRecords: Record<string, unknown>[] }
+
+describe('store-snapshot vector', () => {
+  for (const c of golden<SnapshotCase>('store-snapshot.json').cases) {
+    it('pulls every record of a native store', async () => {
+      const backend = new InMemoryBackend();
+      for (const o of c.objects) await backend.put(o.key, b64decode(o.data));
+      const { data, etag } = await backend.get(keys.manifest);
+      const session = await openSession(decodeManifest(data), etag, { passphrase: c.passphrase });
+      const local = new FakeLocal('web-device');
+      const engine = new SyncEngine({ backend, session, local, state: new MemoryStateStore(), deviceID: 'web-device', deviceName: 'Web' });
+      const report = await engine.sync();
+      expect(report.errors).toEqual([]);
+      const got = [...local.items.values()]
+        .map((r) => {
+          const out: Record<string, unknown> = {
+            deviceID: 'snapshot-device',
+            id: r.id,
+            kind: r.kind,
+            meta: b64encode(utf8(JSON.stringify(r.meta))),
+            modifiedAt: r.modifiedAt.toISOString(),
+            revision: r.revision,
+          };
+          if (r.body) out.body = b64encode(r.body);
+          return out;
+        })
+        .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      const expected = [...c.expectRecords].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+      expect(got.map((r) => ({ ...r, meta: undefined }))).toEqual(expected.map((r) => ({ ...r, meta: undefined })));
+      for (const [i, r] of expected.entries()) {
+        expect(JSON.parse(fromUtf8(b64decode(got[i]!.meta as string)))).toEqual(JSON.parse(fromUtf8(b64decode(r.meta as string))));
+      }
+      // The tombstone of a record this device never had is left alone.
+      expect([...backend.objects.keys()].some((k) => k.startsWith('noteit/v1/tombstones/'))).toBe(true);
+    }, 20_000);
+  }
+});

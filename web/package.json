@@ -1,0 +1,35 @@
+{
+  "name": "noteit-web",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=22.12",
+    "pnpm": ">=10"
+  },
+  "pnpm": {
+    "overrides": {
+      "rollup": "4.62.3",
+      "vitest": "3.2.4",
+      "vite-node": "3.2.4",
+      "@vitest/expect": "3.2.4",
+      "@vitest/mocker": "3.2.4",
+      "@vitest/pretty-format": "3.2.4",
+      "@vitest/runner": "3.2.4",
+      "@vitest/snapshot": "3.2.4",
+      "@vitest/spy": "3.2.4",
+      "@vitest/utils": "3.2.4",
+      "vue": "3.5.43",
+      "@tiptap/extension-bubble-menu": "3.31.0",
+      "@tiptap/extension-floating-menu": "3.31.0"
+    }
+  },
+  "scripts": {
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "dev": "pnpm --filter @noteit/web dev",
+    "build": "pnpm --filter @noteit/web build",
+    "start": "pnpm --filter @noteit/web start",
+    "e2e": "pnpm --filter @noteit/web e2e"
+  }
+}
