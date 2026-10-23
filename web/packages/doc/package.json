@@ -1,0 +1,23 @@
+{
+  "name": "@noteit/doc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tiptap": "./src/tiptap/index.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@tiptap/core": "3.31.0",
+    "@tiptap/pm": "3.31.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "~5.9.3",
+    "vitest": "3.2.4"
+  }
+}
