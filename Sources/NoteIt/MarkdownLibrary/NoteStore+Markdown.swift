@@ -142,7 +142,9 @@ extension NoteStore {
         let scan = markdownFolderScan
         let known = MarkdownScanReads.Known(noteIDs: Set(notes.map(\.id)), notebookIDs: Set(notebooks.map(\.id)),
                                             held: heldMarkdownDeletions,
-                                            recovering: markdownLaunchScanPending ? markdownRecoveryCopyIDs() : [])
+                                            recovering: markdownLaunchScanPending ? markdownRecoveryCopyIDs() : [],
+                                            recoveryRetry: markdownLaunchScanPending ? [] : markdownRecoveryRetry,
+                                            recoveryURL: recoveryURL)
         return {
             guard check(root) else { return .missing }
             let result = scan(root, index, ledger)
@@ -201,6 +203,7 @@ extension NoteStore {
                 applyLaunchScan(result, reads: reads, confirmsMassDeletion: confirming)
             } else {
                 applyExternalChanges(result, reads: reads, atLaunch: false, confirmsMassDeletion: confirming)
+                if !reads.recoveryRetry.isEmpty { applyRecoveryRetry(reads) }
             }
             if wasUnavailable {
                 scheduleSave()
@@ -345,12 +348,19 @@ extension NoteStore {
         notesChangedBeforeDerivedIndexes.formUnion(changed)
         let restoredBefore = Set(notes.map(\.id))
         restoreMarkdownRecoveryCopies(reads: reads)
-        // A note that only exists in recovery/ and couldn't be filled stays held: never empty and editable, or sent.
-        markdownRecoveryPending = markdownRecoveryTargets().filter {
-            note(with: $0) != nil && storage.index.entry($0) == nil && cachedBody($0) == nil
-        }
+        settleMarkdownRecoveryHold()
         notesChangedBeforeDerivedIndexes.formUnion(Set(notes.map(\.id)).subtracting(restoredBefore))
         if note(with: selectedNoteID) == nil { selectedNoteID = notes(for: selection, search: "").first?.id }
+        flush()
+    }
+
+    /// Restores the copies of notes released from Recently Deleted or a lock, or retried, then lifts the hold of
+    /// those it filled.
+    private func applyRecoveryRetry(_ reads: MarkdownScanReads) {
+        markdownRecoveryRetry.subtract(reads.recoveryRetry)
+        restoreMarkdownRecoveryCopies(reads: reads, only: reads.recoverySources)
+        settleMarkdownRecoveryHold()
+        for id in reads.recoveryRetry where cachedBody(id) != nil { externallyUpdatedNoteID = id }
         flush()
     }
 

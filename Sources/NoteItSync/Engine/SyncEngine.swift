@@ -42,6 +42,16 @@ public struct SyncRecordRefused: Error, Sendable, Equatable {
     }
 }
 
+/// Thrown by `SyncLocalStore` for a record it can't export or apply yet. The engine skips it quietly, without an
+/// error, and tries it again on the next pass.
+public struct SyncRecordDeferred: Error, Sendable, Equatable {
+    public var reason: String
+
+    public init(reason: String) {
+        self.reason = reason
+    }
+}
+
 public struct SyncReport: Sendable, Equatable {
     public var pushed = 0, pulled = 0, deleted = 0, conflicts = 0, skipped = 0
     public var errors: [String] = []
@@ -321,6 +331,8 @@ public actor SyncEngine {
     private func guarded(_ pass: Pass, _ work: () async throws -> Void) async throws {
         do {
             try await work()
+        } catch is SyncRecordDeferred {
+            pass.report.skipped += 1
         } catch let error as StorageError {
             if Self.isFatal(error) { throw error }
             pass.report.errors.append(String(describing: error))
@@ -341,6 +353,8 @@ public actor SyncEngine {
         pass.seen.insert(id)
         do {
             try await process(id, pass)
+        } catch is SyncRecordDeferred {
+            pass.report.skipped += 1
         } catch let error as StorageError {
             if Self.isFatal(error) { throw error }
             pass.report.errors.append("\(id.uuidString): \(error)")

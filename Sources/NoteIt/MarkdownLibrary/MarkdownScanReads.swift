@@ -19,6 +19,10 @@ struct MarkdownScanReads: @unchecked Sendable {
         var held: Set<UUID>
         /// Notes with an edit in `recovery/`: their files are read so restoring it can tell what it would replace.
         var recovering: Set<UUID> = []
+        /// Notes whose copies are restored again after the launch (`NoteStore.retryMarkdownRecovery`), and the
+        /// `recovery/` folder their copies are read from.
+        var recoveryRetry: Set<UUID> = []
+        var recoveryURL: URL?
     }
 
     /// Content-relative path → the file's bytes, for changed, moved, added and copied files, for files of
@@ -28,6 +32,16 @@ struct MarkdownScanReads: @unchecked Sendable {
     var notebookFiles: [String: Notebook] = [:]
     /// Paths of removed notes, held notes and notebook folders that were looked for and are there.
     var existing: Set<String> = []
+    /// The newest copy in `recovery/` of each note being restored, as read and parsed off the main thread.
+    var recoveryCopies: [URL: Result<StoredBody, Error>] = [:]
+    /// `Known.recoveryRetry`, and the notes whose copies those are (the keys `NoteStore` restores).
+    var recoveryRetry: Set<UUID> = []
+    var recoverySources: Set<UUID> = []
+
+    func recoveryCopy(_ url: URL, storage: MarkdownBodyStorage) throws -> StoredBody {
+        if let read = recoveryCopies[url] { return try read.get() }
+        return try storage.readRecoveryCopy(url)
+    }
 
     static func read(_ result: FolderScanResult, storage: MarkdownBodyStorage, known: Known) -> MarkdownScanReads {
         var reads = MarkdownScanReads()
@@ -39,6 +53,24 @@ struct MarkdownScanReads: @unchecked Sendable {
             paths.insert(entry.path)
         }
         for id in known.recovering { if let entry = entries[id] { paths.insert(entry.path) } }
+        if let directory = known.recoveryURL, !known.recovering.isEmpty || !known.recoveryRetry.isEmpty {
+            let groups = Dictionary(grouping: MarkdownBodyStorage.recoveryCopies(in: directory), by: \.id)
+            var wanted = Set<UUID>()
+            for (id, found) in groups {
+                guard let newest = found.max(by: { $0.order < $1.order }) else { continue }
+                let recovered = NoteStore.recoveredNoteID(of: id, copy: newest.url)
+                guard known.recovering.contains(id) || known.recoveryRetry.contains(id) || known.recoveryRetry.contains(recovered)
+                else { continue }
+                wanted.formUnion([id, recovered])
+                if known.recoveryRetry.contains(id) || known.recoveryRetry.contains(recovered) { reads.recoverySources.insert(id) }
+                if let entry = entries[id] { paths.insert(entry.path) }
+            }
+            for key in wanted {
+                guard let newest = groups[key]?.max(by: { $0.order < $1.order }) else { continue }
+                reads.recoveryCopies[newest.url] = Result { try storage.readRecoveryCopy(newest.url) }
+            }
+            reads.recoveryRetry = known.recoveryRetry
+        }
         for path in paths {
             let url = root.appendingPathComponent(path, isDirectory: false)
             guard let data = try? Data(contentsOf: url) else { continue }

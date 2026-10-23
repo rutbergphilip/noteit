@@ -10,8 +10,22 @@ enum NoteStoreSyncError: Error, Equatable {
     case invalidPayload(String)
 }
 
+/// A note held because the edit recovered for it couldn't be read: it syncs once it's retried or discarded.
+struct RecoveredEditUnreadable: Error, CustomStringConvertible {
+    var id: UUID
+    var description: String { "the edit recovered for this note couldn’t be read; open the note to retry or discard it" }
+}
+
 /// Record-level API used by `NoteStoreSyncAdapter`. Remote applies never assign new revisions.
 extension NoteStore {
+    /// A note held until its edit in `recovery/` is restored waits quietly for a later pass, unless its copies
+    /// couldn't be read, which is reported.
+    func markdownRecoveryHoldError(_ id: UUID) -> Error {
+        markdownRecoveryUnreadable.contains(id)
+            ? RecoveredEditUnreadable(id: id)
+            : SyncRecordDeferred(reason: "its recovered edit isn’t restored yet")
+    }
+
     func syncRecords() -> [LocalRecord] {
         assignMissingRevisions()
         let books = notebooks.compactMap { nb in
@@ -71,7 +85,8 @@ extension NoteStore {
             if hasUnreadableBody(id) { throw NoteStoreSyncError.unreadableBody(id) }
             // The library keeps the saved revision for it, so after a relaunch that older version would look like a
             // newer local change and be pushed over this one.
-            if hasBodyThatCantBeSaved(id) || markdownRecoveryPending.contains(id) { throw NoteStoreSyncError.unsavedBody(id) }
+            if markdownRecoveryPending.contains(id) { throw markdownRecoveryHoldError(id) }
+            if hasBodyThatCantBeSaved(id) { throw NoteStoreSyncError.unsavedBody(id) }
             let merged = try RawMetaOverlay(lastDecrypted: lastRemoteMeta(for: id, kind: .notes))
                 .merged(with: try Self.encoder.encode(meta), ownedKeys: NoteMeta.ownedCodingKeys)
             return (RecordPayload(id: id, kind: .note, revision: revision, modifiedAt: meta.updatedAt,

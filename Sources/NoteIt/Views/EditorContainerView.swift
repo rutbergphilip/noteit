@@ -64,8 +64,19 @@ struct EditorContainerView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 16)
                 }
+                if store.isRecoveredEditUnreadable(id) {
+                    LoadErrorBanner(message: "This note’s recovered edit couldn’t be read from the Recovery folder. Retry, or discard the edit to keep the note without it; the edit is set aside, not deleted.",
+                                    file: store.recoveryURL, readOnly: true, retry: { store.retryMarkdownRecovery(of: [id]) },
+                                    secondary: ("Discard Recovered Edit", { store.discardRecoveredEdit(id) }))
+                } else if store.isMarkdownRecoveryHeld(id), note.deletedAt == nil, !store.markdownFolderUnavailable {
+                    Text("Restoring this note’s recovered edit…")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16)
+                }
                 if store.isMarkdownBodyUnread(id), !store.isMarkdownBodyLoading(id), !store.markdownFolderUnavailable,
-                   let folder = store.markdownStorage?.contentRootURL {
+                   !store.isMarkdownRecoveryHeld(id), let folder = store.markdownStorage?.contentRootURL {
                     Text("This note hasn’t been read from “\(folder.lastPathComponent)” yet, so it’s read-only.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -292,6 +303,7 @@ struct LoadErrorBanner: View {
     let readOnly: Bool
     var title: String? = nil
     var retry: (() -> Void)? = nil
+    var secondary: (title: String, action: () -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
@@ -311,6 +323,10 @@ struct LoadErrorBanner: View {
             Spacer(minLength: 8)
             if let retry {
                 Button("Retry", action: retry)
+                    .controlSize(.small)
+            }
+            if let secondary {
+                Button(secondary.title, action: secondary.action)
                     .controlSize(.small)
             }
             if let file {

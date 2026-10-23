@@ -6,6 +6,7 @@ import os
 import NoteItCore
 import NoteItMarkdown
 import NoteItAPI
+import NoteItSync
 
 /// markdown-storage Task 4.2: changes made to the Markdown folder while NoteIt is open.
 @MainActor
@@ -559,6 +560,89 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertTrue(store.isMarkdownBodyUnread(recovered), "held read-only until it's filled")
         XCTAssertNil(store.bodyForOutput(recovered))
         XCTAssertThrowsError(try store.exportPlan(id: recovered, kind: .note, deviceID: "t"), "never sent empty")
+    }
+
+    /// The recovered note R of `openWithUnwrittenRecoveredNote`, changed by `change` before a quit, opened again
+    /// with its folder writable.
+    private func relaunchWithHeldRecoveredNote(_ change: (NoteStore, UUID) -> Void) async throws -> (store: NoteStore, recovered: UUID) {
+        let (store, _, recovered, writable) = try await openWithUnwrittenRecoveredNote()
+        change(store, recovered)
+        store.flushBeforeQuit()
+        store.waitForMarkdownWrites(upTo: 10)
+        writable()
+        let relaunched = open()
+        XCTAssertTrue(relaunched.isMarkdownRecoveryHeld(recovered), "held while its copies wait")
+        XCTAssertFalse(relaunched.isRecoveredEditUnreadable(recovered))
+        XCTAssertThrowsError(try relaunched.exportPlan(id: recovered, kind: .note, deviceID: "t")) { error in
+            XCTAssertTrue(error is SyncRecordDeferred, "waits quietly for a later pass: \(error)")
+        }
+        return (relaunched, recovered)
+    }
+
+    private func assertFilledIn(_ store: NoteStore, _ recovered: UUID) async throws {
+        try await waitUntil({ !store.isMarkdownRecoveryHeld(recovered) }, "the hold is lifted")
+        XCTAssertTrue(store.body(for: recovered).string.contains("waiting edit"))
+        XCTAssertFalse(store.isMarkdownBodyUnread(recovered), "editable")
+        XCTAssertNoThrow(try store.exportPlan(id: recovered, kind: .note, deviceID: "t"))
+    }
+
+    func testARecoveredNoteRecoveredFromRecentlyDeletedIsFilledInAndNoLongerHeld() async throws {
+        let (store, recovered) = try await relaunchWithHeldRecoveredNote { store, id in _ = store.moveToRecentlyDeleted([id]) }
+        store.recover([recovered])
+        try await assertFilledIn(store, recovered)
+    }
+
+    func testARecoveredNoteUnlockedIsFilledInAndNoLongerHeld() async throws {
+        let (store, recovered) = try await relaunchWithHeldRecoveredNote { store, id in
+            store.notes[store.noteIndex(id)!].lock = NoteLock(keyID: "k1", sealedID: UUID())
+            store.commitUserMetadataChange()
+        }
+        store.notes[store.noteIndex(recovered)!].lock = nil
+        try await assertFilledIn(store, recovered)
+    }
+
+    private func openWithUnreadableRecoveredNote() async throws -> (store: NoteStore, recovered: UUID, readable: () -> Void) {
+        let (_, recovered) = try await quitWithUnwrittenRecoveredNoteOfARemotelyDeletedNote()
+        let recovery = data.appendingPathComponent("recovery")
+        let names = try fm.contentsOfDirectory(atPath: recovery.path).filter { $0.hasSuffix(".md") }
+        for name in names { try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: recovery.appendingPathComponent(name).path) }
+        let readable = { [fm] in
+            for name in names { try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: recovery.appendingPathComponent(name).path) }
+        }
+        addTeardownBlock(readable)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: content.path)
+        let store = open()
+        XCTAssertTrue(store.isRecoveredEditUnreadable(recovered), "shown as a recovered edit that couldn't be read")
+        XCTAssertThrowsError(try store.exportPlan(id: recovered, kind: .note, deviceID: "t")) { error in
+            XCTAssertTrue(error is RecoveredEditUnreadable, "reported as such: \(error)")
+        }
+        return (store, recovered, readable)
+    }
+
+    func testARecoveredNoteWhoseCopiesCouldntBeReadIsFilledInByRetry() async throws {
+        let (store, recovered, readable) = try await openWithUnreadableRecoveredNote()
+        store.retryMarkdownRecovery(of: [recovered])
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertTrue(store.isRecoveredEditUnreadable(recovered), "still unreadable")
+        readable()
+        store.retryMarkdownRecovery(of: [recovered])
+        try await assertFilledIn(store, recovered)
+        XCTAssertFalse(store.isRecoveredEditUnreadable(recovered))
+    }
+
+    func testDiscardingARecoveredEditThatCouldntBeReadSetsItAsideAndKeepsTheNote() async throws {
+        let (store, recovered, readable) = try await openWithUnreadableRecoveredNote()
+        store.discardRecoveredEdit(recovered)
+        readable()
+        XCTAssertFalse(store.isMarkdownRecoveryHeld(recovered))
+        XCTAssertFalse(store.isRecoveredEditUnreadable(recovered))
+        XCTAssertEqual(recoveryCopies(store), [], "nothing left to restore")
+        let dismissed = store.recoveryURL.appendingPathComponent("dismissed")
+        XCTAssertFalse(try fm.contentsOfDirectory(atPath: dismissed.path).isEmpty, "set aside, not deleted")
+        _ = store.body(for: recovered)
+        XCTAssertFalse(store.isMarkdownBodyUnread(recovered), "editable")
+        XCTAssertNotNil(store.note(with: recovered))
+        XCTAssertNoThrow(try store.exportPlan(id: recovered, kind: .note, deviceID: "t"))
     }
 
     func testAnEditKeptInRecoveryForANoteDeletedOnAnotherDeviceBeforeAQuitBecomesANoteOfItsOwn() async throws {

@@ -131,6 +131,27 @@ final class SyncEngineTests: XCTestCase {
         XCTAssertFalse(keys.contains(RemoteLayout.body(nb)))
     }
 
+    func testARecordTheStoreDefersIsSkippedQuietlyAndAppliedOnALaterPass() async throws {
+        let a = device("A"), b = device("B")
+        let id = await a.store.create(title: "v1")
+        try await sync(a, b)
+        await a.store.edit(id, title: "v2")
+        try await sync(a)
+        await b.store.deferRecords([id])
+
+        let deferred = try await sync(b)[0]
+        XCTAssertEqual(deferred.pulled, 0)
+        XCTAssertTrue(deferred.errors.isEmpty, "\(deferred.errors)")
+        let before = await b.store.title(id)
+        XCTAssertEqual(before, "v1")
+
+        await b.store.deferRecords([])
+        let report = try await sync(b)[0]
+        XCTAssertEqual(report.pulled, 1)
+        let title = await b.store.title(id)
+        XCTAssertEqual(title, "v2")
+    }
+
     func testARemoteNoteTheStoreRefusesIsNotFetchedAgainUntilItChanges() async throws {
         let a = device("A"), b = device("B")
         let id = await a.store.create(title: "Big")

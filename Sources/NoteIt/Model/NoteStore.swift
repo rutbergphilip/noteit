@@ -12,7 +12,10 @@ final class NoteStore: ObservableObject {
         didSet { notebooksVersion &+= 1 }
     }
     @Published var notes: [NoteMeta] = [] {
-        didSet { notesVersion &+= 1 }
+        didSet {
+            notesVersion &+= 1
+            if !markdownRecoveryBlockedByState.isEmpty { scheduleRecoveryOfReleasedNotes() }
+        }
     }
     @Published var selection: SidebarSelection? = .allNotes {
         didSet { if selection != oldValue { editingNoteID = nil } }
@@ -161,6 +164,15 @@ final class NoteStore: ObservableObject {
     /// Notes with edits in `recovery/` and the notes those would be recovered into, as found on disk at load, until
     /// the launch scan restored them: neither synced nor editable meanwhile, so nothing is sent or typed over first.
     var markdownRecoveryPending: Set<UUID> = []
+    /// Held notes whose recovered edit couldn't be read (`recovery/` copies unreadable): read-only with Retry and
+    /// Discard Recovered Edit, and reported by sync, until one of those succeeds.
+    @Published private(set) var markdownRecoveryUnreadable: Set<UUID> = []
+    /// Notes whose copies weren't restored because the note was in Recently Deleted or locked: restored once it's
+    /// recovered or unlocked.
+    private var markdownRecoveryBlockedByState: Set<UUID> = []
+    private var markdownRecoveryReleaseCheckScheduled = false
+    /// Notes whose copies the next scan reads and restores (released from Recently Deleted or a lock, or Retry).
+    var markdownRecoveryRetry: Set<UUID> = []
     /// Sync starts once the launch scan answered and restored what's in `recovery/`; while the folder doesn't
     /// answer, only when there's nothing in `recovery/` to restore.
     var syncWaitsForMarkdownLaunchScan: Bool {
@@ -2079,7 +2091,7 @@ final class NoteStore: ObservableObject {
 
     /// The id of the note a recovered edit becomes when it can't go back into its own note: the same for every
     /// launch until its copies are gone, so a launch that can't write it doesn't make another.
-    static func recoveredNoteID(of id: UUID, copy: URL) -> UUID {
+    nonisolated static func recoveredNoteID(of id: UUID, copy: URL) -> UUID {
         var bytes = Array(SHA256.hash(data: Data("noteit-recovered:\(id.uuidString):\(copy.lastPathComponent)".utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0F) | 0x50
         bytes[8] = (bytes[8] & 0x3F) | 0x80
@@ -2097,7 +2109,7 @@ final class NoteStore: ObservableObject {
     /// Recently Deleted or locked are left in `recovery/` (and set aside if it's deleted for good); copies of a note
     /// that's gone without setting them aside (deleted on another device before they were restored) become a note
     /// of their own, so the edit stays visible.
-    func restoreMarkdownRecoveryCopies(reads: MarkdownScanReads) {
+    func restoreMarkdownRecoveryCopies(reads: MarkdownScanReads, only: Set<UUID>? = nil) {
         guard let storage = markdownStorage else { return }
         let byID = Dictionary(grouping: MarkdownBodyStorage.recoveryCopies(in: recoveryURL), by: \.id)
         // A recovered note not written yet: its own copies (made while it waited) go with the copies it came from.
@@ -2107,11 +2119,12 @@ final class NoteStore: ObservableObject {
             let recoveredID = Self.recoveredNoteID(of: id, copy: newest.url)
             if byID[recoveredID] != nil, storage.index.entry(recoveredID) == nil { mergedInto[recoveredID] = id }
         }
-        for (id, found) in byID.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where mergedInto[id] == nil {
+        for (id, found) in byID.sorted(by: { $0.key.uuidString < $1.key.uuidString })
+        where mergedInto[id] == nil && only.map({ $0.contains(id) }) != false {
             guard let newest = found.max(by: { $0.order < $1.order }) else { continue }
             let restored: StoredBody?
             do {
-                restored = try storage.readRecoveryCopy(newest.url)
+                restored = try reads.recoveryCopy(newest.url, storage: storage)
             } catch {
                 NSLog("NoteIt: couldn't read the recovery copy \(newest.url.path): \(error)")
                 restored = nil
@@ -2123,18 +2136,22 @@ final class NoteStore: ObservableObject {
                 // Deleted here: its copies were set aside, unless moving them failed; that's tried again.
                 let deletedHere = gone && !remotelyRemovedNotes.contains(id) && (isTombstoned(id) || syncDeletionJournal[id] != nil)
                 if noteIndex(recoveredID) != nil || byID[recoveredID] != nil {
-                    restoreBeside(id, from: found, newest: newest, text: restored?.text, merged: byID, storage: storage)
+                    restoreBeside(id, from: found, newest: newest, text: restored?.text, merged: byID, storage: storage, reads: reads)
                 } else if deletedHere {
                     dismissRecoveryCopies(of: id, includingUnrestored: true)
                 } else if gone && restored != nil {
-                    restoreBeside(id, from: found, newest: newest, text: restored?.text, merged: byID, storage: storage)
+                    restoreBeside(id, from: found, newest: newest, text: restored?.text, merged: byID, storage: storage, reads: reads)
                 } else {
                     markdownRecoveryCopiesLeft[id, default: []] += found.map(\.url)
+                    if let index = noteIndex(id), notes[index].deletedAt != nil || notes[index].isLocked {
+                        markdownRecoveryBlockedByState.insert(id)
+                    }
                     if restored != nil { NSLog("NoteIt: left the recovery copy \(newest.url.path): its note is deleted or locked") }
                 }
                 continue
             }
-            if !bodyWriteBlocked.contains(id), !heldMarkdownDeletions.contains(id),
+            // An edit made since (after the note was recovered or unlocked) isn't replaced.
+            if !bodyWriteBlocked.contains(id), !heldMarkdownDeletions.contains(id), !dirtyBodies.contains(id),
                let replaced = recoveryBaseMatches(id, base: MarkdownBodyStorage.recoveryBase(of: newest.url), reads: reads, storage: storage) {
                 if let replaced { history.record(replaced.text, extras: replaced.extras, of: id) }
                 restoreRecoveredBody(id, restored.text, date: newest.order.date, storage: storage)
@@ -2142,19 +2159,23 @@ final class NoteStore: ObservableObject {
                 NSLog("NoteIt: restored note \(id) from \(newest.url.path)")
                 continue
             }
-            restoreBeside(id, from: found, newest: newest, text: restored.text, merged: byID, storage: storage)
+            restoreBeside(id, from: found, newest: newest, text: restored.text, merged: byID, storage: storage, reads: reads)
         }
     }
 
     private func restoreBeside(_ id: UUID, from found: [MarkdownBodyStorage.RecoveryCopy], newest: MarkdownBodyStorage.RecoveryCopy,
                                text: NSAttributedString?, merged byID: [UUID: [MarkdownBodyStorage.RecoveryCopy]],
-                               storage: MarkdownBodyStorage) {
+                               storage: MarkdownBodyStorage, reads: MarkdownScanReads) {
         let recoveredID = Self.recoveredNoteID(of: id, copy: newest.url)
         let existing = noteIndex(recoveredID)
         if isTombstoned(recoveredID) || existing.map({ notes[$0].deletedAt != nil || notes[$0].isLocked }) == true {
             // Deleting it for good sets them aside.
             markdownRecoveryCopies[recoveredID, default: []] += (found + (byID[recoveredID] ?? [])).map(\.url)
-            if isTombstoned(recoveredID) { dismissRecoveryCopies(of: recoveredID) }
+            if isTombstoned(recoveredID) {
+                dismissRecoveryCopies(of: recoveredID)
+            } else {
+                markdownRecoveryBlockedByState.insert(recoveredID)
+            }
             return NSLog("NoteIt: left the recovery copy \(newest.url.path): the note it was restored to is deleted or locked")
         }
         if existing != nil, storage.index.entry(recoveredID) != nil {
@@ -2166,7 +2187,7 @@ final class NoteStore: ObservableObject {
         var latest = (copy: newest, text: text)
         if let newer = own.max(by: { $0.order < $1.order }), newest.order < newer.order {
             do {
-                latest = (newer, try storage.readRecoveryCopy(newer.url).text)
+                latest = (newer, try reads.recoveryCopy(newer.url, storage: storage).text)
             } catch {
                 return NSLog("NoteIt: couldn't read the recovery copy \(newer.url.path): \(error)")
             }
@@ -2204,7 +2225,9 @@ final class NoteStore: ObservableObject {
                 copies += found.map(\.url)
             }
             markdownRecoveryPending.remove(id)
+            markdownRecoveryUnreadable.remove(id)
         }
+        markdownRecoveryBlockedByState.remove(id)
         copies = Array(Set(copies))
         guard !copies.isEmpty else { return }
         let fm = FileManager.default
@@ -2219,6 +2242,56 @@ final class NoteStore: ObservableObject {
                 try fm.moveItem(at: copy, to: RTFDBodyStorage.uniqueURL(folder.appendingPathComponent(copy.lastPathComponent)))
             } catch {
                 NSLog("NoteIt: couldn't set aside the recovery copy \(copy.path): \(error)")
+            }
+        }
+    }
+
+    /// After a restore: the notes that only exist in `recovery/` and weren't filled stay held (never empty and
+    /// editable, or sent); those that aren't in Recently Deleted or locked couldn't be filled because their copies
+    /// couldn't be read.
+    func settleMarkdownRecoveryHold() {
+        guard let storage = markdownStorage else { return }
+        let held = markdownRecoveryTargets().filter {
+            note(with: $0) != nil && storage.index.entry($0) == nil && cachedBody($0) == nil
+        }
+        markdownRecoveryPending = held
+        let unreadable = held.filter { id in note(with: id).map { $0.deletedAt == nil && !$0.isLocked } == true }
+        if markdownRecoveryUnreadable != unreadable { markdownRecoveryUnreadable = unreadable }
+    }
+
+    func isMarkdownRecoveryHeld(_ id: UUID) -> Bool { markdownRecoveryPending.contains(id) }
+
+    func isRecoveredEditUnreadable(_ id: UUID) -> Bool { markdownRecoveryUnreadable.contains(id) }
+
+    /// Reads the note's copies in `recovery/` again (off the main thread, with the next scan) and restores them.
+    func retryMarkdownRecovery(of ids: Set<UUID>) {
+        guard markdownStorage != nil, !ids.isEmpty else { return }
+        markdownRecoveryBlockedByState.subtract(ids)
+        markdownRecoveryRetry.formUnion(ids)
+        markdownFolderNeedsScan()
+    }
+
+    /// Keeps the note as it is without its recovered edit: the copies move to `recovery/dismissed/` (nothing is
+    /// thrown away) and the note is no longer held.
+    func discardRecoveredEdit(_ id: UUID) {
+        dismissRecoveryCopies(of: id, includingUnrestored: true)
+        markdownRecoveryRetry.remove(id)
+        markdownBodiesNotRead.remove(id)
+        externallyUpdatedNoteID = id
+    }
+
+    private func scheduleRecoveryOfReleasedNotes() {
+        guard !markdownRecoveryReleaseCheckScheduled else { return }
+        markdownRecoveryReleaseCheckScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.markdownRecoveryReleaseCheckScheduled = false
+                guard !self.markdownLaunchScanPending else { return }
+                let released = self.markdownRecoveryBlockedByState.filter { id in
+                    self.note(with: id).map { $0.deletedAt == nil && !$0.isLocked } == true
+                }
+                self.retryMarkdownRecovery(of: released)
             }
         }
     }
@@ -2734,7 +2807,7 @@ final class NoteStore: ObservableObject {
     /// A Markdown file is parsed here, because `completeExport` only reads RTFD. A known file that is missing or
     /// can't be read throws rather than sending an empty body.
     func exportBodySource(_ id: UUID) throws -> ExportBody {
-        if markdownRecoveryPending.contains(id) { throw NoteStoreSyncError.unsavedBody(id) }
+        if markdownRecoveryPending.contains(id) { throw markdownRecoveryHoldError(id) }
         if let cached = bodyCache[id] {
             return .text(cached.copy() as? NSAttributedString ?? NSAttributedString(attributedString: cached))
         }

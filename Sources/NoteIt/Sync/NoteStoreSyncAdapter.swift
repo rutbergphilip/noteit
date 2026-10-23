@@ -144,7 +144,7 @@ final class NoteStoreSyncAdapter: SyncLocalStore, @unchecked Sendable {
     @MainActor private func settleLocalEdits(_ id: UUID, kind: RecordKind) throws {
         guard kind == .note else { return }
         // A note with an edit still in recovery/ waits for the launch scan to restore it.
-        if store.markdownRecoveryPending.contains(id) { throw NoteStoreSyncError.unsavedBody(id) }
+        if store.markdownRecoveryPending.contains(id) { throw store.markdownRecoveryHoldError(id) }
         store.commitStagedEditorBody(id)
         NotificationCenter.default.post(name: .noteItSyncWillApplyRemote, object: id)
         let current = store.note(with: id)?.revision
