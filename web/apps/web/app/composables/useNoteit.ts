@@ -57,6 +57,12 @@ const state = reactive({
   templatePicker: undefined as undefined | 'new' | 'insert',
   /** An expanded template for the open editor to insert at the caret. */
   pendingInsert: undefined as BodyContainer | undefined,
+  /** The find bar in the open note (⌥⌘F, ⇧⌘F with replace); `seq` refocuses it. */
+  find: { open: false, replace: false, seq: 0 },
+  /** Set Due Date… (⇧⌘D): bumped to ask the open editor for its picker. */
+  dueDate: 0,
+  /** Add Reminder… (⌃⌘R): likewise. */
+  addReminder: 0,
   /** Rename Tag… for this tag. */
   tagRename: undefined as string | undefined,
   /** Link to Note… (⇧⌘K): bumped to ask the open editor to start a `[[` link. */

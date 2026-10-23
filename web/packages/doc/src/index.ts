@@ -18,3 +18,5 @@ export * from './fuzzy.js';
 export * from './linking.js';
 export * from './import.js';
 export * from './tags.js';
+export * from './natural.js';
+export * from './reminders.js';

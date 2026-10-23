@@ -153,6 +153,19 @@
       "sealed" : "9F3//H4qq23+MeCLubxdGf80Y6KUjKHevI01RA2TS1REDcNsjPPl8+0730gj9/LoztiE06OG67xk7GNzSgiKIvMFxw4jPA8SNIt3LHEUaa2xAXmbDgtHqtPwviAfEhwO4lMz1eKecgK7xDKAvQNiBTltQrc5jE/AUPFk393pTj322voebNdIAqrX"
     },
     {
+      "context" : "claims/reminders/61110F64-4893-43F8-96F3-3FDAA661A24D.json",
+      "decoded" : {
+        "deliveredAt" : 788950800.5,
+        "deviceID" : "device-1",
+        "id" : "61110F64-4893-43F8-96F3-3FDAA661A24D"
+      },
+      "key" : "noteit/v1/claims/reminders/61110F64-4893-43F8-96F3-3FDAA661A24D.json",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "reminder-claim",
+      "plaintextJSON" : "{\"deliveredAt\":788950800.5,\"deviceID\":\"device-1\",\"id\":\"61110F64-4893-43F8-96F3-3FDAA661A24D\"}",
+      "sealed" : "6x9Zj7oShYyUpSwK/V15uztm957v8g3WGcoivBDK428cATdbsWDReZDYMmKacGZ0a9hf1SuRbIGFXCrSVASi2r7Ar6c4F9+gefrPLkrbL5BqCjC6ki+8DTnsaKGwAZ1ilUY97lqP3btDzwLDjQ0XCVksG0yAQOXJwA=="
+    },
+    {
       "context" : "tombstones/430742D2-5082-469B-9F71-FF2B36718F0D.json",
       "decoded" : {
         "deletedAt" : 789091200.5,

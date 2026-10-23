@@ -1,4 +1,4 @@
-import { type Bytes, b64decode, b64encode, sha256Hex } from './bytes.js';
+import { type Bytes, b64decode, b64encode, fromUtf8, sha256Hex } from './bytes.js';
 import { fromDouble2001, toDouble2001 } from './dates.js';
 import { isFatal, RecordDeferred, RecordRefused, StorageError, SyncError } from './errors.js';
 import {
@@ -886,6 +886,47 @@ export class SyncEngine {
     } catch (e) {
       if (!(e instanceof StorageError && e.kind === 'notFound')) throw e;
     }
+  }
+
+  // MARK: reminder claims (organise 7.3; Swift SyncEngine+Claims)
+
+  /**
+   * A conditional create of the reminder's claim, so only one device rings. Any failure but "already exists" is
+   * `unavailable`, and the caller shows the reminder: a duplicate is better than a missed one.
+   */
+  async claimReminder(id: Uuid, at: Date): Promise<'claimed' | 'alreadyClaimed' | 'unavailable'> {
+    const key = keys.reminderClaim(id);
+    try {
+      const plain = encodeJson({ id: id.toUpperCase(), deviceID: this.deviceID, deliveredAt: toDouble2001(at) });
+      await this.backend.put(key, await this.seal(plain, key), { ifNoneMatch: true });
+      return 'claimed';
+    } catch (e) {
+      return e instanceof StorageError && e.kind === 'preconditionFailed' ? 'alreadyClaimed' : 'unavailable';
+    }
+  }
+
+  /** Deletes this device's claims older than `ageSeconds`; claims that don't open and other devices' stay. */
+  async sweepReminderClaims(ageSeconds: number, now: Date = this.now()): Promise<number> {
+    const cutoff = toDouble2001(now) - ageSeconds;
+    let deleted = 0;
+    for (const object of await this.backend.list(keys.reminderClaims)) {
+      if (!object.key.endsWith('.json')) continue;
+      let claim: { deviceID?: unknown; deliveredAt?: unknown };
+      try {
+        claim = JSON.parse(fromUtf8(await this.open((await this.backend.get(object.key)).data, object.key))) as typeof claim;
+      } catch (e) {
+        if (e instanceof StorageError && e.kind !== 'notFound') throw e;
+        continue;
+      }
+      if (claim.deviceID !== this.deviceID || typeof claim.deliveredAt !== 'number' || claim.deliveredAt >= cutoff) continue;
+      try {
+        await this.backend.delete(object.key);
+        deleted += 1;
+      } catch (e) {
+        if (!(e instanceof StorageError && e.kind === 'notFound')) throw e;
+      }
+    }
+    return deleted;
   }
 
   private async currentRevision(id: Uuid): Promise<Uuid | undefined> {

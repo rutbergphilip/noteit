@@ -3,6 +3,8 @@ import { closeHistory, history, redo, undo } from '@tiptap/pm/history';
 import { Plugin, TextSelection } from '@tiptap/pm/state';
 import type { EditorView } from '@tiptap/pm/view';
 import { WIKI_LINK_TRIGGER } from '../linking.js';
+import { dateTokenRewrite, localFirstWeekday } from '../natural.js';
+import { FindHighlight } from './find.js';
 import { safeAlign, safeBlobUrl, safeColor, safeHref, safeInt, safeLanguage, safePositive } from './safe.js';
 
 const BULLETS = ['•', '◦', '▪'];
@@ -298,7 +300,8 @@ export const BoldMark = simpleMark('bold', ['strong', 'b'], 'Mod-b', 'font-weigh
 export const ItalicMark = simpleMark('italic', ['em', 'i'], 'Mod-i', 'font-style=italic');
 export const UnderlineMark = simpleMark('underline', ['u'], 'Mod-u');
 export const StrikeMark = simpleMark('strike', ['s', 'del', 'strike'], 'Mod-Shift-x');
-export const CodeMark = simpleMark('code', ['code'], 'Mod-e');
+// Inline code is ⇧⌘E, as on the Mac, where ⌘E is Use Selection for Find.
+export const CodeMark = simpleMark('code', ['code']);
 
 export const LinkMark = Mark.create({
   name: 'link',
@@ -477,6 +480,17 @@ function wikiLinkTyped(view: EditorView, from: number, prefix: string, start: nu
   });
 }
 
+/** `@due(fri)` → `@due(2026-10-23)` as its `)` is typed (native DateTokenAutoFormat); one ⌘Z puts back the words. */
+function dateTokenTyped(view: EditorView, from: number, prefix: string, start: number): boolean {
+  if (!prefix.includes('@')) return false;
+  const r = dateTokenRewrite(`${prefix})`, new Date(), { firstWeekday: localFirstWeekday() });
+  if (!r) return false;
+  return convertAfterTyping(view, from, from, ')', () => {
+    view.dispatch(view.state.tr.insertText(r.replacement, start + r.start, start + r.end));
+    return true;
+  });
+}
+
 function handleTyped(editor: Editor, view: EditorView, from: number, to: number, text: string, resolve?: WikiLinkResolver): boolean {
   if (text.length !== 1 || from !== to || !editor.isEditable) return false;
   const { $from } = view.state.selection;
@@ -489,6 +503,7 @@ function handleTyped(editor: Editor, view: EditorView, from: number, to: number,
 
   if (text === ' ') return blockShortcut(editor, view, prefix, from, text);
   if (text === ']') return !inCode && wikiLinkTyped(view, from, prefix, start, resolve);
+  if (text === ')' && !inCode) return dateTokenTyped(view, from, prefix, start);
 
   const inline: Record<string, { re: RegExp; mark: string; open: number; typedClose: number }> = {
     '*': { re: BOLD, mark: 'bold', open: 2, typedClose: 1 },
@@ -683,8 +698,10 @@ export function noteItExtensions(opts: { resolver?: AttachmentResolver; wikiLink
     FontSizeMark,
     BlockShortcuts,
     MarkdownShortcuts.configure({ wikiLink: opts.wikiLink }),
+    FindHighlight,
   ];
 }
 
 export { toEditorJSON, fromEditorJSON, prepareForEditor } from './convert.js';
+export * from './find.js';
 export * from './safe.js';

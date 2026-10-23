@@ -361,3 +361,13 @@
   color: var(--acct);
   font-weight: 500;
 }
+
+/* Find in note: every match, and the current one stronger. */
+.ni-prose .ni-find {
+  background: var(--mark);
+  border-radius: 2px;
+}
+.ni-prose .ni-find-current {
+  background: rgba(255, 159, 10, 0.75);
+  box-shadow: 0 0 0 1px rgba(255, 159, 10, 0.9);
+}

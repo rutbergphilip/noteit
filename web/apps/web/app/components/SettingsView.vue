@@ -23,6 +23,7 @@ import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { failureOf, unwrap } from '~/utils/actions';
 import { formatBytes, formatDateTime, relativeTime } from '~/utils/format';
+import { askNotificationPermission, notificationsSupported } from '~/utils/reminders';
 import type { DeviceView } from '~/worker/types';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
@@ -106,6 +107,20 @@ async function forget(): Promise<void> {
     danger: true,
   });
   if (ok) await signOut(true);
+}
+// Reminders ring here while NoteIt is open in a tab; one device rings per reminder (claims).
+const notifyState = ref<NotificationPermission | 'unsupported'>(notificationsSupported() ? Notification.permission : 'unsupported');
+const notifySub = computed(() =>
+  notifyState.value === 'granted'
+    ? '@remind(…) times show a notification while NoteIt is open in a tab. If several devices are on, only one rings.'
+    : notifyState.value === 'denied'
+      ? 'Blocked in this browser\'s site settings. Reminders show inside NoteIt instead.'
+      : notifyState.value === 'unsupported'
+        ? "This browser can't show notifications. Reminders show inside NoteIt instead."
+        : 'Let this browser show @remind(…) times as notifications while NoteIt is open in a tab.',
+);
+async function allowNotifications(): Promise<void> {
+  notifyState.value = await askNotificationPermission();
 }
 const themes = [
   { label: 'System', value: 'system' },
@@ -254,6 +269,9 @@ const roles = [
                   <UInput v-model="deviceName" maxlength="64" aria-label="Device name" class="w-48" />
                   <UButton type="submit" color="neutral" variant="outline" label="Save" :loading="savingDevice" />
                 </form>
+              </SettingsRow>
+              <SettingsRow label="Reminder notifications" :sub="notifySub">
+                <UButton v-if="notifyState === 'default'" color="neutral" variant="outline" label="Allow" @click="allowNotifications" />
               </SettingsRow>
             </SettingsCard>
           </template>

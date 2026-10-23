@@ -279,6 +279,9 @@ final class GoldenVectorTests: XCTestCase {
                             deviceID: "device-2", deviceName: "Laptop", meta: try LibraryCoding.encoder.encode(smartFolder))),
             ("tombstone-smart-folder", RemoteLayout.tombstone(smartFolder.id),
              Tombstone(id: smartFolder.id, kind: .smartFolder, deletedAt: VectorIO.epoch.addingTimeInterval(7_200), deviceID: "device-2")),
+            // organise 7.3: the claim a device writes before it shows a reminder; the web app writes and sweeps them too.
+            ("reminder-claim", RemoteLayout.reminderClaim(VectorIO.uuid("envelope-reminder")),
+             ReminderClaim(id: VectorIO.uuid("envelope-reminder"), deviceID: "device-1", deliveredAt: VectorIO.epoch.addingTimeInterval(32_400.5))),
             ("tombstone", RemoteLayout.tombstone(noteID),
              Tombstone(id: noteID, kind: .note, deletedAt: VectorIO.epoch.addingTimeInterval(172_800.5), deviceID: "device-2",
                        deletedMetaETag: "\"5d41402abc4b2a76b9719d911017c592\"")),
@@ -325,6 +328,7 @@ final class GoldenVectorTests: XCTestCase {
             switch vector.name {
             case let name where name.hasPrefix("tombstone"): reencoded = try SyncEngine.encode(SyncEngine.decode(Tombstone.self, from: plain))
             case "device": reencoded = try SyncEngine.encode(SyncEngine.decode(DeviceInfo.self, from: plain))
+            case "reminder-claim": reencoded = try SyncEngine.encode(SyncEngine.decode(ReminderClaim.self, from: plain))
             case "noteit-doc-body": reencoded = try BodyContainer.decode(plain).encoded()
             default:
                 let envelope = try SyncEngine.decode(RemoteEnvelope.self, from: plain)

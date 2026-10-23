@@ -8,6 +8,7 @@ import {
   decodeEnvelope,
   decodeManifest,
   decodeSmartFolderMeta,
+  encodeJson,
   decodeTombstone,
   encodeEnvelope,
   fromUtf8,
@@ -43,6 +44,10 @@ describe('envelope vectors', () => {
         if (env.kind === 'smartFolder') expect(decodeSmartFolderMeta(b64decode(env.meta))).toEqual(meta);
       } else if (c.context.startsWith('bodies/')) {
         expect(JSON.parse(fromUtf8(plain))).toEqual(expected);
+      } else if (c.context.startsWith('claims/reminders/')) {
+        // The claim the engine writes for the same values is byte for byte the Swift one.
+        const o = JSON.parse(fromUtf8(plain)) as { id: string; deviceID: string; deliveredAt: number };
+        expect(fromUtf8(encodeJson({ id: o.id, deviceID: o.deviceID, deliveredAt: o.deliveredAt }))).toBe(c.plaintextJSON);
       } else if (c.context.startsWith('tombstones/')) {
         expect(decodeTombstone(plain)).toEqual(expected);
       } else {

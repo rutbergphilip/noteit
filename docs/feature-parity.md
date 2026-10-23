@@ -26,7 +26,7 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Code blocks with syntax colouring | Yes | Plain code blocks | Web gap |
 | Bigger/smaller text (⌘+ ⌘−), alignment, clear formatting | Yes | Shown, not settable | Web gap |
 | Paste Markdown as formatting, Paste and Match Style | Yes | Yes: the same "clearly Markdown" rules and reader (the Mac's Markdown fixtures); ⇧⌘V pastes plain text | Parity |
-| Find and replace in a note (`find`, `findReplace`) | ⌥⌘F, ⇧⌘F | The browser's own find | Web gap |
+| Find and replace in a note (`find`, `findReplace`) | ⌥⌘F, ⇧⌘F | ⌥⌘F, ⇧⌘F: Match Case, Whole Word, regex with `$1`, ⌘G/⇧⌘G, ⌘E, one ⌘Z per replace | Parity |
 | Pin and unpin (`togglePin`) | Yes | Yes | Parity |
 | Notebooks: create, rename, colour, symbol (`newNotebook`) | ⇧⌘N | ⌥⇧⌘B (⇧⌘N where the browser allows it) | Parity |
 | Nested notebooks | Drag, Move To | Create inside, shown nested; moving a notebook is a web gap | Parity |
@@ -80,8 +80,8 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Which notebook holds templates | Preference, else "Templates" | The notebook named "Templates" | Native-only (local data): Mac preference |
 | Tasks view (`showTasks`) | ⇧⌘T | ⌥⇧⌘T (⇧⌘T where the browser allows it); check off there | Parity |
 | Show completed tasks (`showCompletedTasks`) | Yes | Completed switch in Tasks | Parity |
-| `@due(…)` dates, Set Due Date… (`setDueDate`), natural dates such as `@due(fri)` | ⇧⌘D | Typed `@due(2026-10-24)` is read; the picker and natural dates are a web gap | Web gap |
-| Reminders: `@remind(…)` notifications (`addReminder`) | ⌃⌘R, notifications | Shown in Tasks; no notifications yet. A browser can only notify while NoteIt is open in a tab, and must take part in reminder claims so only one device rings | Web gap |
+| `@due(…)` dates, Set Due Date… (`setDueDate`), natural dates such as `@due(fri)` | ⇧⌘D | ⇧⌘D picker; `@due(fri)`, `@remind(tomorrow 9am)` become dates on `)` with the same parser (shared vectors). Long forms only the Mac's data detector reads, such as "October 21", stay as typed | Parity |
+| Reminders: `@remind(…)` notifications (`addReminder`) | ⌃⌘R, notifications | ⌃⌘R; browser notifications (Settings › General) while NoteIt is open in a tab, else a notice in the app. Claims in the same `claims/reminders/` format (shared vectors), so only one device rings | Parity |
 
 ## Capture, import and export
 

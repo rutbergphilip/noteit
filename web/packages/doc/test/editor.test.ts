@@ -4,6 +4,7 @@ import { undo } from '@tiptap/pm/history';
 import { afterEach, describe, expect, it } from 'vitest';
 import { fromEditorJSON, insertTable, noteItExtensions } from '../src/tiptap/index.js';
 
+const p2 = (text: string) => ({ type: 'paragraph', content: [{ type: 'text', text }] });
 const para = (text = '') => (text ? { type: 'paragraph', content: [{ type: 'text', text }] } : { type: 'paragraph' });
 
 // Every editor is destroyed after its test, so ProseMirror's DOM timers never outlive the environment.
@@ -151,5 +152,33 @@ describe('[[ links as you type', () => {
     ed.commands.setTextSelection(1);
     type(ed, 'see [[Plans]] ok');
     expect(blocks(ed)[0]).toMatchObject({ content: [{ text: 'see ' }, { text: 'Plans', marks: [{ type: 'link', attrs: { href: 'noteit://note?title=Plans' } }] }, { text: ' ok' }] });
+  });
+});
+
+describe('find and replace (native FindReplaceEngine)', () => {
+  it('finds with case, whole word and regex, and replaces keeping formatting in one undo step', async () => {
+    const { findMatches, findPattern, replaceMatches } = await import('../src/tiptap/index.js');
+    const ed = editorWith([p2('Cat cat '), { type: 'paragraph', content: [{ type: 'text', text: 'concat', marks: [{ type: 'bold' }] }] }]);
+    const count = (q: string, o = {}) => findMatches(ed.state.doc, findPattern(q, o) as RegExp).length;
+    expect(count('cat')).toBe(3);
+    expect(count('cat', { matchCase: true })).toBe(2);
+    expect(count('cat', { wholeWord: true })).toBe(2);
+    expect(findPattern('(', { regex: true })).toBeTypeOf('string');
+    const pattern = findPattern('c(a)t', { regex: true }) as RegExp;
+    ed.view.dispatch(replaceMatches(ed.state.tr, findMatches(ed.state.doc, pattern), 'd$1g', true));
+    expect(ed.state.doc.textContent).toBe('dag dag condag');
+    expect(blocks(ed)[1]).toEqual({ type: 'paragraph', content: [{ type: 'text', text: 'condag', marks: [{ type: 'bold' }] }] });
+    undo(ed.state, ed.view.dispatch);
+    expect(ed.state.doc.textContent).toBe('Cat cat concat');
+  });
+});
+
+describe('natural dates as you type', () => {
+  it('@due(tomorrow) becomes a full date when ) is typed', () => {
+    const ed = editorWith();
+    type(ed, 'Call @due(tomorrow)');
+    expect(ed.state.doc.textContent).toMatch(/^Call @due\(\d{4}-\d{2}-\d{2}\)$/);
+    undo(ed.state, ed.view.dispatch);
+    expect(ed.state.doc.textContent).toBe('Call @due(tomorrow)');
   });
 });

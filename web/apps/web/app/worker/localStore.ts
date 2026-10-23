@@ -53,6 +53,7 @@ import {
   parseTasks,
   maskedText,
   pruneAttachments,
+  reminderId,
   renameTagInQuery,
   rewriteTags,
   searchFold,
@@ -328,6 +329,21 @@ export class WebLocalStore implements SyncLocalStore {
     for (const d of this.derived.values()) {
       if (d.row.deletedAt || d.row.kind !== 'doc') continue;
       for (const t of d.tasks) out.push({ noteId: d.row.id, noteTitle: d.row.title, block: t.block, text: t.text, checked: t.checked, ...(t.due ? { due: t.due } : {}), ...(t.remind ? { remind: t.remind } : {}) });
+    }
+    return out;
+  }
+
+  /** Reminders that can still ring (native liveReminders): not done, not on a checked task, in live editable notes. */
+  liveReminders(): { id: string; noteId: Uuid; noteTitle: string; text: string; at: LocalDateTime }[] {
+    const out: { id: string; noteId: Uuid; noteTitle: string; text: string; at: LocalDateTime }[] = [];
+    for (const d of this.derived.values()) {
+      if (!d.hasLiveReminder || d.row.deletedAt || d.row.kind !== 'doc') continue;
+      const doc = this.getNote(d.row.id)?.container?.doc;
+      if (!doc) continue;
+      for (const r of parseTasks(maskedText(doc)).reminders) {
+        if (r.done || (r.isTask && r.checked)) continue;
+        out.push({ id: reminderId(d.row.id, r.at, r.text), noteId: d.row.id, noteTitle: d.row.title, text: r.text, at: r.at });
+      }
     }
     return out;
   }

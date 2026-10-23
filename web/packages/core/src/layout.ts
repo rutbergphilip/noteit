@@ -20,6 +20,8 @@ export const keys = {
   noteBody: (id: Uuid) => `${ROOT}notes/${id}.body`,
   docBody: (id: Uuid, version: Uuid, tag: string) => `${ROOT}bodies/${id}.${version}.${tag}.body`,
   smartFolder: (id: Uuid) => `${ROOT}smart-folders/${id}.json`,
+  reminderClaims: `${ROOT}claims/reminders/`,
+  reminderClaim: (id: Uuid) => `${ROOT}claims/reminders/${id}.json`,
   tombstone: (id: Uuid) => `${ROOT}tombstones/${id}.json`,
   device: (deviceId: string) => `${ROOT}devices/${deviceId}.json`,
   metaKey: (id: Uuid, kind: RecordKind) => (kind === 'notebook' ? keys.notebook(id) : kind === 'smartFolder' ? keys.smartFolder(id) : keys.noteMeta(id)),

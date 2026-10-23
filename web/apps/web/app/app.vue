@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, watch } from 'vue';
 import { setNotifier, type Theme, useNoteit } from '~/composables/useNoteit';
 import { PALETTE_KEYS, webCommands } from '~/utils/commands';
 import { matchesCombo } from '~/utils/shortcuts';
+import { startReminders, stopReminders } from '~/utils/reminders';
 
 const { state, boot, client } = useNoteit();
 
@@ -55,6 +56,12 @@ const onOnline = () => {
 
 // Closing IndexedDB as the page goes away lets a reload open it at once. The open editor saves a pending edit
 // first (noteit:flush), so that save is queued in the worker ahead of the close.
+// Reminders ring while the library is open (utils/reminders.ts).
+watch(
+  () => state.phase,
+  (phase) => (phase === 'ready' ? startReminders() : stopReminders()),
+);
+
 const onPageHide = (e: PageTransitionEvent) => {
   window.dispatchEvent(new Event('noteit:flush'));
   if (state.phase !== 'loading' && !e.persisted) void client().close();

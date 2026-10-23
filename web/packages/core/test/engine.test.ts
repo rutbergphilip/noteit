@@ -168,3 +168,23 @@ describe('store-snapshot vector', () => {
     }, 20_000);
   }
 });
+
+describe('reminder claims (Swift SyncEngine+Claims)', () => {
+  it('lets one device claim a reminder, and sweeps only its own old claims', async () => {
+    const { InMemoryBackend, connect, MemoryStateStore, SyncEngine } = await import('../src/index.js');
+    const { FakeLocal } = await import('./fake-local.js');
+    const backend = new InMemoryBackend();
+    const a = await connect(backend, { passphrase: 'claims claims', createIfMissing: true });
+    const mk = (id: string, now: () => Date) => new SyncEngine({ backend, session: a.session, local: new FakeLocal(), state: new MemoryStateStore(), deviceID: id, deviceName: id, now });
+    const t = new Date('2026-10-24T09:00:00Z');
+    const ea = mk('A', () => t);
+    const eb = mk('B', () => t);
+    const id = '61110F64-4893-43F8-96F3-3FDAA661A24D';
+    expect(await ea.claimReminder(id, t)).toBe('claimed');
+    expect(await eb.claimReminder(id, t)).toBe('alreadyClaimed');
+    expect(await eb.sweepReminderClaims(0, new Date(t.getTime() + 1000))).toBe(0);
+    expect(await ea.sweepReminderClaims(7 * 86400, new Date(t.getTime() + 1000))).toBe(0);
+    expect(await ea.sweepReminderClaims(0, new Date(t.getTime() + 1000))).toBe(1);
+    expect(await eb.claimReminder(id, t)).toBe('claimed');
+  });
+});

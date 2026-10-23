@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
-import { addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS } from '@noteit/doc';
+import { localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS } from '@noteit/doc';
 import { fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
@@ -187,6 +187,69 @@ function pasteMarkdown(asText: boolean, data: DataTransfer | null): boolean {
   }
   const blocks = pasted.endsWithNewline ? [...content, { type: 'paragraph' }] : content;
   return ed.chain().focus().insertContent(blocks as never).run();
+}
+
+// MARK: Set Due Date… (native DatePopover for the checklist item under the cursor)
+
+const due = ref<{ kind: 'due' | 'remind'; date: string; time: string; pos: number }>();
+watch(
+  () => state.dueDate,
+  (n) => {
+    if (!n) return;
+    const ed = editor.value;
+    if (!ed || !editable.value) return;
+    const { $from } = ed.state.selection;
+    const item = $from.parent;
+    if (item.type.name !== 'listItem' || item.attrs.kind !== 'task') return toast('Put the cursor on a checklist item to give it a due date.');
+    const existing = /@due\((\d{4}-\d{2}-\d{2})(?: (\d{2}:\d{2}))?\)/.exec(item.textContent);
+    const today = localDateTimeToken(localFromDate(new Date(), false));
+    due.value = { kind: 'due', date: existing?.[1] ?? today, time: existing?.[2] ?? '', pos: $from.before() };
+  },
+);
+// Add Reminder… (⌃⌘R): the line's own date ("call Bo tomorrow 3pm") when it has one, else the picker at 09:00.
+watch(
+  () => state.addReminder,
+  (n) => {
+    if (!n) return;
+    const ed = editor.value;
+    if (!ed || !editable.value) return;
+    const { $from } = ed.state.selection;
+    if (!$from.parent.isTextblock || $from.parent.type.name === 'codeBlock') return;
+    const pos = $from.before();
+    const line = $from.parent.textContent.replace(/@remind\([^()\n]*\)/g, '');
+    const found = parseNaturalDate(line, new Date(), { defaultHour: 9, firstWeekday: localFirstWeekday() });
+    const existing = /@remind\((\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})/.exec($from.parent.textContent);
+    if (found && !existing) {
+      due.value = { kind: 'remind', date: '', time: '', pos };
+      return applyDue(localDateTimeToken(found.value));
+    }
+    due.value = { kind: 'remind', date: existing?.[1] ?? localDateTimeToken(localFromDate(new Date(Date.now() + 86_400_000), false)), time: existing?.[2] ?? '09:00', pos };
+  },
+);
+function dayToken(offset: number): string {
+  return localDateTimeToken(localFromDate(new Date(Date.now() + offset * 86_400_000), false));
+}
+/** Writes `@due(…)` into the item: replaces the one there, else adds it at the end; empty removes it. */
+function applyDue(token: string | undefined): void {
+  const ed = editor.value;
+  const d = due.value;
+  due.value = undefined;
+  if (!ed || !d) return;
+  const node = ed.state.doc.nodeAt(d.pos);
+  if (!node || !node.isTextblock) return;
+  const text = node.textBetween(0, node.content.size, undefined, '\ufffc');
+  const name = d.kind;
+  const m = (name === 'due' ? /\s?@due\([^()\n]*\)/ : /\s?@remind\([^()\n]*\)/).exec(text);
+  const start = d.pos + 1;
+  const tr = ed.state.tr;
+  if (m) {
+    if (token) tr.insertText(`${m[0].startsWith(' ') ? ' ' : ''}@${name}(${token})`, start + m.index, start + m.index + m[0].length);
+    else tr.delete(start + m.index, start + m.index + m[0].length);
+  } else if (token) {
+    tr.insertText(`${text && !text.endsWith(' ') ? ' ' : ''}@${name}(${token})`, start + node.content.size);
+  }
+  ed.view.dispatch(tr);
+  ed.commands.focus();
 }
 
 async function followNoteLink(href: string): Promise<void> {
@@ -649,6 +712,8 @@ onBeforeUnmount(() => {
       <span class="ms-auto flex-none ps-2 text-xs text-muted transition-opacity" :class="saveState === 'saving' && 'opacity-60'">{{ saveState === 'saved' ? 'Saved' : saveState === 'saving' ? 'Saving…' : 'Edited' }}</span>
     </div>
 
+    <FindBar :editor="editor" :can-replace="editable && !row?.deletedAt" />
+
     <div v-if="readOnlyReason || row?.conflictSource" class="flex flex-col gap-2 px-6 pt-3">
       <UAlert
         v-if="readOnlyReason === 'legacy'"
@@ -706,6 +771,26 @@ onBeforeUnmount(() => {
         <NoteInspector :note-id="noteId" :doc="liveDoc" @jump="jumpTo" />
       </div>
     </div>
+    <UModal :open="!!due" :title="due?.kind === 'remind' ? 'Add Reminder' : 'Set Due Date'" :description="due?.kind === 'remind' ? 'For the line under the cursor' : 'For the checklist item under the cursor'" :ui="{ content: 'sm:max-w-[380px]', footer: 'justify-end gap-2' }" @update:open="(o: boolean) => !o && (due = undefined)">
+      <template #body>
+        <form v-if="due" id="due-form" class="flex flex-col gap-3" @submit.prevent="applyDue(due.date ? `${due.date}${due.time || due.kind === 'remind' ? ` ${due.time || '09:00'}` : ''}` : undefined)">
+          <div class="flex gap-2">
+            <UButton color="neutral" variant="soft" size="xs" label="Today" @click="due.date = dayToken(0)" />
+            <UButton color="neutral" variant="soft" size="xs" label="Tomorrow" @click="due.date = dayToken(1)" />
+            <UButton color="neutral" variant="soft" size="xs" label="Next Week" @click="due.date = dayToken(7)" />
+          </div>
+          <div class="flex gap-2">
+            <UFormField label="Date" class="flex-1"><UInput v-model="due.date" type="date" autofocus class="w-full" /></UFormField>
+            <UFormField :label="due.kind === 'remind' ? 'Time' : 'Time (optional)'"><UInput v-model="due.time" type="time" /></UFormField>
+          </div>
+        </form>
+      </template>
+      <template #footer>
+        <UButton color="error" variant="ghost" class="me-auto" label="Remove" @click="applyDue(undefined)" />
+        <UButton color="neutral" variant="soft" label="Cancel" @click="due = undefined" />
+        <UButton type="submit" form="due-form" label="Set" :disabled="!due?.date" />
+      </template>
+    </UModal>
     <USlideover
       :open="state.inspector.open && !row?.deletedAt && narrow"
       side="right"
