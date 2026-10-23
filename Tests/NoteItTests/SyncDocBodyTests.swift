@@ -117,6 +117,29 @@ final class SyncDocBodyTests: XCTestCase {
         XCTAssertThrowsError(try NoteStore.decodeSyncBody(rtfd, format: BodyFormat.noteItDocV1))
     }
 
+    private func docPayload(_ id: UUID, frontMatter: String) throws -> RecordPayload {
+        let meta = NoteMeta(id: id, notebookID: nil, title: "", preview: "", isPinned: false, createdAt: Date(), updatedAt: Date(),
+                            tags: [], revision: UUID())
+        let body = try BodyCodec.noteItDoc(of: NSAttributedString(string: "Remote\nnote"),
+                                           extras: ContainerExtras(frontMatter: frontMatter, extra: [:])).encoded()
+        return RecordPayload(id: id, kind: .note, revision: meta.revision!, modifiedAt: meta.updatedAt, deviceID: "web",
+                             meta: try NoteStore.encoder.encode(meta), body: body, bodyFormat: BodyFormat.noteItDocV1)
+    }
+
+    /// Security review: synced front matter is untrusted and never carries NoteIt's own keys into the library.
+    func testRemoteFrontMatterIsSanitizedOrRefused() throws {
+        let store = makeStore("fm")
+        let hostile = "id: 00000000-0000-0000-0000-000000000000\npinned: true\n---\nsource: web\nconflict-source: \"Evil\""
+        var prepared = try NoteStore.prepareRemoteNote(try docPayload(UUID(), frontMatter: hostile), storage: store.bodyStorage)
+        defer { prepared.discard() }
+        XCTAssertEqual(prepared.extras.frontMatter, "source: web")
+
+        XCTAssertThrowsError(try NoteStore.prepareRemoteNote(try docPayload(UUID(), frontMatter: "not: valid\nat all"),
+                                                             storage: store.bodyStorage)) { error in
+            guard case NoteStoreSyncError.invalidPayload = error else { return XCTFail("\(error)") }
+        }
+    }
+
     func testPreparedNoteItDocNoteKeepsItsExtrasAndIsNotRTFD() throws {
         let store = makeStore("p")
         let id = UUID()
