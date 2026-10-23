@@ -7,6 +7,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-23
+
 ### Changed
 
 - The first published build of 0.6.0, which was tagged but never released. It brings everything listed under 0.6.0: importing from Evernote and Notion, `noteit://` links, the Local API and `noteit` command line tool, Spotlight and Shortcuts, links between notes, daily notes, templates, nested notebooks and tags, smart folders, search filters, Tasks and reminders.
@@ -155,7 +157,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Folders kept in sync by another tool, such as iCloud Drive or Dropbox, and S3 services without conditional writes only get best-effort protection when two Macs write at the same time.
 - The full list is in [Known limitations](https://github.com/rutbergphilip/noteit/blob/main/docs/known-limitations.md).
 
-[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/rutbergphilip/noteit/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/rutbergphilip/noteit/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/rutbergphilip/noteit/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rutbergphilip/noteit/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rutbergphilip/noteit/compare/v0.3.0...v0.4.0
