@@ -1,46 +1,23 @@
 <script setup lang="ts">
+import { ref } from 'vue';
 import { useNoteit } from '~/composables/useNoteit';
 
 const { boot } = useNoteit();
+const retrying = ref(false);
+async function retry(): Promise<void> {
+  retrying.value = true;
+  await boot();
+  retrying.value = false;
+}
 </script>
 
 <template>
-  <div class="center">
-    <div class="card">
-      <NiIcon name="cloudOff" :size="28" />
-      <h1>Can't Reach the Server</h1>
-      <p>NoteIt couldn't talk to this server. Check your connection, then try again.</p>
-      <button class="ni-btn" type="button" @click="boot()">Try Again</button>
-    </div>
+  <div class="grid min-h-dvh place-items-center bg-(--page) p-4">
+    <UCard class="max-w-[420px] rounded-(--radius-2xl) shadow-(--shadow-card) ring-0" :ui="{ body: 'flex flex-col gap-3 p-8 sm:p-8' }">
+      <UIcon name="i-lucide-cloud-off" class="size-7" />
+      <h1 class="text-[22px] font-bold">Can't Reach the Server</h1>
+      <p class="text-muted">NoteIt couldn't talk to this server. Check your connection, then try again.</p>
+      <UButton size="lg" class="self-start" :loading="retrying" label="Try Again" @click="retry" />
+    </UCard>
   </div>
 </template>
-
-<style scoped>
-.center {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  background: var(--page);
-  padding: 16px;
-}
-.card {
-  max-width: 420px;
-  background: var(--bg);
-  border-radius: var(--radius-2xl);
-  box-shadow: var(--shadow-card);
-  padding: 32px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  color: var(--ink);
-}
-h1 {
-  margin: 0;
-  font-size: 22px;
-}
-p {
-  margin: 0;
-  color: var(--ink2);
-  line-height: 1.5;
-}
-</style>

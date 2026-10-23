@@ -1,18 +1,19 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, reactive } from 'vue';
 import type { Block, BodyContainer } from '@noteit/doc';
 import { useNoteit } from '~/composables/useNoteit';
 
 const { state, createNote, toast } = useNoteit();
 
-// The draft lives in memory for this tab only: never written to browser storage unencrypted.
-const draft = (globalThis as { __noteitCaptureDraft?: { title: string; body: string; notebook: string } }).__noteitCaptureDraft ??= reactive({
-  title: '',
-  body: '',
-  notebook: state.notebooks.find((n) => n.name.toLowerCase() === 'inbox')?.id ?? '',
-});
-const titleInput = ref<HTMLInputElement>();
-onMounted(() => titleInput.value?.focus());
+// The draft lives in memory for this tab only: never written to browser storage unencrypted. Closing the dialog
+// (esc, outside click) keeps it; Discard clears it.
+const draft = ((globalThis as { __noteitCaptureDraft?: { title: string; body: string; notebook: string } }).__noteitCaptureDraft ??= reactive({ title: '', body: '', notebook: 'none' }));
+const destinations = computed(() => [{ label: 'No Notebook', value: 'none' }, ...state.notebooks.map((n) => ({ label: n.name || 'Untitled', value: n.id }))]);
+const empty = computed(() => !draft.title.trim() && !draft.body.trim());
+
+function onOpen(open: boolean): void {
+  if (open && draft.notebook === 'none') draft.notebook = state.notebooks.find((n) => n.name.toLowerCase() === 'inbox')?.id ?? 'none';
+}
 
 /** Plain text → noteit-doc: the title as a Title line, "- [ ]" lines as checklist items, "- " as bullets. */
 function toContainer(): BodyContainer {
@@ -31,131 +32,48 @@ function toContainer(): BodyContainer {
 }
 
 async function save(): Promise<void> {
-  if (!draft.title.trim() && !draft.body.trim()) return;
-  await createNote(toContainer(), draft.notebook || undefined);
+  if (empty.value) return;
+  await createNote(toContainer(), draft.notebook === 'none' ? undefined : draft.notebook);
   discard();
-  toast('Saved to your notes');
+  toast('Saved to your notes', 'success');
 }
-
 function discard(): void {
   draft.title = '';
   draft.body = '';
   state.capture = false;
 }
-
 function onKey(e: KeyboardEvent): void {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
     e.preventDefault();
     void save();
-  } else if (e.key === 'Escape') state.capture = false;
+  }
 }
 </script>
 
 <template>
   <!-- design p04 -->
-  <div class="ni-scrim" @click="state.capture = false" />
-  <form class="ni-dialog capture" role="dialog" aria-modal="true" aria-label="Quick Capture" @submit.prevent="save" @keydown="onKey">
-    <div class="top">
-      <span class="badge"><NiIcon name="capture" :size="16" color="var(--acc)" /></span>
-      <span class="name">Quick Capture</span>
-      <label class="dest">Save to
-        <select v-model="draft.notebook">
-          <option value="">No Notebook</option>
-          <option v-for="nb in state.notebooks" :key="nb.id" :value="nb.id">{{ nb.name }}</option>
-        </select>
-      </label>
-    </div>
-    <label><span class="sr-only">Title</span><input ref="titleInput" v-model="draft.title" class="title" placeholder="Title" /></label>
-    <label><span class="sr-only">Note</span><textarea v-model="draft.body" rows="6" placeholder="Write something. - [ ] makes a checklist item." /></label>
-    <div class="foot">
-      <kbd>esc</kbd>
-      <span class="hint">to dismiss · draft is kept until you close this tab</span>
-      <button type="button" class="ni-btn ghost small" @click="discard">Discard</button>
-      <button type="submit" class="ni-btn small">Save Note ⌘↵</button>
-    </div>
-  </form>
+  <UModal v-model:open="state.capture" title="Quick Capture" description="Draft a note without leaving what you're doing." :ui="{ content: 'sm:max-w-[600px] sm:top-[140px] sm:translate-y-0 top-auto' }" @update:open="onOpen">
+    <template #content>
+      <form class="flex flex-col gap-3 px-5.5 py-4.5" @submit.prevent="save" @keydown="onKey">
+        <div class="flex flex-wrap items-center gap-2.5">
+          <span class="grid size-7 place-items-center rounded-lg bg-(--sel)"><UIcon name="i-lucide-pen-line" class="size-4 text-primary" /></span>
+          <span class="text-sm font-semibold">Quick Capture</span>
+          <label class="ms-auto flex items-center gap-2 text-[13px] text-muted">
+            Save to
+            <USelect v-model="draft.notebook" :items="destinations" size="sm" variant="soft" class="min-w-36" />
+          </label>
+        </div>
+        <input v-model="draft.title" class="w-full bg-transparent text-[22px] font-semibold outline-none placeholder:text-dimmed" placeholder="Title" aria-label="Title" autofocus />
+        <UTextarea v-model="draft.body" :rows="6" autoresize :maxrows="14" variant="none" placeholder="Write something. - [ ] makes a checklist item." aria-label="Note" :ui="{ base: 'px-0 text-sm/normal' }" />
+        <div class="flex flex-wrap items-center gap-2 border-t border-default pt-3">
+          <UKbd value="escape" />
+          <span class="me-auto text-xs text-muted">to dismiss · draft is kept until you close this tab</span>
+          <UButton color="neutral" variant="ghost" size="sm" label="Discard" @click="discard" />
+          <UButton type="submit" size="sm" :disabled="empty" label="Save Note">
+            <template #trailing><UKbd value="meta" size="sm" /><UKbd value="enter" size="sm" /></template>
+          </UButton>
+        </div>
+      </form>
+    </template>
+  </UModal>
 </template>
-
-<style scoped>
-.capture {
-  top: 140px;
-  width: min(600px, calc(100% - 32px));
-  padding: 18px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.top {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.badge {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--sel);
-  display: grid;
-  place-items: center;
-}
-.name {
-  font-size: 14px;
-  font-weight: 600;
-}
-.dest {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--ink2);
-}
-.dest select {
-  border: 0;
-  background: var(--fill);
-  border-radius: 8px;
-  padding: 5px 8px;
-  font-size: 13px;
-}
-.title {
-  width: 100%;
-  border: 0;
-  outline: none;
-  background: transparent;
-  font-size: 22px;
-  font-weight: 600;
-  color: var(--ink);
-}
-textarea {
-  width: 100%;
-  border: 0;
-  outline: none;
-  background: transparent;
-  font-size: 14px;
-  line-height: 1.5;
-  resize: vertical;
-  color: var(--ink);
-}
-.foot {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  border-top: 1px solid var(--line);
-  padding-top: 12px;
-}
-kbd {
-  font: inherit;
-  font-size: 12px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 2px 6px;
-  color: var(--ink2);
-}
-.hint {
-  font-size: 12px;
-  color: var(--ink2);
-  margin-right: auto;
-}
-</style>

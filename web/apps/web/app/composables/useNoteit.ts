@@ -9,15 +9,16 @@ export type Phase = 'loading' | 'setup' | 'signin' | 'changePassword' | 'unlock'
 export type View = { kind: 'all' } | { kind: 'pinned' } | { kind: 'recent' } | { kind: 'trash' } | { kind: 'notebook'; id: string } | { kind: 'tag'; tag: string };
 export type Theme = 'system' | 'light' | 'dark';
 
-const THEME_KEY = 'noteit.theme';
+export interface Notice {
+  title: string;
+  description?: string;
+  tone?: 'info' | 'success' | 'error';
+}
 
-function storedTheme(): Theme {
-  try {
-    const t = localStorage.getItem(THEME_KEY);
-    return t === 'light' || t === 'dark' ? t : 'system';
-  } catch {
-    return 'system';
-  }
+/** Set by app.vue from Nuxt UI's useToast(), which needs a component setup to resolve. */
+let notifier: ((notice: Notice) => void) | undefined;
+export function setNotifier(fn: (notice: Notice) => void): void {
+  notifier = fn;
 }
 
 const state = reactive({
@@ -34,7 +35,8 @@ const state = reactive({
   query: '',
   searchHits: undefined as Set<string> | undefined,
   sort: 'edited' as 'edited' | 'created' | 'title',
-  theme: storedTheme(),
+  /** Mirrors Nuxt UI's color mode (app.vue keeps the two in step; it persists the choice). */
+  theme: 'system' as Theme,
   /** Phone/tablet: which pane is shown. */
   pane: 'list' as 'list' | 'editor',
   drawerOpen: false,
@@ -42,7 +44,6 @@ const state = reactive({
   capture: false,
   notebookDialog: undefined as undefined | { mode: 'create'; parent?: string } | { mode: 'edit'; id: string },
   settings: false,
-  toast: undefined as string | undefined,
 });
 
 const worker = shallowRef<ReturnType<typeof createWorkerClient>>();
@@ -66,11 +67,8 @@ async function refresh(): Promise<void> {
   if (state.query) state.searchHits = new Set(await client().search(state.query));
 }
 
-function toast(message: string): void {
-  state.toast = message;
-  setTimeout(() => {
-    if (state.toast === message) state.toast = undefined;
-  }, 3500);
+function toast(message: string, tone: Notice['tone'] = 'info'): void {
+  notifier?.({ title: message, tone });
 }
 
 /** Where the SPA starts: server info, then the session (null when signed out), then the account's next step. */
@@ -143,12 +141,6 @@ async function signOut(forget = false): Promise<void> {
 
 function setTheme(t: Theme): void {
   state.theme = t;
-  try {
-    if (t === 'system') localStorage.removeItem(THEME_KEY);
-    else localStorage.setItem(THEME_KEY, t);
-  } catch {
-    // private mode: the choice lasts for this tab only
-  }
 }
 
 async function setQuery(q: string): Promise<void> {

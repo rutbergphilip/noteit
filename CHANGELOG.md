@@ -23,6 +23,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - On S3 storage, a request that could change data is never sent twice automatically. A dropped connection is sorted out on the next sync instead.
 - On storage that can't delete conditionally (sync folders and some S3 providers), NoteIt checks that a note is unchanged right before deleting it, and leaves anything another device changed meanwhile.
 - In the NoteIt web app, server setup, sign-in, invites, passwords and user management now run as type-checked server actions built with nuxt-safe-action. Forms point at the field that needs fixing, often before anything is sent, and lists such as your access keys and the server's users refresh by themselves after a change. Sync is unchanged.
+- The NoteIt web app is rebuilt on Nuxt UI, keeping its look. Dialogs, menus and the command palette handle the keyboard, focus and Escape consistently and animate in and out. Notes and notebooks have right-click menus, buttons show when they're working, confirmations are in-app dialogs instead of browser pop-ups, the sidebar and note list can be resized, and Settings opens over your notes.
 
 ### Security
 

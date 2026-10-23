@@ -18,6 +18,7 @@ const messages: Record<string, string> = {
 };
 
 async function submit(): Promise<void> {
+  if (!passphrase.value) return;
   error.value = '';
   busy.value = true;
   const result = await unlock(passphrase.value);
@@ -29,103 +30,35 @@ async function submit(): Promise<void> {
 
 <template>
   <!-- design p07 -->
-  <div class="page">
-    <div class="brand">
+  <div class="flex min-h-dvh flex-col items-center justify-center gap-6 bg-(--page) px-4 py-12">
+    <div class="flex items-center gap-2.5 text-xl">
       <img src="/noteit-icon.png" alt="" width="32" height="32" />
       <span class="ni-wordmark">Note<span>It</span></span>
     </div>
-    <div class="card">
-      <span class="badge"><NiIcon name="lock" :size="24" color="var(--acc)" /></span>
+    <UCard class="w-full max-w-[440px] rounded-(--radius-2xl) shadow-(--shadow-card) ring-0" :ui="{ body: 'flex flex-col gap-5 p-[clamp(20px,5vw,32px)] sm:p-[clamp(20px,5vw,32px)]' }">
+      <span class="grid size-13 place-items-center rounded-[15px] bg-(--sel)"><UIcon name="i-lucide-lock" class="size-6 text-primary" /></span>
       <template v-if="creating">
         <div>
-          <h1>Encrypt Your Notes</h1>
-          <p>Choose the passphrase that encrypts your library. It never leaves this browser; the server only ever sees encrypted notes.</p>
+          <h1 class="text-2xl font-bold">Encrypt Your Notes</h1>
+          <p class="mt-2 text-[15px]/normal text-muted">Choose the passphrase that encrypts your library. It never leaves this browser; the server only ever sees encrypted notes.</p>
         </div>
         <CreateStoreForm />
       </template>
-      <form v-else @submit.prevent="submit">
+      <form v-else class="flex flex-col gap-5" @submit.prevent="submit">
         <div>
-          <h1>Unlock Your Notes</h1>
-          <p>Enter your encryption passphrase. It never leaves this browser, and the server only ever sees encrypted notes.</p>
+          <h1 class="text-2xl font-bold">Unlock Your Notes</h1>
+          <p class="mt-2 text-[15px]/normal text-muted">Enter your encryption passphrase. It never leaves this browser, and the server only ever sees encrypted notes.</p>
         </div>
         <PassphraseField v-model="passphrase" label="Passphrase" autocomplete="current-password" autofocus />
-        <div v-if="error" class="ni-alert error" role="alert">{{ error }}</div>
-        <button class="ni-btn" type="submit" :disabled="busy || !passphrase">{{ busy ? 'Unlocking…' : 'Unlock' }}</button>
-        <p class="fine">NoteIt stays unlocked until you close this tab or lock it from the menu.</p>
-        <div class="ni-alert warn">
-          <NiIcon name="alert" />
-          <span>Lost passphrases can't be recovered, not even by your server admin. Keep a copy in your password manager.</span>
-        </div>
+        <UAlert v-if="error" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="error" />
+        <UButton type="submit" size="xl" block :loading="busy" :disabled="!passphrase" :label="busy ? 'Unlocking…' : 'Unlock'" />
+        <p class="text-[13px] text-muted">NoteIt stays unlocked until you close this tab or lock it from the menu.</p>
+        <UAlert color="warning" variant="subtle" icon="i-lucide-triangle-alert" description="Lost passphrases can't be recovered, not even by your server admin. Keep a copy in your password manager." />
       </form>
-    </div>
-    <p class="foot">
-      Signed in as <strong>{{ state.session?.user.username }}</strong> · <a href="#" @click.prevent="signOut()">Sign Out</a>
+    </UCard>
+    <p class="text-[13px] text-muted">
+      Signed in as <strong class="text-default">{{ state.session?.user.username }}</strong> ·
+      <UButton variant="link" class="p-0 text-[13px]" label="Sign Out" @click="signOut()" />
     </p>
   </div>
 </template>
-
-<style scoped>
-.page {
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 24px;
-  padding: 48px 16px;
-  background: var(--page);
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 20px;
-}
-.card {
-  width: 100%;
-  max-width: 440px;
-  background: var(--bg);
-  border-radius: var(--radius-2xl);
-  box-shadow: var(--shadow-card);
-  padding: clamp(20px, 5vw, 32px);
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-.card form {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-.badge {
-  width: 52px;
-  height: 52px;
-  border-radius: 15px;
-  background: var(--sel);
-  display: grid;
-  place-items: center;
-}
-h1 {
-  margin: 0;
-  font-size: 24px;
-  font-weight: 700;
-}
-p {
-  margin: 8px 0 0;
-  font-size: 15px;
-  line-height: 1.5;
-  color: var(--ink2);
-}
-.fine {
-  margin: 0;
-  font-size: 13px;
-}
-.foot {
-  margin: 0;
-  font-size: 13px;
-  color: var(--ink2);
-}
-.foot strong {
-  color: var(--ink);
-}
-</style>

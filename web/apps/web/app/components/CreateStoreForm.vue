@@ -31,22 +31,16 @@ async function submit(): Promise<void> {
 </script>
 
 <template>
-  <form class="create" @submit.prevent="submit">
+  <form class="flex flex-col gap-4" @submit.prevent="submit">
     <PassphraseField v-model="passphrase" label="Encryption passphrase" autocomplete="new-password" autofocus />
     <PassphraseField v-model="confirm" label="Type it again" autocomplete="new-password" />
-    <div v-if="error" class="ni-alert error" role="alert">{{ error }}</div>
-    <div class="ni-alert warn">
-      <NiIcon name="alert" />
-      <span>Lost passphrases can't be recovered, not even by your server admin. Keep a copy in your password manager. Use the same passphrase on your Mac.</span>
-    </div>
-    <button class="ni-btn" type="submit" :disabled="busy">{{ busy ? 'Creating…' : 'Create Encrypted Library' }}</button>
+    <UAlert v-if="error" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="error" />
+    <UAlert
+      color="warning"
+      variant="subtle"
+      icon="i-lucide-triangle-alert"
+      description="Lost passphrases can't be recovered, not even by your server admin. Keep a copy in your password manager. Use the same passphrase on your Mac."
+    />
+    <UButton type="submit" size="xl" block :loading="busy" :label="busy ? 'Creating…' : 'Create Encrypted Library'" />
   </form>
 </template>
-
-<style scoped>
-.create {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-</style>

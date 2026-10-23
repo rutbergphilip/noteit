@@ -13,15 +13,18 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@iconify-json/lucide": "1.2.142",
     "@node-rs/argon2": "2.2.1",
     "@noteit/core": "workspace:*",
     "@noteit/doc": "workspace:*",
+    "@nuxt/ui": "4.11.3",
     "@tiptap/core": "3.31.0",
     "@tiptap/pm": "3.31.0",
     "@tiptap/vue-3": "3.31.0",
     "h3": "1.15.11",
     "nuxt": "4.6.0",
     "nuxt-safe-action": "0.7.0",
+    "tailwindcss": "4.3.3",
     "vue": "3.5.43",
     "zod": "4.6.5"
   },

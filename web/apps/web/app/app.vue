@@ -1,15 +1,23 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, watchEffect } from 'vue';
-import { useNoteit } from '~/composables/useNoteit';
+import { onBeforeUnmount, onMounted, watch } from 'vue';
+import { setNotifier, type Theme, useNoteit } from '~/composables/useNoteit';
 
 const { state, boot, client, createNote } = useNoteit();
 
-let media: MediaQueryList | undefined;
-const applyTheme = () => {
-  const dark = state.theme === 'dark' || (state.theme === 'system' && !!media?.matches);
-  document.documentElement.classList.toggle('dark', dark);
-};
+// Toasts: the composable's toast() lands here, in Nuxt UI's toaster.
+const toaster = useToast();
+const TONES = { info: { color: 'neutral', icon: 'i-lucide-info' }, success: { color: 'success', icon: 'i-lucide-circle-check' }, error: { color: 'error', icon: 'i-lucide-circle-alert' } } as const;
+setNotifier(({ title, description, tone = 'info' }) => toaster.add({ title, description, ...TONES[tone], duration: tone === 'error' ? 6000 : 3500 }));
 
+// Theme: Nuxt UI's color mode owns the <html> class and persistence; the app state mirrors it.
+const colorMode = useColorMode();
+state.theme = colorMode.preference as Theme;
+watch(
+  () => state.theme,
+  (t) => (colorMode.preference = t),
+);
+
+// Global shortcuts. ⌥ combinations are matched on e.code: on a Mac ⌥N types "˜", so the key name never matches.
 function onKey(e: KeyboardEvent): void {
   if (state.phase !== 'ready') return;
   const mod = e.metaKey || e.ctrlKey;
@@ -22,9 +30,9 @@ function onKey(e: KeyboardEvent): void {
   } else if (mod && e.altKey && (e.code === 'KeyC' || e.key.toLowerCase() === 'c')) {
     e.preventDefault();
     state.capture = true;
-  } else if (e.key === 'Escape') {
-    state.palette = false;
-    state.drawerOpen = false;
+  } else if (mod && e.key === ',') {
+    e.preventDefault();
+    state.settings = true;
   }
 }
 
@@ -36,8 +44,6 @@ const onOnline = () => {
 };
 
 onMounted(() => {
-  media = window.matchMedia('(prefers-color-scheme: dark)');
-  media.addEventListener('change', applyTheme);
   window.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', onVisibility);
   window.addEventListener('online', onOnline);
@@ -45,63 +51,45 @@ onMounted(() => {
   void boot();
 });
 onBeforeUnmount(() => {
-  media?.removeEventListener('change', applyTheme);
   window.removeEventListener('keydown', onKey);
   document.removeEventListener('visibilitychange', onVisibility);
   window.removeEventListener('online', onOnline);
   window.removeEventListener('focus', onOnline);
 });
-watchEffect(() => {
-  void state.theme;
-  if (import.meta.client) applyTheme();
-});
 </script>
 
 <template>
-  <div class="ni-root">
-    <div v-if="state.phase === 'loading'" class="ni-boot" aria-busy="true">
-      <img src="/noteit-icon.png" alt="" width="44" height="44" />
+  <UApp :toaster="{ position: 'bottom-center', expand: false }" :tooltip="{ delayDuration: 350 }">
+    <div class="min-h-dvh bg-default">
+      <Transition name="fade" mode="out-in">
+        <div v-if="state.phase === 'loading'" key="loading" class="grid min-h-dvh place-items-center bg-(--page)" aria-busy="true">
+          <img src="/noteit-icon.png" alt="" width="44" height="44" class="animate-pulse" />
+        </div>
+        <ServerDown v-else-if="state.phase === 'serverDown'" key="down" />
+        <SetupWizard v-else-if="state.phase === 'setup'" key="setup" />
+        <SignIn v-else-if="state.phase === 'signin'" key="signin" />
+        <ChangePassword v-else-if="state.phase === 'changePassword'" key="password" />
+        <UnlockScreen v-else-if="state.phase === 'unlock' || state.phase === 'createStore'" key="unlock" />
+        <LegacyStore v-else-if="state.phase === 'legacy'" key="legacy" />
+        <AppShell v-else-if="state.phase === 'ready'" key="ready" />
+      </Transition>
+      <template v-if="state.phase === 'ready'">
+        <SettingsView />
+        <CommandPalette />
+        <QuickCapture />
+        <NotebookDialog />
+      </template>
     </div>
-    <ServerDown v-else-if="state.phase === 'serverDown'" />
-    <SetupWizard v-else-if="state.phase === 'setup'" />
-    <SignIn v-else-if="state.phase === 'signin'" />
-    <ChangePassword v-else-if="state.phase === 'changePassword'" />
-    <UnlockScreen v-else-if="state.phase === 'unlock' || state.phase === 'createStore'" />
-    <LegacyStore v-else-if="state.phase === 'legacy'" />
-    <template v-else-if="state.phase === 'ready'">
-      <SettingsView v-if="state.settings" />
-      <AppShell v-else />
-      <CommandPalette v-if="state.palette" />
-      <QuickCapture v-if="state.capture" />
-      <NotebookDialog v-if="state.notebookDialog" />
-    </template>
-    <div v-if="state.toast" class="ni-toast" role="status">{{ state.toast }}</div>
-  </div>
+  </UApp>
 </template>
 
 <style>
-.ni-root {
-  min-height: 100vh;
-  background: var(--bg);
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 150ms ease;
 }
-.ni-boot {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  background: var(--page);
-}
-.ni-toast {
-  position: fixed;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  z-index: 60;
-  background: var(--ink);
-  color: var(--bg);
-  padding: 10px 16px;
-  border-radius: 12px;
-  font-size: 14px;
-  box-shadow: var(--shadow-dialog);
-  max-width: calc(100% - 32px);
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 </style>

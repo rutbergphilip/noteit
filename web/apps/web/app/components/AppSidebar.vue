@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import type { ContextMenuItem } from '@nuxt/ui';
 import { useNoteit, type View } from '~/composables/useNoteit';
 import { relativeTime } from '~/utils/format';
-import { safeHex, SYMBOL_ICONS } from '~/utils/icons';
+import { notebookIcon, safeHex } from '~/utils/notebooks';
 import type { NotebookRow } from '~/worker/types';
 
-const { state, tags } = useNoteit();
+const { state, tags, createNote } = useNoteit();
 
 const live = computed(() => state.notes.filter((n) => !n.deletedAt));
 const counts = computed(() => {
@@ -19,6 +20,13 @@ const counts = computed(() => {
     byNotebook,
   };
 });
+
+const library = computed(() => [
+  { view: { kind: 'all' } as View, label: 'All Notes', icon: 'i-lucide-file-text', color: 'var(--acc)', count: counts.value.all },
+  { view: { kind: 'pinned' } as View, label: 'Pinned', icon: 'i-lucide-pin', color: 'var(--pinned)', count: counts.value.pinned },
+  { view: { kind: 'recent' } as View, label: 'Recent', icon: 'i-lucide-clock', color: 'var(--recent)', count: counts.value.recent },
+  { view: { kind: 'trash' } as View, label: 'Recently Deleted', icon: 'i-lucide-trash-2', color: 'var(--ink2)', count: counts.value.trash },
+]);
 
 /** Notebooks as a tree (organise's `parent`), depth-first, siblings by sortIndex. */
 const tree = computed(() => {
@@ -35,171 +43,107 @@ const tree = computed(() => {
 });
 
 const isActive = (v: View) => JSON.stringify(v) === JSON.stringify(state.view);
-
 function go(v: View): void {
   state.view = v;
   state.drawerOpen = false;
   state.pane = 'list';
 }
+
+const notebookMenu = (nb: NotebookRow): ContextMenuItem[][] => [
+  [
+    { label: 'New Note Here', icon: 'i-lucide-file-plus', onSelect: () => void createNote(undefined, nb.id) },
+    { label: 'New Notebook Inside…', icon: 'i-lucide-folder-plus', onSelect: () => (state.notebookDialog = { mode: 'create', parent: nb.id }) },
+  ],
+  [{ label: 'Edit Notebook…', icon: 'i-lucide-pencil', onSelect: () => (state.notebookDialog = { mode: 'edit', id: nb.id }) }],
+];
+const item = (active: boolean) => [
+  'w-full justify-start gap-2.5 px-2.5 min-h-[34px] text-sm font-normal text-default',
+  active ? 'bg-(--sel) hover:bg-(--sel) font-medium' : 'hover:bg-(--fill)',
+];
 </script>
 
 <template>
-  <nav class="side" aria-label="Library">
-    <div class="label">Library</div>
-    <a href="#" :class="{ active: isActive({ kind: 'all' }) }" @click.prevent="go({ kind: 'all' })">
-      <NiIcon name="notes" :size="17" color="var(--acc)" />All Notes<span class="count">{{ counts.all }}</span>
-    </a>
-    <a href="#" :class="{ active: isActive({ kind: 'pinned' }) }" @click.prevent="go({ kind: 'pinned' })">
-      <NiIcon name="pin" :size="17" color="var(--pinned)" />Pinned<span class="count">{{ counts.pinned }}</span>
-    </a>
-    <a href="#" :class="{ active: isActive({ kind: 'recent' }) }" @click.prevent="go({ kind: 'recent' })">
-      <NiIcon name="clock" :size="17" color="var(--recent)" />Recent<span class="count">{{ counts.recent }}</span>
-    </a>
-    <a href="#" :class="{ active: isActive({ kind: 'trash' }) }" @click.prevent="go({ kind: 'trash' })">
-      <NiIcon name="trash" :size="17" color="var(--ink2)" />Recently Deleted<span class="count">{{ counts.trash }}</span>
-    </a>
+  <UDashboardSidebar
+    id="sidebar"
+    v-model:open="state.drawerOpen"
+    resizable
+    :min-size="200"
+    :default-size="240"
+    :max-size="320"
+    :toggle="false"
+    :menu="{ side: 'left' }"
+    :ui="{
+      root: 'min-h-0 bg-(--side)',
+      header: 'hidden',
+      body: 'gap-0.5 px-2.5 py-3.5',
+      footer: 'flex-col items-stretch gap-2 px-2.5 pb-3',
+      content: 'bg-(--side) max-w-[85%] w-[280px]',
+    }"
+  >
+    <nav aria-label="Library" class="flex flex-col gap-0.5">
+      <div class="px-2.5 py-1.5 text-[11px] font-semibold text-muted">Library</div>
+      <UButton
+        v-for="l in library"
+        :key="l.label"
+        color="neutral"
+        variant="ghost"
+        :class="item(isActive(l.view))"
+        :aria-current="isActive(l.view) ? 'page' : undefined"
+        @click="go(l.view)"
+      >
+        <UIcon :name="l.icon" class="size-[17px] shrink-0" :style="{ color: l.color }" />
+        <span class="truncate">{{ l.label }}</span>
+        <span class="ms-auto text-xs text-muted">{{ l.count }}</span>
+      </UButton>
 
-    <div class="label spaced">Notebooks</div>
-    <a
-      v-for="{ nb, depth } in tree"
-      :key="nb.id"
-      href="#"
-      :class="{ active: isActive({ kind: 'notebook', id: nb.id }) }"
-      :style="{ paddingLeft: `${10 + depth * 16}px` }"
-      @click.prevent="go({ kind: 'notebook', id: nb.id })"
-      @dblclick.prevent="state.notebookDialog = { mode: 'edit', id: nb.id }"
-    >
-      <NiIcon :name="SYMBOL_ICONS[nb.symbol] ?? 'folder'" :size="17" :color="safeHex(nb.colorHex)" />
-      <span class="name">{{ nb.name || 'Untitled' }}</span><span class="count">{{ counts.byNotebook.get(nb.id) ?? 0 }}</span>
-    </a>
-    <p v-if="!tree.length" class="empty">No notebooks yet.</p>
+      <div class="px-2.5 pt-4 pb-1.5 text-[11px] font-semibold text-muted">Notebooks</div>
+      <UContextMenu v-for="{ nb, depth } in tree" :key="nb.id" :items="notebookMenu(nb)">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          :class="item(isActive({ kind: 'notebook', id: nb.id }))"
+          :style="{ paddingInlineStart: `${10 + depth * 16}px` }"
+          :aria-current="isActive({ kind: 'notebook', id: nb.id }) ? 'page' : undefined"
+          @click="go({ kind: 'notebook', id: nb.id })"
+          @dblclick.prevent="state.notebookDialog = { mode: 'edit', id: nb.id }"
+        >
+          <UIcon :name="notebookIcon(nb.symbol)" class="size-[17px] shrink-0" :style="{ color: safeHex(nb.colorHex) }" />
+          <span class="truncate">{{ nb.name || 'Untitled' }}</span>
+          <span class="ms-auto text-xs text-muted">{{ counts.byNotebook.get(nb.id) ?? 0 }}</span>
+        </UButton>
+      </UContextMenu>
+      <p v-if="!tree.length" class="px-2.5 text-[13px] text-muted">No notebooks yet.</p>
 
-    <template v-if="tags.length">
-      <div class="label spaced">Tags</div>
-      <div class="tags">
-        <a v-for="t in tags.slice(0, 30)" :key="t.tag" href="#" class="tag" :class="{ active: isActive({ kind: 'tag', tag: t.tag }) }" @click.prevent="go({ kind: 'tag', tag: t.tag })">#{{ t.tag }}</a>
-      </div>
+      <template v-if="tags.length">
+        <div class="px-2.5 pt-4 pb-1.5 text-[11px] font-semibold text-muted">Tags</div>
+        <div class="flex flex-wrap gap-1.5 px-2.5">
+          <UButton
+            v-for="t in tags.slice(0, 30)"
+            :key="t.tag"
+            size="xs"
+            :color="isActive({ kind: 'tag', tag: t.tag }) ? 'primary' : 'neutral'"
+            variant="soft"
+            class="rounded-full px-2.5"
+            :label="`#${t.tag}`"
+            @click="go({ kind: 'tag', tag: t.tag })"
+          />
+        </div>
+      </template>
+    </nav>
+
+    <template #footer>
+      <UButton
+        color="neutral"
+        variant="ghost"
+        icon="i-lucide-plus"
+        label="New Notebook"
+        class="justify-start px-2.5 font-normal text-muted"
+        @click="state.notebookDialog = { mode: 'create', ...(state.view.kind === 'notebook' ? { parent: state.view.id } : {}) }"
+      />
+      <UButton color="neutral" variant="outline" class="justify-start gap-2 rounded-[10px] p-2.5 text-left text-xs/snug font-normal text-muted ring-(--line)" @click="state.settings = true">
+        <UIcon name="i-lucide-server" class="size-[15px] shrink-0" />
+        <span>This server · encrypted<br /><span class="opacity-80">Last sync {{ state.status.lastSync ? relativeTime(state.status.lastSync).toLowerCase() : 'pending' }}</span></span>
+      </UButton>
     </template>
-
-    <div class="bottom">
-      <button type="button" class="new-nb" @click="state.notebookDialog = { mode: 'create', ...(state.view.kind === 'notebook' ? { parent: state.view.id } : {}) }">
-        <NiIcon name="plus" :size="16" :stroke="2" />New Notebook
-      </button>
-      <button type="button" class="store" @click="state.settings = true">
-        <NiIcon name="server" :size="15" />
-        <span>This server · encrypted<br /><span class="muted">Last sync {{ state.status.lastSync ? relativeTime(state.status.lastSync).toLowerCase() : 'pending' }}</span></span>
-      </button>
-    </div>
-  </nav>
+  </UDashboardSidebar>
 </template>
-
-<style scoped>
-.side {
-  background: var(--side);
-  border-right: 1px solid var(--line);
-  padding: 14px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-  height: 100%;
-}
-.label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--ink2);
-  padding: 6px 10px;
-}
-.label.spaced {
-  padding-top: 16px;
-}
-a {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 8px;
-  color: var(--ink);
-  text-decoration: none;
-  font-size: 14px;
-}
-a:hover {
-  color: var(--ink);
-  background: var(--fill);
-}
-a.active {
-  background: var(--sel);
-  font-weight: 500;
-}
-.name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.count {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--ink2);
-}
-.empty {
-  margin: 0;
-  padding: 0 10px;
-  font-size: 13px;
-  color: var(--ink2);
-}
-.tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 10px;
-}
-a.tag {
-  min-height: 0;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--ink2);
-  background: var(--fill);
-  border-radius: 999px;
-  padding: 4px 10px;
-}
-a.tag.active {
-  background: var(--sel);
-  color: var(--acct);
-}
-.bottom {
-  margin-top: auto;
-  padding-top: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.new-nb {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 34px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  font-size: 14px;
-  color: var(--ink2);
-  cursor: pointer;
-  text-align: left;
-}
-.store {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px;
-  border-radius: 10px;
-  border: 1px solid var(--line);
-  background: transparent;
-  font-size: 12px;
-  color: var(--ink2);
-  text-align: left;
-  cursor: pointer;
-  line-height: 1.4;
-}
-</style>

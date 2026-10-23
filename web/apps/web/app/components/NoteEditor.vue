@@ -4,12 +4,14 @@ import { EditorContent, useEditor } from '@tiptap/vue-3';
 import type { Editor } from '@tiptap/core';
 import { addAttachment, attachmentTooLargeMessage, type BodyContainer, isAllowedLink, MAX_ATTACHMENT_BYTES, sanitizePastedHtml } from '@noteit/doc';
 import { fromEditorJSON, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
+import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
-import { safeHex } from '~/utils/icons';
+import { notebookIcon, safeHex } from '~/utils/notebooks';
 import type { OpenedNote } from '~/worker/types';
 
 const props = defineProps<{ noteId: string }>();
 const { state, client, toast, refresh } = useNoteit();
+const confirm = useConfirm();
 
 const note = shallowRef<OpenedNote>();
 const container = shallowRef<BodyContainer>();
@@ -180,10 +182,18 @@ const blockType = computed<Block>(() => {
   return 'paragraph';
 });
 
-function setBlock(e: Event): void {
+const BLOCKS: { value: Block; label: string }[] = [
+  { value: 'paragraph', label: 'Body' },
+  { value: 'h1', label: 'Title' },
+  { value: 'h2', label: 'Heading' },
+  { value: 'h3', label: 'Subheading' },
+  { value: 'code', label: 'Code Block' },
+  { value: 'quote', label: 'Quote' },
+];
+
+function setBlock(v: Block): void {
   const ed = editor.value as Editor | undefined;
-  if (!ed) return;
-  const v = (e.target as HTMLSelectElement).value as Block;
+  if (!ed || v === blockType.value) return;
   const chain = ed.chain().focus();
   if (ed.isActive('blockquote')) chain.lift('blockquote');
   if (v === 'paragraph') chain.setNode('paragraph').run();
@@ -211,21 +221,25 @@ function insertTable(): void {
     .run();
 }
 
-function setLink(): void {
+const linkOpen = ref(false);
+const linkHref = ref('');
+const linkError = ref('');
+watch(linkOpen, (open) => {
+  if (!open) return;
+  linkHref.value = (editor.value?.getAttributes('link').href as string | undefined) ?? 'https://';
+  linkError.value = '';
+});
+function applyLink(): void {
   const ed = editor.value;
   if (!ed) return;
-  const current = ed.getAttributes('link').href as string | undefined;
-  const href = prompt('Link address (https://, mailto:, tel: or noteit://note/…)', current ?? 'https://');
-  if (href === null) return;
-  if (href === '') {
-    ed.chain().focus().unsetMark('link').run();
+  const href = linkHref.value.trim();
+  if (href && !isAllowedLink(href)) {
+    linkError.value = 'Links can be https, http, mailto, tel or noteit://note links.';
     return;
   }
-  if (!isAllowedLink(href)) {
-    toast('Links can be https, http, mailto, tel or noteit://note links.');
-    return;
-  }
-  ed.chain().focus().setMark('link', { href }).run();
+  if (href) ed.chain().focus().setMark('link', { href }).run();
+  else ed.chain().focus().unsetMark('link').run();
+  linkOpen.value = false;
 }
 
 const COLORS = ['#FF3B30', '#FF9500', '#34C759', '#007AFF', '#AF52DE'];
@@ -239,14 +253,34 @@ function applyColor(kind: 'textColor' | 'highlight', color: string | undefined):
   colorMenu.value = undefined;
 }
 
+/** Toolbar buttons: the mark/list name for aria-pressed, a Lucide icon and the shortcut TipTap binds. */
+const MARKS = [
+  { mark: 'bold', label: 'Bold', icon: 'i-lucide-bold', kbds: ['meta', 'B'] },
+  { mark: 'italic', label: 'Italic', icon: 'i-lucide-italic', kbds: ['meta', 'I'] },
+  { mark: 'underline', label: 'Underline', icon: 'i-lucide-underline', kbds: ['meta', 'U'] },
+  { mark: 'strike', label: 'Strikethrough', icon: 'i-lucide-strikethrough', kbds: ['meta', 'shift', 'X'] },
+] as const;
+const LISTS = [
+  { kind: 'bullet', label: 'Bulleted list', icon: 'i-lucide-list' },
+  { kind: 'ordered', label: 'Numbered list', icon: 'i-lucide-list-ordered' },
+  { kind: 'task', label: 'Checklist', icon: 'i-lucide-list-checks' },
+] as const;
+
 // MARK: note actions
 
 async function togglePin(): Promise<void> {
   if (row.value) await client().updateNoteMeta(props.noteId, { isPinned: !row.value.isPinned });
 }
-async function move(e: Event): Promise<void> {
-  const v = (e.target as HTMLSelectElement).value;
-  await client().updateNoteMeta(props.noteId, { notebookID: v || null });
+const notebookChoices = computed(() => [
+  { label: 'No Notebook', value: NO_NOTEBOOK, icon: 'i-lucide-circle-dashed' },
+  ...state.notebooks.map((nb) => ({ label: nb.name || 'Untitled', value: nb.id, icon: notebookIcon(nb.symbol) })),
+]);
+/** Reka's Select can't hold an empty value, so "no notebook" has a sentinel. */
+const NO_NOTEBOOK = 'none';
+async function move(v: string): Promise<void> {
+  const notebookID = v === NO_NOTEBOOK ? null : v;
+  if (notebookID === (row.value?.notebookID ?? null)) return;
+  await client().updateNoteMeta(props.noteId, { notebookID });
 }
 async function trash(): Promise<void> {
   await save();
@@ -261,7 +295,7 @@ async function recover(): Promise<void> {
   await load();
 }
 async function deleteForever(): Promise<void> {
-  if (!confirm('Delete this note for good? It is removed from all your devices.')) return;
+  if (!(await confirm({ title: 'Delete this note for good?', description: 'It is removed from all your devices.', confirmLabel: 'Delete', danger: true }))) return;
   await client().deleteForever(props.noteId);
   state.selectedId = undefined;
   state.pane = 'list';
@@ -278,89 +312,153 @@ function exportNote(): void {
 </script>
 
 <template>
-  <div class="ed">
-    <div class="bar">
-      <button type="button" class="back" aria-label="Back to notes" @click="state.pane = 'list'"><NiIcon name="back" :size="18" /></button>
-      <label class="chip" :style="notebook ? { background: `color-mix(in srgb, ${safeHex(notebook.colorHex)} 16%, transparent)` } : {}">
-        <span class="dot" :style="{ background: notebook ? safeHex(notebook.colorHex) : 'var(--ink3)' }" />
-        <span class="sr-only">Notebook</span>
-        <select :value="row?.notebookID ?? ''" :disabled="!!row?.deletedAt" @change="move">
-          <option value="">No Notebook</option>
-          <option v-for="nb in state.notebooks" :key="nb.id" :value="nb.id">{{ nb.name || 'Untitled' }}</option>
-        </select>
-      </label>
-      <span class="edited">Edited {{ edited }}</span>
-      <div class="actions">
+  <div class="flex h-full min-h-0 flex-col">
+    <div class="flex flex-wrap items-center gap-3 border-b border-default px-6 py-3 max-md:px-3 max-md:py-2">
+      <UButton class="md:hidden" color="neutral" variant="ghost" icon="i-lucide-chevron-left" aria-label="Back to notes" @click="state.pane = 'list'" />
+      <USelect
+        :model-value="row?.notebookID ?? NO_NOTEBOOK"
+        :items="notebookChoices"
+        :disabled="!!row?.deletedAt"
+        size="xs"
+        variant="none"
+        aria-label="Notebook"
+        class="h-[26px] max-w-[200px] rounded-full"
+        :style="{ background: notebook ? `color-mix(in srgb, ${safeHex(notebook.colorHex)} 16%, transparent)` : 'var(--fill)' }"
+        :ui="{ base: 'py-0 ps-5 pe-6 text-xs font-semibold', leading: 'ps-2.5', trailing: 'pe-1.5', content: 'min-w-48' }"
+        @update:model-value="(v) => move(String(v))"
+      >
+        <template #leading><span class="size-2 rounded-full" :style="{ background: notebook ? safeHex(notebook.colorHex) : 'var(--ink3)' }" /></template>
+      </USelect>
+      <span class="text-xs text-muted">Edited {{ edited }}</span>
+      <div class="ms-auto flex gap-1">
         <template v-if="row?.deletedAt">
-          <button type="button" class="ni-btn secondary small" @click="recover"><NiIcon name="restore" :size="15" />Recover</button>
-          <button type="button" class="ni-btn danger small" @click="deleteForever">Delete Now</button>
+          <UButton color="neutral" variant="soft" size="sm" icon="i-lucide-rotate-ccw" label="Recover" @click="recover" />
+          <UButton color="error" size="sm" label="Delete Now" @click="deleteForever" />
         </template>
         <template v-else>
-          <button type="button" class="act" :aria-label="row?.isPinned ? 'Unpin' : 'Pin'" :aria-pressed="!!row?.isPinned" :style="row?.isPinned ? { color: 'var(--pinned)' } : {}" @click="togglePin">
-            <NiIcon name="pin" :size="17" />
-          </button>
-          <button type="button" class="act" aria-label="Download note" :disabled="!container" @click="exportNote"><NiIcon name="share" :size="17" /></button>
-          <button type="button" class="act" aria-label="Move to Recently Deleted" @click="trash"><NiIcon name="trash" :size="17" /></button>
+          <UTooltip :text="row?.isPinned ? 'Unpin' : 'Pin'">
+            <UButton
+              color="neutral"
+              variant="ghost"
+              icon="i-lucide-pin"
+              :class="row?.isPinned ? 'text-(--pinned)' : 'text-muted'"
+              :aria-label="row?.isPinned ? 'Unpin' : 'Pin'"
+              :aria-pressed="!!row?.isPinned"
+              @click="togglePin"
+            />
+          </UTooltip>
+          <UTooltip text="Download note">
+            <UButton color="neutral" variant="ghost" class="text-muted" icon="i-lucide-share" aria-label="Download note" :disabled="!container" @click="exportNote" />
+          </UTooltip>
+          <UTooltip text="Move to Recently Deleted">
+            <UButton color="neutral" variant="ghost" class="text-muted" icon="i-lucide-trash-2" aria-label="Move to Recently Deleted" @click="trash" />
+          </UTooltip>
         </template>
       </div>
     </div>
 
-    <div v-if="editable && !row?.deletedAt" class="toolbar" role="toolbar" aria-label="Formatting">
-      <label>
-        <span class="sr-only">Text style</span>
-        <select class="style" :value="blockType" @change="setBlock">
-          <option value="paragraph">Body</option>
-          <option value="h1">Title</option>
-          <option value="h2">Heading</option>
-          <option value="h3">Subheading</option>
-          <option value="code">Code Block</option>
-          <option value="quote">Quote</option>
-        </select>
-      </label>
-      <span class="sep" />
-      <button type="button" aria-label="Bold" :aria-pressed="active('bold')" class="b" @click="mark('bold')">B</button>
-      <button type="button" aria-label="Italic" :aria-pressed="active('italic')" class="i" @click="mark('italic')">I</button>
-      <button type="button" aria-label="Underline" :aria-pressed="active('underline')" class="u" @click="mark('underline')">U</button>
-      <button type="button" aria-label="Strikethrough" :aria-pressed="active('strike')" class="s" @click="mark('strike')">S</button>
-      <button type="button" aria-label="Inline code" :aria-pressed="active('code')" :disabled="active('codeBlock')" @click="mark('code')"><NiIcon name="inlineCode" :size="16" :stroke="2" /></button>
-      <span class="sep" />
-      <div class="pop-wrap">
-        <button type="button" aria-label="Text color" @click="colorMenu = colorMenu === 'text' ? undefined : 'text'"><NiIcon name="textColor" :size="16" :stroke="2" /></button>
-        <div v-if="colorMenu === 'text'" class="swatches">
-          <button v-for="c in COLORS" :key="c" type="button" class="sw" :aria-label="`Color ${c}`" :style="{ background: c }" @click="applyColor('textColor', c)" />
-          <button type="button" class="sw none" aria-label="No color" @click="applyColor('textColor', undefined)">×</button>
-        </div>
-      </div>
-      <div class="pop-wrap">
-        <button type="button" aria-label="Highlight" @click="colorMenu = colorMenu === 'highlight' ? undefined : 'highlight'"><NiIcon name="highlight" :size="16" :stroke="2" /></button>
-        <div v-if="colorMenu === 'highlight'" class="swatches">
-          <button v-for="c in HIGHLIGHTS" :key="c" type="button" class="sw" :aria-label="`Highlight ${c}`" :style="{ background: c }" @click="applyColor('highlight', c)" />
-          <button type="button" class="sw none" aria-label="No highlight" @click="applyColor('highlight', undefined)">×</button>
-        </div>
-      </div>
-      <span class="sep" />
-      <button type="button" aria-label="Bulleted list" :aria-pressed="active('listItem', { kind: 'bullet' })" @click="toggleList('bullet')"><NiIcon name="bullets" :size="16" :stroke="2" /></button>
-      <button type="button" aria-label="Numbered list" :aria-pressed="active('listItem', { kind: 'ordered' })" @click="toggleList('ordered')"><NiIcon name="numbered" :size="16" :stroke="2" /></button>
-      <button type="button" aria-label="Checklist" :aria-pressed="active('listItem', { kind: 'task' })" @click="toggleList('task')"><NiIcon name="checklist" :size="16" :stroke="2" /></button>
-      <button type="button" aria-label="Table" @click="insertTable"><NiIcon name="table" :size="16" :stroke="2" /></button>
-      <button type="button" aria-label="Link" :aria-pressed="active('link')" @click="setLink"><NiIcon name="link" :size="16" :stroke="2" /></button>
-      <button type="button" aria-label="Image or file" @click="pickFile"><NiIcon name="image" :size="16" :stroke="2" /></button>
+    <div
+      v-if="editable && !row?.deletedAt"
+      class="flex flex-wrap items-center gap-0.5 border-b border-default px-5 py-2 max-md:flex-nowrap max-md:overflow-x-auto max-md:px-2 max-md:py-1.5"
+      role="toolbar"
+      aria-label="Formatting"
+    >
+      <USelect :model-value="blockType" :items="BLOCKS" size="sm" variant="soft" aria-label="Text style" class="w-32 flex-none bg-(--fill)" @update:model-value="(v) => setBlock(v as Block)" />
+      <USeparator orientation="vertical" class="mx-1.5 h-[18px]" />
+      <UTooltip v-for="m in MARKS" :key="m.mark" :text="m.label" :kbds="[...m.kbds]">
+        <UButton color="neutral" variant="ghost" size="sm" square class="size-[30px] justify-center" :icon="m.icon" :aria-label="m.label" :aria-pressed="active(m.mark)" :class="active(m.mark) && 'bg-(--sel) text-(--acct)'" @click="mark(m.mark)" />
+      </UTooltip>
+      <UTooltip text="Inline code" :kbds="['meta', 'E']">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-code" aria-label="Inline code" :aria-pressed="active('code')" :class="active('code') && 'bg-(--sel) text-(--acct)'" :disabled="active('codeBlock')" @click="mark('code')" />
+      </UTooltip>
+      <USeparator orientation="vertical" class="mx-1.5 h-[18px]" />
+      <UPopover :open="colorMenu === 'text'" @update:open="(o) => (colorMenu = o ? 'text' : undefined)">
+        <UTooltip text="Text color">
+          <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-baseline" aria-label="Text color" />
+        </UTooltip>
+        <template #content>
+          <div class="flex gap-1.5 p-2">
+            <button v-for="c in COLORS" :key="c" type="button" class="size-[22px] cursor-pointer rounded-full ring-1 ring-(--line) hover:scale-110 transition-transform" :aria-label="`Color ${c}`" :style="{ background: c }" @click="applyColor('textColor', c)" />
+            <UButton color="neutral" variant="outline" size="xs" class="size-[22px] justify-center rounded-full p-0" icon="i-lucide-x" aria-label="No color" @click="applyColor('textColor', undefined)" />
+          </div>
+        </template>
+      </UPopover>
+      <UPopover :open="colorMenu === 'highlight'" @update:open="(o) => (colorMenu = o ? 'highlight' : undefined)">
+        <UTooltip text="Highlight">
+          <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-highlighter" aria-label="Highlight" />
+        </UTooltip>
+        <template #content>
+          <div class="flex gap-1.5 p-2">
+            <button v-for="c in HIGHLIGHTS" :key="c" type="button" class="size-[22px] cursor-pointer rounded-full ring-1 ring-(--line) hover:scale-110 transition-transform" :aria-label="`Highlight ${c}`" :style="{ background: c }" @click="applyColor('highlight', c)" />
+            <UButton color="neutral" variant="outline" size="xs" class="size-[22px] justify-center rounded-full p-0" icon="i-lucide-x" aria-label="No highlight" @click="applyColor('highlight', undefined)" />
+          </div>
+        </template>
+      </UPopover>
+      <USeparator orientation="vertical" class="mx-1.5 h-[18px]" />
+      <UTooltip v-for="l in LISTS" :key="l.kind" :text="l.label">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          size="sm"
+          :icon="l.icon"
+          :aria-label="l.label"
+          :aria-pressed="active('listItem', { kind: l.kind })"
+          :class="active('listItem', { kind: l.kind }) && 'bg-(--sel) text-(--acct)'"
+          @click="toggleList(l.kind)"
+        />
+      </UTooltip>
+      <UTooltip text="Table">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-table" aria-label="Table" @click="insertTable" />
+      </UTooltip>
+      <UPopover v-model:open="linkOpen">
+        <UTooltip text="Link">
+          <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-link" aria-label="Link" :aria-pressed="active('link')" :class="active('link') && 'bg-(--sel) text-(--acct)'" />
+        </UTooltip>
+        <template #content>
+          <form class="flex w-80 flex-col gap-2 p-3" @submit.prevent="applyLink">
+            <UFormField label="Link address" :error="linkError || undefined" help="https://, mailto:, tel: or noteit://note/… Leave empty to remove.">
+              <UInput v-model="linkHref" autofocus size="sm" spellcheck="false" autocapitalize="none" />
+            </UFormField>
+            <div class="flex justify-end gap-2">
+              <UButton color="neutral" variant="ghost" size="xs" label="Cancel" @click="linkOpen = false" />
+              <UButton type="submit" size="xs" label="Apply" />
+            </div>
+          </form>
+        </template>
+      </UPopover>
+      <UTooltip text="Image or file">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-image" aria-label="Image or file" @click="pickFile" />
+      </UTooltip>
       <input ref="fileInput" type="file" multiple hidden @change="onFiles" />
-      <span class="saved">{{ saveState === 'saved' ? 'Saved' : saveState === 'saving' ? 'Saving…' : 'Edited' }}</span>
+      <span class="ms-auto flex-none ps-2 text-xs text-muted transition-opacity" :class="saveState === 'saving' && 'opacity-60'">{{ saveState === 'saved' ? 'Saved' : saveState === 'saving' ? 'Saving…' : 'Edited' }}</span>
     </div>
 
-    <div v-if="readOnlyReason === 'legacy'" class="ni-alert warn banner">
-      <NiIcon name="alert" />Formatted on an older Mac — open NoteIt on macOS to convert. You can still pin, move or delete it here.
-    </div>
-    <div v-else-if="readOnlyReason === 'locked'" class="ni-alert warn banner"><NiIcon name="lock" />This note is locked. Unlock it in NoteIt on your Mac.</div>
-    <div v-else-if="readOnlyReason" class="ni-alert warn banner">
-      <NiIcon name="alert" />This note uses something this version of NoteIt web can't edit yet, so it opens read-only ({{ readOnlyReason }}).
-    </div>
-    <div v-if="row?.conflictSource" class="ni-alert warn banner">
-      <NiIcon name="alert" />This is a conflict copy: the note was changed on {{ row.conflictSource }} and here at the same time. Keep the parts you need, then delete the copy.
+    <div v-if="readOnlyReason || row?.conflictSource" class="flex flex-col gap-2 px-6 pt-3">
+      <UAlert
+        v-if="readOnlyReason === 'legacy'"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-triangle-alert"
+        description="Formatted on an older Mac — open NoteIt on macOS to convert. You can still pin, move or delete it here."
+      />
+      <UAlert v-else-if="readOnlyReason === 'locked'" color="warning" variant="subtle" icon="i-lucide-lock" description="This note is locked. Unlock it in NoteIt on your Mac." />
+      <UAlert
+        v-else-if="readOnlyReason"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-triangle-alert"
+        :description="`This note uses something this version of NoteIt web can't edit yet, so it opens read-only (${readOnlyReason}).`"
+      />
+      <UAlert
+        v-if="row?.conflictSource"
+        color="warning"
+        variant="subtle"
+        icon="i-lucide-copy"
+        :description="`This is a conflict copy: the note was changed on ${row.conflictSource} and here at the same time. Keep the parts you need, then delete the copy.`"
+      />
     </div>
 
-    <article class="page">
+    <article class="page flex-1 overflow-y-auto">
       <h2 v-if="row?.kind === 'legacy' || row?.kind === 'locked'" class="ro-title">{{ row.title || 'Untitled' }}</h2>
       <p v-if="row?.kind === 'legacy' && row.preview" class="ro-preview">{{ row.preview }}</p>
       <EditorContent v-show="row?.kind === 'doc'" :editor="editor" />
@@ -369,195 +467,19 @@ function exportNote(): void {
 </template>
 
 <style scoped>
-.ed {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-.bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding: 12px 24px;
-  border-bottom: 1px solid var(--line);
-}
-.back {
-  display: none;
-  width: 36px;
-  height: 36px;
-  border: 0;
-  background: transparent;
-  border-radius: 8px;
-  color: var(--ink);
-  cursor: pointer;
-  place-items: center;
-}
-@container app (max-width: 719px) {
-  .back {
-    display: grid;
-  }
-  .bar {
-    padding: 8px 12px;
-  }
-  .toolbar {
-    padding: 6px 8px !important;
-    flex-wrap: nowrap !important;
-    overflow-x: auto;
-  }
-  .page {
-    padding: 20px 16px 56px !important;
-  }
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 0 4px 0 10px;
-  border-radius: 999px;
-  background: var(--fill);
-  font-size: 12px;
-  font-weight: 600;
-}
-.chip select {
-  border: 0;
-  background: transparent;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  max-width: 160px;
-}
-.dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-}
-.edited {
-  font-size: 12px;
-  color: var(--ink2);
-}
-.actions {
-  margin-left: auto;
-  display: flex;
-  gap: 4px;
-}
-.act {
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ink2);
-  cursor: pointer;
-}
-.act:hover {
-  background: var(--fill);
-}
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 2px;
-  padding: 8px 20px;
-  border-bottom: 1px solid var(--line);
-}
-.toolbar button {
-  width: 30px;
-  height: 30px;
-  flex: none;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  cursor: pointer;
-  display: grid;
-  place-items: center;
-  color: var(--ink);
-}
-.toolbar button[aria-pressed='true'] {
-  background: var(--sel);
-  color: var(--acct);
-}
-.toolbar button:disabled {
-  opacity: 0.4;
-}
-.toolbar .b {
-  font-weight: 700;
-}
-.toolbar .i {
-  font-style: italic;
-  font-family: Georgia, serif;
-}
-.toolbar .u {
-  text-decoration: underline;
-}
-.toolbar .s {
-  text-decoration: line-through;
-}
-.style {
-  height: 30px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 7px;
-  background: var(--fill);
-  font-size: 13px;
-  cursor: pointer;
-}
-.sep {
-  width: 1px;
-  height: 18px;
-  background: var(--line);
-  margin: 0 6px;
-  flex: none;
-}
-.saved {
-  margin-left: auto;
-  font-size: 12px;
-  color: var(--ink2);
-  flex: none;
-  padding-left: 8px;
-}
-.pop-wrap {
-  position: relative;
-}
-.swatches {
-  position: absolute;
-  top: 34px;
-  left: 0;
-  z-index: 20;
-  display: flex;
-  gap: 6px;
-  padding: 8px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: var(--shadow-dialog);
-}
-.toolbar .sw {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 1px solid var(--line);
-}
-.toolbar .sw.none {
-  background: var(--bg);
-  font-size: 12px;
-}
-.banner {
-  margin: 12px 24px 0;
-}
 .page {
-  flex: 1;
-  overflow-y: auto;
   padding: 36px 32px 56px;
+}
+@media (max-width: 767px) {
+  .page {
+    padding: 20px 16px 56px;
+  }
 }
 .ro-title {
   max-width: var(--reading-max);
   margin: 0 auto 12px;
   font-size: 30px;
+  font-weight: 700;
 }
 .ro-preview {
   max-width: var(--reading-max);

@@ -1,4 +1,42 @@
-/* NoteIt web tokens, from the owner's design (design pNN templates). Components use token names only. */
+@import 'tailwindcss';
+@import '@nuxt/ui';
+
+/*
+ * NoteIt web theme. The design's tokens (design pNN templates) stay the source of truth: Nuxt UI's palette and
+ * --ui-* variables are mapped onto them, so components and the remaining hand-written CSS agree in both modes.
+ */
+
+@theme static {
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* primary: the design's violet accent (500 = light --acc, 400 = dark --acc, 600 = --acct) */
+  --color-brand-50: #f3f1ff;
+  --color-brand-100: #e9e5ff;
+  --color-brand-200: #d5ceff;
+  --color-brand-300: #b6aaff;
+  --color-brand-400: #8f80ff;
+  --color-brand-500: #6e5bff;
+  --color-brand-600: #5443db;
+  --color-brand-700: #4535b8;
+  --color-brand-800: #392e94;
+  --color-brand-900: #312a77;
+  --color-brand-950: #1e2470;
+
+  /* neutral: the design's cool, slightly violet greys (ink, ink2, ink3, page, side, list) */
+  --color-ink-50: #fafafc;
+  --color-ink-100: #f3f2f7;
+  --color-ink-200: #e8e7ee;
+  --color-ink-300: #d4d3dc;
+  --color-ink-400: #8c8c98;
+  --color-ink-500: #62626e;
+  --color-ink-600: #4a4a55;
+  --color-ink-700: #2e2e36;
+  --color-ink-800: #26262c;
+  --color-ink-900: #1b1b1f;
+  --color-ink-950: #151518;
+}
+
 :root {
   --bg: #ffffff;
   --side: #f3f2f7;
@@ -58,7 +96,7 @@
   color-scheme: light;
 }
 
-:root.dark {
+.dark {
   --bg: #1b1b1f;
   --side: #222227;
   --list: #1f1f24;
@@ -88,53 +126,56 @@
   color-scheme: dark;
 }
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
+/* Nuxt UI's semantic variables, pointed at the design tokens. */
+:root,
+.dark {
+  --ui-radius: 0.4167rem; /* sm 7px · md 10px · lg 13px · xl 20px, the design's radii */
+  --ui-header-height: var(--header-h);
+  --ui-primary: var(--acc);
+  --ui-text-inverted: var(--onacc);
+  --ui-error: var(--danger);
+  --ui-success: var(--success);
+  --ui-bg: var(--bg);
+  --ui-bg-muted: var(--list);
+  --ui-bg-elevated: var(--side);
+  --ui-text: var(--ink);
+  --ui-text-highlighted: var(--ink);
+  --ui-text-toned: var(--ink2);
+  --ui-text-muted: var(--ink2);
+  --ui-text-dimmed: var(--ink3);
+  --ui-border: var(--line);
+  --ui-border-muted: var(--line);
+  --ui-border-accented: var(--line-strong);
 }
-html,
-body {
-  margin: 0;
-  height: 100%;
-  background: var(--bg);
+/* Warnings read as the design's warm ink, not Tailwind's bright amber. */
+:root {
+  --ui-warning: #a15c00;
+}
+.dark {
+  --ui-warning: #f5c26b;
+}
+
+@layer base {
+  html,
+  body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+.ni-wordmark {
+  font-weight: 800;
+  font-style: italic;
+  letter-spacing: -0.02em;
   color: var(--ink);
-  font-family: var(--font-sans);
-  -webkit-font-smoothing: antialiased;
 }
-button,
-input,
-select,
-textarea {
-  font: inherit;
-  color: inherit;
-}
-a {
-  color: var(--acct);
-}
-a:hover {
+.ni-wordmark span {
   color: var(--acc);
-}
-button:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible,
-a:focus-visible,
-[tabindex]:focus-visible {
-  outline: 3px solid var(--acc);
-  outline-offset: 1px;
-}
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
 }
 
 /* Round checkboxes (design p01) */
-input[type='checkbox'].ni-check,
 .ni-li-task input[type='checkbox'] {
   appearance: none;
   -webkit-appearance: none;
@@ -149,12 +190,10 @@ input[type='checkbox'].ni-check,
   background: transparent;
   cursor: pointer;
 }
-input[type='checkbox'].ni-check:checked,
 .ni-li-task input[type='checkbox']:checked {
   background: var(--acc);
   border-color: var(--acc);
 }
-input[type='checkbox'].ni-check:checked::after,
 .ni-li-task input[type='checkbox']:checked::after {
   content: '';
   width: 4px;
@@ -162,165 +201,6 @@ input[type='checkbox'].ni-check:checked::after,
   border: solid var(--onacc);
   border-width: 0 2px 2px 0;
   transform: translateY(-1px) rotate(45deg);
-}
-
-/* Switch (design p09) */
-input.ni-switch {
-  appearance: none;
-  -webkit-appearance: none;
-  margin: 0;
-  flex: none;
-  width: 44px;
-  height: 26px;
-  border-radius: 13px;
-  background: #c9c9d3;
-  position: relative;
-  cursor: pointer;
-  transition: background 0.15s;
-}
-input.ni-switch::after {
-  content: '';
-  position: absolute;
-  top: 3px;
-  left: 3px;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-  transition: left 0.15s;
-}
-input.ni-switch:checked {
-  background: var(--acc);
-}
-input.ni-switch:checked::after {
-  left: 21px;
-}
-
-/* Shared form pieces */
-.ni-field {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--ink2);
-}
-.ni-input,
-.ni-field input,
-.ni-field select,
-.ni-field textarea {
-  height: 44px;
-  padding: 0 14px;
-  border: 1px solid var(--line-strong);
-  border-radius: 11px;
-  background: var(--bg);
-  font-size: 15px;
-  color: var(--ink);
-  width: 100%;
-}
-.ni-field textarea {
-  height: auto;
-  padding: 10px 14px;
-  resize: vertical;
-}
-.ni-hint {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--ink2);
-  line-height: 1.45;
-}
-.ni-hint.error {
-  color: var(--danger);
-}
-.ni-field input[aria-invalid='true'] {
-  border-color: var(--danger);
-}
-.ni-btn {
-  height: 44px;
-  padding: 0 18px;
-  border: 0;
-  border-radius: 11px;
-  background: var(--acc);
-  color: var(--onacc);
-  font-size: 15px;
-  font-weight: 600;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-}
-.ni-btn:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-.ni-btn.secondary {
-  background: var(--fill);
-  color: var(--ink);
-}
-.ni-btn.ghost {
-  background: transparent;
-  color: var(--ink2);
-}
-.ni-btn.danger {
-  background: var(--danger);
-  color: #fff;
-}
-.ni-btn.small {
-  height: 34px;
-  padding: 0 12px;
-  font-size: 13px;
-  border-radius: 9px;
-}
-.ni-alert {
-  display: flex;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 12px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-.ni-alert.warn {
-  background: var(--warn-bg);
-  color: var(--warn-ink);
-}
-.ni-alert.error {
-  background: var(--danger-bg);
-  color: var(--danger-ink);
-}
-.ni-alert.ok {
-  background: var(--success-bg);
-  color: var(--success-ink);
-}
-.ni-wordmark {
-  font-weight: 800;
-  font-style: italic;
-  letter-spacing: -0.02em;
-  color: var(--ink);
-}
-.ni-wordmark span {
-  color: var(--acc);
-}
-
-/* Dialogs (design p03-p05) */
-.ni-scrim {
-  position: fixed;
-  inset: 0;
-  background: var(--scrim);
-  z-index: 50;
-}
-.ni-dialog {
-  position: fixed;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 51;
-  width: min(460px, calc(100% - 32px));
-  max-height: calc(100vh - 140px);
-  overflow: auto;
-  border-radius: var(--radius-xl);
-  background: var(--bg);
-  box-shadow: var(--shadow-dialog);
 }
 
 /* Editor content (noteit-doc rendering) */

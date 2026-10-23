@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, ref, useTemplateRef, watch } from 'vue';
 import {
   accountChangePassword,
   accountCreateS3Key,
@@ -19,15 +19,25 @@ import {
   session,
 } from '#safe-action/actions';
 import { changePasswordInput, createUserInput } from '#shared/schemas';
+import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { failureOf, unwrap } from '~/utils/actions';
 import { formatBytes, relativeTime } from '~/utils/format';
 import type { DeviceView } from '~/worker/types';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
+const confirm = useConfirm();
 type Section = 'general' | 'sync' | 'security' | 'account' | 'users' | 'about';
 const section = ref<Section>('sync');
 const isAdmin = computed(() => state.session?.user.role === 'admin');
+const sections = computed(() => [
+  { id: 'general' as const, label: 'General', icon: 'i-lucide-settings' },
+  { id: 'sync' as const, label: 'Sync & storage', icon: 'i-lucide-refresh-cw' },
+  { id: 'security' as const, label: 'Security & devices', icon: 'i-lucide-shield' },
+  { id: 'account' as const, label: 'Account', icon: 'i-lucide-user-round' },
+  ...(isAdmin.value ? [{ id: 'users' as const, label: 'Users', icon: 'i-lucide-users', admin: true }] : []),
+  { id: 'about' as const, label: 'About NoteIt', icon: 'i-lucide-info' },
+]);
 const origin = location.origin;
 const noteCount = computed(() => state.notes.filter((n) => !n.deletedAt).length);
 
@@ -36,7 +46,7 @@ function report(error: Parameters<typeof failureOf>[0]): void {
   const f = failureOf(error);
   if (!f) return;
   if (f.code === 'unauthorized') void boot();
-  toast(f.message);
+  toast(f.message, 'error');
 }
 
 // MARK: queries. GET actions read through Nuxt's useAsyncData; each key is tagged so a mutation can name
@@ -48,9 +58,9 @@ const queries = {
   users: useAction(adminUsers),
   invites: useAction(adminInvites),
 };
-const { data: keys } = useAsyncData('settings:s3-keys', async () => unwrap(await queries.keys.executeAsync(undefined)), { default: () => [] });
+const { data: keys, status: keysStatus } = useAsyncData('settings:s3-keys', async () => unwrap(await queries.keys.executeAsync(undefined)), { default: () => [] });
 useActionQueryTags('settings:s3-keys', ['s3-keys']);
-const { data: users } = useAsyncData('settings:users', async () => (isAdmin.value ? unwrap(await queries.users.executeAsync(undefined)).users : []), { default: () => [] });
+const { data: users, status: usersStatus } = useAsyncData('settings:users', async () => (isAdmin.value ? unwrap(await queries.users.executeAsync(undefined)).users : []), { default: () => [] });
 useActionQueryTags('settings:users', ['users']);
 const { data: invites } = useAsyncData('settings:invites', async () => (isAdmin.value ? unwrap(await queries.invites.executeAsync(undefined)) : []), { default: () => [] });
 useActionQueryTags('settings:invites', ['invites']);
@@ -62,20 +72,44 @@ async function loadSync(): Promise<void> {
   if (s.data) state.session = s.data;
   else report(s);
 }
+// Settings is a modal over the notes: refresh what it shows each time it opens.
+watch(
+  () => state.settings,
+  (open) => {
+    if (!open) return;
+    section.value = 'sync';
+    profile.values.value.displayName = state.session?.user.displayName ?? '';
+    deviceName.value = state.deviceName;
+    void loadSync();
+    void refreshNuxtData(['settings:s3-keys', 'settings:users', 'settings:invites']);
+  },
+);
 watch(section, (s) => s === 'sync' && loadSync());
-onMounted(loadSync);
 
 // MARK: this browser
 
 const deviceName = ref(state.deviceName);
+const savingDevice = ref(false);
 async function saveDeviceName(): Promise<void> {
+  savingDevice.value = true;
   state.deviceName = await client().setDeviceName(deviceName.value);
-  toast('Device name saved');
+  savingDevice.value = false;
+  toast('Device name saved', 'success');
 }
 async function forget(): Promise<void> {
-  if (!confirm('Sign out and delete the encrypted copy of your notes from this browser? Notes on the server are kept.')) return;
-  await signOut(true);
+  const ok = await confirm({
+    title: 'Forget this browser?',
+    description: 'Signs out and deletes the encrypted copy of your notes from this browser. Notes on the server are kept.',
+    confirmLabel: 'Sign Out & Forget',
+    danger: true,
+  });
+  if (ok) await signOut(true);
 }
+const themes = [
+  { label: 'System', value: 'system' },
+  { label: 'Light', value: 'light' },
+  { label: 'Dark', value: 'dark' },
+];
 
 // MARK: account
 
@@ -83,7 +117,7 @@ const profile = useFormAction(accountUpdateProfile, {
   initialValues: { displayName: state.session?.user.displayName ?? '' },
   onSuccess: ({ data }) => {
     state.session = data;
-    toast('Name saved');
+    toast('Name saved', 'success');
   },
   onError: ({ error }) => report(error),
 });
@@ -92,7 +126,7 @@ const password = useFormAction(accountChangePassword, {
   clientSchema: changePasswordInput,
   onSuccess: () => {
     password.reset();
-    toast('Password changed. Other browsers are signed out.');
+    toast('Password changed. Other browsers are signed out.', 'success');
   },
   onError: ({ error }) => error.serverError && report(error),
 });
@@ -103,7 +137,7 @@ const newKey = ref<{ accessKeyId: string; secretAccessKey: string }>();
 const keyMutation = { invalidate: { tags: ['s3-keys'] }, onError: ({ error }: { error: Parameters<typeof failureOf>[0] }) => report(error) };
 const createKey = useAction(accountCreateS3Key, { ...keyMutation, onSuccess: ({ data }) => (newKey.value = data) });
 const rotateKey = useAction(accountRotateS3Key, { ...keyMutation, onSuccess: ({ data }) => (newKey.value = data) });
-const revokeKey = useAction(accountRevokeS3Key, { ...keyMutation, onSuccess: () => toast('Key revoked') });
+const revokeKey = useAction(accountRevokeS3Key, { ...keyMutation, onSuccess: () => toast('Key revoked', 'success') });
 
 // MARK: admin
 
@@ -116,7 +150,8 @@ const addUser = useFormAction(adminCreateUser, {
   invalidate: { tags: ['users'] },
   onSuccess: ({ data }) => {
     created.value = `${data.user.username}: temporary password ${data.temporaryPassword}`;
-    addUser.reset();
+    // Not reset(): it cancels the execution, which also skips this mutation's `invalidate` refresh.
+    addUser.values.value.username = '';
   },
   onError: ({ error }) => error.serverError && report(error),
 });
@@ -125,408 +160,246 @@ const resetPassword = useAction(adminResetPassword, {
   ...userMutation,
   onSuccess: ({ data, input }) => (created.value = `${users.value.find((u) => u.id === input.id)?.username}: temporary password ${data.temporaryPassword}`),
 });
-const removeUser = useAction(adminDeleteUser, { ...userMutation, onSuccess: () => toast('User deleted') });
-function deleteUser(id: string, username: string): void {
-  const typed = prompt(`This deletes ${username} and all of their encrypted notes on this server. Type the username to confirm.`);
-  if (typed === username) removeUser.execute({ id, confirmUsername: typed });
+const removeUser = useAction(adminDeleteUser, { ...userMutation, onSuccess: () => toast('User deleted', 'success') });
+async function deleteUser(id: string, username: string): Promise<void> {
+  const ok = await confirm({
+    title: `Delete ${username}?`,
+    description: `This deletes ${username} and all of their encrypted notes on this server.`,
+    confirmLabel: 'Delete User',
+    danger: true,
+    typeToConfirm: username,
+  });
+  if (ok) removeUser.execute({ id, confirmUsername: username });
 }
+const userMenu = (u: { id: string; username: string; status: string }) => [
+  [
+    { label: 'Reset Password', icon: 'i-lucide-key-round', onSelect: () => resetPassword.execute({ id: u.id }) },
+    { label: u.status === 'active' ? 'Disable' : 'Enable', icon: u.status === 'active' ? 'i-lucide-user-x' : 'i-lucide-user-check', onSelect: () => updateUser.execute({ id: u.id, status: u.status === 'active' ? 'disabled' : 'active' }) },
+  ],
+  [{ label: 'Delete…', icon: 'i-lucide-trash-2', color: 'error' as const, onSelect: () => void deleteUser(u.id, u.username) }],
+];
 const inviteMutation = { invalidate: { tags: ['invites'] }, onError: ({ error }: { error: Parameters<typeof failureOf>[0] }) => report(error) };
 const createInvite = useAction(adminCreateInvite, { ...inviteMutation, onSuccess: ({ data }) => (inviteLink.value = `${origin}/#invite=${data.token}`) });
 const revokeInvite = useAction(adminRevokeInvite, inviteMutation);
+
+useActionFormErrors(useTemplateRef('passwordForm'), password.fieldErrors);
+useActionFormErrors(useTemplateRef('profileForm'), profile.fieldErrors);
+useActionFormErrors(useTemplateRef('addUserForm'), addUser.fieldErrors);
+const passwordValues = password.values;
+const profileValues = profile.values;
+const addUserValues = addUser.values;
+const roles = [
+  { label: 'User', value: 'user' },
+  { label: 'Admin', value: 'admin' },
+];
 </script>
 
 <template>
   <!-- design p09 / p15 -->
-  <div class="settings">
-    <header>
-      <button type="button" class="ni-btn ghost small" @click="state.settings = false"><NiIcon name="back" :size="16" />Back to notes</button>
-      <h1>Settings</h1>
-    </header>
-    <div class="wrap">
-      <nav class="nav" aria-label="Settings sections">
-        <a href="#" :aria-current="section === 'general' ? 'page' : undefined" @click.prevent="section = 'general'">General</a>
-        <a href="#" :aria-current="section === 'sync' ? 'page' : undefined" @click.prevent="section = 'sync'">Sync &amp; storage</a>
-        <a href="#" :aria-current="section === 'security' ? 'page' : undefined" @click.prevent="section = 'security'">Security &amp; devices</a>
-        <a href="#" :aria-current="section === 'account' ? 'page' : undefined" @click.prevent="section = 'account'">Account</a>
-        <template v-if="isAdmin">
-          <div class="grp">Server admin</div>
-          <a href="#" :aria-current="section === 'users' ? 'page' : undefined" @click.prevent="section = 'users'">Users</a>
-        </template>
-        <a href="#" :aria-current="section === 'about' ? 'page' : undefined" @click.prevent="section = 'about'">About NoteIt</a>
-      </nav>
-
-      <main>
-        <template v-if="section === 'general'">
-          <div><h2>General</h2></div>
-          <section class="card">
-            <h3>Appearance</h3>
-            <div class="row">
-              <div><div>Theme</div><div class="sub">Follows your system unless you pick one.</div></div>
-              <select v-model="state.theme" class="sel" @change="setTheme(state.theme)">
-                <option value="system">System</option>
-                <option value="light">Light</option>
-                <option value="dark">Dark</option>
-              </select>
-            </div>
-          </section>
-          <section class="card">
-            <h3>This browser</h3>
-            <div class="row">
-              <div class="grow"><div>Device name</div><div class="sub">Shown in conflict copies on your other devices.</div></div>
-              <input v-model="deviceName" class="ni-input short" maxlength="64" />
-              <button type="button" class="ni-btn small secondary" @click="saveDeviceName()">Save</button>
-            </div>
-          </section>
-        </template>
-
-        <template v-else-if="section === 'sync'">
-          <div>
-            <h2>Sync &amp; storage</h2>
-            <p class="sub">Everything is encrypted in this browser before it's uploaded.</p>
+  <UModal
+    v-model:open="state.settings"
+    title="Settings"
+    description="NoteIt settings"
+    :ui="{ content: 'sm:max-w-5xl h-dvh sm:h-[min(88dvh,800px)] max-sm:max-w-none max-sm:rounded-none overflow-hidden' }"
+  >
+    <template #content>
+      <div class="flex h-full min-h-0 flex-col bg-(--page) sm:flex-row">
+        <nav class="flex flex-none gap-0.5 border-default bg-default p-3 max-sm:overflow-x-auto max-sm:border-b sm:w-60 sm:flex-col sm:border-e" aria-label="Settings sections">
+          <div class="flex items-center justify-between px-2 pb-2 max-sm:hidden">
+            <h2 class="text-[17px] font-bold">Settings</h2>
           </div>
-          <section class="card status">
-            <span class="badge"><NiIcon name="server" :size="22" color="var(--acc)" /></span>
-            <div class="grow">
-              <h3>Connected to this server</h3>
-              <div class="sub">{{ origin }} · last synced {{ state.status.lastSync ? relativeTime(state.status.lastSync).toLowerCase() : 'not yet' }}</div>
-            </div>
-            <div class="stats">
-              <div><strong>{{ noteCount }}</strong>notes</div>
-              <div v-if="state.session"><strong>{{ formatBytes(state.session.quota.usedBytes) }}</strong>of {{ formatBytes(state.session.quota.limitBytes) }}</div>
-            </div>
-            <button type="button" class="ni-btn small" @click="client().syncNow()">Sync Now</button>
-          </section>
-          <section v-if="state.status.recordErrors.length" class="card">
-            <h3>{{ state.status.recordErrors.length }} items will be retried on the next sync</h3>
-            <div v-for="(e, i) in state.status.recordErrors" :key="i" class="row sub">{{ e.message }}</div>
-          </section>
-          <section class="card">
-            <h3>Devices using this library</h3>
-            <div v-for="d in devices" :key="d.deviceID" class="row">
-              <div>
-                <div>{{ d.name }} <span v-if="d.current" class="pill">This browser</span></div>
-                <div class="sub">{{ d.platform === 'web' ? 'NoteIt web' : d.platform === 'mac' ? 'NoteIt for Mac' : 'NoteIt' }} · last synced {{ relativeTime(d.lastSync).toLowerCase() }}</div>
-              </div>
-            </div>
-            <div v-if="!devices.length" class="row sub">No devices have synced yet.</div>
-          </section>
-        </template>
+          <template v-for="sec in sections" :key="sec.id">
+            <div v-if="'admin' in sec" class="px-2.5 pt-3 pb-1 text-[11px] font-semibold text-muted max-sm:hidden">Server admin</div>
+            <UButton
+              color="neutral"
+              variant="ghost"
+              :icon="sec.icon"
+              :label="sec.label"
+              class="flex-none justify-start font-normal"
+              :class="section === sec.id ? 'bg-(--sel) font-medium hover:bg-(--sel)' : 'text-default'"
+              :aria-current="section === sec.id ? 'page' : undefined"
+              @click="section = sec.id"
+            />
+          </template>
+          <UButton color="neutral" variant="ghost" icon="i-lucide-x" aria-label="Close settings" class="ms-auto flex-none sm:hidden" @click="state.settings = false" />
+        </nav>
 
-        <template v-else-if="section === 'security'">
-          <div><h2>Security &amp; devices</h2></div>
-          <section class="card">
-            <h3>This browser</h3>
-            <div class="row">
-              <div class="grow"><div>Lock NoteIt</div><div class="sub">Forgets the key in memory. You'll need your passphrase to open your notes again.</div></div>
-              <button type="button" class="ni-btn small secondary" @click="lock()">Lock</button>
-            </div>
-            <div class="row">
-              <div class="grow"><div>Sign out &amp; forget this device</div><div class="sub">Deletes the encrypted offline copy from this browser.</div></div>
-              <button type="button" class="ni-btn small danger" @click="forget">Forget</button>
-            </div>
-          </section>
-          <section class="card">
-            <h3>Password</h3>
-            <p class="sub">Your password opens your account. Your notes use your separate encryption passphrase, which never reaches the server.</p>
-            <form class="form" novalidate @submit.prevent="password.submit()">
-              <label class="ni-field">Current password <input v-model="password.values.value.current" type="password" autocomplete="current-password" :aria-invalid="!!password.fieldErrors.value.current" />
-                <span v-for="m in password.fieldErrors.value.current" :key="m" class="ni-hint error">{{ m }}</span>
-              </label>
-              <label class="ni-field">New password <input v-model="password.values.value.next" type="password" autocomplete="new-password" :aria-invalid="!!password.fieldErrors.value.next" />
-                <span v-for="m in password.fieldErrors.value.next" :key="m" class="ni-hint error">{{ m }}</span>
-              </label>
-              <button type="submit" class="ni-btn small" :disabled="password.isExecuting.value">Change Password</button>
-            </form>
-            <div class="row">
-              <div class="grow"><div>Sign out everywhere</div><div class="sub">Ends every session of this account, including this one.</div></div>
-              <button type="button" class="ni-btn small secondary" @click="signOutEverywhere.execute(undefined)">Sign Out Everywhere</button>
-            </div>
-          </section>
-        </template>
+        <main class="flex min-h-0 flex-1 flex-col gap-5 overflow-y-auto p-4 sm:p-6">
+          <UButton color="neutral" variant="ghost" icon="i-lucide-x" aria-label="Close settings" class="absolute end-3 top-3 max-sm:hidden" @click="state.settings = false" />
 
-        <template v-else-if="section === 'account'">
-          <div><h2>Account</h2></div>
-          <section class="card">
-            <div class="row first">
-              <div class="grow"><div>Name</div><div class="sub">Signed in as {{ state.session?.user.username }}</div></div>
-              <input v-model="profile.values.value.displayName" class="ni-input short" maxlength="64" aria-label="Name" />
-              <button type="button" class="ni-btn small secondary" :disabled="profile.isExecuting.value" @click="profile.submit()">Save</button>
-            </div>
-          </section>
-          <section class="card">
-            <h3>S3 access keys</h3>
-            <p class="sub">
-              For NoteIt on your Mac (Settings → Sync → S3-compatible) or backup tools like rclone. Endpoint <code>{{ origin }}/s3</code>, bucket <code>noteit</code>, region <code>us-east-1</code>, path-style. A key opens
-              only your own encrypted store.
-            </p>
-            <div v-for="k in keys" :key="k.accessKeyId" class="row">
-              <div class="grow">
-                <div>{{ k.label }} <code>{{ k.accessKeyId }}</code></div>
-                <div class="sub">Created {{ relativeTime(k.createdAt).toLowerCase() }}{{ k.lastUsedAt ? ` · used ${relativeTime(k.lastUsedAt).toLowerCase()}` : ' · never used' }}</div>
-              </div>
-              <button type="button" class="ni-btn small secondary" @click="rotateKey.execute({ accessKeyId: k.accessKeyId })">Replace</button>
-              <button type="button" class="ni-btn small ghost" @click="revokeKey.execute({ accessKeyId: k.accessKeyId })">Revoke</button>
-            </div>
-            <div class="row">
-              <input v-model="keyLabel" class="ni-input short" maxlength="64" aria-label="Key label" />
-              <button type="button" class="ni-btn small" :disabled="createKey.isExecuting.value" @click="createKey.execute({ label: keyLabel })">Create Key</button>
-            </div>
-            <div v-if="newKey" class="secret">
-              Access key ID: <code>{{ newKey.accessKeyId }}</code><br />Secret access key: <code>{{ newKey.secretAccessKey }}</code>
-              <div class="sub">Copy the secret now. It isn't shown again.</div>
-            </div>
-          </section>
-        </template>
+          <template v-if="section === 'general'">
+            <h2 class="text-xl font-bold">General</h2>
+            <SettingsCard title="Appearance">
+              <SettingsRow label="Theme" sub="Follows your system unless you pick one.">
+                <USelect :model-value="state.theme" :items="themes" class="w-36" aria-label="Theme" @update:model-value="(t) => setTheme(t as 'system' | 'light' | 'dark')" />
+              </SettingsRow>
+            </SettingsCard>
+            <SettingsCard title="This browser">
+              <SettingsRow label="Device name" sub="Shown in conflict copies on your other devices.">
+                <form class="flex gap-2" @submit.prevent="saveDeviceName">
+                  <UInput v-model="deviceName" maxlength="64" aria-label="Device name" class="w-48" />
+                  <UButton type="submit" color="neutral" variant="outline" label="Save" :loading="savingDevice" />
+                </form>
+              </SettingsRow>
+            </SettingsCard>
+          </template>
 
-        <template v-else-if="section === 'users' && isAdmin">
-          <div>
-            <h2>Users</h2>
-            <p class="sub">Every person has their own encrypted library and passphrase. Admins can't read anyone's notes.</p>
-          </div>
-          <section class="card">
-            <div v-for="u in users" :key="u.id" class="row">
-              <div class="grow">
-                <div>{{ u.displayName }} <span class="sub">@{{ u.username }}</span> <span v-if="u.role === 'admin'" class="pill">Admin</span> <span v-if="u.status !== 'active'" class="pill warn">{{ u.status }}</span></div>
-                <div class="sub">{{ formatBytes(u.usedBytes) }} of {{ formatBytes(u.quotaBytes) }} · {{ u.objectCount }} objects{{ u.lastSeenAt ? ` · seen ${relativeTime(u.lastSeenAt).toLowerCase()}` : '' }}</div>
+          <template v-else-if="section === 'sync'">
+            <div>
+              <h2 class="text-xl font-bold">Sync &amp; storage</h2>
+              <p class="mt-1 text-sm text-muted">Everything is encrypted in this browser before it's uploaded.</p>
+            </div>
+            <div class="flex flex-wrap items-center gap-4 rounded-xl bg-default p-5 ring ring-default">
+              <span class="grid size-11 place-items-center rounded-xl bg-(--sel)"><UIcon name="i-lucide-server" class="size-[22px] text-primary" /></span>
+              <div class="min-w-0 flex-1">
+                <h3 class="font-semibold">Connected to this server</h3>
+                <div class="text-sm text-muted">{{ origin }} · last synced {{ state.status.lastSync ? relativeTime(state.status.lastSync).toLowerCase() : 'not yet' }}</div>
               </div>
-              <template v-if="u.id !== state.session?.user.id">
-                <button type="button" class="ni-btn small ghost" @click="resetPassword.execute({ id: u.id })">Reset Password</button>
-                <button type="button" class="ni-btn small ghost" @click="updateUser.execute({ id: u.id, status: u.status === 'active' ? 'disabled' : 'active' })">{{ u.status === 'active' ? 'Disable' : 'Enable' }}</button>
-                <button type="button" class="ni-btn small ghost" @click="deleteUser(u.id, u.username)">Delete</button>
+              <div class="flex gap-5 text-xs text-muted">
+                <div class="flex flex-col"><strong class="text-lg text-default">{{ noteCount }}</strong>notes</div>
+                <div v-if="state.session" class="flex flex-col">
+                  <strong class="text-lg text-default">{{ formatBytes(state.session.quota.usedBytes) }}</strong>of {{ formatBytes(state.session.quota.limitBytes) }}
+                </div>
+              </div>
+              <UButton icon="i-lucide-refresh-cw" label="Sync Now" :loading="state.status.phase === 'syncing'" @click="client().syncNow()" />
+            </div>
+            <UProgress v-if="state.session" :model-value="Math.min(100, (state.session.quota.usedBytes / state.session.quota.limitBytes) * 100)" size="sm" aria-label="Storage used" />
+            <SettingsCard v-if="state.status.recordErrors.length" :title="`${state.status.recordErrors.length} items will be retried on the next sync`">
+              <div v-for="(e, i) in state.status.recordErrors" :key="i" class="py-2 text-sm text-muted">{{ e.message }}</div>
+            </SettingsCard>
+            <SettingsCard title="Devices using this library">
+              <SettingsRow
+                v-for="d in devices"
+                :key="d.deviceID"
+                :label="d.name"
+                :sub="`${d.platform === 'web' ? 'NoteIt web' : d.platform === 'mac' ? 'NoteIt for Mac' : 'NoteIt'} · last synced ${relativeTime(d.lastSync).toLowerCase()}`"
+              >
+                <UBadge v-if="d.current" variant="soft" label="This browser" />
+              </SettingsRow>
+              <div v-if="!devices.length" class="py-3 text-sm text-muted">No devices have synced yet.</div>
+            </SettingsCard>
+          </template>
+
+          <template v-else-if="section === 'security'">
+            <h2 class="text-xl font-bold">Security &amp; devices</h2>
+            <SettingsCard title="This browser">
+              <SettingsRow label="Lock NoteIt" sub="Forgets the key in memory. You'll need your passphrase to open your notes again.">
+                <UButton color="neutral" variant="outline" icon="i-lucide-lock" label="Lock" @click="lock()" />
+              </SettingsRow>
+              <SettingsRow label="Sign out & forget this device" sub="Deletes the encrypted offline copy from this browser.">
+                <UButton color="error" variant="soft" label="Forget" @click="forget" />
+              </SettingsRow>
+            </SettingsCard>
+            <SettingsCard title="Password" sub="Your password opens your account. Your notes use your separate encryption passphrase, which never reaches the server.">
+              <UForm ref="passwordForm" :state="passwordValues" :validate-on="[]" class="grid max-w-xl gap-4 py-3 sm:grid-cols-2" @submit="password.submit()">
+                <UFormField label="Current password" name="current">
+                  <UInput v-model="passwordValues.current" type="password" autocomplete="current-password" />
+                </UFormField>
+                <UFormField label="New password" name="next">
+                  <UInput v-model="passwordValues.next" type="password" autocomplete="new-password" />
+                </UFormField>
+                <div><UButton type="submit" label="Change Password" :loading="password.isExecuting.value" /></div>
+              </UForm>
+              <SettingsRow label="Sign out everywhere" sub="Ends every session of this account, including this one.">
+                <UButton color="neutral" variant="outline" icon="i-lucide-log-out" label="Sign Out Everywhere" :loading="signOutEverywhere.isExecuting.value" @click="signOutEverywhere.execute(undefined)" />
+              </SettingsRow>
+            </SettingsCard>
+          </template>
+
+          <template v-else-if="section === 'account'">
+            <h2 class="text-xl font-bold">Account</h2>
+            <SettingsCard>
+              <UForm ref="profileForm" :state="profileValues" :validate-on="[]" class="flex flex-wrap items-end gap-3 py-2" @submit="profile.submit()">
+                <UFormField label="Name" name="displayName" :help="`Signed in as ${state.session?.user.username}`" class="min-w-60 flex-1">
+                  <UInput v-model="profileValues.displayName" maxlength="64" />
+                </UFormField>
+                <UButton type="submit" color="neutral" variant="outline" label="Save" :loading="profile.isExecuting.value" class="mb-6" />
+              </UForm>
+            </SettingsCard>
+            <SettingsCard title="S3 access keys">
+              <template #sub>
+                For NoteIt on your Mac (Settings → Sync → S3-compatible) or backup tools like rclone. Endpoint <code>{{ origin }}/s3</code>, bucket <code>noteit</code>, region <code>us-east-1</code>, path-style. A key
+                opens only your own encrypted store.
               </template>
-            </div>
-          </section>
-          <section class="card">
-            <h3>Add someone</h3>
-            <form class="inline" novalidate @submit.prevent="addUser.submit()">
-              <input v-model="addUser.values.value.username" class="ni-input short" placeholder="username" aria-label="Username" :aria-invalid="!!addUser.fieldErrors.value.username" />
-              <select v-model="addUser.values.value.role" class="sel" aria-label="Role"><option value="user">User</option><option value="admin">Admin</option></select>
-              <button type="submit" class="ni-btn small" :disabled="addUser.isExecuting.value">Create User</button>
-              <button type="button" class="ni-btn small secondary" @click="createInvite.execute({ role: 'user' })">Create Invite Link</button>
-            </form>
-            <span v-for="m in addUser.fieldErrors.value.username" :key="m" class="ni-hint error">{{ m }}</span>
-            <code v-if="created" class="secret">{{ created }}</code>
-            <code v-if="inviteLink" class="secret">{{ inviteLink }}</code>
-            <div v-for="i in invites.filter((x) => !x.usedAt && !x.revokedAt)" :key="i.id" class="row">
-              <div class="grow sub">Invite ({{ i.role }}) · expires {{ new Date(i.expiresAt).toLocaleString() }}</div>
-              <button type="button" class="ni-btn small ghost" @click="revokeInvite.execute({ id: i.id })">Revoke</button>
-            </div>
-          </section>
-        </template>
-
-        <template v-else-if="section === 'about'">
-          <div><h2>About NoteIt</h2></div>
-          <section class="card">
-            <div class="row first">
-              <img src="/noteit-icon.png" alt="" width="48" height="48" />
-              <div>
-                <div class="ni-wordmark">Note<span>It</span> web {{ state.server?.version }}</div>
-                <div class="sub">Free software under the AGPL-3.0-or-later. <a :href="state.server?.sourceUrl" rel="noopener noreferrer">Source code</a></div>
+              <div v-if="keysStatus === 'pending' && !keys.length" class="flex flex-col gap-2 py-3"><USkeleton class="h-10" /><USkeleton class="h-10" /></div>
+              <SettingsRow
+                v-for="k in keys"
+                :key="k.accessKeyId"
+                :sub="`Created ${relativeTime(k.createdAt).toLowerCase()}${k.lastUsedAt ? ` · used ${relativeTime(k.lastUsedAt).toLowerCase()}` : ' · never used'}`"
+              >
+                <template #label>{{ k.label }} <code class="ms-1 text-xs">{{ k.accessKeyId }}</code></template>
+                <UButton color="neutral" variant="outline" size="sm" label="Replace" :loading="rotateKey.isExecuting.value" @click="rotateKey.execute({ accessKeyId: k.accessKeyId })" />
+                <UButton color="error" variant="ghost" size="sm" label="Revoke" @click="revokeKey.execute({ accessKeyId: k.accessKeyId })" />
+              </SettingsRow>
+              <form class="flex gap-2 py-3" @submit.prevent="createKey.execute({ label: keyLabel })">
+                <UInput v-model="keyLabel" maxlength="64" aria-label="Key label" placeholder="Label" class="w-48" />
+                <UButton type="submit" icon="i-lucide-key-round" label="Create Key" :loading="createKey.isExecuting.value" />
+              </form>
+              <div v-if="newKey" class="flex flex-col gap-2 pb-3">
+                <SecretValue :value="newKey.accessKeyId" label="Access key ID" />
+                <SecretValue :value="newKey.secretAccessKey" label="Secret access key" hint="Copy the secret now. It isn't shown again." />
               </div>
-            </div>
-          </section>
-        </template>
-      </main>
-    </div>
-  </div>
-</template>
+            </SettingsCard>
+          </template>
 
-<style scoped>
-.settings {
-  min-height: 100vh;
-  background: var(--page);
-  container-type: inline-size;
-}
-header {
-  height: var(--header-h);
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 20px;
-  background: var(--bg);
-  border-bottom: 1px solid var(--line);
-}
-h1 {
-  margin: 0;
-  font-size: 17px;
-}
-.wrap {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 24px;
-  padding: 24px;
-  max-width: 1100px;
-  margin: 0 auto;
-}
-.nav {
-  flex: 1 1 200px;
-  max-width: 240px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-.nav a {
-  display: flex;
-  align-items: center;
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 9px;
-  color: var(--ink);
-  text-decoration: none;
-  font-size: 14px;
-}
-.nav a[aria-current='page'] {
-  background: var(--sel);
-  font-weight: 600;
-}
-.grp {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--ink2);
-  padding: 14px 12px 4px;
-}
-main {
-  flex: 999 1 420px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-h2 {
-  margin: 0;
-  font-size: 24px;
-}
-h3 {
-  margin: 0;
-  font-size: 15px;
-}
-.sub {
-  font-size: 13px;
-  color: var(--ink2);
-  line-height: 1.45;
-  margin: 4px 0 0;
-}
-.card {
-  background: var(--bg);
-  border-radius: var(--radius-xl);
-  border: 1px solid var(--line);
-  padding: 20px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.card.status {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 18px;
-}
-.badge {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  background: var(--sel);
-  display: grid;
-  place-items: center;
-}
-.stats {
-  display: flex;
-  gap: 18px;
-  font-size: 12px;
-  color: var(--ink2);
-}
-.stats div {
-  display: flex;
-  flex-direction: column;
-}
-.stats strong {
-  font-size: 18px;
-  color: var(--ink);
-}
-.row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 14px 0;
-  border-top: 1px solid var(--line);
-  flex-wrap: wrap;
-  font-size: 14px;
-}
-.row.first {
-  border-top: 0;
-}
-.grow {
-  flex: 1;
-  min-width: 180px;
-}
-.short {
-  width: auto;
-  max-width: 220px;
-  height: 36px;
-  font-size: 14px;
-}
-.sel {
-  height: 36px;
-  border: 1px solid var(--line-strong);
-  border-radius: 9px;
-  background: var(--bg);
-  padding: 0 8px;
-}
-.pill {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--sel);
-  color: var(--acct);
-  font-weight: 600;
-}
-.pill.warn {
-  background: var(--warn-bg);
-  color: var(--warn-ink);
-}
-.form {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-width: 360px;
-  padding: 12px 0;
-}
-.inline {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 10px 0;
-}
-.secret {
-  display: block;
-  margin-top: 8px;
-  padding: 12px 14px;
-  border-radius: var(--radius-md);
-  background: var(--code);
-  font-size: 13px;
-  word-break: break-all;
-}
-@container (max-width: 719px) {
-  .wrap {
-    padding: 16px;
-    gap: 16px;
-  }
-  .nav {
-    flex: 1 1 100%;
-    max-width: none;
-    flex-direction: row;
-    overflow-x: auto;
-    gap: 4px;
-  }
-  .nav a {
-    flex: none;
-    background: var(--bg);
-  }
-  .grp {
-    display: none;
-  }
-  .card {
-    padding: 16px;
-  }
-}
-</style>
+          <template v-else-if="section === 'users' && isAdmin">
+            <div>
+              <h2 class="text-xl font-bold">Users</h2>
+              <p class="mt-1 text-sm text-muted">Every person has their own encrypted library and passphrase. Admins can't read anyone's notes.</p>
+            </div>
+            <SettingsCard>
+              <div v-if="usersStatus === 'pending' && !users.length" class="flex flex-col gap-2 py-3"><USkeleton class="h-12" /><USkeleton class="h-12" /></div>
+              <SettingsRow
+                v-for="u in users"
+                :key="u.id"
+                :sub="`${formatBytes(u.usedBytes)} of ${formatBytes(u.quotaBytes)} · ${u.objectCount} objects${u.lastSeenAt ? ` · seen ${relativeTime(u.lastSeenAt).toLowerCase()}` : ''}`"
+              >
+                <template #label>
+                  {{ u.displayName }} <span class="text-sm text-muted">@{{ u.username }}</span>
+                  <UBadge v-if="u.role === 'admin'" variant="soft" size="sm" class="ms-1" label="Admin" />
+                  <UBadge v-if="u.status !== 'active'" color="warning" variant="soft" size="sm" class="ms-1" :label="u.status" />
+                </template>
+                <UDropdownMenu v-if="u.id !== state.session?.user.id" :items="userMenu(u)" :content="{ align: 'end' }">
+                  <UButton color="neutral" variant="ghost" icon="i-lucide-ellipsis" :aria-label="`Actions for ${u.username}`" />
+                </UDropdownMenu>
+              </SettingsRow>
+            </SettingsCard>
+            <SettingsCard title="Add someone">
+              <UForm ref="addUserForm" :state="addUserValues" :validate-on="[]" class="flex flex-wrap items-start gap-2 py-3" @submit="addUser.submit()">
+                <UFormField name="username" class="w-56">
+                  <UInput v-model="addUserValues.username" placeholder="username" aria-label="Username" autocapitalize="none" />
+                </UFormField>
+                <USelect v-model="addUserValues.role" :items="roles" aria-label="Role" class="w-28" />
+                <UButton type="submit" icon="i-lucide-user-plus" label="Create User" :loading="addUser.isExecuting.value" />
+                <UButton color="neutral" variant="outline" icon="i-lucide-link" label="Create Invite Link" :loading="createInvite.isExecuting.value" @click="createInvite.execute({ role: 'user' })" />
+              </UForm>
+              <div class="flex flex-col gap-2 pb-3 empty:hidden">
+                <SecretValue v-if="created" :value="created" label="New account" hint="Share it privately; they choose their own password on first sign-in." />
+                <SecretValue v-if="inviteLink" :value="inviteLink" label="Invite link" hint="Works once and expires in 3 days." />
+              </div>
+              <SettingsRow v-for="i in invites.filter((x) => !x.usedAt && !x.revokedAt)" :key="i.id" :label="`Invite (${i.role})`" :sub="`Expires ${new Date(i.expiresAt).toLocaleString()}`">
+                <UButton color="error" variant="ghost" size="sm" label="Revoke" @click="revokeInvite.execute({ id: i.id })" />
+              </SettingsRow>
+            </SettingsCard>
+          </template>
+
+          <template v-else-if="section === 'about'">
+            <h2 class="text-xl font-bold">About NoteIt</h2>
+            <SettingsCard>
+              <div class="flex items-center gap-4 py-3">
+                <img src="/noteit-icon.png" alt="" width="48" height="48" />
+                <div>
+                  <div class="ni-wordmark">Note<span>It</span> web {{ state.server?.version }}</div>
+                  <div class="text-sm text-muted">
+                    Free software under the AGPL-3.0-or-later.
+                    <ULink :to="state.server?.sourceUrl" external target="_blank" rel="noopener noreferrer" class="text-primary">Source code</ULink>
+                  </div>
+                </div>
+              </div>
+            </SettingsCard>
+          </template>
+        </main>
+      </div>
+    </template>
+  </UModal>
+</template>

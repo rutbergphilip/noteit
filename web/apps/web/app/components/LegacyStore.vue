@@ -15,6 +15,7 @@ async function recheck(): Promise<void> {
     await refresh();
   }
 }
+
 const onFocus = () => void recheck();
 let poll: ReturnType<typeof setInterval> | undefined;
 onMounted(() => {
@@ -33,63 +34,19 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page">
-    <div class="card" role="status">
-      <span class="badge"><NiIcon name="devices" :size="24" color="var(--acc)" /></span>
-      <h1>Open NoteIt on your Mac once to finish setting up web access</h1>
-      <p>
+  <div class="grid min-h-dvh place-items-center bg-(--page) px-4 py-12">
+    <UCard class="max-w-[520px] rounded-(--radius-2xl) shadow-(--shadow-card) ring-0" :ui="{ body: 'flex flex-col gap-3.5 p-[clamp(20px,5vw,32px)] sm:p-[clamp(20px,5vw,32px)]' }" role="status">
+      <span class="grid size-13 place-items-center rounded-[15px] bg-(--sel)"><UIcon name="i-lucide-monitor-smartphone" class="size-6 text-primary" /></span>
+      <h1 class="text-[22px]/tight font-bold">Open NoteIt on your Mac once to finish setting up web access</h1>
+      <p class="text-[15px]/normal text-muted">
         Your passphrase is right, but this library still stores notes in the Mac's older format, which a browser can't read. The next time NoteIt on your Mac syncs, it upgrades the library automatically
         (it checks first that every device can read the new format). Nothing is lost and nothing changes for your Mac.
       </p>
-      <p>This page checks again every minute and continues on its own.</p>
-      <div class="row">
-        <button class="ni-btn" type="button" :disabled="checking" @click="recheck">{{ checking ? 'Checking…' : 'Check Again' }}</button>
-        <button class="ni-btn ghost" type="button" @click="signOut()">Sign Out</button>
+      <p class="text-[15px]/normal text-muted">This page checks again every minute and continues on its own.</p>
+      <div class="flex flex-wrap gap-2">
+        <UButton size="lg" :loading="checking" label="Check Again" @click="recheck" />
+        <UButton size="lg" color="neutral" variant="ghost" label="Sign Out" @click="signOut()" />
       </div>
-    </div>
+    </UCard>
   </div>
 </template>
-
-<style scoped>
-.page {
-  min-height: 100vh;
-  display: grid;
-  place-items: center;
-  padding: 48px 16px;
-  background: var(--page);
-}
-.card {
-  max-width: 520px;
-  background: var(--bg);
-  border-radius: var(--radius-2xl);
-  box-shadow: var(--shadow-card);
-  padding: clamp(20px, 5vw, 32px);
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-.badge {
-  width: 52px;
-  height: 52px;
-  border-radius: 15px;
-  background: var(--sel);
-  display: grid;
-  place-items: center;
-}
-h1 {
-  margin: 0;
-  font-size: 22px;
-  line-height: 1.25;
-}
-p {
-  margin: 0;
-  color: var(--ink2);
-  line-height: 1.5;
-  font-size: 15px;
-}
-.row {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-</style>

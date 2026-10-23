@@ -1,7 +1,22 @@
 // The web client is a pure SPA: the server only serves static assets, /api and /s3, and never renders notes.
 // The control plane is nuxt-safe-action actions (server/actions → /api/_actions/*); sync stays plain routes.
 export default defineNuxtConfig({
-  modules: ['nuxt-safe-action'],
+  modules: ['@nuxt/ui', 'nuxt-safe-action'],
+  ui: {
+    // System fonts only (design): nothing fetched from a font CDN, which the CSP would refuse anyway.
+    fonts: false,
+  },
+  icon: {
+    // Lucide ships in the bundle: the CSP allows no third-party connect-src, so no Iconify API at runtime.
+    provider: 'none',
+    clientBundle: { scan: { globInclude: ['app/**/*.{vue,ts}'] }, icons: [] },
+    serverBundle: false,
+  },
+  colorMode: {
+    // The theme menu's choice; 'system' follows the OS.
+    storageKey: 'noteit.theme',
+    classSuffix: '',
+  },
   compatibilityDate: '2026-09-01',
   ssr: false,
   devtools: { enabled: false },

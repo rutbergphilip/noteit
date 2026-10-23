@@ -4,9 +4,9 @@ defineProps<{ tagline?: string }>();
 
 <template>
   <!-- design p06: gradient hero on the left, the form on the right; stacks below 880px -->
-  <div class="auth">
-    <aside class="hero">
-      <div class="brand">
+  <div class="auth flex min-h-dvh flex-wrap bg-default">
+    <aside class="hero flex flex-col justify-between overflow-hidden text-white">
+      <div class="flex items-center gap-3">
         <img src="/noteit-icon.png" alt="" width="44" height="44" />
         <span class="word">Note<span>It</span></span>
       </div>
@@ -15,21 +15,19 @@ defineProps<{ tagline?: string }>();
       </svg>
       <div>
         <div class="big">Notes at the speed of thought.</div>
-        <div class="sub">{{ tagline ?? 'Your notes, on your server. Encrypted before they leave your browser.' }}</div>
+        <div class="mt-3 max-w-[440px] text-base/normal text-white/85">{{ tagline ?? 'Your notes, on your server. Encrypted before they leave your browser.' }}</div>
       </div>
     </aside>
-    <main class="side">
-      <slot />
+    <main class="flex flex-[1_1_360px] items-center justify-center px-6 py-12">
+      <div class="flex w-full max-w-[380px] flex-col gap-5">
+        <slot />
+      </div>
     </main>
   </div>
 </template>
 
 <style scoped>
 .auth {
-  min-height: 100vh;
-  display: flex;
-  flex-wrap: wrap;
-  background: var(--bg);
   container-type: inline-size;
 }
 .hero {
@@ -37,16 +35,6 @@ defineProps<{ tagline?: string }>();
   min-height: 320px;
   padding: 56px;
   background: var(--hero);
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  overflow: hidden;
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
 }
 .word {
   font-size: 26px;
@@ -67,43 +55,6 @@ defineProps<{ tagline?: string }>();
   font-weight: 700;
   letter-spacing: -0.01em;
   max-width: 440px;
-}
-.sub {
-  font-size: 16px;
-  line-height: 1.5;
-  margin-top: 12px;
-  color: rgba(255, 255, 255, 0.85);
-  max-width: 440px;
-}
-.side {
-  flex: 1 1 360px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 48px 24px;
-}
-.side :deep(form) {
-  width: 100%;
-  max-width: 380px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-.side :deep(h1) {
-  margin: 0;
-  font-size: 28px;
-  font-weight: 700;
-}
-.side :deep(.lead) {
-  margin: 8px 0 0;
-  font-size: 14px;
-  color: var(--ink2);
-}
-.side :deep(.fine) {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--ink2);
 }
 @container (max-width: 879px) {
   .hero {

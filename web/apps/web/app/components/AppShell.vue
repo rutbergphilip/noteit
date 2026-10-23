@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import type { DropdownMenuItem } from '@nuxt/ui';
 import { useNoteit } from '~/composables/useNoteit';
 
 const { state, createNote, setQuery, lock, signOut, setTheme } = useNoteit();
-const accountOpen = ref(false);
+
 const initials = computed(() => {
   const name = state.session?.user.displayName || state.session?.user.username || '?';
   return name
@@ -13,341 +14,99 @@ const initials = computed(() => {
     .slice(0, 2)
     .toUpperCase();
 });
+
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 const search = ref(state.query);
 function onSearch(): void {
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => void setQuery(search.value), 120);
 }
+
+const accountItems = computed<DropdownMenuItem[][]>(() => [
+  [{ type: 'label', label: state.session?.user.displayName, description: `@${state.session?.user.username}`, avatar: { text: initials.value, class: 'bg-(--avatar) text-white' } }],
+  [
+    {
+      label: 'Appearance',
+      icon: state.theme === 'dark' ? 'i-lucide-moon' : state.theme === 'light' ? 'i-lucide-sun' : 'i-lucide-sun-moon',
+      children: (['system', 'light', 'dark'] as const).map((t) => ({
+        label: t === 'system' ? 'System' : t === 'light' ? 'Light' : 'Dark',
+        type: 'checkbox' as const,
+        checked: state.theme === t,
+        onSelect: (e: Event) => {
+          e.preventDefault();
+          setTheme(t);
+        },
+      })),
+    },
+    { label: 'Quick Capture', icon: 'i-lucide-pen-line', kbds: ['alt', 'meta', 'C'], onSelect: () => (state.capture = true) },
+    { label: 'Settings', icon: 'i-lucide-sliders-horizontal', kbds: ['meta', ','], onSelect: () => (state.settings = true) },
+  ],
+  [
+    { label: 'Lock', icon: 'i-lucide-lock', onSelect: () => void lock() },
+    { label: 'Sign Out', icon: 'i-lucide-log-out', onSelect: () => void signOut() },
+  ],
+]);
+
+function home(): void {
+  state.view = { kind: 'all' };
+  state.pane = 'list';
+}
 </script>
 
 <template>
   <!-- design p01 (desktop), p13 (tablet: sidebar as a drawer), p14 (phone: one pane at a time) -->
-  <div class="app" :class="{ 'show-editor': state.pane === 'editor' }">
-    <header class="hdr">
-      <button type="button" class="icon-btn menu-btn" aria-label="Show notebooks and tags" @click="state.drawerOpen = true">
-        <NiIcon name="menu" :size="20" :stroke="2" />
-      </button>
-      <a href="#" class="brand" aria-label="NoteIt home" @click.prevent="state.view = { kind: 'all' }; state.pane = 'list'">
+  <div class="flex h-dvh flex-col bg-default">
+    <header class="flex h-(--header-h) flex-none items-center gap-2 border-b border-default bg-(--top) px-2 sm:gap-4 sm:px-4">
+      <UButton class="lg:hidden" color="neutral" variant="ghost" size="lg" icon="i-lucide-menu" aria-label="Show notebooks and tags" @click="state.drawerOpen = true" />
+      <a href="#" class="flex flex-none items-center gap-2.5 text-[19px] no-underline lg:w-[220px]" aria-label="NoteIt home" @click.prevent="home">
         <img src="/noteit-icon.png" alt="" width="30" height="30" />
-        <span class="brand-word ni-wordmark">Note<span>It</span></span>
+        <span class="ni-wordmark max-md:hidden">Note<span>It</span></span>
       </a>
-      <button type="button" class="icon-btn search-btn" aria-label="Search notes and commands" @click="state.palette = true">
-        <NiIcon name="search" :size="18" />
-      </button>
-      <label class="search-field">
-        <NiIcon name="search" :size="16" />
-        <span class="sr-only">Search notes</span>
-        <input v-model="search" type="search" placeholder="Search notes and commands" @input="onSearch" @keydown.enter.prevent="state.palette = true" />
-        <kbd>⌘K</kbd>
-      </label>
-      <div class="right">
+
+      <UInput
+        v-model="search"
+        type="search"
+        icon="i-lucide-search"
+        placeholder="Search notes and commands"
+        variant="soft"
+        aria-label="Search notes"
+        class="max-w-[520px] flex-[1_1_280px] max-md:hidden"
+        :ui="{ base: 'bg-(--fill) hover:bg-(--fill) focus-visible:bg-(--fill)', trailing: 'pe-2' }"
+        @update:model-value="onSearch"
+        @keydown.enter.prevent="state.palette = true"
+      >
+        <template #trailing>
+          <UKbd value="meta" variant="outline" /><UKbd value="K" variant="outline" />
+        </template>
+      </UInput>
+
+      <div class="ms-auto flex flex-none items-center gap-1.5 sm:gap-2">
+        <UButton class="md:hidden" color="neutral" variant="soft" size="lg" icon="i-lucide-search" aria-label="Search notes and commands" @click="state.palette = true" />
         <SyncPill />
-        <button type="button" class="new-btn" aria-label="New note" @click="createNote()">
-          <NiIcon name="plus" :size="16" :stroke="2" />
-          <span class="new-label">New Note</span>
-        </button>
-        <button type="button" class="icon-btn settings-btn" aria-label="Settings" @click="state.settings = true">
-          <NiIcon name="sliders" :size="18" />
-        </button>
-        <div class="account">
-          <button type="button" class="avatar" aria-label="Account" :aria-expanded="accountOpen" @click="accountOpen = !accountOpen">{{ initials }}</button>
-          <div v-if="accountOpen" class="menu" role="menu" @click="accountOpen = false">
-            <div class="who">{{ state.session?.user.displayName }}<span>{{ state.session?.user.username }}</span></div>
-            <button role="menuitem" type="button" @click="setTheme(state.theme === 'dark' ? 'light' : 'dark')">
-              <NiIcon :name="state.theme === 'dark' ? 'sun' : 'moon'" :size="16" />{{ state.theme === 'dark' ? 'Light Mode' : 'Dark Mode' }}
-            </button>
-            <button role="menuitem" type="button" @click="state.capture = true"><NiIcon name="capture" :size="16" />Quick Capture</button>
-            <button role="menuitem" type="button" @click="state.settings = true"><NiIcon name="sliders" :size="16" />Settings</button>
-            <button role="menuitem" type="button" @click="lock()"><NiIcon name="lock" :size="16" />Lock</button>
-            <button role="menuitem" type="button" @click="signOut()"><NiIcon name="back" :size="16" />Sign Out</button>
-          </div>
-        </div>
+        <UTooltip text="New note" :kbds="['alt', 'meta', 'N']">
+          <UButton size="lg" icon="i-lucide-plus" aria-label="New note" :ui="{ label: 'max-md:hidden' }" label="New Note" @click="createNote()" />
+        </UTooltip>
+        <UTooltip text="Settings" :kbds="['meta', ',']">
+          <UButton class="max-md:hidden" color="neutral" variant="ghost" size="lg" icon="i-lucide-sliders-horizontal" aria-label="Settings" @click="state.settings = true" />
+        </UTooltip>
+        <UDropdownMenu :items="accountItems" :content="{ align: 'end', sideOffset: 8 }" :ui="{ content: 'w-60' }">
+          <UButton color="neutral" variant="ghost" square class="rounded-full p-0.5" aria-label="Account">
+            <UAvatar :text="initials" size="md" class="bg-(--avatar) text-xs font-bold text-white" :ui="{ fallback: 'text-white' }" />
+          </UButton>
+        </UDropdownMenu>
       </div>
     </header>
 
-    <div class="body">
-      <div v-if="state.drawerOpen" class="drawer-scrim" @click="state.drawerOpen = false" />
-      <AppSidebar class="sidebar" :class="{ open: state.drawerOpen }" />
-      <NoteList class="notes" />
-      <main class="editor">
+    <UDashboardGroup storage="local" storage-key="noteit-panes" unit="px" class="relative inset-auto min-h-0 flex-1">
+      <AppSidebar />
+      <NoteList />
+      <UDashboardPanel id="editor" :class="['min-h-0', state.pane === 'list' && 'max-md:hidden']">
         <NoteEditor v-if="state.selectedId" :key="state.selectedId" :note-id="state.selectedId" />
-        <div v-else class="nothing">
+        <div v-else class="flex flex-1 flex-col items-center justify-center gap-3 text-muted opacity-85">
           <img src="/noteit-icon.png" alt="" width="64" height="64" />
-          <p>Select a note, or press <kbd>⌥⌘N</kbd> for a new one.</p>
+          <p class="flex items-center gap-1">Select a note, or press <UKbd value="alt" /><UKbd value="meta" /><UKbd value="N" /> for a new one.</p>
         </div>
-      </main>
-    </div>
+      </UDashboardPanel>
+    </UDashboardGroup>
   </div>
 </template>
-
-<style scoped>
-.app {
-  container-type: inline-size;
-  container-name: app;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-}
-.hdr {
-  height: var(--header-h);
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--line);
-  background: var(--top);
-}
-.icon-btn {
-  width: 40px;
-  height: 40px;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--ink2);
-  cursor: pointer;
-  flex: none;
-}
-.menu-btn,
-.search-btn {
-  display: none;
-}
-.search-btn {
-  background: var(--fill);
-}
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  text-decoration: none;
-  width: 220px;
-  flex: none;
-  font-size: 19px;
-}
-.search-field {
-  flex: 1 1 280px;
-  max-width: 520px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 10px;
-  background: var(--fill);
-  color: var(--ink2);
-}
-.search-field input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  background: transparent;
-  font-size: 14px;
-  color: var(--ink);
-  outline: none;
-}
-kbd {
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink2);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 2px 6px;
-}
-.right {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-}
-.new-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  height: 40px;
-  padding: 0 14px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--acc);
-  color: var(--onacc);
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.account {
-  position: relative;
-}
-.avatar {
-  width: 34px;
-  height: 34px;
-  border: 0;
-  border-radius: 50%;
-  background: var(--avatar);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
-  cursor: pointer;
-}
-.menu {
-  position: absolute;
-  right: 0;
-  top: 42px;
-  z-index: 40;
-  min-width: 220px;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-dialog);
-  padding: 6px;
-  display: flex;
-  flex-direction: column;
-}
-.menu .who {
-  padding: 8px 10px;
-  font-weight: 600;
-  display: flex;
-  flex-direction: column;
-  font-size: 14px;
-}
-.menu .who span {
-  font-weight: 400;
-  font-size: 12px;
-  color: var(--ink2);
-}
-.menu button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 36px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  font-size: 14px;
-  text-align: left;
-  cursor: pointer;
-}
-.menu button:hover {
-  background: var(--fill);
-}
-.body {
-  flex: 1;
-  display: flex;
-  align-items: stretch;
-  min-height: 0;
-  position: relative;
-}
-.sidebar {
-  flex: 0 0 240px;
-  max-width: 256px;
-}
-.notes {
-  flex: 1 1 320px;
-  max-width: 360px;
-}
-.editor {
-  flex: 999 1 420px;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-.nothing {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  color: var(--ink2);
-  opacity: 0.85;
-}
-.drawer-scrim {
-  display: none;
-}
-
-@container app (max-width: 1279px) {
-  .sidebar {
-    flex-basis: 200px;
-    max-width: 216px;
-  }
-  .notes {
-    flex-basis: 260px;
-    max-width: 300px;
-  }
-}
-/* Tablet (design p13): the sidebar becomes a drawer behind the menu button. */
-@container app (max-width: 1023px) {
-  .menu-btn {
-    display: grid;
-  }
-  .brand {
-    width: auto;
-  }
-  .sidebar {
-    display: none;
-  }
-  .sidebar.open {
-    display: flex;
-    position: absolute;
-    inset: 0 auto 0 0;
-    width: 280px;
-    max-width: 85%;
-    z-index: 30;
-    box-shadow: var(--shadow-dialog);
-  }
-  .drawer-scrim {
-    display: block;
-    position: absolute;
-    inset: 0;
-    z-index: 29;
-    background: var(--scrim);
-  }
-  :deep(.sync-label) {
-    display: none;
-  }
-}
-/* Phone (design p14): one pane at a time. */
-@container app (max-width: 719px) {
-  .hdr {
-    gap: 6px;
-    padding: 0 8px;
-  }
-  .notes {
-    max-width: none;
-    border-right: 0;
-  }
-  .editor {
-    display: none;
-  }
-  .show-editor .notes {
-    display: none;
-  }
-  .show-editor .editor {
-    display: flex;
-  }
-  .search-field {
-    display: none;
-  }
-  .search-btn {
-    display: grid;
-  }
-  .new-label {
-    display: none;
-  }
-  .new-btn {
-    width: 40px;
-    padding: 0;
-    justify-content: center;
-  }
-  .brand-word,
-  .settings-btn {
-    display: none;
-  }
-}
-</style>

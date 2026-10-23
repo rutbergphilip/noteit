@@ -5,29 +5,27 @@ import { relativeTime } from '~/utils/format';
 
 const { state, client } = useNoteit();
 const open = ref(false);
+const syncing = computed(() => state.status.phase === 'syncing');
 
 const view = computed(() => {
   const s = state.status;
   switch (s.phase) {
     case 'syncing':
-      return { icon: 'cloud', label: 'Syncing…', tone: '' };
+      return { icon: 'i-lucide-refresh-cw', label: 'Syncing…', color: 'neutral' as const };
     case 'offline':
-      return { icon: 'cloudOff', label: 'Offline', tone: 'warn' };
+      return { icon: 'i-lucide-cloud-off', label: 'Offline', color: 'warning' as const };
     case 'error':
-      return { icon: 'alert', label: 'Sync Issue', tone: 'error' };
+      return { icon: 'i-lucide-triangle-alert', label: 'Sync Issue', color: 'error' as const };
     case 'legacy':
-      return { icon: 'alert', label: 'Needs your Mac', tone: 'warn' };
+      return { icon: 'i-lucide-triangle-alert', label: 'Needs your Mac', color: 'warning' as const };
     case 'locked':
-      return { icon: 'lock', label: 'Locked', tone: '' };
+      return { icon: 'i-lucide-lock', label: 'Locked', color: 'neutral' as const };
     default:
-      return s.pending > 0 ? { icon: 'cloud', label: `${s.pending} to sync`, tone: '' } : { icon: 'lock', label: 'Synced · encrypted', tone: '' };
+      return s.pending > 0 ? { icon: 'i-lucide-cloud-upload', label: `${s.pending} to sync`, color: 'neutral' as const } : { icon: 'i-lucide-lock', label: 'Synced · encrypted', color: 'neutral' as const };
   }
 });
 
-const failed = computed(() =>
-  state.status.recordErrors.map((e) => ({ ...e, title: e.id ? (state.notes.find((n) => n.id === e.id)?.title || 'Untitled') : undefined })),
-);
-
+const failed = computed(() => state.status.recordErrors.map((e) => ({ ...e, title: e.id ? state.notes.find((n) => n.id === e.id)?.title || 'Untitled' : undefined })));
 function openNote(id: string): void {
   state.selectedId = id;
   state.pane = 'editor';
@@ -36,80 +34,35 @@ function openNote(id: string): void {
 </script>
 
 <template>
-  <div class="wrap">
-    <button type="button" class="sync-pill" :class="view.tone" role="status" :aria-label="view.label" :aria-expanded="open" @click="open = !open">
-      <NiIcon :name="view.icon" :size="14" :stroke="2" />
-      <span class="sync-label">{{ view.label }}</span>
-    </button>
-    <div v-if="open" class="pop" role="dialog" aria-label="Sync details">
-      <div class="line"><strong>{{ view.label }}</strong></div>
-      <div class="muted">Last synced {{ state.status.lastSync ? relativeTime(state.status.lastSync) : 'not yet' }}. Notes are encrypted in this browser before they're uploaded.</div>
-      <div v-if="state.status.detail && state.status.phase !== 'idle'" class="muted">{{ state.status.detail }}</div>
-      <template v-if="failed.length">
-        <div class="line">{{ failed.length }} {{ failed.length === 1 ? 'item' : 'items' }} will be retried on the next sync</div>
-        <ul>
-          <li v-for="(f, i) in failed" :key="i">
-            <a v-if="f.id" href="#" @click.prevent="openNote(f.id)">{{ f.title }}</a>
-            <span class="muted">{{ f.message }}</span>
-          </li>
-        </ul>
-      </template>
-      <button class="ni-btn small" type="button" @click="client().syncNow()">Sync Now</button>
-    </div>
-  </div>
+  <UPopover v-model:open="open" :content="{ align: 'end', sideOffset: 8 }">
+    <UButton
+      :color="view.color"
+      variant="soft"
+      size="sm"
+      class="rounded-full px-3 font-normal"
+      :class="view.color === 'neutral' && 'bg-(--fill) text-muted hover:bg-(--fill)'"
+      :icon="view.icon"
+      :ui="{ leadingIcon: ['size-3.5', syncing && 'animate-spin'], label: 'max-lg:hidden' }"
+      :label="view.label"
+      :aria-label="view.label"
+      role="status"
+    />
+    <template #content>
+      <div class="flex w-[min(320px,calc(100vw-32px))] flex-col gap-2 p-3.5 text-[13px]" aria-label="Sync details">
+        <strong class="text-sm">{{ view.label }}</strong>
+        <p class="leading-normal text-muted">Last synced {{ state.status.lastSync ? relativeTime(state.status.lastSync) : 'not yet' }}. Notes are encrypted in this browser before they're uploaded.</p>
+        <p v-if="state.status.detail && state.status.phase !== 'idle'" class="text-muted">{{ state.status.detail }}</p>
+        <template v-if="failed.length">
+          <div>{{ failed.length }} {{ failed.length === 1 ? 'item' : 'items' }} will be retried on the next sync</div>
+          <ul class="flex flex-col gap-1 ps-1">
+            <li v-for="(f, i) in failed" :key="i" class="flex flex-col">
+              <UButton v-if="f.id" variant="link" size="xs" class="p-0" :label="f.title" @click="openNote(f.id)" />
+              <span class="text-muted">{{ f.message }}</span>
+            </li>
+          </ul>
+        </template>
+        <UButton size="sm" class="self-start" icon="i-lucide-refresh-cw" :loading="syncing" label="Sync Now" @click="client().syncNow()" />
+      </div>
+    </template>
+  </UPopover>
 </template>
-
-<style scoped>
-.wrap {
-  position: relative;
-}
-.sync-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--fill);
-  font-size: 13px;
-  color: var(--ink2);
-  cursor: pointer;
-}
-.sync-pill.warn {
-  background: var(--warn-bg);
-  color: var(--warn-ink);
-}
-.sync-pill.error {
-  background: var(--danger-bg);
-  color: var(--danger-ink);
-}
-.pop {
-  position: absolute;
-  right: 0;
-  top: 38px;
-  z-index: 40;
-  width: min(320px, calc(100vw - 32px));
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-dialog);
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  font-size: 13px;
-}
-.muted {
-  color: var(--ink2);
-  line-height: 1.45;
-}
-ul {
-  margin: 0;
-  padding-left: 18px;
-}
-li {
-  display: flex;
-  flex-direction: column;
-}
-</style>

@@ -1,186 +1,137 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
+import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
-import { NOTEBOOK_COLORS, NOTEBOOK_SYMBOLS, safeHex, SYMBOL_ICONS } from '~/utils/icons';
+import { NOTEBOOK_COLORS, NOTEBOOK_SYMBOLS, notebookIcon, safeHex } from '~/utils/notebooks';
 
 const { state, client, refresh, toast, descendants } = useNoteit();
-const mode = state.notebookDialog!;
-const existing = mode.mode === 'edit' ? state.notebooks.find((n) => n.id === mode.id) : undefined;
-const name = ref(existing?.name ?? '');
-const color = ref(existing?.colorHex?.toUpperCase() ?? NOTEBOOK_COLORS[0]!.hex);
-const symbol = ref(existing?.symbol ?? 'tray');
-const parent = ref(mode.mode === 'create' ? (mode.parent ?? '') : (existing?.parent ?? ''));
-const nameInput = ref<HTMLInputElement>();
-onMounted(() => nameInput.value?.focus());
+const confirm = useConfirm();
+
+const open = computed({
+  get: () => !!state.notebookDialog,
+  set: (v) => {
+    if (!v) state.notebookDialog = undefined;
+  },
+});
+const existing = computed(() => {
+  const m = state.notebookDialog;
+  return m?.mode === 'edit' ? state.notebooks.find((n) => n.id === m.id) : undefined;
+});
+const name = ref('');
+const color = ref(NOTEBOOK_COLORS[0]!.hex);
+const symbol = ref('tray');
+const TOP = 'top';
+const parent = ref(TOP);
+const busy = ref(false);
+
+// Fields are filled when the dialog opens, so it can stay mounted and animate.
+watch(
+  () => state.notebookDialog,
+  (m) => {
+    if (!m) return;
+    const nb = existing.value;
+    name.value = nb?.name ?? '';
+    color.value = nb?.colorHex?.toUpperCase() ?? NOTEBOOK_COLORS[0]!.hex;
+    symbol.value = nb?.symbol ?? 'tray';
+    parent.value = (m.mode === 'create' ? m.parent : nb?.parent) ?? TOP;
+  },
+  { immediate: true },
+);
 
 const parentChoices = computed(() => {
-  const banned = existing ? new Set([existing.id, ...descendants(existing.id)]) : new Set<string>();
-  return state.notebooks.filter((n) => !banned.has(n.id));
+  const nb = existing.value;
+  const banned = nb ? new Set([nb.id, ...descendants(nb.id)]) : new Set<string>();
+  return [{ label: 'Top level', value: TOP, icon: 'i-lucide-library' }, ...state.notebooks.filter((n) => !banned.has(n.id)).map((n) => ({ label: n.name || 'Untitled', value: n.id, icon: notebookIcon(n.symbol) }))];
 });
-
-const close = () => (state.notebookDialog = undefined);
 
 async function submit(): Promise<void> {
   const trimmed = name.value.trim();
   if (!trimmed) return;
-  if (existing) await client().updateNotebook(existing.id, { name: trimmed, colorHex: color.value, symbol: symbol.value });
-  else {
-    const id = await client().createNotebook({ name: trimmed, colorHex: color.value, symbol: symbol.value, ...(parent.value ? { parent: parent.value } : {}) });
-    state.view = { kind: 'notebook', id };
+  busy.value = true;
+  try {
+    const nb = existing.value;
+    if (nb) await client().updateNotebook(nb.id, { name: trimmed, colorHex: color.value, symbol: symbol.value });
+    else {
+      const id = await client().createNotebook({ name: trimmed, colorHex: color.value, symbol: symbol.value, ...(parent.value !== TOP ? { parent: parent.value } : {}) });
+      state.view = { kind: 'notebook', id };
+    }
+    await refresh();
+    open.value = false;
+  } finally {
+    busy.value = false;
   }
-  await refresh();
-  close();
 }
 
 async function remove(): Promise<void> {
-  if (!existing) return;
-  if (!confirm(`Delete “${existing.name}”? Its notes move to Recently Deleted.`)) return;
-  await client().deleteNotebook(existing.id);
+  const nb = existing.value;
+  if (!nb) return;
+  const ok = await confirm({ title: `Delete “${nb.name}”?`, description: 'Its notes move to Recently Deleted.', confirmLabel: 'Delete Notebook', danger: true });
+  if (!ok) return;
+  await client().deleteNotebook(nb.id);
   state.view = { kind: 'all' };
   await refresh();
-  close();
+  open.value = false;
   toast('Notebook deleted');
 }
 </script>
 
 <template>
   <!-- design p05 -->
-  <div class="ni-scrim" @click="close" />
-  <form class="ni-dialog nb" role="dialog" aria-modal="true" aria-labelledby="nbh" @submit.prevent="submit" @keydown.esc="close">
-    <h2 id="nbh">{{ existing ? 'Edit Notebook' : 'New Notebook' }}</h2>
-    <div class="name-row">
-      <span class="preview" :style="{ background: `color-mix(in srgb, ${safeHex(color)} 16%, transparent)` }">
-        <NiIcon :name="SYMBOL_ICONS[symbol] ?? 'folder'" :size="22" :color="safeHex(color)" />
-      </span>
-      <label class="ni-field grow">Name<input ref="nameInput" v-model="name" maxlength="100" required /></label>
-    </div>
-    <fieldset>
-      <legend>Color</legend>
-      <div class="swatches">
-        <button
-          v-for="c in NOTEBOOK_COLORS"
-          :key="c.hex"
-          type="button"
-          class="sw"
-          :aria-label="c.hex === color ? `${c.label}, selected` : c.label"
-          :aria-pressed="c.hex === color"
-          :style="{ background: c.hex }"
-          @click="color = c.hex"
-        />
-      </div>
-    </fieldset>
-    <fieldset>
-      <legend>Icon</legend>
-      <div class="icons">
-        <button
-          v-for="s in NOTEBOOK_SYMBOLS"
-          :key="s.symbol"
-          type="button"
-          class="ic"
-          :aria-label="s.symbol === symbol ? `${s.label}, selected` : s.label"
-          :aria-pressed="s.symbol === symbol"
-          @click="symbol = s.symbol"
-        >
-          <NiIcon :name="SYMBOL_ICONS[s.symbol]!" :size="20" :color="s.symbol === symbol ? safeHex(color) : 'currentColor'" />
-        </button>
-      </div>
-    </fieldset>
-    <label v-if="!existing" class="ni-field">Inside
-      <select v-model="parent">
-        <option value="">Top level</option>
-        <option v-for="nb in parentChoices" :key="nb.id" :value="nb.id">{{ nb.name }}</option>
-      </select>
-    </label>
-    <div class="actions">
-      <button v-if="existing" type="button" class="ni-btn ghost small danger-text" @click="remove">Delete</button>
-      <button type="button" class="ni-btn secondary small" @click="close">Cancel</button>
-      <button type="submit" class="ni-btn small" :disabled="!name.trim()">{{ existing ? 'Save' : 'Create Notebook' }}</button>
-    </div>
-  </form>
+  <UModal v-model:open="open" :title="existing ? 'Edit Notebook' : 'New Notebook'" :ui="{ content: 'sm:max-w-[460px]', footer: 'justify-end gap-2' }">
+    <template #body>
+      <form id="notebook-form" class="flex flex-col gap-5" @submit.prevent="submit">
+        <div class="flex items-end gap-3">
+          <span class="grid size-11 flex-none place-items-center rounded-xl transition-colors" :style="{ background: `color-mix(in srgb, ${safeHex(color)} 16%, transparent)` }">
+            <UIcon :name="notebookIcon(symbol)" class="size-[22px]" :style="{ color: safeHex(color) }" />
+          </span>
+          <UFormField label="Name" class="flex-1">
+            <UInput v-model="name" size="lg" maxlength="100" autofocus />
+          </UFormField>
+        </div>
+        <fieldset>
+          <legend class="mb-2 text-[13px] font-medium text-muted">Color</legend>
+          <div class="flex flex-wrap gap-2.5">
+            <button
+              v-for="c in NOTEBOOK_COLORS"
+              :key="c.hex"
+              type="button"
+              class="size-7 cursor-pointer rounded-full transition-shadow focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+              :class="c.hex === color && 'shadow-[0_0_0_2px_var(--bg),0_0_0_4px_var(--ink)]'"
+              :aria-label="c.label"
+              :aria-pressed="c.hex === color"
+              :style="{ background: c.hex }"
+              @click="color = c.hex"
+            />
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend class="mb-2 text-[13px] font-medium text-muted">Icon</legend>
+          <div class="grid grid-cols-[repeat(auto-fill,minmax(40px,1fr))] gap-2">
+            <UTooltip v-for="s in NOTEBOOK_SYMBOLS" :key="s.symbol" :text="s.label">
+              <UButton
+                color="neutral"
+                variant="soft"
+                square
+                class="size-10 justify-center rounded-[10px] bg-(--fill)"
+                :class="s.symbol === symbol && 'bg-(--sel) ring-2 ring-primary ring-inset'"
+                :aria-label="s.label"
+                :aria-pressed="s.symbol === symbol"
+                @click="symbol = s.symbol"
+              >
+                <UIcon :name="notebookIcon(s.symbol)" class="size-5" :style="s.symbol === symbol ? { color: safeHex(color) } : {}" />
+              </UButton>
+            </UTooltip>
+          </div>
+        </fieldset>
+        <UFormField v-if="!existing" label="Inside">
+          <USelect v-model="parent" :items="parentChoices" class="w-full" />
+        </UFormField>
+      </form>
+    </template>
+    <template #footer>
+      <UButton v-if="existing" color="error" variant="ghost" class="me-auto" label="Delete" @click="remove" />
+      <UButton color="neutral" variant="soft" label="Cancel" @click="open = false" />
+      <UButton type="submit" form="notebook-form" :loading="busy" :disabled="!name.trim()" :label="existing ? 'Save' : 'Create Notebook'" />
+    </template>
+  </UModal>
 </template>
-
-<style scoped>
-.nb {
-  top: 110px;
-  padding: 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-h2 {
-  margin: 0;
-  font-size: 20px;
-}
-.name-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-}
-.grow {
-  flex: 1;
-}
-.preview {
-  width: 44px;
-  height: 44px;
-  border-radius: 12px;
-  display: grid;
-  place-items: center;
-  flex: none;
-}
-fieldset {
-  border: 0;
-  margin: 0;
-  padding: 0;
-}
-legend {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--ink2);
-  margin-bottom: 8px;
-}
-.swatches {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.sw {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 0;
-  cursor: pointer;
-  padding: 0;
-}
-.sw[aria-pressed='true'] {
-  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--ink);
-}
-.icons {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(40px, 1fr));
-  gap: 8px;
-}
-.ic {
-  width: 40px;
-  height: 40px;
-  border: 0;
-  border-radius: 10px;
-  background: var(--fill);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  color: var(--ink2);
-}
-.ic[aria-pressed='true'] {
-  background: var(--sel);
-  box-shadow: inset 0 0 0 2px var(--acc);
-}
-.actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.danger-text {
-  color: var(--danger);
-  margin-right: auto;
-}
-</style>
