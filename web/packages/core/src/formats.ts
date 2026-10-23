@@ -1,6 +1,6 @@
 import { type Bytes, b64decode, b64encode, fromUtf8, utf8 } from './bytes.js';
 import { SyncError } from './errors.js';
-import type { RecordKind } from './layout.js';
+import { isRecordKind, type RecordKind } from './layout.js';
 import { normalizeUuid, type Uuid } from './uuid.js';
 
 // MARK: JSON
@@ -196,7 +196,7 @@ export function decodeEnvelope(b: Uint8Array, allowLocked = true): RemoteEnvelop
   const o = decodeJsonObject(b, 'envelope');
   const what = 'envelope';
   const kind = req(o, 'kind', isString, what);
-  if (kind !== 'note' && kind !== 'notebook') throw new SyncError('invalidPayload', `envelope kind ${kind}`);
+  if (!isRecordKind(kind)) throw new SyncError('invalidPayload', `envelope kind ${kind}`);
   const env: RemoteEnvelope = {
     id: uuidField(o, 'id', what),
     kind,
@@ -228,7 +228,7 @@ export interface Tombstone {
 export function decodeTombstone(b: Uint8Array): Tombstone | undefined {
   const o = decodeJsonObject(b, 'tombstone');
   const kind = req(o, 'kind', isString, 'tombstone');
-  if (kind !== 'note' && kind !== 'notebook') return undefined;
+  if (!isRecordKind(kind)) return undefined;
   const t: Tombstone = {
     id: uuidField(o, 'id', 'tombstone'),
     kind,
@@ -292,6 +292,40 @@ export const NOTE_META_OWNED_KEYS: readonly string[] = [
   'conflictSource', 'conflictOriginalID', 'deletedAt', 'lock',
 ];
 export const NOTEBOOK_META_OWNED_KEYS: readonly string[] = ['id', 'name', 'colorHex', 'symbol', 'sortIndex', 'modifiedAt', 'revision'];
+
+/** Swift `SmartFolder` (organise): a saved search in the sidebar. */
+export interface SmartFolderMeta {
+  id: Uuid;
+  name: string;
+  query: string;
+  symbol: string;
+  sortIndex: number;
+  revision?: Uuid;
+  modifiedAt?: string;
+}
+/** `SmartFolder.ownedCodingKeys`. */
+export const SMART_FOLDER_META_OWNED_KEYS: readonly string[] = ['id', 'name', 'query', 'symbol', 'sortIndex', 'revision', 'modifiedAt'];
+export const SMART_FOLDER_DEFAULT_SYMBOL = 'folder.badge.gearshape';
+export const SMART_FOLDER_MAX_NAME = 60;
+export const SMART_FOLDER_MAX_QUERY = 500;
+export const SMART_FOLDER_MAX_COUNT = 200;
+
+export function decodeSmartFolderMeta(b: Uint8Array): SmartFolderMeta {
+  const o = decodeJsonObject(b, 'smartFolder');
+  const w = 'smartFolder';
+  const meta: SmartFolderMeta = {
+    id: uuidField(o, 'id', w),
+    name: req(o, 'name', isString, w),
+    query: req(o, 'query', isString, w),
+    symbol: req(o, 'symbol', isString, w),
+    sortIndex: Number.isInteger(o.sortIndex) ? (o.sortIndex as number) : 0,
+  };
+  const rev = opt(o, 'revision', isString, w);
+  if (rev && normalizeUuid(rev)) meta.revision = normalizeUuid(rev)!;
+  const mod = opt(o, 'modifiedAt', isString, w);
+  if (mod !== undefined) meta.modifiedAt = mod;
+  return meta;
+}
 
 /** RawMetaOverlay: owned keys come only from `meta` (absent there → removed), every other key from `raw`. */
 export function patchMeta(raw: Uint8Array | undefined, meta: object, ownedKeys: readonly string[]): Bytes {

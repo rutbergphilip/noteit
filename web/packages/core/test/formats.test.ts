@@ -7,6 +7,7 @@ import {
   decodeDevice,
   decodeEnvelope,
   decodeManifest,
+  decodeSmartFolderMeta,
   decodeTombstone,
   encodeEnvelope,
   fromUtf8,
@@ -32,13 +33,14 @@ describe('envelope vectors', () => {
       const plain = await cipher.open(b64decode(c.sealed), c.context);
       expect(fromUtf8(plain)).toBe(c.plaintextJSON);
       const expected = c.decoded;
-      if (c.context.startsWith('notes/') || c.context.startsWith('notebooks/')) {
+      if (c.context.startsWith('notes/') || c.context.startsWith('notebooks/') || c.context.startsWith('smart-folders/')) {
         const env = decodeEnvelope(plain);
         const { meta, ...rest } = expected;
         expect({ ...env, meta: undefined }).toEqual({ ...rest, meta: undefined });
         expect(JSON.parse(fromUtf8(b64decode(env.meta)))).toEqual(meta);
         // Re-encoding keeps every field.
         expect(JSON.parse(fromUtf8(encodeEnvelope(env)))).toEqual(JSON.parse(c.plaintextJSON));
+        if (env.kind === 'smartFolder') expect(decodeSmartFolderMeta(b64decode(env.meta))).toEqual(meta);
       } else if (c.context.startsWith('bodies/')) {
         expect(JSON.parse(fromUtf8(plain))).toEqual(expected);
       } else if (c.context.startsWith('tombstones/')) {

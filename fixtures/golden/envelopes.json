@@ -114,6 +114,45 @@
       "sealed" : "T5/BlHrMQVJR2+dM9A5zt87J2i4TNlbrqzlXoKSPPz4liy6gNjz4gROmHjoZWpdgGjGpeTkybi33EaRVILEUoqI0+oPnswXTyjdeTVU/fAoa1HpaBF8Yhau+jfWlw+Iogm4TT3UJ2WFqy+GeuyzSFYEv3JWopAPoGbWHRugAydHdvI7MhNLRcyPCU//KloxAEcYgFa9n6UhRmIlED9+OOL2tRK1AoOpIn7Ukam/btWPtmuSmnBsxtPmLJOE8cYFbemkpNdbpqpwWGifsZDQW494AjsWeZREcHw0Zgqd8s4IzvKtNiOmim8MT4rvocSDapcT32FiNzvZV/q2ZZSfkII/0w7tVaPonUmUXtA9j6xiELU9LrOZf68QcL0+NNl9/F2ZW64MJ56wCdWKLHjXrwNwjH1j70xqEtri9EFLjNf21o6AWlnzBBTfOuNNqBzpiL4YKOVUoPITuel4lCS91fEEej+0upDF88CVEfPvu4LB6AMR/2B2gFqN1MWl+sTiwU6YpiF8l9b9GPsPFotjPwSreLyZWDEh7fd+AgT+WpZNkVUVJfrY7A8eymyYwaOQHcj3gZZbYHMVSbi/MHY+S7HEX0R8XmtX/w+7hjRrge2DVQ5YR3gXaUrPPpJwANgrFJosaTf5EDVfD0Lrfj6CmI/91dnVlRO8rh3JIF9T4zc/hhrE4V2wxSc/Vy5rMML/gjHUMZmZ3riD4+L+v75EZAfjpYdZZhTsiwkqYKPmczXfrLyUCGaXxW6zk6utbPdXKFyy9Gt5IbQCzpbj8s2YzXvUtZV4IuPCeLL5fwIr6"
     },
     {
+      "context" : "smart-folders/233033B7-668E-4E23-BB5B-562C00F5FD19.json",
+      "decoded" : {
+        "deviceID" : "device-2",
+        "deviceName" : "Laptop",
+        "id" : "233033B7-668E-4E23-BB5B-562C00F5FD19",
+        "kind" : "smartFolder",
+        "meta" : {
+          "id" : "233033B7-668E-4E23-BB5B-562C00F5FD19",
+          "modifiedAt" : "2026-01-01T01:30:00Z",
+          "name" : "Due / this week",
+          "query" : "is:todo due:this-week -tag:someday",
+          "revision" : "F0ADFBF5-9C3A-45DB-870A-9AEF611BC464",
+          "sortIndex" : 1,
+          "symbol" : "folder.badge.gearshape"
+        },
+        "modifiedAt" : 788923800,
+        "revision" : "F0ADFBF5-9C3A-45DB-870A-9AEF611BC464"
+      },
+      "key" : "noteit/v1/smart-folders/233033B7-668E-4E23-BB5B-562C00F5FD19.json",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "smart-folder-envelope",
+      "plaintextJSON" : "{\"deviceID\":\"device-2\",\"deviceName\":\"Laptop\",\"id\":\"233033B7-668E-4E23-BB5B-562C00F5FD19\",\"kind\":\"smartFolder\",\"meta\":\"ewogICJpZCIgOiAiMjMzMDMzQjctNjY4RS00RTIzLUJCNUItNTYyQzAwRjVGRDE5IiwKICAibW9kaWZpZWRBdCIgOiAiMjAyNi0wMS0wMVQwMTozMDowMFoiLAogICJuYW1lIiA6ICJEdWUgXC8gdGhpcyB3ZWVrIiwKICAicXVlcnkiIDogImlzOnRvZG8gZHVlOnRoaXMtd2VlayAtdGFnOnNvbWVkYXkiLAogICJyZXZpc2lvbiIgOiAiRjBBREZCRjUtOUMzQS00NURCLTg3MEEtOUFFRjYxMUJDNDY0IiwKICAic29ydEluZGV4IiA6IDEsCiAgInN5bWJvbCIgOiAiZm9sZGVyLmJhZGdlLmdlYXJzaGFwZSIKfQ==\",\"modifiedAt\":788923800,\"revision\":\"F0ADFBF5-9C3A-45DB-870A-9AEF611BC464\"}",
+      "sealed" : "a3gQdsUzMa9lYYTuj+t7r2hthGVfm33F3yiWhKptcuKPyRsf9VIBJ1rSMBR1+e6mxqjb8Ll7jRBM4I74I/gszkzHJ++cILEjGV976sRh+P4ojAT62eRX5PClegmGejO7ulF0MNl65tG4ASl3dFn7nf7rvXtoWAHG4R724XHYdBSo54PFVuWBKULzw+Mavm0rx3PimtTqU1tISwH2iGJSZGKuRQ/lua/TqJnKNexTNqEYwk38na9VQaewv4iCcMGCQxtRVnJ6DP5dZ9UmRHcc8oD1cJSHqsLAXye2uIYefh895rIoQ1FsHkNM2O0i1nKaAM0BzXQxQSioejY9c0LCKRC6XI4KrD1+BzkSylSO0INpfZ33yQ4ImtJ3riWeiCMbOHrwq0e8LP4y3FAgiJHftkFkFn91n3OwQfdB5oHxFhQ2OaY1u0UyAv6FpeBSh7iSMAS5ShbvUrzRyr34FTCDVeFeRMGYDdn409JVrpWM/Q9JSJdYVMuK2RHbTzLoxEWWKqopJmDrFbw1ArtI4IvQ7HluYQJ0+rcChfqhIidwtm9+AwHhfd481xxnItaTqBI67Y/fHMynZbk4HuaQYjybuj0PA4iQkWpefg/rL245zjUjHO0M3JFE8BgwjOyAmr1Zg3C78T01Zoub++jg2jMipGYQ2LcxlTIm5PQjNjOJBKxBsgEwhQ2Ks642ajBFg4o5OitnbAqnyJcypQTRTml7LBCDgY9I57r0AyLaD+HPoKvxjQ1QgJAE+SUotQ1NfnDufkecJAolVBNsgsBQoi3g8WTyua0ZzXdwvsxg1Mk="
+    },
+    {
+      "context" : "tombstones/233033B7-668E-4E23-BB5B-562C00F5FD19.json",
+      "decoded" : {
+        "deletedAt" : 788925600,
+        "deviceID" : "device-2",
+        "id" : "233033B7-668E-4E23-BB5B-562C00F5FD19",
+        "kind" : "smartFolder"
+      },
+      "key" : "noteit/v1/tombstones/233033B7-668E-4E23-BB5B-562C00F5FD19.json",
+      "keyB64" : "8Z/xATw9ALjz2aX76zTPhCZq+6b8rbzVjzMdYzG65PU=",
+      "name" : "tombstone-smart-folder",
+      "plaintextJSON" : "{\"deletedAt\":788925600,\"deviceID\":\"device-2\",\"id\":\"233033B7-668E-4E23-BB5B-562C00F5FD19\",\"kind\":\"smartFolder\"}",
+      "sealed" : "9F3//H4qq23+MeCLubxdGf80Y6KUjKHevI01RA2TS1REDcNsjPPl8+0730gj9/LoztiE06OG67xk7GNzSgiKIvMFxw4jPA8SNIt3LHEUaa2xAXmbDgtHqtPwviAfEhwO4lMz1eKecgK7xDKAvQNiBTltQrc5jE/AUPFk393pTj322voebNdIAqrX"
+    },
+    {
       "context" : "tombstones/430742D2-5082-469B-9F71-FF2B36718F0D.json",
       "decoded" : {
         "deletedAt" : 789091200.5,

@@ -8,7 +8,10 @@ export const CANARY_PREFIX = 'noteit/.canary/';
 export const CANARY_MISMATCH_ETAG = 'noteit-canary-mismatch';
 export const NEW_TAG = 'new';
 
-export type RecordKind = 'notebook' | 'note';
+/** Swift `RecordKind` raw values. Smart folders belong to organise; like notebooks they have no body. */
+export type RecordKind = 'notebook' | 'note' | 'smartFolder';
+export const RECORD_KINDS: readonly RecordKind[] = ['notebook', 'note', 'smartFolder'];
+export const isRecordKind = (k: unknown): k is RecordKind => k === 'notebook' || k === 'note' || k === 'smartFolder';
 
 export const keys = {
   manifest: `${ROOT}manifest.json`,
@@ -16,9 +19,10 @@ export const keys = {
   noteMeta: (id: Uuid) => `${ROOT}notes/${id}.meta`,
   noteBody: (id: Uuid) => `${ROOT}notes/${id}.body`,
   docBody: (id: Uuid, version: Uuid, tag: string) => `${ROOT}bodies/${id}.${version}.${tag}.body`,
+  smartFolder: (id: Uuid) => `${ROOT}smart-folders/${id}.json`,
   tombstone: (id: Uuid) => `${ROOT}tombstones/${id}.json`,
   device: (deviceId: string) => `${ROOT}devices/${deviceId}.json`,
-  metaKey: (id: Uuid, kind: RecordKind) => (kind === 'notebook' ? keys.notebook(id) : keys.noteMeta(id)),
+  metaKey: (id: Uuid, kind: RecordKind) => (kind === 'notebook' ? keys.notebook(id) : kind === 'smartFolder' ? keys.smartFolder(id) : keys.noteMeta(id)),
 };
 
 /** The cipher context of a key: the key with `noteit/v1/` stripped. */
@@ -77,6 +81,12 @@ export function indexRemote(objects: RemoteObject[]): RemoteIndex {
       case 'notebooks': {
         const id = idFor('.json');
         if (id) index.metas.set(id, { ...object, kind: 'notebook' });
+        else if (name.length > 36 && normalizeUuid(name.slice(0, 36))) index.sidecars.push(object);
+        break;
+      }
+      case 'smart-folders': {
+        const id = idFor('.json');
+        if (id) index.metas.set(id, { ...object, kind: 'smartFolder' });
         else if (name.length > 36 && normalizeUuid(name.slice(0, 36))) index.sidecars.push(object);
         break;
       }

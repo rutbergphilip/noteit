@@ -70,3 +70,13 @@ describe('backends reject keys outside the layout grammar before any I/O', () =>
     await expect(b.get('inkwell/v1/../x')).rejects.toMatchObject({ kind: 'invalidResponse' });
   });
 });
+
+describe('storeExists', () => {
+  it('is false for an empty backend and true once a store is created', async () => {
+    const { InMemoryBackend, connect, storeExists } = await import('../src/index.js');
+    const backend = new InMemoryBackend();
+    expect(await storeExists(backend)).toBe(false);
+    await connect(backend, { passphrase: 'correct horse battery', createIfMissing: true });
+    expect(await storeExists(backend)).toBe(true);
+  });
+});

@@ -53,8 +53,8 @@ export interface SyncLocalStore {
   records(): Promise<LocalRecord[]>;
   deletions(): Promise<Map<Uuid, LocalDeletion>>;
   export(id: Uuid, kind: RecordKind): Promise<RecordPayload>;
-  /** Inserts or replaces the record, keeping `p.revision`. */
-  apply(p: RecordPayload): Promise<void>;
+  /** Inserts or replaces the record, keeping `p.revision`; `fromDevice` names the device that wrote it. */
+  apply(p: RecordPayload, fromDevice?: string): Promise<void>;
   applyDeletion(id: Uuid, kind: RecordKind): Promise<void>;
   /** Imports the payload as a new record with a new id and a new revision. */
   importConflictCopy(p: RecordPayload, fromDevice: string): Promise<void>;
@@ -215,7 +215,7 @@ export class SyncEngine {
 
   private ordered(ids: Set<Uuid>, pass: Pass): Uuid[] {
     const rank = (id: Uuid): number =>
-      (pass.records.get(id)?.kind ?? pass.deletions.get(id)?.kind ?? pass.index.metas.get(id)?.kind) === 'notebook' ? 0 : 2;
+      ({ notebook: 0, smartFolder: 1, note: 2 } as const)[pass.records.get(id)?.kind ?? pass.deletions.get(id)?.kind ?? pass.index.metas.get(id)?.kind ?? 'note'];
     return [...ids].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
   }
 
@@ -600,7 +600,7 @@ export class SyncEngine {
   }
 
   private async adopt(payload: RecordPayload, etag: string, envelope: RemoteEnvelope): Promise<void> {
-    await this.local.apply(payload);
+    await this.local.apply(payload, envelope.deviceName);
     const base: Base = { revision: payload.revision, remoteMetaETag: etag };
     if (envelope.bodyVersion) base.bodyVersion = envelope.bodyVersion;
     this.state.bases[payload.id] = base;
@@ -645,7 +645,8 @@ export class SyncEngine {
       return;
     }
 
-    if (kind === 'notebook') {
+    // Records without a body (notebooks, smart folders) keep the newer edit (Swift RecordKind.usesLastWriterWins).
+    if (kind !== 'note') {
       const localMod = toDouble2001(localRecord.modifiedAt);
       const remoteWins = envelope.modifiedAt !== localMod ? envelope.modifiedAt > localMod : envelope.deviceID > this.deviceID;
       pass.report.conflicts += 1;
@@ -827,7 +828,7 @@ export class SyncEngine {
       deviceID: envelope.deviceID,
       meta: b64decode(envelope.meta),
     };
-    if (kind === 'notebook' || envelope.bodySHA256 === undefined) return { envelope, etag, payload };
+    if (kind !== 'note' || envelope.bodySHA256 === undefined) return { envelope, etag, payload };
     const carried: CarriedBody = { bodySHA256: envelope.bodySHA256 };
     if (envelope.bodyFormat !== undefined) carried.bodyFormat = envelope.bodyFormat;
     if (envelope.bodyVersion !== undefined) carried.bodyVersion = envelope.bodyVersion;
@@ -888,7 +889,7 @@ export class SyncEngine {
   }
 
   private async currentRevision(id: Uuid): Promise<Uuid | undefined> {
-    return (await this.local.revision(id, 'note')) ?? (await this.local.revision(id, 'notebook'));
+    return (await this.local.revision(id, 'note')) ?? (await this.local.revision(id, 'notebook')) ?? (await this.local.revision(id, 'smartFolder'));
   }
 
   private seal(plain: Uint8Array, key: string): Promise<Bytes> {

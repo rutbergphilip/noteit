@@ -100,6 +100,15 @@ async function readManifest(backend: StorageBackend): Promise<{ manifest: Manife
   }
 }
 
+/**
+ * Whether the backend holds a store (or a legacy one that connect() would migrate), read without the passphrase,
+ * so a client can offer "create" before asking for a passphrase it would only discard.
+ */
+export async function storeExists(backend: StorageBackend): Promise<boolean> {
+  if ((await backend.list(ROOT)).some((o) => o.key === keys.manifest)) return true;
+  return (await backend.list(LEGACY_ROOT)).some((o) => o.key === `${LEGACY_ROOT}manifest.json`);
+}
+
 /** RemoteMigration: a store found only under `inkwell/v1/` is copied byte for byte to `noteit/v1/`, manifest last. */
 export async function migrateLegacyStoreIfNeeded(backend: StorageBackend): Promise<boolean> {
   const current = await backend.list(ROOT);

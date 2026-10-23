@@ -255,6 +255,9 @@ final class GoldenVectorTests: XCTestCase {
         let nestedNotebook = Notebook(id: VectorIO.uuid("envelope-notebook-nested"), name: "Clients", symbol: "folder", colorHex: "#34C759",
                                       sortIndex: 0, revision: VectorIO.uuid("envelope-notebook-nested-rev"),
                                       modifiedAt: VectorIO.epoch.addingTimeInterval(3_660), parent: notebookID)
+        let smartFolder = SmartFolder(id: VectorIO.uuid("envelope-smart-folder"), name: "Due / this week", query: "is:todo due:this-week -tag:someday",
+                                      sortIndex: 1, revision: VectorIO.uuid("envelope-smart-folder-rev"),
+                                      modifiedAt: VectorIO.epoch.addingTimeInterval(5_400))
         let noteMetaData = try LibraryCoding.encoder.encode(noteMeta)
         let body = Data("{\\rtf1\\ansi Plans}".utf8)
         let inputs: [(String, String, any Encodable)] = [
@@ -270,6 +273,12 @@ final class GoldenVectorTests: XCTestCase {
             ("notebook-envelope-nested", RemoteLayout.meta(.notebook, nestedNotebook.id),
              RemoteEnvelope(id: nestedNotebook.id, kind: .notebook, revision: nestedNotebook.revision!, modifiedAt: nestedNotebook.modifiedAt!,
                             deviceID: "device-2", deviceName: "Laptop", meta: try LibraryCoding.encoder.encode(nestedNotebook))),
+            // organise: a smart folder record, read and written by the web app too.
+            ("smart-folder-envelope", RemoteLayout.meta(.smartFolder, smartFolder.id),
+             RemoteEnvelope(id: smartFolder.id, kind: .smartFolder, revision: smartFolder.revision!, modifiedAt: smartFolder.modifiedAt!,
+                            deviceID: "device-2", deviceName: "Laptop", meta: try LibraryCoding.encoder.encode(smartFolder))),
+            ("tombstone-smart-folder", RemoteLayout.tombstone(smartFolder.id),
+             Tombstone(id: smartFolder.id, kind: .smartFolder, deletedAt: VectorIO.epoch.addingTimeInterval(7_200), deviceID: "device-2")),
             ("tombstone", RemoteLayout.tombstone(noteID),
              Tombstone(id: noteID, kind: .note, deletedAt: VectorIO.epoch.addingTimeInterval(172_800.5), deviceID: "device-2",
                        deletedMetaETag: "\"5d41402abc4b2a76b9719d911017c592\"")),
@@ -322,6 +331,8 @@ final class GoldenVectorTests: XCTestCase {
                 reencoded = try SyncEngine.encode(envelope)
                 if envelope.kind == .note {
                     XCTAssertEqual(try LibraryCoding.encoder.encode(LibraryCoding.decoder.decode(NoteMeta.self, from: envelope.meta)), envelope.meta)
+                } else if envelope.kind == .smartFolder {
+                    XCTAssertEqual(try LibraryCoding.encoder.encode(LibraryCoding.decoder.decode(SmartFolder.self, from: envelope.meta)), envelope.meta)
                 } else {
                     XCTAssertEqual(try LibraryCoding.encoder.encode(LibraryCoding.decoder.decode(Notebook.self, from: envelope.meta)), envelope.meta)
                 }
