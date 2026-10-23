@@ -368,6 +368,23 @@ export const FontSizeMark = Mark.create({
   },
 });
 
+/** Turns the line into a list item of `kind`, or back into body text when it already is one. */
+function setList(editor: Editor, kind: 'bullet' | 'ordered' | 'task'): boolean {
+  if (editor.isActive('listItem', { kind })) return editor.commands.setNode('paragraph');
+  return editor.commands.setNode('listItem', { kind, level: 0, number: kind === 'ordered' ? 1 : null, checked: kind === 'task' ? false : null });
+}
+
+/** ⌘] / ⌘[: a list item's level, else the paragraph's indent (0…8). */
+function shiftLevel(editor: Editor, by: number): boolean {
+  const node = editor.state.selection.$from.parent;
+  if (node.type.name === 'listItem') return editor.commands.updateAttributes('listItem', { level: Math.min(8, Math.max(0, (node.attrs.level ?? 0) + by)) });
+  if (node.type.name === 'paragraph' || node.type.name === 'heading') {
+    const indent = Math.min(8, Math.max(0, (node.attrs.indent ?? 0) + by));
+    return editor.commands.updateAttributes(node.type.name, { indent: indent || null });
+  }
+  return false;
+}
+
 export const BlockShortcuts = Extension.create({
   name: 'noteitShortcuts',
   addProseMirrorPlugins: () => [history()],
@@ -381,6 +398,24 @@ export const BlockShortcuts = Extension.create({
       'Mod-Alt-2': () => this.editor.commands.setNode('heading', { level: 2 }),
       'Mod-Alt-3': () => this.editor.commands.setNode('heading', { level: 3 }),
       'Mod-Alt-0': () => this.editor.commands.setNode('paragraph'),
+      // The rest of native's Format menu (docs/keyboard-shortcuts.md); ⌘ is Ctrl off a Mac.
+      'Mod-Alt-4': () => this.editor.commands.setNode('codeBlock'),
+      'Mod-Alt-5': () => this.editor.chain().setNode('paragraph').wrapIn('blockquote').run(),
+      'Shift-Mod-8': () => setList(this.editor, 'bullet'),
+      'Shift-Mod-7': () => setList(this.editor, 'ordered'),
+      'Shift-Mod-l': () => setList(this.editor, 'task'),
+      'Shift-Mod-u': () => {
+        const { $from } = this.editor.state.selection;
+        const node = $from.parent;
+        if (node.type.name !== 'listItem' || node.attrs.kind !== 'task') return false;
+        return this.editor.commands.updateAttributes('listItem', { checked: node.attrs.checked !== true });
+      },
+      'Shift-Mod-e': () => this.editor.commands.toggleMark('code'),
+      'Shift-Mod-h': () =>
+        this.editor.isActive('highlight') ? this.editor.commands.unsetMark('highlight') : this.editor.commands.setMark('highlight', { color: '#FFED8C' }),
+      'Shift-Mod-Alt-d': () => this.editor.chain().insertContent({ type: 'horizontalRule' }).run(),
+      'Mod-]': () => shiftLevel(this.editor, 1),
+      'Mod-[': () => shiftLevel(this.editor, -1),
     };
   },
 });

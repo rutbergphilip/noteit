@@ -77,5 +77,59 @@
     { "input": "a OR", "tree": "word(a)" },
     { "input": "\"open phrase", "tree": "phrase(open phrase)" },
     { "input": "Été", "tree": "word(ete)" }
-  ]
+  ],
+  "statistics": [
+    { "text": "", "words": 0, "characters": 0, "reading": "—" },
+    { "text": "Hello, world!\n\nIt's  a - test.", "words": 5, "characters": 30, "reading": "Less than a minute" },
+    { "text": "a￼b ￼", "words": 2, "characters": 3, "reading": "Less than a minute" },
+    { "text": "é👍🏽", "words": 1, "characters": 2, "reading": "Less than a minute" },
+    { "text": "☐\tbuy milk\n•\tand bread", "words": 4, "characters": 22, "reading": "Less than a minute" }
+  ],
+  "evaluate": {
+    "now": "2026-10-19 10:00",
+    "timeZone": "Europe/Stockholm",
+    "notebooks": [
+      { "id": "11111111-1111-4111-8111-111111111111", "name": "Work", "sortIndex": 0 },
+      { "id": "22222222-2222-4222-8222-222222222222", "name": "Clients", "sortIndex": 0, "parent": "11111111-1111-4111-8111-111111111111" },
+      { "id": "33333333-3333-4333-8333-333333333333", "name": "Home", "sortIndex": 1 }
+    ],
+    "cases": [
+      { "query": "supplier BUDGET", "doc": { "text": "Call the Supplier about the budget" }, "match": true },
+      { "query": "\"supplier the\"", "doc": { "text": "Call the Supplier about the budget" }, "match": false },
+      { "query": "-(pie OR budget)", "doc": { "text": "Call the Supplier about the budget" }, "match": false },
+      { "query": "cafe", "doc": { "text": "Café" }, "match": true },
+      { "query": "title:call", "doc": { "text": "x", "title": "Call" }, "match": true },
+      { "query": "tag:work", "doc": { "tags": ["work/acme"] }, "match": true },
+      { "query": "tag:work", "doc": { "tags": ["workshop"] }, "match": false },
+      { "query": "notebook:work", "doc": { "notebook": "22222222-2222-4222-8222-222222222222" }, "match": true },
+      { "query": "in:Work/Clients", "doc": { "notebook": "22222222-2222-4222-8222-222222222222" }, "match": true },
+      { "query": "notebook:home", "doc": { "notebook": "22222222-2222-4222-8222-222222222222" }, "match": false },
+      { "query": "is:pinned", "doc": { "isPinned": true }, "match": true },
+      { "query": "is:todo", "doc": { "open": 1, "done": 2 }, "match": true },
+      { "query": "is:done", "doc": { "open": 1, "done": 2 }, "match": false },
+      { "query": "is:done", "doc": { "open": 0, "done": 2 }, "match": true },
+      { "query": "is:untagged", "doc": { "tags": [] }, "match": true },
+      { "query": "is:conflict", "doc": { "isConflict": true }, "match": true },
+      { "query": "has:due", "doc": { "due": ["2026-10-21"] }, "match": true },
+      { "query": "has:reminder", "doc": { "reminder": true }, "match": true },
+      { "query": "has:attachment", "doc": { "attachment": false }, "match": false },
+      { "query": "edited:<7d", "doc": { "updatedAt": "2026-10-15 09:00" }, "match": true },
+      { "query": "edited:>7d", "doc": { "updatedAt": "2026-10-01 09:00" }, "match": true },
+      { "query": "edited:today", "doc": { "updatedAt": "2026-10-19 00:30" }, "match": true },
+      { "query": "edited:yesterday", "doc": { "updatedAt": "2026-10-18 23:59" }, "match": true },
+      { "query": "created:2026-10-18", "doc": { "createdAt": "2026-10-18 12:00" }, "match": true },
+      { "query": "created:>2026-10-18", "doc": { "createdAt": "2026-10-18 12:00" }, "match": false },
+      { "query": "created:<2026-10-18", "doc": { "createdAt": "2026-10-17 23:00" }, "match": true },
+      { "query": "edited:this-month", "doc": { "updatedAt": "2026-10-01 00:00" }, "match": true },
+      { "query": "due:overdue", "doc": { "due": ["2026-10-18"] }, "match": true },
+      { "query": "due:overdue", "doc": { "due": ["2026-10-19"] }, "match": false },
+      { "query": "due:overdue", "doc": { "due": ["2026-10-19 09:00"] }, "match": true },
+      { "query": "due:today", "doc": { "due": ["2026-10-19 18:00"] }, "match": true },
+      { "query": "due:<7d", "doc": { "due": ["2026-10-25"] }, "match": true },
+      { "query": "due:>7d", "doc": { "due": ["2026-10-25"] }, "match": false },
+      { "query": "due:>2026-10-20", "doc": { "due": ["2026-10-21"] }, "match": true },
+      { "query": "is:todo -tag:draft OR is:pinned", "doc": { "open": 1, "tags": ["draft"] }, "match": false },
+      { "query": "is:maybe", "doc": { "text": "is:maybe" }, "match": true }
+    ]
+  }
 }

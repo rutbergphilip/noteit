@@ -49,6 +49,37 @@ describe('WebLocalStore', () => {
     expect(reopened.s.search('MILK')).toEqual([id]);
   });
 
+  it('searches with the native search language, and lists links and tasks', async () => {
+    const { s } = await store();
+    const target = await s.createNote({ container: text('Budget #work/acme') });
+    const task = (t: string, checked: boolean) => ({ type: 'listItem' as const, attrs: { kind: 'task' as const, level: 0, checked }, content: [{ type: 'text' as const, text: t }] });
+    const source = await s.createNote({
+      container: {
+        ...emptyContainer(),
+        doc: {
+          type: 'doc',
+          content: [
+            { type: 'paragraph', content: [{ type: 'text', text: 'Plan, see ' }, { type: 'text', text: 'Budget', marks: [{ type: 'link', attrs: { href: `noteit://note/${target.toUpperCase()}` } }] }] },
+            task('pay @due(2026-10-21)', false),
+            task('done', true),
+          ],
+        },
+      },
+    });
+    expect(s.search('tag:work')).toEqual([target]);
+    expect(s.search('is:todo')).toEqual([source]);
+    expect(s.search('has:due -tag:work')).toEqual([source]);
+    expect(s.search('budget OR plan').sort()).toEqual([target, source].sort());
+    expect(s.links(target).backlinks).toEqual([{ id: source, title: 'Plan, see Budget', context: 'Plan, see Budget' }]);
+    expect(s.links(source).outgoing).toEqual([{ id: target, title: 'Budget #work/acme', text: 'Budget', exists: true }]);
+    expect(s.tasks().map((t) => [t.text, t.checked])).toEqual([
+      ['pay', false],
+      ['done', true],
+    ]);
+    await s.setTaskChecked(source, 1, true);
+    expect(s.search('is:done')).toEqual([source]);
+  });
+
   it('keeps meta keys it does not own through edits (RawMetaOverlay)', async () => {
     const { s } = await store();
     const id = newUuid();

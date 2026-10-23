@@ -34,8 +34,18 @@ import {
   deriveTitleAndPreview,
   emptyContainer,
   encodeBody,
-  matchesSearch,
+  docTasks,
+  type DocTask,
+  hasAttachments,
+  type LocalDateTime,
+  matchesQuery,
+  noteLinks,
+  type NoteLinkRef,
+  parseQuery,
+  parseTasks,
+  maskedText,
   pruneAttachments,
+  searchFold,
   searchableText,
   withConflictSuffix,
 } from '@noteit/doc';
@@ -65,7 +75,13 @@ interface StoredRecord {
 
 interface Derived {
   row: NoteRow;
+  /** Folded searchable text (title, body, `#tags`). */
   search: string;
+  tasks: DocTask[];
+  openDueDates: LocalDateTime[];
+  hasLiveReminder: boolean;
+  hasAttachment: boolean;
+  links: NoteLinkRef[];
 }
 
 export const RECENTLY_DELETED_DAYS = 30;
@@ -142,6 +158,10 @@ export class WebLocalStore implements SyncLocalStore {
     let preview = meta.preview;
     let tags = meta.tags;
     let search = `${meta.title}\n${meta.preview}`;
+    let tasks: DocTask[] = [];
+    let hasLiveReminder = false;
+    let hasAttachment = false;
+    let links: NoteLinkRef[] = [];
     if (r.bodyFormat === BODY_FORMAT_LOCKED_V1 || r.carried?.bodyFormat === BODY_FORMAT_LOCKED_V1) {
       kind = 'locked';
       preview = '';
@@ -158,6 +178,10 @@ export class WebLocalStore implements SyncLocalStore {
         preview = tp.preview;
         tags = deriveTags(decoded.container.doc);
         search = searchableText(decoded.container.doc);
+        tasks = docTasks(decoded.container.doc);
+        hasLiveReminder = parseTasks(maskedText(decoded.container.doc)).reminders.some((r) => !r.done && !(r.isTask && r.checked));
+        hasAttachment = hasAttachments(decoded.container.doc);
+        links = noteLinks(decoded.container.doc);
       }
     }
     const row: NoteRow = { id: r.id, title, preview, tags, isPinned: meta.isPinned, createdAt: meta.createdAt, updatedAt: meta.updatedAt, kind };
@@ -165,7 +189,8 @@ export class WebLocalStore implements SyncLocalStore {
     if (meta.deletedAt) row.deletedAt = meta.deletedAt;
     if (meta.conflictSource) row.conflictSource = meta.conflictSource;
     if (meta.conflictOriginalID) row.conflictOriginalID = meta.conflictOriginalID;
-    this.derived.set(r.id, { row, search: `${search}\n${tags.map((t) => `#${t}`).join(' ')}` });
+    const openDueDates = tasks.flatMap((t) => (!t.checked && t.due ? [t.due] : []));
+    this.derived.set(r.id, { row, search: searchFold(`${search}\n${tags.map((t) => `#${t}`).join(' ')}`), tasks, openDueDates, hasLiveReminder, hasAttachment, links });
   }
 
   // MARK: queries
@@ -184,8 +209,74 @@ export class WebLocalStore implements SyncLocalStore {
     return { notes: [...this.derived.values()].map((d) => d.row), notebooks: notebooks.sort((a, b) => a.sortIndex - b.sortIndex || a.name.localeCompare(b.name)) };
   }
 
-  search(query: string): string[] {
-    return [...this.derived.values()].filter((d) => !d.row.deletedAt && matchesSearch(d.search, query)).map((d) => d.row.id);
+  /** The search language (`tag:`, `is:todo`, `-word`, `OR` …), evaluated as native `QueryEvaluator` does. */
+  search(query: string, now: Date = this.now()): string[] {
+    const q = parseQuery(query);
+    const notebooks = this.snapshot().notebooks;
+    const ctx = { now, notebooks };
+    return [...this.derived.values()]
+      .filter((d) => {
+        if (d.row.deletedAt) return false;
+        const open = d.tasks.filter((t) => !t.checked).length;
+        return matchesQuery(q, {
+          foldedText: d.search,
+          foldedTitle: searchFold(d.row.title),
+          tags: d.row.tags,
+          ...(d.row.notebookID ? { notebookID: d.row.notebookID } : {}),
+          isPinned: d.row.isPinned,
+          isConflict: !!d.row.conflictSource,
+          createdAt: new Date(d.row.createdAt),
+          updatedAt: new Date(d.row.updatedAt),
+          openTaskCount: open,
+          doneTaskCount: d.tasks.length - open,
+          openDueDates: d.openDueDates,
+          hasLiveReminder: d.hasLiveReminder,
+          hasAttachment: d.hasAttachment,
+        }, ctx);
+      })
+      .map((d) => d.row.id);
+  }
+
+  /** Notes that link here (with the line for context), and the notes this one links to. */
+  links(id: Uuid): { backlinks: { id: Uuid; title: string; context: string }[]; outgoing: { id?: Uuid; title: string; text: string; exists: boolean }[] } {
+    const target = id.toUpperCase();
+    const backlinks: { id: Uuid; title: string; context: string }[] = [];
+    for (const d of this.derived.values()) {
+      if (d.row.id === id || d.row.deletedAt) continue;
+      const hit = d.links.find((l) => l.id === target);
+      if (hit) backlinks.push({ id: d.row.id, title: d.row.title, context: hit.context });
+    }
+    const byUpper = new Map([...this.derived.values()].map((d) => [d.row.id.toUpperCase(), d.row]));
+    const seen = new Set<string>();
+    const outgoing: { id?: Uuid; title: string; text: string; exists: boolean }[] = [];
+    for (const l of this.derived.get(id)?.links ?? []) {
+      const key = l.id ?? `title:${l.title}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const row = l.id ? byUpper.get(l.id) : [...this.derived.values()].find((d) => !d.row.deletedAt && d.row.title.toLowerCase() === l.title?.toLowerCase())?.row;
+      outgoing.push({ ...(row ? { id: row.id } : {}), title: row?.title ?? l.title ?? l.text, text: l.text, exists: !!row && !row.deletedAt });
+    }
+    return { backlinks: backlinks.sort((a, b) => a.title.localeCompare(b.title)), outgoing };
+  }
+
+  /** Every checklist item in live, editable notes (the Tasks view). */
+  tasks(): { noteId: Uuid; noteTitle: string; block: number; text: string; checked: boolean; due?: LocalDateTime; remind?: LocalDateTime }[] {
+    const out: { noteId: Uuid; noteTitle: string; block: number; text: string; checked: boolean; due?: LocalDateTime; remind?: LocalDateTime }[] = [];
+    for (const d of this.derived.values()) {
+      if (d.row.deletedAt || d.row.kind !== 'doc') continue;
+      for (const t of d.tasks) out.push({ noteId: d.row.id, noteTitle: d.row.title, block: t.block, text: t.text, checked: t.checked, ...(t.due ? { due: t.due } : {}), ...(t.remind ? { remind: t.remind } : {}) });
+    }
+    return out;
+  }
+
+  /** Checks or unchecks one checklist item, as a body edit. */
+  async setTaskChecked(id: Uuid, block: number, checked: boolean): Promise<void> {
+    const opened = this.getNote(id);
+    if (!opened?.container || opened.readOnly) throw new Error('This note is read-only here');
+    const b = opened.container.doc.content[block];
+    if (b?.type !== 'listItem' || b.attrs.kind !== 'task') throw new Error('That item has changed');
+    b.attrs = { ...b.attrs, checked };
+    await this.saveNote(id, opened.container);
   }
 
   getNote(id: Uuid): { row: NoteRow; container?: BodyContainer; readOnly?: string } | undefined {
