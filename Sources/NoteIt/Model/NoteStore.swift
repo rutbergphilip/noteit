@@ -1205,6 +1205,7 @@ final class NoteStore: ObservableObject {
             clearOversizedBody(id)
             appliedRemoteRevisions.notes[id.uuidString] = nil
             pendingTrash.insert(id)
+            dismissRecoveryCopies(of: id)
             dispatchDerivedIndexes(.removed(id))
         }
         bodyAccessOrder.removeAll { removed.contains($0) }
@@ -2069,15 +2070,21 @@ final class NoteStore: ObservableObject {
         }
         for (id, found) in byID.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where mergedInto[id] == nil {
             guard let newest = found.max(by: { $0.order < $1.order }) else { continue }
-            guard let index = noteIndex(id), notes[index].deletedAt == nil, !notes[index].isLocked else {
-                NSLog("NoteIt: left the recovery copy \(newest.url.path): its note is deleted or locked")
-                continue
-            }
-            let restored: StoredBody
+            let restored: StoredBody?
             do {
                 restored = try storage.readRecoveryCopy(newest.url)
             } catch {
                 NSLog("NoteIt: couldn't read the recovery copy \(newest.url.path): \(error)")
+                restored = nil
+            }
+            guard let index = noteIndex(id), notes[index].deletedAt == nil, !notes[index].isLocked, let restored else {
+                // A note already made from these copies is filled in whatever became of this one.
+                let recoveredID = Self.recoveredNoteID(of: id, copy: newest.url)
+                if noteIndex(recoveredID) != nil || byID[recoveredID] != nil {
+                    restoreBeside(id, from: found, newest: newest, text: restored?.text, merged: byID, storage: storage)
+                } else if restored != nil {
+                    NSLog("NoteIt: left the recovery copy \(newest.url.path): its note is deleted or locked")
+                }
                 continue
             }
             if !bodyWriteBlocked.contains(id), !heldMarkdownDeletions.contains(id),
@@ -2093,11 +2100,14 @@ final class NoteStore: ObservableObject {
     }
 
     private func restoreBeside(_ id: UUID, from found: [MarkdownBodyStorage.RecoveryCopy], newest: MarkdownBodyStorage.RecoveryCopy,
-                               text: NSAttributedString, merged byID: [UUID: [MarkdownBodyStorage.RecoveryCopy]],
+                               text: NSAttributedString?, merged byID: [UUID: [MarkdownBodyStorage.RecoveryCopy]],
                                storage: MarkdownBodyStorage) {
         let recoveredID = Self.recoveredNoteID(of: id, copy: newest.url)
         let existing = noteIndex(recoveredID)
         if isTombstoned(recoveredID) || existing.map({ notes[$0].deletedAt != nil || notes[$0].isLocked }) == true {
+            // Deleting it for good sets them aside.
+            markdownRecoveryCopies[recoveredID, default: []] += (found + (byID[recoveredID] ?? [])).map(\.url)
+            if isTombstoned(recoveredID) { dismissRecoveryCopies(of: recoveredID) }
             return NSLog("NoteIt: left the recovery copy \(newest.url.path): the note it was restored to is deleted or locked")
         }
         if existing != nil, storage.index.entry(recoveredID) != nil {
@@ -2114,14 +2124,16 @@ final class NoteStore: ObservableObject {
                 return NSLog("NoteIt: couldn't read the recovery copy \(newer.url.path): \(error)")
             }
         }
+        guard let text = latest.text else { return }
         let copies = (found + own).map(\.url)
-        let body = latest.copy.id == recoveredID ? latest.text : Self.appendingToTitleLine(latest.text, " (Recovered)")
+        let body = latest.copy.id == recoveredID ? text : Self.appendingToTitleLine(text, " (Recovered)")
         if existing != nil {
             restoreRecoveredBody(recoveredID, body, date: latest.copy.order.date, storage: storage)
         } else {
-            guard let index = noteIndex(id) else { return }
-            _ = createNote(in: notes[index].notebookID, initial: body, id: recoveredID)
+            _ = createNote(in: noteIndex(id).map { notes[$0].notebookID } ?? nil, initial: body, id: recoveredID)
             guard let copyIndex = noteIndex(recoveredID) else { return }
+            // Like a restored edit, it isn't synced before it's in its file: its id comes back at every launch until then.
+            failedBodies.insert(recoveredID)
             notes[copyIndex].conflictSource = Self.recoveredEditSource
             notes[copyIndex].conflictOriginalID = id
             notes[copyIndex].updatedAt = latest.copy.order.date
@@ -2129,6 +2141,27 @@ final class NoteStore: ObservableObject {
         }
         markdownRecoveryCopies[recoveredID, default: []] += copies
         NSLog("NoteIt: restored note \(id) from \(latest.copy.url.path) as a note of its own")
+    }
+
+    /// A note deleted for good no longer wants the copies its text came from: they're moved to `recovery/dismissed/`,
+    /// which no launch restores from, so they can't bring it back (with the same id) and nothing is thrown away.
+    private func dismissRecoveryCopies(of id: UUID) {
+        markdownWaitingCopies[id] = nil
+        guard let copies = markdownRecoveryCopies.removeValue(forKey: id), !copies.isEmpty else { return }
+        let fm = FileManager.default
+        let folder = recoveryURL.appendingPathComponent("dismissed", isDirectory: true)
+        do {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        } catch {
+            return NSLog("NoteIt: couldn't set aside the recovery copies of deleted note \(id): \(error)")
+        }
+        for copy in copies where fm.fileExists(atPath: copy.path) {
+            do {
+                try fm.moveItem(at: copy, to: RTFDBodyStorage.uniqueURL(folder.appendingPathComponent(copy.lastPathComponent)))
+            } catch {
+                NSLog("NoteIt: couldn't set aside the recovery copy \(copy.path): \(error)")
+            }
+        }
     }
 
     /// Whether the note's file is still what a recovery copy's edit was based on: `.some(text it replaces)` (nil

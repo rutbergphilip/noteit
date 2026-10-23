@@ -395,6 +395,79 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(reopened.notes.filter { $0.conflictOriginalID == kept && $0.deletedAt == nil }.count, 1)
     }
 
+    /// A launch that restored Kept's waiting edit as a note of its own and couldn't write it (the folder is read-only).
+    private func openWithUnwrittenRecoveredNote() async throws -> (store: NoteStore, kept: UUID, recovered: UUID, writable: @Sendable () -> Void) {
+        let (kept, quit, _) = try await keepEditInRecovery()
+        try edit("Kept.md", "first", "changed elsewhere")
+        quit()
+        let path = content.path
+        let writable: @Sendable () -> Void = { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path) }
+        addTeardownBlock { writable() }
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: content.path)
+        let store = open()
+        let recovered = try XCTUnwrap(store.notes.first { $0.conflictOriginalID == kept }).id
+        XCTAssertTrue(store.isBodyDirty(recovered), "its write failed")
+        return (store, kept, recovered, writable)
+    }
+
+    func testARecoveredNoteDeletedForGoodIsntBroughtBackByItsCopies() async throws {
+        NoteStore.syncJournalEnabled = true
+        addTeardownBlock { NoteStore.syncJournalEnabled = false }
+        let (store, kept, recovered, writable) = try await openWithUnwrittenRecoveredNote()
+        _ = store.moveToRecentlyDeleted([recovered])
+        store.emptyRecentlyDeleted()
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertNotNil(store.syncDeletions()[recovered])
+        XCTAssertEqual(recoveryCopies(store), [], "its copies are set aside")
+        let dismissed = store.recoveryURL.appendingPathComponent("dismissed")
+        XCTAssertTrue(try fm.contentsOfDirectory(atPath: dismissed.path).contains { $0.hasPrefix(kept.uuidString) },
+                      "not thrown away")
+
+        writable()
+        for _ in 0..<2 {
+            let relaunched = open()
+            XCTAssertNil(relaunched.note(with: recovered), "a note deleted for good stays deleted")
+            XCTAssertNotNil(relaunched.syncDeletions()[recovered], "its deletion is still sent to other devices")
+        }
+    }
+
+    func testARecoveredNoteInRecentlyDeletedAtLaunchIsntBroughtBackOnceDeletedForGood() async throws {
+        let (store, _, recovered, writable) = try await openWithUnwrittenRecoveredNote()
+        _ = store.moveToRecentlyDeleted([recovered])
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        let relaunched = open()
+        relaunched.emptyRecentlyDeleted()
+        relaunched.flush()
+        relaunched.waitForMarkdownWrites(upTo: 10)
+        XCTAssertEqual(recoveryCopies(relaunched), [])
+        writable()
+        XCTAssertNil(open().note(with: recovered))
+    }
+
+    func testARecoveredNoteIsFilledInEvenWhenTheNoteItCameFromWasDeleted() async throws {
+        let (store, kept, recovered, writable) = try await openWithUnwrittenRecoveredNote()
+        _ = store.moveToRecentlyDeleted([kept])
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+
+        let relaunched = open()
+        XCTAssertTrue(relaunched.body(for: recovered).string.contains("waiting edit"), "not an empty note")
+        writable()
+        let written = open()
+        written.flush()
+        written.waitForMarkdownWrites(upTo: 10)
+        XCTAssertTrue(written.body(for: recovered).string.contains("waiting edit"))
+        XCTAssertFalse(written.isBodyDirty(recovered))
+        XCTAssertEqual(recoveryCopies(written), [])
+    }
+
+    func testARecoveredNoteIsntSyncedBeforeItsWritten() async throws {
+        let (store, _, recovered, _) = try await openWithUnwrittenRecoveredNote()
+        XCTAssertTrue(store.hasBodyThatCantBeSaved(recovered))
+    }
+
     func testARescanNeverWaitsForTheFolderOnTheMainThread() async throws {
         try put("Kept.md", "# Kept\n\nfirst\n")
         let store = open()
