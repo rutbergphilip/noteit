@@ -2,9 +2,12 @@ import NoteItDoc
 import XCTest
 @testable import NoteItMarkdown
 
-/// Inputs built to blow the stack or go quadratic; the bounds are loose so slow CI machines pass.
+/// Inputs built to blow the stack or go quadratic; the bounds are loose so slow CI machines pass, and looser still
+/// on shared CI runners; a quadratic regression still blows well past either.
 final class HostileInputTests: XCTestCase {
-    private func assertParsesQuickly(_ text: String, within seconds: Double = 3, _ label: String,
+    private static let limit: TimeInterval = ProcessInfo.processInfo.environment["CI"] == nil ? 3 : 10
+
+    private func assertParsesQuickly(_ text: String, within seconds: Double = limit, _ label: String,
                                      file: StaticString = #filePath, line: UInt = #line) {
         let start = Date()
         XCTAssertNoThrow(try MarkdownCodec.parse(text), label, file: file, line: line)
@@ -76,7 +79,7 @@ final class HostileInputTests: XCTestCase {
         let start = Date()
         let output = MarkdownCodec.write(BodyContainer(doc: .doc(edited)), frontMatter: .empty, profile: .library,
                                          attachmentPath: { $0 }, previous: previous)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 3)
+        XCTAssertLessThan(Date().timeIntervalSince(start), Self.limit)
         XCTAssertEqual(output.fallbacks, 0)
         XCTAssertEqual(try MarkdownCodec.parse(output.text).body.doc, .doc(edited))
     }
