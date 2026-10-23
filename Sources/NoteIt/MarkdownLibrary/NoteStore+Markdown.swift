@@ -318,6 +318,7 @@ extension NoteStore {
         // The folder may be on a volume that hangs: the library opens from library.json, read-only, and the folder is
         // scanned off the main thread.
         markdownLaunchScanPending = true
+        markdownRecoveryPending = markdownRecoveryTargets()
         markdownFolderUnavailable = true
         markdownFolderChecking = true
         markdownFolderNeedsScan()
@@ -344,6 +345,7 @@ extension NoteStore {
         notesChangedBeforeDerivedIndexes.formUnion(changed)
         let restoredBefore = Set(notes.map(\.id))
         restoreMarkdownRecoveryCopies(reads: reads)
+        markdownRecoveryPending = []
         notesChangedBeforeDerivedIndexes.formUnion(Set(notes.map(\.id)).subtracting(restoredBefore))
         if note(with: selectedNoteID) == nil { selectedNoteID = notes(for: selection, search: "").first?.id }
         flush()

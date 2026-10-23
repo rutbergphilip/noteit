@@ -590,6 +590,8 @@ final class SyncController: ObservableObject {
     /// Returns a retry delay when the pass failed, nil to use the normal interval.
     private func performPass() async -> TimeInterval? {
         guard let config = configuration, !suspendedForLibraryConversion else { return nil }
+        // Edits kept in recovery/ are restored by the Markdown launch scan; nothing is sent or applied before.
+        if store.syncWaitsForMarkdownLaunchScan { return 1 }
         let gen = generation
         lastPassStarted = Date()
         passInFlight = true

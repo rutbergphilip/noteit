@@ -158,6 +158,14 @@ final class NoteStore: ObservableObject {
     @Published var markdownFolderChecking = false
     /// Until the first scan is applied, a scan applies with launch semantics (new files take ids right away).
     var markdownLaunchScanPending = false
+    /// Notes with edits in `recovery/` and the notes those would be recovered into, as found on disk at load, until
+    /// the launch scan restored them: neither synced nor editable meanwhile, so nothing is sent or typed over first.
+    var markdownRecoveryPending: Set<UUID> = []
+    /// Sync starts once the launch scan answered and restored what's in `recovery/`; while the folder doesn't
+    /// answer, only when there's nothing in `recovery/` to restore.
+    var syncWaitsForMarkdownLaunchScan: Bool {
+        markdownStorage != nil && markdownLaunchScanPending && (markdownFolderChecking || !markdownRecoveryPending.isEmpty)
+    }
     /// The first scan reads every changed file, so it may take longer than a rescan.
     var markdownLaunchScanTimeout: TimeInterval = 60
     /// The scan running off the main thread, if any.
@@ -190,6 +198,8 @@ final class NoteStore: ObservableObject {
     var markdownWaitingCopies: [UUID: URL] = [:]
     /// Every `recovery/` copy of a Markdown note made (or restored) this session, removed once a newer body is written.
     private var markdownRecoveryCopies: [UUID: [URL]] = [:]
+    /// Copies left in `recovery/` at launch because their note is in Recently Deleted or locked.
+    private var markdownRecoveryCopiesLeft: [UUID: [URL]] = [:]
     /// Notes whose body couldn't be read because the folder didn't answer; they are read again once it does.
     var markdownBodiesNotRead: Set<UUID> = [] {
         didSet { if markdownBodiesNotRead != oldValue { publishMarkdownBodiesNotRead() } }
@@ -724,6 +734,10 @@ final class NoteStore: ObservableObject {
     /// that takes longer goes on, up to `markdownBlockingTimeout`; the note is `.unanswered` and shows as loading
     /// meanwhile, and the next call takes the ended read.
     func readMarkdownBody(_ id: UUID, from storage: MarkdownBodyStorage, wait: TimeInterval? = nil) -> MarkdownBodyRead {
+        guard !markdownRecoveryPending.contains(id) else {
+            markdownBodiesNotRead.insert(id)
+            return .unanswered
+        }
         guard let entry = storage.index.entry(id) else { return .missing }
         guard !markdownFolderUnavailable else {
             markdownBodiesNotRead.insert(id)
@@ -2040,6 +2054,16 @@ final class NoteStore: ObservableObject {
         Set(MarkdownBodyStorage.recoveryCopies(in: recoveryURL).map(\.id))
     }
 
+    /// The notes with copies in `recovery/` and the notes those copies would become (`recoveredNoteID`).
+    func markdownRecoveryTargets() -> Set<UUID> {
+        var ids = Set<UUID>()
+        for (id, found) in Dictionary(grouping: MarkdownBodyStorage.recoveryCopies(in: recoveryURL), by: \.id) {
+            ids.insert(id)
+            if let newest = found.max(by: { $0.order < $1.order }) { ids.insert(Self.recoveredNoteID(of: id, copy: newest.url)) }
+        }
+        return ids
+    }
+
     /// The id of the note a recovered edit becomes when it can't go back into its own note: the same for every
     /// launch until its copies are gone, so a launch that can't write it doesn't make another.
     static func recoveredNoteID(of id: UUID, copy: URL) -> UUID {
@@ -2056,8 +2080,10 @@ final class NoteStore: ObservableObject {
     /// its date says; a copy that doesn't say what it was based on; a note that can't be written or is held) the file
     /// is left as it is and the edit becomes a note of its own beside it, with an id derived from the copy
     /// (`recoveredNoteID`): a later launch that finds the copies again fills in that note (or, once it was written,
-    /// removes them) rather than making another. Copies are removed once their text is written; copies of notes that
-    /// are deleted or locked are left in `recovery/`.
+    /// removes them) rather than making another. Copies are removed once their text is written. Copies of a note in
+    /// Recently Deleted or locked are left in `recovery/` (and set aside if it's deleted for good); copies of a note
+    /// that's gone without setting them aside (deleted on another device before they were restored) become a note
+    /// of their own, so the edit stays visible.
     func restoreMarkdownRecoveryCopies(reads: MarkdownScanReads) {
         guard let storage = markdownStorage else { return }
         let byID = Dictionary(grouping: MarkdownBodyStorage.recoveryCopies(in: recoveryURL), by: \.id)
@@ -2080,10 +2106,12 @@ final class NoteStore: ObservableObject {
             guard let index = noteIndex(id), notes[index].deletedAt == nil, !notes[index].isLocked, let restored else {
                 // A note already made from these copies is filled in whatever became of this one.
                 let recoveredID = Self.recoveredNoteID(of: id, copy: newest.url)
-                if noteIndex(recoveredID) != nil || byID[recoveredID] != nil {
+                let gone = noteIndex(id) == nil
+                if noteIndex(recoveredID) != nil || byID[recoveredID] != nil || (gone && restored != nil) {
                     restoreBeside(id, from: found, newest: newest, text: restored?.text, merged: byID, storage: storage)
-                } else if restored != nil {
-                    NSLog("NoteIt: left the recovery copy \(newest.url.path): its note is deleted or locked")
+                } else {
+                    markdownRecoveryCopiesLeft[id, default: []] += found.map(\.url)
+                    if restored != nil { NSLog("NoteIt: left the recovery copy \(newest.url.path): its note is deleted or locked") }
                 }
                 continue
             }
@@ -2146,8 +2174,9 @@ final class NoteStore: ObservableObject {
     /// A note deleted for good no longer wants the copies its text came from: they're moved to `recovery/dismissed/`,
     /// which no launch restores from, so they can't bring it back (with the same id) and nothing is thrown away.
     private func dismissRecoveryCopies(of id: UUID) {
-        markdownWaitingCopies[id] = nil
-        guard let copies = markdownRecoveryCopies.removeValue(forKey: id), !copies.isEmpty else { return }
+        var copies = (markdownRecoveryCopies.removeValue(forKey: id) ?? []) + (markdownRecoveryCopiesLeft.removeValue(forKey: id) ?? [])
+        if let waiting = markdownWaitingCopies.removeValue(forKey: id) { copies.append(waiting) }
+        guard !copies.isEmpty else { return }
         let fm = FileManager.default
         let folder = recoveryURL.appendingPathComponent("dismissed", isDirectory: true)
         do {
@@ -2663,6 +2692,7 @@ final class NoteStore: ObservableObject {
     /// A Markdown file is parsed here, because `completeExport` only reads RTFD. A known file that is missing or
     /// can't be read throws rather than sending an empty body.
     func exportBodySource(_ id: UUID) throws -> ExportBody {
+        if markdownRecoveryPending.contains(id) { throw NoteStoreSyncError.unsavedBody(id) }
         if let cached = bodyCache[id] {
             return .text(cached.copy() as? NSAttributedString ?? NSAttributedString(attributedString: cached))
         }

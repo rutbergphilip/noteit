@@ -410,6 +410,112 @@ final class ExternalChangeTests: XCTestCase {
         return (store, kept, recovered, writable)
     }
 
+    /// The next launch, with its scan held until `scan` is called.
+    private func openBeforeTheLaunchScan() -> (store: NoteStore, scan: () -> Void) {
+        let storage = MarkdownBodyStorageTests.make(root, renames: false)
+        let gate = DispatchSemaphore(value: 0)
+        storage.rootCheck = { url in
+            _ = gate.wait(timeout: .now() + 30)
+            return FileManager.default.fileExists(atPath: url.path)
+        }
+        let release = { for _ in 0..<16 { gate.signal() } }
+        addTeardownBlock(release)
+        let store = NoteStore(location: LibraryLocation(url: data, seedsFreshLibrary: false, format: .markdown, contentRootURL: content,
+                                                        renameFilesOnTitleChange: false),
+                              bodyStorage: storage)
+        store.markdownClock = { Date().addingTimeInterval(10) }
+        store.markdownFlushWait = 10
+        return (store, {
+            release()
+            store.waitForLaunchScan()
+            store.waitForMarkdownWrites(upTo: 10)
+        })
+    }
+
+    func testARecoveredNoteIsntSyncedOrEditableBeforeTheLaunchScanRestoresIt() async throws {
+        let (store, kept, recovered, _) = try await openWithUnwrittenRecoveredNote()
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        let (early, scan) = openBeforeTheLaunchScan()
+        XCTAssertNotNil(early.note(with: recovered), "listed in library.json")
+        XCTAssertTrue(early.syncWaitsForMarkdownLaunchScan)
+        XCTAssertThrowsError(try early.exportPlan(id: recovered, kind: .note, deviceID: "t"), "its text is still in recovery/")
+        _ = early.body(for: recovered)
+        XCTAssertTrue(early.isMarkdownBodyUnread(recovered), "read-only until it's restored")
+        XCTAssertNil(early.bodyForOutput(recovered))
+        let adapter = NoteStoreSyncAdapter(store: early, deviceID: "t")
+        _ = await adapter.records()
+        do {
+            try await adapter.applyDeletion(kept, kind: .note)
+            XCTFail("a deletion of a note with an edit in recovery/ waits for the edit")
+        } catch {}
+        XCTAssertNotNil(early.note(with: kept))
+
+        scan()
+        XCTAssertFalse(early.syncWaitsForMarkdownLaunchScan)
+        XCTAssertFalse(early.isMarkdownBodyUnread(recovered))
+        XCTAssertTrue(early.body(for: recovered).string.contains("waiting edit"))
+        XCTAssertThrowsError(try early.exportPlan(id: recovered, kind: .note, deviceID: "t"), "not synced before it's written")
+    }
+
+    func testSyncWaitsForTheLaunchScanToRestoreEditsKeptInRecovery() async throws {
+        _ = NSApplication.shared
+        let (store, _, recovered, writable) = try await openWithUnwrittenRecoveredNote()
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        writable()
+        let (early, scan) = openBeforeTheLaunchScan()
+        let shared = root.appendingPathComponent("Shared Notes", isDirectory: true)
+        try fm.createDirectory(at: shared, withIntermediateDirectories: true)
+        let controller = SyncController(store: early, keepsSecretsInMemory: true)
+        try await controller.connect(SyncConfiguration(provider: .folder, folderPath: shared.path, encrypted: false,
+                                                       deviceID: "test", deviceName: "Test"),
+                                     accessKey: nil, secret: nil, passphrase: nil)
+        let pushed = { (id: UUID) in
+            (self.fm.enumerator(atPath: shared.path)?.allObjects as? [String] ?? []).contains { $0.contains(id.uuidString) }
+        }
+        controller.syncNow()
+        try await Task.sleep(for: .seconds(1.5))
+        XCTAssertFalse(pushed(recovered), "an empty note was sent before its text was restored")
+
+        scan()
+        controller.syncNow()
+        try await waitUntil({ pushed(recovered) }, "sent once it's restored and written")
+        await controller.disconnect()
+    }
+
+    func testAnEditKeptInRecoveryForANoteDeletedBeforeTheLaunchScanBecomesANoteOfItsOwn() async throws {
+        let (kept, quit, _) = try await keepEditInRecovery()
+        quit()
+        let (early, scan) = openBeforeTheLaunchScan()
+        early.applyRemoteDeletion(kept, kind: .note)
+        scan()
+        XCTAssertNil(early.note(with: kept))
+        let recovered = try XCTUnwrap(early.notes.first { $0.conflictOriginalID == kept }, "the edit stays visible")
+        XCTAssertTrue(early.body(for: recovered.id).string.contains("waiting edit"))
+        early.flush()
+        early.waitForMarkdownWrites(upTo: 10)
+        XCTAssertEqual(recoveryCopies(early), [])
+        XCTAssertEqual(open().notes.filter { $0.conflictOriginalID == kept }.count, 1)
+    }
+
+    func testAnEditKeptInRecoveryForANoteDeletedForGoodFromRecentlyDeletedIsntBroughtBack() async throws {
+        let (kept, quit, away) = try await keepEditInRecovery()
+        _ = away.moveToRecentlyDeleted([kept])
+        away.flush()
+        quit()
+        let store = open()
+        XCTAssertNotNil(store.note(with: kept)?.deletedAt)
+        XCTAssertFalse(store.notes.contains { $0.conflictOriginalID == kept })
+        store.emptyRecentlyDeleted()
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertEqual(recoveryCopies(store), [], "set aside")
+        let relaunched = open()
+        XCTAssertNil(relaunched.note(with: kept))
+        XCTAssertFalse(relaunched.notes.contains { $0.conflictOriginalID == kept }, "a note deleted for good stays deleted")
+    }
+
     func testARecoveredNoteDeletedForGoodIsntBroughtBackByItsCopies() async throws {
         NoteStore.syncJournalEnabled = true
         addTeardownBlock { NoteStore.syncJournalEnabled = false }
