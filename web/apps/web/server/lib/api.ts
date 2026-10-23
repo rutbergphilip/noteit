@@ -11,7 +11,6 @@ import {
   getRouterParam,
   type H3Event,
   readBody,
-  readRawBody,
   setCookie,
   setResponseHeader,
   setResponseStatus,
@@ -32,7 +31,8 @@ import {
   USERNAME_RE,
   verifyPassword,
 } from './accounts';
-import { isListablePrefix } from '@noteit/core';
+import { isListablePrefix, isValidKey } from '@noteit/core';
+import { BodyTooLarge, readBodyLimited } from './body';
 import type { ServerContext } from './context';
 import { InvalidKeyError } from './diskStore';
 import { checkCsrf, clientIp, isHttps, keyFromRawPath, normalizeIfMatch, parseIfNoneMatch, quoteETag } from './http';
@@ -533,18 +533,29 @@ export function createApiHandler(ctx: ServerContext) {
   router.put(
     '/storage/object/**',
     defineEventHandler(async (event) => {
+      // Authenticate and validate everything we can from the headers before a single body byte is read.
       const user = requireUser(event);
       const key = objectKey(event);
-      const length = Number(getHeader(event, 'content-length') ?? 0);
-      if (length > cfg.maxObjectBytes) fail(413, 'tooLarge', 'Object too large.');
-      const data = (await readRawBody(event, false)) ?? Buffer.alloc(0);
-      if (data.length > cfg.maxObjectBytes) fail(413, 'tooLarge', 'Object too large.');
+      if (!isValidKey(key)) fail(400, 'invalidKey', 'Invalid key.');
       const cond = { ifMatch: normalizeIfMatch(getHeader(event, 'if-match')), ifNoneMatch: parseIfNoneMatch(getHeader(event, 'if-none-match')) };
-      const previous = await store.head(user.id, key);
-      await quotas.admit(user, previous?.size, data.length);
-      const result = await store.put(user.id, key, new Uint8Array(data), cond);
+      let data: Uint8Array;
+      try {
+        data = await readBodyLimited(event, cfg.maxObjectBytes);
+      } catch (e) {
+        if (e instanceof BodyTooLarge) {
+          setResponseHeader(event, 'Connection', 'close');
+          fail(413, 'tooLarge', 'Object too large.');
+        }
+        throw e;
+      }
+      const result = await quotas.exclusive(user.id, async () => {
+        const previous = await store.head(user.id, key);
+        await quotas.admit(user, previous?.size, data.length);
+        const put = await store.put(user.id, key, data, cond);
+        if (put !== 'preconditionFailed') await quotas.applied(user.id, previous?.size, data.length);
+        return put;
+      });
       if (result === 'preconditionFailed') fail(412, 'preconditionFailed', 'The object changed.');
-      await quotas.applied(user.id, previous?.size, data.length);
       setResponseHeader(event, 'ETag', quoteETag(result.etag));
       return { etag: result.etag };
     }),
@@ -555,11 +566,15 @@ export function createApiHandler(ctx: ServerContext) {
     defineEventHandler(async (event) => {
       const user = requireUser(event);
       const key = objectKey(event);
-      const previous = await store.head(user.id, key);
-      const result = await store.delete(user.id, key, { ifMatch: normalizeIfMatch(getHeader(event, 'if-match')) });
+      const ifMatch = normalizeIfMatch(getHeader(event, 'if-match'));
+      const result = await quotas.exclusive(user.id, async () => {
+        const previous = await store.head(user.id, key);
+        const deleted = await store.delete(user.id, key, ifMatch !== undefined ? { ifMatch } : {});
+        if (deleted === 'ok') await quotas.applied(user.id, previous?.size, undefined);
+        return deleted;
+      });
       if (result === 'notFound') fail(404, 'notFound');
       if (result === 'preconditionFailed') fail(412, 'preconditionFailed', 'The object changed.');
-      await quotas.applied(user.id, previous?.size, undefined);
       setResponseStatus(event, 204);
       return null;
     }),
@@ -578,6 +593,8 @@ export function createApiHandler(ctx: ServerContext) {
       if (result === undefined && !event.handled) fail(404, 'notFound');
       return result;
     } catch (e) {
+      // An unread request body would otherwise keep the connection busy draining it.
+      if (!event.node.req.complete) setResponseHeader(event, 'Connection', 'close');
       if (e instanceof ApiFailure) {
         setResponseStatus(event, e.status);
         return { error: e.code, message: e.message };

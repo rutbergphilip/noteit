@@ -3,12 +3,24 @@ import { join } from 'node:path';
 import { AccountStore, ApiFailure, type User } from './accounts';
 import { loadConfig, type ServerConfig } from './config';
 import { DiskStore } from './diskStore';
+import { Mutex } from './files';
 import { BootstrapToken, RateLimiter, SessionSigner } from './sessions';
 
 /** Per-user usage, recounted from disk on first use and then kept in step with every write. */
 export class Quotas {
   private readonly usage = new Map<string, Promise<{ bytes: number; objects: number }>>();
+  private readonly locks = new Map<string, Mutex>();
   constructor(private readonly store: DiskStore) {}
+
+  /**
+   * Every write of one user runs head → admit → put → applied inside this, so concurrent PUTs can't each admit
+   * against the same stale usage and overshoot the quota together.
+   */
+  exclusive<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+    let m = this.locks.get(userId);
+    if (!m) this.locks.set(userId, (m = new Mutex()));
+    return m.run(fn);
+  }
 
   current(userId: string): Promise<{ bytes: number; objects: number }> {
     let u = this.usage.get(userId);

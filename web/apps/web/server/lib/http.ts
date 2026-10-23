@@ -87,10 +87,18 @@ export function securityHeaders(event: H3Event, cfg: ServerConfig): void {
   if (isHttps(event, cfg)) setResponseHeader(event, 'Strict-Transport-Security', 'max-age=31536000');
 }
 
+/**
+ * The address rate limits key on. Without NOTEIT_TRUST_PROXY it is the socket peer. Behind proxies, each trusted
+ * proxy appends the address it received from, so only entries counted from the right are trustworthy: with
+ * NOTEIT_TRUSTED_PROXY_HOPS = n (default 1) the client is the n-th entry from the right. Anything left of that was
+ * supplied by the client and is ignored. Too few entries → the socket peer.
+ */
 export function clientIp(event: H3Event, cfg: ServerConfig): string {
-  if (cfg.trustProxy) {
-    const fwd = getHeader(event, 'x-forwarded-for');
-    if (fwd) return fwd.split(',')[0]!.trim();
-  }
-  return event.node.req.socket.remoteAddress ?? 'unknown';
+  const peer = event.node.req.socket.remoteAddress ?? 'unknown';
+  if (!cfg.trustProxy) return peer;
+  const fwd = getHeader(event, 'x-forwarded-for');
+  if (!fwd) return peer;
+  const entries = fwd.split(',').map((e) => e.trim()).filter(Boolean);
+  const entry = entries[entries.length - cfg.trustedProxyHops];
+  return entry ?? peer;
 }

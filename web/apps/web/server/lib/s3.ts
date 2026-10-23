@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { canonicalRequest, isValidKey, parseAuthorization, signature, UNSIGNED_PAYLOAD, xmlEscape } from '@noteit/core';
-import { defineEventHandler, getHeader, type H3Event, readRawBody, setResponseHeader, setResponseStatus } from 'h3';
+import { defineEventHandler, getHeader, type H3Event, setResponseHeader, setResponseStatus } from 'h3';
+import { BodyTooLarge, readBodyLimited } from './body';
 import { ApiFailure, type User } from './accounts';
 import type { ServerContext } from './context';
 import type { StoredObject } from './diskStore';
@@ -29,7 +30,8 @@ function sendError(event: H3Event, f: S3Failure, resource: string): string {
 const sha256hex = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 
 /** SigV4 header auth (spec §6.3b). The access key picks exactly one user; nothing in the request can name another. */
-async function authenticate(event: H3Event, ctx: ServerContext, body: Uint8Array): Promise<User> {
+/** Verifies the signature over the headers only; the declared payload hash is checked later, while the body streams. */
+async function authenticate(event: H3Event, ctx: ServerContext): Promise<{ user: User; payloadHash: string }> {
   const auth = parseAuthorization(getHeader(event, 'authorization') ?? '');
   if (!auth || auth.service !== 's3') throw new S3Failure(403, 'AccessDenied', 'Only AWS4-HMAC-SHA256 header authentication is supported');
   const found = ctx.accounts.byAccessKey(auth.accessKeyId);
@@ -65,7 +67,6 @@ async function authenticate(event: H3Event, ctx: ServerContext, body: Uint8Array
   if (!timingSafeEqual(Buffer.from(expected), Buffer.from(auth.signature.padEnd(expected.length, '0').slice(0, expected.length))) || expected !== auth.signature) {
     throw new S3Failure(403, 'SignatureDoesNotMatch', 'The request signature does not match');
   }
-  if (payloadHash !== UNSIGNED_PAYLOAD && sha256hex(body) !== payloadHash) throw new S3Failure(400, 'XAmzContentSHA256Mismatch', 'The payload hash does not match');
   if (found.user.status !== 'active') throw new S3Failure(403, 'AccessDenied', 'This account is disabled');
   const lastUsed = found.key.lastUsedAt ? Date.parse(found.key.lastUsedAt) : 0;
   if (Date.now() - lastUsed > 3_600_000) {
@@ -74,7 +75,7 @@ async function authenticate(event: H3Event, ctx: ServerContext, body: Uint8Array
       if (key) key.lastUsedAt = new Date().toISOString();
     });
   }
-  return found.user;
+  return { user: found.user, payloadHash };
 }
 
 export interface ListV2Query {
@@ -192,13 +193,24 @@ export function createS3Handler(ctx: ServerContext) {
     const method = event.method.toUpperCase();
     try {
       if (ctx.accounts.isEmpty) throw new S3Failure(503, 'ServiceUnavailable', 'This server needs its first admin');
-      const length = Number(getHeader(event, 'content-length') ?? 0);
-      if (length > cfg.maxObjectBytes) throw new S3Failure(400, 'EntityTooLarge', 'Object too large');
-      const body = method === 'PUT' ? new Uint8Array((await readRawBody(event, false)) ?? Buffer.alloc(0)) : new Uint8Array();
-      if (body.length > cfg.maxObjectBytes) throw new S3Failure(400, 'EntityTooLarge', 'Object too large');
-      const user = await authenticate(event, ctx, body);
+      // Signature first, from the headers alone: nothing is buffered for an unauthenticated client.
+      const { user, payloadHash } = await authenticate(event, ctx);
       const { bucket, key } = parsePath(url);
       if (bucket !== BUCKET) throw new S3Failure(404, 'NoSuchBucket', 'The only bucket is noteit');
+      if (key !== undefined && !isValidKey(key)) throw new S3Failure(400, 'InvalidArgument', 'Key is outside the NoteIt layout');
+      let body = new Uint8Array();
+      if (method === 'PUT') {
+        try {
+          body = await readBodyLimited(event, cfg.maxObjectBytes);
+        } catch (e) {
+          if (e instanceof BodyTooLarge) {
+            setResponseHeader(event, 'Connection', 'close');
+            throw new S3Failure(413, 'EntityTooLarge', 'Your proposed upload exceeds the maximum allowed object size');
+          }
+          throw e;
+        }
+        if (payloadHash !== UNSIGNED_PAYLOAD && sha256hex(body) !== payloadHash) throw new S3Failure(400, 'XAmzContentSHA256Mismatch', 'The payload hash does not match');
+      }
       const params = new URLSearchParams(url.includes('?') ? url.slice(url.indexOf('?') + 1) : '');
 
       if (key === undefined) {
@@ -221,7 +233,6 @@ export function createS3Handler(ctx: ServerContext) {
         return renderListV2(q, listObjectsV2(all, q));
       }
 
-      if (!isValidKey(key)) throw new S3Failure(400, 'InvalidArgument', 'Key is outside the NoteIt layout');
       switch (method) {
         case 'GET':
         case 'HEAD': {
@@ -250,16 +261,19 @@ export function createS3Handler(ctx: ServerContext) {
           } catch {
             throw new S3Failure(400, 'InvalidArgument', 'Bad If-Match');
           }
-          const previous = await store.head(user.id, key);
-          try {
-            await quotas.admit(user, previous?.size, body.length);
-          } catch (e) {
-            if (e instanceof ApiFailure) throw new S3Failure(400, 'QuotaExceeded', 'This account is out of storage');
-            throw e;
-          }
-          const result = await store.put(user.id, key, body, { ...(ifMatch !== undefined ? { ifMatch } : {}), ifNoneMatch: noneMatch !== undefined });
+          const result = await quotas.exclusive(user.id, async () => {
+            const previous = await store.head(user.id, key);
+            try {
+              await quotas.admit(user, previous?.size, body.length);
+            } catch (e) {
+              if (e instanceof ApiFailure) throw new S3Failure(400, 'QuotaExceeded', 'This account is out of storage');
+              throw e;
+            }
+            const put = await store.put(user.id, key, body, { ...(ifMatch !== undefined ? { ifMatch } : {}), ifNoneMatch: noneMatch !== undefined });
+            if (put !== 'preconditionFailed') await quotas.applied(user.id, previous?.size, body.length);
+            return put;
+          });
           if (result === 'preconditionFailed') throw new S3Failure(412, 'PreconditionFailed', 'At least one of the pre-conditions you specified did not hold');
-          await quotas.applied(user.id, previous?.size, body.length);
           setResponseHeader(event, 'ETag', `"${result.etag}"`);
           return '';
         }
@@ -270,12 +284,15 @@ export function createS3Handler(ctx: ServerContext) {
           } catch {
             throw new S3Failure(400, 'InvalidArgument', 'Bad If-Match');
           }
-          const previous = await store.head(user.id, key);
-          const result = await store.delete(user.id, key, ifMatch !== undefined ? { ifMatch } : {});
+          const result = await quotas.exclusive(user.id, async () => {
+            const previous = await store.head(user.id, key);
+            const deleted = await store.delete(user.id, key, ifMatch !== undefined ? { ifMatch } : {});
+            if (deleted === 'ok') await quotas.applied(user.id, previous?.size, undefined);
+            return deleted;
+          });
           if (result === 'preconditionFailed') throw new S3Failure(412, 'PreconditionFailed', 'At least one of the pre-conditions you specified did not hold');
           // S3 answers 204 for a missing key unless a condition names it.
           if (result === 'notFound' && ifMatch !== undefined) throw new S3Failure(404, 'NoSuchKey', 'The specified key does not exist');
-          if (result === 'ok') await quotas.applied(user.id, previous?.size, undefined);
           setResponseStatus(event, 204);
           return '';
         }
@@ -283,6 +300,8 @@ export function createS3Handler(ctx: ServerContext) {
           throw new S3Failure(405, 'MethodNotAllowed', 'Unsupported operation');
       }
     } catch (e) {
+      // An unread request body would otherwise keep the connection busy draining it.
+      if (!event.node.req.complete) setResponseHeader(event, 'Connection', 'close');
       if (e instanceof S3Failure) return method === 'HEAD' ? (setResponseStatus(event, e.status), '') : sendError(event, e, url.split('?')[0]!);
       if (e instanceof InvalidKeyError) return sendError(event, new S3Failure(400, 'InvalidArgument', 'Invalid key'), url.split('?')[0]!);
       ctx.log(`s3 error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);

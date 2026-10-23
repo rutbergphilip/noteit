@@ -17,6 +17,8 @@ export interface ServerConfig {
   commit: string;
   /** Behind a reverse proxy that sets X-Forwarded-For. */
   trustProxy: boolean;
+  /** How many reverse proxies append to X-Forwarded-For; the client is that many entries from the right. */
+  trustedProxyHops: number;
 }
 
 /** `NAME` or the contents of the file named by `NAME_FILE`. */
@@ -44,5 +46,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     version: env.NOTEIT_VERSION || '0.1.0',
     commit: env.NOTEIT_COMMIT || 'dev',
     trustProxy: env.NOTEIT_TRUST_PROXY === 'true',
+    trustedProxyHops: Math.max(1, int(env.NOTEIT_TRUSTED_PROXY_HOPS, 1)),
   };
 }
