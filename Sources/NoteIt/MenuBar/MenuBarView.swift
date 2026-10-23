@@ -16,6 +16,7 @@ struct MenuBarView: View {
     @StateObject private var windowBox = WindowBox()
     @ObservedObject private var sync = SyncController.shared
     @ObservedObject private var updater = AppUpdater.shared
+    @ObservedObject private var capture = QuickCaptureVisibility.shared
 
     private static let recentLimit = 12
 
@@ -31,6 +32,12 @@ struct MenuBarView: View {
             )
             .padding(.horizontal, 12)
             .padding(.bottom, 10)
+
+            if !isSearching, capture.hasDraft {
+                captureDraftRow
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 8)
+            }
 
             if !isSearching {
                 composer
@@ -90,6 +97,29 @@ struct MenuBarView: View {
         .padding(.horizontal, 12)
         .padding(.top, 12)
         .padding(.bottom, 10)
+    }
+
+    // MARK: - Quick Capture draft
+
+    /// Shown while Quick Capture is holding an unsaved draft; Resume opens the panel with it.
+    private var captureDraftRow: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "pencil.line")
+                .font(.system(size: 11))
+                .foregroundStyle(Tokens.Color.accent)
+            Text("Quick Capture draft waiting")
+                .font(Tokens.Font.cardMeta)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button("Resume") {
+                closePanel()
+                QuickCaptureController.shared.show()
+            }
+            .buttonStyle(.link)
+            .controlSize(.small)
+            .help("Continue the draft in Quick Capture")
+        }
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Quick note composer

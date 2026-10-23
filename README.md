@@ -25,7 +25,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
 - **Capture from anywhere**
   - Global hotkeys for *Show / Hide NoteIt*, *New Note*, *Quick Capture*, *Open Quickly*, *Command Palette* and *Capture Selection*. They're unbound by default, you record your own, and the hotkeys themselves need no Accessibility permission.
   - **Capture from any app.** Select text anywhere and press *Capture Selection*, or use *Services › Capture to NoteIt*, to save it as a note with a link back to the page or document it came from. Reading the selection with the hotkey is opt-in and needs Accessibility permission.
-  - A Spotlight-style **Quick Capture** panel that floats over any app, including full-screen ones, and keeps your draft when dismissed.
+  - A Spotlight-style **Quick Capture** panel that floats over any app, including full-screen ones, and keeps your draft when dismissed. A waiting draft shows as a dot on the menu bar icon.
   - A **menu bar panel** with search, a quick-note composer, and Pinned and Recent notes. It's fully keyboard-driven.
   - A *Menu bar only* mode and *Launch at login*.
 - **Organize your way**

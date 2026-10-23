@@ -133,7 +133,7 @@ Menu shortcuts can be changed too. `MenuShortcutStore` keeps only the changes fr
 ## Menu bar and Quick Capture
 
 - The menu bar item is a SwiftUI `MenuBarExtra` with a window-style panel (`MenuBarView`). Its icon is a template image from `Sources/NoteIt/Resources/`, which switches to a "capturing" variant while Quick Capture is open.
-- Quick Capture (`QuickCapturePanel.swift`) is a non-activating floating panel, so the app you were using stays in front. It appears on every Space, including over full-screen apps. Its draft (title, body and notebook) is kept until you save or discard it.
+- Quick Capture (`QuickCapturePanel.swift`) is a non-activating floating panel, so the app you were using stays in front. It appears on every Space, including over full-screen apps. Its draft (title, body and notebook) is kept until you save or discard it. While one is waiting, `QuickCaptureVisibility.hasDraft` puts a dot on the menu bar icon (`AppResources.menuBarGlyph(capturing:draft:)`) and a *Quick Capture draft waiting* row with Resume in the menu bar panel.
 - In *Menu bar only* mode the app switches to the accessory activation policy and hides its Dock icon. The menu bar icon can't be turned off in that mode, so NoteIt stays reachable.
 
 ## Command palette

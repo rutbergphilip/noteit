@@ -18,7 +18,7 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 ## Notes and editing
 
 - **Markdown export is lossy.** Underline, text colors, highlights, alignment and paragraph indents are dropped, because Markdown has no syntax for them. Export as HTML, PDF or RTFD to keep them.
-- **Quick Capture is plain text.** The title becomes a bold first line; format the note afterwards in the editor. There's one draft at a time, and nothing outside the panel shows that a draft is waiting.
+- **Quick Capture is plain text.** The title becomes a bold first line; format the note afterwards in the editor. There's one draft at a time. A waiting draft shows as a dot on the menu bar icon and a row in the menu bar panel.
 - **Tags live in the note text.** Renaming or deleting a tag skips locked notes and notes in Recently Deleted.
 - **One notebook per note.** Notebooks nest up to four levels deep.
 - **Search doesn't look inside attachments** such as PDFs. Best-match ranking applies only when the search has words; otherwise notes are sorted by last edit.

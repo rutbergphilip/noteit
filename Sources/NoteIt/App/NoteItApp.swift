@@ -210,12 +210,12 @@ private struct MenuBarGlyph: View {
 
     var body: some View {
         Group {
-            if let glyph = AppResources.menuBarGlyph(capturing: visibility.isCapturing) {
+            if let glyph = AppResources.menuBarGlyph(capturing: visibility.isCapturing, draft: visibility.hasDraft) {
                 Image(nsImage: glyph)
             } else {
                 Image(systemName: "pencil.line")
             }
         }
-        .accessibilityLabel("NoteIt")
+        .accessibilityLabel(visibility.hasDraft ? "NoteIt, Quick Capture draft waiting" : "NoteIt")
     }
 }
