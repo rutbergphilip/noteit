@@ -209,6 +209,12 @@ enum NotionImporter {
             progress(ImportProgress(completed: index, total: pages.count, currentName: page.title))
             if Task.isCancelled { report.cancelled = true; break }
             guard let id = ids[page.key] else { continue }
+            // A page is its place in the export, which stays the same when the workspace is exported again.
+            let identity = (try? Data(contentsOf: page.file)).map { ImportIdentity(source: "notion:" + page.key, content: $0) }
+            if let identity, store.shouldSkipImport(identity, report: &report) {
+                await Task.yield()
+                continue
+            }
             let body: NSAttributedString?
             if page.isTable {
                 body = tableBody(page, report: &report)
@@ -222,8 +228,10 @@ enum NotionImporter {
             let notebook = notebooks[page.notebookKey].flatMap { id in store.notebooks.first { $0.id == id } }
                 ?? store.newNotebookForImport(named: page.notebook, parentID: nil)
             notebooks[page.notebookKey] = notebook.id
-            created.append(store.createImportedNote(body: body, title: page.title, notebookID: notebook.id,
-                                                    createdAt: nil, updatedAt: nil, id: id).id)
+            let meta = store.createImportedNote(body: body, title: page.title, notebookID: notebook.id,
+                                                createdAt: nil, updatedAt: nil, id: id)
+            created.append(meta.id)
+            if let identity { store.importLedger.record(identity, noteID: meta.id) }
             report.notesImported += 1
             report.notebookIDs.insert(notebook.id)
             await Task.yield()
@@ -231,6 +239,7 @@ enum NotionImporter {
         progress(ImportProgress(completed: report.cancelled ? report.notesImported : pages.count, total: pages.count))
         let titles = Dictionary(pages.compactMap { page in ids[page.key].map { ($0, page.title) } }, uniquingKeysWith: { a, _ in a })
         store.unresolveLinksToSkipped(in: created, planned: titles)
+        store.importLedger.save()
         store.flush()
         return report
     }

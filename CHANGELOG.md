@@ -12,6 +12,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - A portable note format for sync, so the upcoming NoteIt web app can open your notes. The first time this version syncs, it switches your storage over and converts your notes in the background; there's nothing to set up. If another Mac still runs an older NoteIt, it asks you first, because that Mac stops syncing until it's updated. Nothing on it is lost. Each of your devices downloads every note once while this happens.
 - A “NoteIt Server” choice when you set up sync, for syncing with your own NoteIt web app.
 - Clean Up Unused Storage… in Settings › Sync removes leftover copies of notes that were never finished saving, for example from a Mac that was erased while it was syncing. It's available on storage that supports conditional writes, and it asks first.
+- A short first-run guide. On a fresh library NoteIt opens a Welcome window that asks whether you are new or already use NoteIt on another Mac, then walks through recording hotkeys, the menu bar icon, importing notes and sync. Skip it any time; Help › Welcome to NoteIt… and the command palette open it again.
+- A waiting Quick Capture draft now shows. While a draft is kept after you dismiss the panel, the menu bar icon gets a small dot and the menu bar panel shows a *Quick Capture draft waiting* row with a Resume button.
+- Importing twice no longer makes duplicates. NoteIt remembers what each import made, by the source note's file path or id and a fingerprint of its content. Notes that are already in NoteIt are left alone and counted in the summary. A note whose source has changed since is imported again as a new note, so nothing you edited in NoteIt is overwritten. The memory is kept on this Mac only.
+- Note info. The Links and Outline panel has a new Info tab with the note's word count, character count, reading time, created and last edited dates, notebook and tags. Counts update as you type. Show it with Show Note Info in the View menu (⌃⌘I) or from the command palette.
 
 ### Changed
 

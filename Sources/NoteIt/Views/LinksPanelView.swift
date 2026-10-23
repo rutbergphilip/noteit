@@ -6,6 +6,7 @@ import SwiftUI
 enum InspectorTab: String, CaseIterable, Identifiable {
     case links
     case outline
+    case info
 
     var id: String { rawValue }
 
@@ -13,6 +14,7 @@ enum InspectorTab: String, CaseIterable, Identifiable {
         switch self {
         case .links: "Links"
         case .outline: "Outline"
+        case .info: "Info"
         }
     }
 }
@@ -34,7 +36,7 @@ struct LinksPanelView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .help("Links: notes that link to this one and the links in it. Outline: this note's headings.")
+            .help("Links: notes that link to this one and the links in it. Outline: this note's headings. Info: word count, dates and tags.")
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             Divider()
@@ -42,6 +44,7 @@ struct LinksPanelView: View {
                 switch tab.wrappedValue {
                 case .links: LinksTab(note: note, index: store.linkIndex)
                 case .outline: OutlineTab(note: note)
+                case .info: NoteInfoTab(note: note)
                 }
             } else {
                 placeholder("No Note Selected")

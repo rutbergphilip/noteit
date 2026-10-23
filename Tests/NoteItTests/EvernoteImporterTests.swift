@@ -278,9 +278,29 @@ final class EvernoteImporterTests: XCTestCase {
         XCTAssertEqual(store.notebookPathTitle(a), "Work 2")
         XCTAssertEqual(try meta("B", in: store).notebookID, a)
 
+        store.importLedger = ImportLedger(url: nil)   // forget the first import so the same file is imported again
         _ = await EvernoteImporter.importFiles([file], into: store)
         XCTAssertEqual(Set(store.notebooks.map(\.name)), ["Work", "Work 2", "Work 3"])
         XCTAssertTrue(store.notes.allSatisfy { $0.notebookID != existing.id })
+    }
+
+    func testImportingTheSameExportTwiceSkipsKnownNotes() async throws {
+        let store = makeStore()
+        let file = try enex([note("A", content: "x"), note("B", content: "y")], to: "Work.enex")
+        let first = await EvernoteImporter.importFiles([file], into: store)
+        XCTAssertEqual(first.notesImported, 2)
+        let count = store.notes.count
+
+        let again = await EvernoteImporter.importFiles([file], into: store)
+        XCTAssertEqual(again.notesImported, 0)
+        XCTAssertEqual(again.notesAlreadyImported, 2)
+        XCTAssertEqual(store.notes.count, count)
+
+        let edited = try enex([note("A", content: "x"), note("B", content: "changed")], to: "Work.enex")
+        let third = await EvernoteImporter.importFiles([edited], into: store)
+        XCTAssertEqual(third.notesImported, 1)
+        XCTAssertEqual(third.notesChanged, 1)
+        XCTAssertEqual(third.notesAlreadyImported, 1)
     }
 
     func testStackSharedWithinOneImportButNotWithTheLibrary() async throws {

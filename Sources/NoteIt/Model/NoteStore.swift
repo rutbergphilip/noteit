@@ -50,6 +50,8 @@ final class NoteStore: ObservableObject {
     static let bodyCacheLimit = 20
 
     nonisolated let rootURL: URL
+    /// Notes made by earlier imports, so importing a source again skips what is already here (ImportLedger).
+    lazy var importLedger = ImportLedger(url: rootURL.appendingPathComponent(ImportLedger.fileName))
     /// Where the note bodies live (Task 4.1): `RTFDBodyStorage(rootURL:)` in wave 0.
     nonisolated let bodyStorage: NoteBodyStorage
     nonisolated var notesURL: URL { bodyStorage.contentRootURL }
@@ -65,6 +67,8 @@ final class NoteStore: ObservableObject {
     private var firstLaunchMarkerURL: URL { rootURL.appendingPathComponent(".initialized") }
     /// False when migration didn't report a fresh install (see `LibraryMigration.Outcome.allowsSeeding`).
     private let seedsFreshLibrary: Bool
+    /// True when this launch created the sample notes, which is when the first-run guide shows.
+    private(set) var seededOnLaunch = false
 
     private var bodyCache: [UUID: NSAttributedString] = [:]
     private var bodyAccessOrder: [UUID] = []
@@ -1634,6 +1638,7 @@ final class NoteStore: ObservableObject {
             rebuildFromBodies(recovered: nil)
         } else if seedsFreshLibrary, !fm.fileExists(atPath: firstLaunchMarkerURL.path) {
             SeedData.seed(into: self)
+            seededOnLaunch = true
             recordSeedManifest()
         }
         libraryDirty = true

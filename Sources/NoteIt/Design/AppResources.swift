@@ -38,8 +38,30 @@ enum AppResources {
     @MainActor static var appIcon: NSImage? { image("AppIcon") }
 
     /// The menu bar glyph (`scripts/make_menubar_glyph.swift`): a template image at 18 × 18 pt.
-    @MainActor static func menuBarGlyph(capturing: Bool) -> NSImage? {
-        image(capturing ? "noteit-menubar-capturingTemplate" : "noteit-menubarTemplate",
-              template: true, size: NSSize(width: Tokens.Size.menuBarGlyph, height: Tokens.Size.menuBarGlyph))
+    /// With `draft`, a small dot in the corner shows that Quick Capture is holding an unsaved draft.
+    @MainActor static func menuBarGlyph(capturing: Bool, draft: Bool = false) -> NSImage? {
+        let size = NSSize(width: Tokens.Size.menuBarGlyph, height: Tokens.Size.menuBarGlyph)
+        guard let base = image(capturing ? "noteit-menubar-capturingTemplate" : "noteit-menubarTemplate", template: true, size: size) else {
+            return nil
+        }
+        guard draft, !capturing else { return base }
+        let key = "noteit-menubar-draft"
+        if let cached = cache[key] { return cached }
+        let badged = NSImage(size: size, flipped: false) { rect in
+            base.draw(in: rect)
+            let dot = Tokens.Size.menuBarDraftDot
+            let spot = NSRect(x: rect.maxX - dot - 0.5, y: rect.maxY - dot - 0.5, width: dot, height: dot)
+            // Clear a ring around the dot so it stays readable on top of the glyph, then draw it.
+            NSGraphicsContext.current?.saveGraphicsState()
+            NSGraphicsContext.current?.compositingOperation = .clear
+            NSBezierPath(ovalIn: spot.insetBy(dx: -1, dy: -1)).fill()
+            NSGraphicsContext.current?.restoreGraphicsState()
+            NSColor.black.setFill()
+            NSBezierPath(ovalIn: spot).fill()
+            return true
+        }
+        badged.isTemplate = true
+        cache[key] = badged
+        return badged
     }
 }

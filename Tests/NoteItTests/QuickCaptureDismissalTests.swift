@@ -46,4 +46,18 @@ final class QuickCaptureDismissalTests: XCTestCase {
         XCTAssertEqual(panel.alphaValue, 1, accuracy: 0.001)
         XCTAssertFalse(QuickCaptureVisibility.shared.isCapturing)
     }
+
+    func testDraftIndicatorFollowsTheDraft() {
+        let visibility = QuickCaptureVisibility.shared
+        let controller = QuickCaptureController()
+        XCTAssertFalse(visibility.hasDraft)
+
+        controller.model.body = "  \n"
+        XCTAssertFalse(visibility.hasDraft, "blank text isn't a draft")
+        controller.model.title = "Call back"
+        XCTAssertTrue(visibility.hasDraft)
+
+        controller.discard()
+        XCTAssertFalse(visibility.hasDraft)
+    }
 }

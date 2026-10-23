@@ -20,18 +20,17 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 ## Notes and editing
 
 - **Markdown export is lossy.** Underline, text colors, highlights, alignment and paragraph indents are dropped, because Markdown has no syntax for them. Export as HTML, PDF or RTFD to keep them.
-- **Quick Capture is plain text.** The title becomes a bold first line; format the note afterwards in the editor. There's one draft at a time, and nothing outside the panel shows that a draft is waiting.
+- **Quick Capture is plain text.** The title becomes a bold first line; format the note afterwards in the editor. There's one draft at a time. A waiting draft shows as a dot on the menu bar icon and a row in the menu bar panel.
 - **Tags live in the note text.** Renaming or deleting a tag skips locked notes and notes in Recently Deleted.
 - **One notebook per note.** Notebooks nest up to four levels deep.
 - **Search doesn't look inside attachments** such as PDFs. Best-match ranking applies only when the search has words; otherwise notes are sorted by last edit.
 - **Reminders need NoteIt running.** A reminder that comes due while NoteIt is closed shows the next time it opens, if that's within a day. Reminders need the app bundle, so they don't show when running with `swift run`.
 - **Reminders in locked notes don't ring**, and tasks in locked notes aren't listed in Tasks.
-- **No note info.** There's no word count or created date.
 - **One window.** Notes can't be opened in separate windows.
 
 ## Import
 
-- **Importing twice makes duplicates.** NoteIt doesn't recognize notes it has already imported.
+- **Importing again skips unchanged notes only.** NoteIt recognizes a note it already imported by its source (a file path, an Apple Notes id, an Evernote title and creation time, a Notion page's place in the export) and a fingerprint of its content. If the source changed, the note is imported again as a new note rather than updating the old one, and the summary says how many. A note you've deleted for good is imported again; one in Recently Deleted still counts as imported. The record lives on this Mac and isn't synced, so a second Mac that imports the same source makes its own copies.
 - **Apple Notes checklists become bulleted lists**, and ticked items aren't marked as done.
 - **Apple Notes attachments other than images are skipped** (PDFs, drawings, scans, audio and so on), and so are locked notes. The summary at the end counts both.
 - **Apple Notes formatting is approximate.** Headings are recognized by font size, and fonts and text colors are dropped.
@@ -43,5 +42,5 @@ NoteIt is a young project. These are the things it doesn't do yet, or does only 
 
 ## Setup and distribution
 
-- **No first-run guide.** New users get sample notes only. Global hotkeys are unbound by default and are set up in Settings › Shortcuts.
+- **The first-run guide is short.** It shows once, on a fresh library, and Help › Welcome to NoteIt… brings it back. Hotkeys recorded in it are saved right away rather than on Continue, the Apple Notes, Evernote and Notion imports run from the usual Import… sheet instead of inside the guide, and choosing *I use NoteIt on another Mac* doesn't remove the sample notes before the first sync. Global hotkeys stay unbound until you record them.
 - **Accessibility hasn't been audited** yet. Only some controls have VoiceOver labels.

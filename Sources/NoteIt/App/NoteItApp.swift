@@ -140,6 +140,8 @@ struct NoteItCommands: Commands {
         CommandGroup(after: .toolbar) {
             Divider()
             InspectorMenuButton()
+            Button("Show Note Info") { PaletteCommandRegistry.showInspector(.info, defaults: .standard) }
+                .menuShortcut(.showNoteInfo)
             Button("Tasks") {
                 WindowRouter.showMainWindow()
                 NoteStore.shared.showTasks()
@@ -149,6 +151,10 @@ struct NoteItCommands: Commands {
                 .menuShortcut(.goBack)
             Button("Go Forward") { NotificationCenter.default.post(name: .noteItGoForward, object: nil) }
                 .menuShortcut(.goForward)
+        }
+
+        CommandGroup(after: .help) {
+            Button("Welcome to NoteIt…") { WelcomeWindow.shared.show() }
         }
 
         CommandGroup(after: .windowArrangement) {
@@ -208,12 +214,12 @@ private struct MenuBarGlyph: View {
 
     var body: some View {
         Group {
-            if let glyph = AppResources.menuBarGlyph(capturing: visibility.isCapturing) {
+            if let glyph = AppResources.menuBarGlyph(capturing: visibility.isCapturing, draft: visibility.hasDraft) {
                 Image(nsImage: glyph)
             } else {
                 Image(systemName: "pencil.line")
             }
         }
-        .accessibilityLabel("NoteIt")
+        .accessibilityLabel(visibility.hasDraft ? "NoteIt, Quick Capture draft waiting" : "NoteIt")
     }
 }

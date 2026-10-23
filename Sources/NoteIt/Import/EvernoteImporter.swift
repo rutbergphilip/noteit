@@ -66,6 +66,15 @@ enum EvernoteImporter {
         (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
     }
 
+    /// What makes one export of a note differ from another: its text, tags, dates and attachments.
+    nonisolated static func fingerprint(of note: EvernoteNote) -> Data {
+        var hasher = SHA256()
+        hasher.update(data: Data(note.content.utf8))
+        hasher.update(data: Data((note.tags.joined(separator: ",") + "|\(note.updated?.timeIntervalSince1970 ?? 0)|\(note.reminder?.timeIntervalSince1970 ?? 0)").utf8))
+        for resource in note.resources { hasher.update(data: resource.data) }
+        return Data(hasher.finalize())
+    }
+
     // MARK: Importing
 
     static func importFiles(_ urls: [URL], into store: NoteStore,
@@ -107,12 +116,19 @@ enum EvernoteImporter {
                 let title = note.title.isEmpty ? "Untitled" : note.title
                 progress(ImportProgress(completed: done - 1, total: max(total, done), currentName: title))
                 if Task.isCancelled { report.cancelled = true; break files }
+                // An export has no note ids and gets a new path each time, so a note is its title and creation time.
+                let identity = ImportIdentity(source: "evernote:\(note.created?.timeIntervalSince1970 ?? 0):\(title)", content: Self.fingerprint(of: note))
+                if store.shouldSkipImport(identity, report: &report) {
+                    await Task.yield()
+                    continue
+                }
                 let notebook = notebooks.notebook(for: item.notebook, in: store)
                 let meta = autoreleasepool {
                     store.createImportedNote(body: Self.body(for: note, title: title, tagNames: &tagNames, report: &report), title: title,
                                              notebookID: notebook.id, createdAt: note.created, updatedAt: note.updated)
                 }
                 created.append(meta.id)
+                store.importLedger.record(identity, noteID: meta.id)
                 let key = TextFold.fold(title.trimmingCharacters(in: .whitespacesAndNewlines))
                 if titles[key] == nil { titles[key] = meta.id }
                 report.notesImported += 1
@@ -130,6 +146,7 @@ enum EvernoteImporter {
         progress(ImportProgress(completed: done, total: max(total, done)))
         report.tagsSkipped = tagNames.dropped.count
         store.resolveTitleLinks(in: created, titles: titles)
+        store.importLedger.save()
         store.flush()
         return report
     }

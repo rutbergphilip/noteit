@@ -62,6 +62,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let window = NSApp.keyWindow { alert.beginSheetModal(for: window) } else { alert.runModal() }
         }
         NoteStore.shared.startWatchingMarkdownFolder()
+        if OnboardingFlow.shouldShowAutomatically(seededThisLaunch: NoteStore.shared.seededOnLaunch,
+                                                   completedVersion: UserDefaults.standard.integer(forKey: PrefKey.onboardingCompletedVersion)) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { MainActor.assumeIsolated { WelcomeWindow.shared.show() } }
+        }
         NoteStore.shared.askAboutHeldDeletions()
         DispatchQueue.main.async { PreviousLibrary.askIfDue(dataDir: NoteStore.shared.rootURL) }
         AutomationService.shared.staged.purgeExpired(now: Date())
@@ -245,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     store.selection = .conflicts
                     store.selectedNoteID = store.notes(for: .conflicts, search: "").first?.id
                 }
+                if args.contains("--debug-onboarding") { WelcomeWindow.shared.show() }
                 if args.contains("--debug-quick-capture") {
                     QuickCaptureController.shared.show()
                 }

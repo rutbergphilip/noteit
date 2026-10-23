@@ -73,6 +73,7 @@ These only exist in debug builds (`#if DEBUG`). Release builds from `build_app.s
 | `--debug-preview-bindings` | Shows sample hotkey bindings without saving them, for screenshots |
 | `--debug-menubar-preview` | Shows the menu bar panel in a normal window, for screenshots |
 | `--debug-quick-capture` | Opens Quick Capture at launch |
+| `--debug-onboarding` | Opens the Welcome guide at launch |
 | `--debug-find <query> [--debug-replace <text>]` | Opens the note's find bar with a query, and the replace row when a replacement is given |
 | `--debug-dark` | Forces dark mode |
 | `--debug-show-conflicts` | Selects the Conflicts filter and its first note |

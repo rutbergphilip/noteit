@@ -25,7 +25,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
 - **Capture from anywhere**
   - Global hotkeys for *Show / Hide NoteIt*, *New Note*, *Quick Capture*, *Open Quickly*, *Command Palette* and *Capture Selection*. They're unbound by default, you record your own, and the hotkeys themselves need no Accessibility permission.
   - **Capture from any app.** Select text anywhere and press *Capture Selection*, or use *Services › Capture to NoteIt*, to save it as a note with a link back to the page or document it came from. Reading the selection with the hotkey is opt-in and needs Accessibility permission.
-  - A Spotlight-style **Quick Capture** panel that floats over any app, including full-screen ones, and keeps your draft when dismissed.
+  - A Spotlight-style **Quick Capture** panel that floats over any app, including full-screen ones, and keeps your draft when dismissed. A waiting draft shows as a dot on the menu bar icon.
   - A **menu bar panel** with search, a quick-note composer, and Pinned and Recent notes. It's fully keyboard-driven.
   - A *Menu bar only* mode and *Launch at login*.
 - **Organize your way**
@@ -39,6 +39,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
 - **Link your notes**
   - Type `[[` to link to another note or one of its headings. Clicking a link to a note that doesn't exist yet creates it.
   - **Links and Outline** (⌥⌘I) shows the notes that link here, the links in this note, unlinked mentions of its title and its headings. Go Back and Go Forward (⌃⌘← / ⌃⌘→) retrace the notes you opened.
+  - **Note info** (⌃⌘I) opens the same panel on its Info tab, with word count, characters, reading time, created and last edited dates, notebook and tags.
   - Renaming a note offers to update the text of links to it.
   - **Daily notes.** ⌃⌘T opens today's note, Today in the sidebar does the same, and a calendar opens any day. There's an optional global hotkey too.
   - **Templates.** Notes in the Templates notebook can start new notes, with placeholders for the date, time, title and clipboard. A notebook can have a default template.
@@ -52,6 +53,7 @@ NoteIt is a SwiftUI and AppKit app. Its only third-party dependency is [Sparkle]
   - About 30 keyboard shortcuts. See the [shortcut reference](docs/keyboard-shortcuts.md).
   - Menu shortcuts such as New Note, Find… and Print… can be changed in Settings › Shortcuts.
 - **Native and local-first**
+  - A short **first-run guide** (Help › Welcome to NoteIt…) helps set up hotkeys, the menu bar, imports and sync.
   - Light and dark mode, system accent color, and standard menus and Settings.
   - Notes are stored as RTFD in `~/Library/Application Support/NoteIt/`, with autosave and atomic writes.
 - **Optional sync** between Macs through storage you own, end-to-end encrypted by default. See below.

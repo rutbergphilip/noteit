@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import Combine
 import NoteItCore
 import SwiftUI
 
@@ -35,6 +36,8 @@ final class QuickCaptureModel: ObservableObject {
 final class QuickCaptureVisibility: ObservableObject {
     static let shared = QuickCaptureVisibility()
     @Published var isCapturing = false
+    /// A draft is waiting in Quick Capture, whether or not the panel is open. The menu bar shows it.
+    @Published var hasDraft = false
 }
 
 /// Spotlight-style quick capture: ⌘↩ saves, Esc dismisses, clicking elsewhere dismisses.
@@ -45,11 +48,23 @@ final class QuickCaptureController: NSObject, NSWindowDelegate {
 
     private var panel: QuickCapturePanel?
     private var keyMonitor: Any?
-    private let model = QuickCaptureModel()
+    let model = QuickCaptureModel()
+    private var draftObserver: AnyCancellable?
     private var shownAt = Date.distantPast
     /// Bumped by every presentation, so a dismissal animation that finishes after the panel was
     /// shown again doesn't hide it.
     private(set) var presentationGeneration = 0
+
+    override init() {
+        super.init()
+        draftObserver = model.$title.combineLatest(model.$body)
+            .map { title, body in
+                !(title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    && body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+            .removeDuplicates()
+            .sink { QuickCaptureVisibility.shared.hasDraft = $0 }
+    }
 
     var isVisible: Bool { panel?.isVisible ?? false }
 

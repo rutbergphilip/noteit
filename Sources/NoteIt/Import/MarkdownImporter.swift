@@ -116,6 +116,7 @@ final class MarkdownImporter {
         store.unresolveLinksToSkipped(in: createdIDs,
                                       planned: Dictionary(zip(ids, items.map { $0.url.deletingPathExtension().lastPathComponent }),
                                                           uniquingKeysWith: { a, _ in a }))
+        store.importLedger.save()
         store.flush()
         return report
     }
@@ -136,6 +137,8 @@ final class MarkdownImporter {
             return importBundle(item.url, named: item.url.deletingPathExtension().lastPathComponent, item: item, id: id, report: &report)
         }
         guard let text = Self.readText(item.url) else { return false }
+        let identity = ImportIdentity(source: "markdown:" + item.url.standardizedFileURL.path, content: text)
+        if store.shouldSkipImport(identity, report: &report) { return true }
         let fileDates = Self.fileDates(item.url)
         let folder = item.url.deletingLastPathComponent()
         let skipped = SkippedImages()
@@ -146,7 +149,7 @@ final class MarkdownImporter {
             : MarkdownReader.note(from: text, fallbackTitle: name, resolveImage: resolver, resolveWikiLink: resolveWikiLink)
         report.attachmentsSkipped += skipped.count
         save(note, notebook: item.notebook, created: note.frontMatter.created ?? fileDates.created,
-             updated: note.frontMatter.updated ?? fileDates.modified, id: id, report: &report)
+             updated: note.frontMatter.updated ?? fileDates.modified, id: id, identity: identity, report: &report)
         return true
     }
 
@@ -157,6 +160,8 @@ final class MarkdownImporter {
             ?? ((try? fileManager.contentsOfDirectory(at: bundle, includingPropertiesForKeys: nil)) ?? [])
                 .first { Self.textExtensions.contains($0.pathExtension.lowercased()) }
         guard let textURL, Self.isInside(textURL, root: bundle), let text = Self.readText(textURL) else { return false }
+        let identity = ImportIdentity(source: "markdown:" + item.url.standardizedFileURL.path, content: text)
+        if store.shouldSkipImport(identity, report: &report) { return true }
         let skipped = SkippedImages()
         let resolver = Self.resolver(base: bundle, root: bundle, nameIndex: Self.fileIndex(under: bundle), skipped: skipped)
         let note = textURL.pathExtension.lowercased() == "txt"
@@ -167,14 +172,17 @@ final class MarkdownImporter {
         let fileDates = Self.fileDates(item.url)
         save(note, notebook: item.notebook,
              created: note.frontMatter.created ?? info.created ?? fileDates.created,
-             updated: note.frontMatter.updated ?? info.modified ?? fileDates.modified, id: id, report: &report)
+             updated: note.frontMatter.updated ?? info.modified ?? fileDates.modified, id: id, identity: identity, report: &report)
         return true
     }
 
-    private func save(_ note: MarkdownNote, notebook: [String], created: Date?, updated: Date?, id: UUID?, report: inout ImportReport) {
+    private func save(_ note: MarkdownNote, notebook: [String], created: Date?, updated: Date?, id: UUID?,
+                      identity: ImportIdentity, report: inout ImportReport) {
         let nb = store.notebookForImport(path: notebook)
-        createdIDs.append(store.createImportedNote(body: note.body, title: note.title, notebookID: nb.id,
-                                                   createdAt: created, updatedAt: updated, id: id).id)
+        let meta = store.createImportedNote(body: note.body, title: note.title, notebookID: nb.id,
+                                            createdAt: created, updatedAt: updated, id: id)
+        createdIDs.append(meta.id)
+        store.importLedger.record(identity, noteID: meta.id)
         report.notesImported += 1
         report.notebookIDs.insert(nb.id)
     }

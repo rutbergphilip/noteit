@@ -30,6 +30,7 @@ final class MenuShortcutDefaultsTests: XCTestCase {
             (.showTasks, MenuShortcut("t", [.shift, .command])),
             (.setDueDate, MenuShortcut("d", [.shift, .command])),
             (.addReminder, MenuShortcut("r", [.control, .command])),
+            (.showNoteInfo, MenuShortcut("i", [.control, .command])),
         ]
         XCTAssertEqual(MenuShortcutCommand.allCases, expected.map(\.0))
         for (command, shortcut) in expected {

@@ -132,7 +132,7 @@ final class ImportModel: ObservableObject {
         task = Task { [weak self] in
             guard let self else { return }
             if let report = await work(self) {
-                self.phase = report.notesImported == 0 && report.lockedSkipped == 0 && report.notesSkipped == 0
+                self.phase = report.notesImported == 0 && report.notesAlreadyImported == 0 && report.lockedSkipped == 0 && report.notesSkipped == 0
                     && report.filesSkipped == 0 && report.archivesSkipped.isEmpty
                     && !report.cancelled && !report.permissionDenied
                     ? .failed(.nothingToImport)

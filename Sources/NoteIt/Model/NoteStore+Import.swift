@@ -9,6 +9,10 @@ struct ImportReport: Equatable {
     var attachmentsSkipped = 0
     var filesSkipped = 0
     var notesSkipped = 0
+    /// Notes left out because an earlier import already made them from the same, unchanged source.
+    var notesAlreadyImported = 0
+    /// Notes imported again, as new notes, because their source changed since an earlier import.
+    var notesChanged = 0
     /// Notes imported without the encrypted sections they had (Evernote `en-crypt`).
     var encryptedSectionsSkipped = 0
     /// Distinct tag names left out because no letters or numbers were left after making them valid.
@@ -31,7 +35,9 @@ struct ImportReport: Equatable {
     var summary: String {
         var parts: [String] = []
         let notes = Self.count(notesImported, "note", "notes")
-        if notebooksUsed > 0 {
+        if notesImported == 0, notesAlreadyImported > 0 {
+            parts.append("Nothing new to import.")
+        } else if notebooksUsed > 0 {
             parts.append("Imported \(notes) into \(Self.count(notebooksUsed, "notebook", "notebooks")).")
         } else {
             parts.append("Imported \(notes).")
@@ -45,6 +51,14 @@ struct ImportReport: Equatable {
             skipped.append(Self.count(tagsSkipped, "tag with no letters or numbers", "tags with no letters or numbers"))
         }
         if !skipped.isEmpty { parts.append("Skipped \(Self.list(skipped)).") }
+        if notesAlreadyImported > 0 {
+            parts.append(notesAlreadyImported == 1 ? "1 note was already imported and left as it is."
+                         : "\(notesAlreadyImported.formatted()) notes were already imported and left as they are.")
+        }
+        if notesChanged > 0 {
+            parts.append(notesChanged == 1 ? "1 note had changed since it was imported, so it came in as a new note."
+                         : "\(notesChanged.formatted()) notes had changed since they were imported, so they came in as new notes.")
+        }
         if let archive = archivesSkipped.first {
             parts.append(archivesSkipped.count == 1 ? "Couldn't open “\(archive)”, so its pages weren't imported."
                          : "Couldn't open \(archivesSkipped.count.formatted()) ZIP files (“\(archive)” and others), so their pages weren't imported.")

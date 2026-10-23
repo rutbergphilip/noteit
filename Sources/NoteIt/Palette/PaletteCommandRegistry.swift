@@ -136,6 +136,10 @@ enum PaletteCommandRegistry {
             command("showOutline", "Show Outline", symbol: "list.bullet.indent", shortcut: nil, keywords: ["headings", "inspector", "toc"], available: hasLiveNote) {
                 showInspector(.outline, defaults: defaults)
             },
+            command("showNoteInfo", "Show Note Info", symbol: "info.circle", shortcut: shortcuts.current(.showNoteInfo)?.display,
+                    keywords: ["word count", "characters", "reading time", "created", "modified", "statistics", "inspector"], available: hasLiveNote) {
+                showInspector(.info, defaults: defaults)
+            },
             command("versionHistory", "Version History…", symbol: "clock.arrow.circlepath", shortcut: shortcuts.current(.versionHistory)?.display, keywords: ["revisions", "restore"], available: hasLiveNote) {
                 if let liveNote { NoteMenuActions.showVersionHistory(of: liveNote) }
             },
@@ -153,6 +157,9 @@ enum PaletteCommandRegistry {
                     available: store.hasRecentlyDeleted) {
                 store.selection = .recentlyDeleted
                 WindowRouter.showMainWindow()
+            },
+            command("showWelcome", "Welcome to NoteIt…", symbol: "hand.wave", shortcut: nil, keywords: ["guide", "setup", "first run", "onboarding", "help"]) {
+                WelcomeWindow.shared.show()
             },
             command("import", "Import…", symbol: "square.and.arrow.down", shortcut: nil, keywords: ["markdown", "apple notes", "evernote", "enex", "notion"]) {
                 ImportSheetPresenter.show()

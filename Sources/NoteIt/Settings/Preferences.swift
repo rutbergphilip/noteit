@@ -28,6 +28,8 @@ enum PrefKey {
     /// The Templates notebook's UUID string; empty means found by name or created on first use.
     static let templatesNotebookID = "templatesNotebookID"
     static let inspectorVisible = "inspectorVisible"
+    /// The newest first-run guide the user has finished or skipped (`OnboardingFlow.currentVersion`); 0 if none.
+    static let onboardingCompletedVersion = "onboardingCompletedVersion"
     /// `links` or `outline`.
     static let inspectorTab = "inspectorTab"
     static let unlinkedMentionsExpanded = "unlinkedMentionsExpanded"
