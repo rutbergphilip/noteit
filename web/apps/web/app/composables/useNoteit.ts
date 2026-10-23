@@ -49,6 +49,8 @@ const state = reactive({
   selectedId: undefined as string | undefined,
   query: '',
   searchHits: undefined as Set<string> | undefined,
+  /** Best Match position of each hit while the search has words (native SearchRanker). */
+  searchRank: undefined as Map<string, number> | undefined,
   /** Problems in the search query (an unknown filter is searched as a word, as on the Mac). */
   searchIssues: [] as string[],
   /** The Links and Outline panel (native ⌥⌘I), with its Info tab (⌃⌘I). */
@@ -113,7 +115,7 @@ async function refresh(): Promise<void> {
   state.notes = snap.notes;
   state.notebooks = snap.notebooks;
   state.smartFolders = snap.smartFolders;
-  if (state.query) state.searchHits = new Set(await client().search(state.query));
+  if (state.query) setHits(await client().search(state.query));
   await refreshSmartHits();
 }
 
@@ -214,7 +216,12 @@ function setTheme(t: Theme): void {
 async function setQuery(q: string): Promise<void> {
   state.query = q;
   state.searchIssues = q.trim() ? parseQuery(q).issues.map((i) => i.message) : [];
-  state.searchHits = q.trim() ? new Set(await client().search(q)) : undefined;
+  setHits(q.trim() ? await client().search(q) : undefined);
+}
+
+function setHits(ids: string[] | undefined): void {
+  state.searchHits = ids ? new Set(ids) : undefined;
+  state.searchRank = ids && state.query && parseQuery(state.query).hasTextTerms ? new Map(ids.map((id, i) => [id, i])) : undefined;
 }
 
 const RECENT_DAYS = 7;
@@ -232,6 +239,9 @@ const visibleNotes = computed(() => {
   if (v.kind === 'smartFolder') notes = state.smartHits ? notes.filter((n) => state.smartHits!.has(n.id)) : [];
   if (state.searchHits) notes = notes.filter((n) => state.searchHits!.has(n.id));
   const by = state.sort;
+  // Searching for words lists Best Match first, as on the Mac (the other orders stay as picked).
+  const rank = by === 'edited' ? state.searchRank : undefined;
+  if (rank) return [...notes].sort((a, b) => (rank.get(a.id) ?? 1e9) - (rank.get(b.id) ?? 1e9));
   return [...notes].sort((a, b) => {
     if (v.kind !== 'trash' && a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
     if (by === 'title') return (a.title || 'Untitled').localeCompare(b.title || 'Untitled');

@@ -53,6 +53,7 @@ import {
   parseTasks,
   maskedText,
   pruneAttachments,
+  rankSearch,
   findMentions,
   linkMentions,
   mentionsAreSearched,
@@ -277,12 +278,15 @@ export class WebLocalStore implements SyncLocalStore {
     };
   }
 
-  /** The search language (`tag:`, `is:todo`, `-word`, `OR` …), evaluated as native `QueryEvaluator` does. */
+  /**
+   * The search language (`tag:`, `is:todo`, `-word`, `OR` …), evaluated as native `QueryEvaluator` does; with words
+   * to look for, the ids come in Best Match order (native SearchRanker).
+   */
   search(query: string, now: Date = this.now()): string[] {
     const q = parseQuery(query);
     const notebooks = this.snapshot().notebooks;
     const ctx = { now, notebooks };
-    return [...this.derived.values()]
+    const hits = [...this.derived.values()]
       .filter((d) => {
         if (d.row.deletedAt) return false;
         const open = d.tasks.filter((t) => !t.checked).length;
@@ -301,8 +305,10 @@ export class WebLocalStore implements SyncLocalStore {
           hasLiveReminder: d.hasLiveReminder,
           hasAttachment: d.hasAttachment,
         }, ctx);
-      })
-      .map((d) => d.row.id);
+      });
+    if (!q.hasTextTerms) return hits.map((d) => d.row.id);
+    const docs = hits.map((d) => ({ foldedText: d.search, foldedTitle: searchFold(d.row.title), tags: d.row.tags, isPinned: d.row.isPinned, updatedAt: new Date(d.row.updatedAt) }));
+    return rankSearch(docs, q, searchFold(query), now).map((i) => hits[i]!.row.id);
   }
 
   /** Notes that link here (with the line for context), and the notes this one links to. */

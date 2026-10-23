@@ -38,7 +38,7 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Locked notes | Lock and unlock | Listed by title, read-only | Web gap |
 | Notes from older Macs (RTFD bodies) | Yes | Listed, read-only until a Mac converts them | Native-only by design |
 | Version history (`versionHistory`) | ⌥⌘Y | — | Native-only (local data): versions stay on the Mac that saved them |
-| Note list sorting | Date edited; Best Match while searching | Edited, created or title | Web-only (the extra orders); Best Match is a web gap |
+| Note list sorting | Date edited; Best Match while searching | Edited (Best Match while searching), created or title | Web-only (the extra orders) |
 
 ## Tags, search and smart folders
 
@@ -50,7 +50,8 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Rename, merge and delete tags everywhere | Yes | Right-click a tag: the same rewrite rules (nested tags, code and links left alone) and smart folder searches renamed; no Undo | Parity |
 | Search: words, "phrases", `-word`, `OR`, brackets (`searchNotes`) | ⌘F | ⌘F; the same parser and evaluator (shared vectors) | Parity |
 | Search filters `tag:` `notebook:`/`in:` `title:` `is:` `has:` `edited:` `created:` `due:` | Yes | Yes, with a warning for a filter it can't read | Parity |
-| Search ranking, snippets and highlights in the note | Yes | Matching notes in edit order | Web gap |
+| Search ranking | Yes | Best Match while searching for words, the same ranker | Parity |
+| Search snippets and highlights in the note | Yes | — (the find bar highlights in a note) | Web gap |
 | Text in images found by search | Yes | — | Native-only by design (macOS text recognition) |
 | Smart folders (`newSmartFolder`, `saveSearchAsSmartFolder`) | Yes, synced | Yes: the same synced `smart-folders/` records (shared envelope vectors), in the sidebar and the palette | Parity |
 
