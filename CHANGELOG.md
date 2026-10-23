@@ -7,6 +7,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+- The first published build of 0.6.0, which was tagged but never released. It brings everything listed under 0.6.0: importing from Evernote and Notion, `noteit://` links, the Local API and `noteit` command line tool, Spotlight and Shortcuts, links between notes, daily notes, templates, nested notebooks and tags, smart folders, search filters, Tasks and reminders.
+
 ## [0.6.0] - 2026-10-23
 
 ### Added
