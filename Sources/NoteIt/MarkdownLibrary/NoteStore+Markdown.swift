@@ -345,7 +345,10 @@ extension NoteStore {
         notesChangedBeforeDerivedIndexes.formUnion(changed)
         let restoredBefore = Set(notes.map(\.id))
         restoreMarkdownRecoveryCopies(reads: reads)
-        markdownRecoveryPending = []
+        // A note that only exists in recovery/ and couldn't be filled stays held: never empty and editable, or sent.
+        markdownRecoveryPending = markdownRecoveryTargets().filter {
+            note(with: $0) != nil && storage.index.entry($0) == nil && cachedBody($0) == nil
+        }
         notesChangedBeforeDerivedIndexes.formUnion(Set(notes.map(\.id)).subtracting(restoredBefore))
         if note(with: selectedNoteID) == nil { selectedNoteID = notes(for: selection, search: "").first?.id }
         flush()

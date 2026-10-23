@@ -520,6 +520,71 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertFalse(open().notes.contains { $0.conflictOriginalID == kept })
     }
 
+    /// An unwritten recovered note with a copy of its own, whose source was deleted on another device, the deletion
+    /// still waiting to move the source's file to the Trash when the app quit.
+    private func quitWithUnwrittenRecoveredNoteOfARemotelyDeletedNote() async throws -> (kept: UUID, recovered: UUID) {
+        let (store, kept, recovered, _) = try await openWithUnwrittenRecoveredNote()
+        store.applyRemoteDeletion(kept, kind: .note)
+        XCTAssertTrue(store.isTombstoned(kept), "its file couldn't be moved to the Trash yet")
+        store.flushBeforeQuit()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertTrue(recoveryCopies(store).contains { $0.lastPathComponent.hasPrefix(recovered.uuidString) }, "a copy of its own")
+        return (kept, recovered)
+    }
+
+    func testARecoveredNoteOfANoteDeletedOnAnotherDeviceIsFilledInAfterARelaunch() async throws {
+        let (kept, recovered) = try await quitWithUnwrittenRecoveredNoteOfARemotelyDeletedNote()
+        let store = open()
+        XCTAssertNil(store.note(with: kept))
+        XCTAssertTrue(store.body(for: recovered).string.contains("waiting edit"), "not an empty note")
+        XCTAssertNotNil(store.note(with: recovered))
+        XCTAssertFalse(store.notes.contains { $0.title.contains("(Recovered) (Recovered)") })
+        XCTAssertThrowsError(try store.exportPlan(id: recovered, kind: .note, deviceID: "t"), "not synced before it's written")
+    }
+
+    func testARecoveredNoteWhoseCopiesCantBeReadIsntEmptyAndEditable() async throws {
+        let (_, recovered) = try await quitWithUnwrittenRecoveredNoteOfARemotelyDeletedNote()
+        let recovery = data.appendingPathComponent("recovery")
+        for name in try fm.contentsOfDirectory(atPath: recovery.path) where name.hasSuffix(".md") {
+            try fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: recovery.appendingPathComponent(name).path)
+        }
+        addTeardownBlock { [fm] in
+            for name in (try? fm.contentsOfDirectory(atPath: recovery.path)) ?? [] {
+                try? fm.setAttributes([.posixPermissions: 0o644], ofItemAtPath: recovery.appendingPathComponent(name).path)
+            }
+        }
+        let store = open()
+        XCTAssertNotNil(store.note(with: recovered))
+        _ = store.body(for: recovered)
+        XCTAssertTrue(store.isMarkdownBodyUnread(recovered), "held read-only until it's filled")
+        XCTAssertNil(store.bodyForOutput(recovered))
+        XCTAssertThrowsError(try store.exportPlan(id: recovered, kind: .note, deviceID: "t"), "never sent empty")
+    }
+
+    func testAnEditKeptInRecoveryForANoteDeletedOnAnotherDeviceBeforeAQuitBecomesANoteOfItsOwn() async throws {
+        let (kept, quit, away) = try await keepEditInRecovery()
+        away.applyRemoteDeletion(kept, kind: .note)
+        XCTAssertTrue(away.isTombstoned(kept))
+        away.flush()
+        quit()
+        let store = open()
+        let recovered = try XCTUnwrap(store.notes.first { $0.conflictOriginalID == kept }, "the edit stays visible")
+        XCTAssertTrue(store.body(for: recovered.id).string.contains("waiting edit"))
+    }
+
+    func testAnEditKeptInRecoveryForANoteDeletedForGoodHereBeforeAQuitIsSetAside() async throws {
+        let (kept, quit, away) = try await keepEditInRecovery()
+        _ = away.moveToRecentlyDeleted([kept])
+        away.emptyRecentlyDeleted()
+        away.flush()
+        quit()
+        let store = open()
+        XCTAssertNil(store.note(with: kept))
+        XCTAssertFalse(store.notes.contains { $0.conflictOriginalID == kept }, "a note deleted for good stays deleted")
+        let dismissed = store.recoveryURL.appendingPathComponent("dismissed")
+        XCTAssertTrue(((try? fm.contentsOfDirectory(atPath: dismissed.path)) ?? []).contains { $0.hasPrefix(kept.uuidString) })
+    }
+
     func testANoteWithAnEditInRecoveryPurgedAtLaunchBeforeTheScanIsntBroughtBack() async throws {
         try await assertDeletedForGoodBeforeTheLaunchScanStaysDeleted { store in
             XCTAssertEqual(store.purgeExpiredDeletedNotes(now: Date().addingTimeInterval(400 * 24 * 60 * 60)), 1)

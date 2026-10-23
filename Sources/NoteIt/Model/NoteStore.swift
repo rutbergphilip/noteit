@@ -200,9 +200,10 @@ final class NoteStore: ObservableObject {
     private var markdownRecoveryCopies: [UUID: [URL]] = [:]
     /// Copies left in `recovery/` at launch because their note is in Recently Deleted or locked.
     private var markdownRecoveryCopiesLeft: [UUID: [URL]] = [:]
-    /// Notes removed by a deletion from another device this session: copies of theirs still in `recovery/` become a
-    /// note of their own rather than being set aside.
+    /// Notes removed by a deletion from another device: copies of theirs still in `recovery/` become a note of their
+    /// own rather than being set aside. Saved with the tombstones (`tombstones-remote.json`) while those are pending.
     private var remotelyRemovedNotes: Set<UUID> = []
+    var remoteTombstonesURL: URL { rootURL.appendingPathComponent("tombstones-remote.json") }
     /// Notes whose body couldn't be read because the folder didn't answer; they are read again once it does.
     var markdownBodiesNotRead: Set<UUID> = [] {
         didSet { if markdownBodiesNotRead != oldValue { publishMarkdownBodiesNotRead() } }
@@ -1222,8 +1223,16 @@ final class NoteStore: ObservableObject {
             clearOversizedBody(id)
             appliedRemoteRevisions.notes[id.uuidString] = nil
             pendingTrash.insert(id)
-            if remote { remotelyRemovedNotes.insert(id) }
-            dismissRecoveryCopies(of: id, includingUnrestored: !remote)
+            if remote {
+                // Deleted elsewhere: its copies stay in recovery/ and become a note of their own at the next launch.
+                remotelyRemovedNotes.insert(id)
+                markdownWaitingCopies[id] = nil
+                markdownRecoveryCopies[id] = nil
+                markdownRecoveryCopiesLeft[id] = nil
+            } else {
+                remotelyRemovedNotes.remove(id)
+                dismissRecoveryCopies(of: id, includingUnrestored: true)
+            }
             dispatchDerivedIndexes(.removed(id))
         }
         bodyAccessOrder.removeAll { removed.contains($0) }
@@ -2113,9 +2122,11 @@ final class NoteStore: ObservableObject {
                 let gone = noteIndex(id) == nil
                 // Deleted here: its copies were set aside, unless moving them failed; that's tried again.
                 let deletedHere = gone && !remotelyRemovedNotes.contains(id) && (isTombstoned(id) || syncDeletionJournal[id] != nil)
-                if deletedHere {
+                if noteIndex(recoveredID) != nil || byID[recoveredID] != nil {
+                    restoreBeside(id, from: found, newest: newest, text: restored?.text, merged: byID, storage: storage)
+                } else if deletedHere {
                     dismissRecoveryCopies(of: id, includingUnrestored: true)
-                } else if noteIndex(recoveredID) != nil || byID[recoveredID] != nil || (gone && restored != nil) {
+                } else if gone && restored != nil {
                     restoreBeside(id, from: found, newest: newest, text: restored?.text, merged: byID, storage: storage)
                 } else {
                     markdownRecoveryCopiesLeft[id, default: []] += found.map(\.url)
@@ -2339,6 +2350,9 @@ final class NoteStore: ObservableObject {
             return
         }
         pendingTrash.formUnion(ids)
+        if let data = try? Data(contentsOf: remoteTombstonesURL), let remote = try? Self.decoder.decode([UUID].self, from: data) {
+            remotelyRemovedNotes.formUnion(Set(remote).intersection(pendingTrash))
+        }
     }
 
     /// Debug-only crash simulation: `NOTEIT_STORE_CRASHPOINT=<name>` exits immediately (no further
@@ -2353,6 +2367,15 @@ final class NoteStore: ObservableObject {
 
     private func saveTombstones() {
         do {
+            // Before the tombstones, so a remote deletion's tombstone is never read without its mark.
+            let remote = remotelyRemovedNotes.intersection(pendingTrash).sorted { $0.uuidString < $1.uuidString }
+            if remote.isEmpty {
+                if FileManager.default.fileExists(atPath: remoteTombstonesURL.path) {
+                    try FileManager.default.removeItem(at: remoteTombstonesURL)
+                }
+            } else {
+                try Self.encoder.encode(remote).write(to: remoteTombstonesURL, options: .atomic)
+            }
             if pendingTrash.isEmpty {
                 if FileManager.default.fileExists(atPath: tombstonesURL.path) {
                     try FileManager.default.removeItem(at: tombstonesURL)
