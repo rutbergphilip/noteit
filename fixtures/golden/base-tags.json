@@ -1,0 +1,38 @@
+{
+  "cases" : [
+    {
+      "etag" : "5d41402abc4b2a76b9719d911017c592",
+      "tag" : "JEKOEM3UXMQR4POK"
+    },
+    {
+      "etag" : "\"5d41402abc4b2a76b9719d911017c592\"",
+      "tag" : "JEKOEM3UXMQR4POK"
+    },
+    {
+      "etag" : "d41d8cd98f00b204e9800998ecf8427e-2",
+      "tag" : "LJA6ZCVGIDKXGJOK"
+    },
+    {
+      "etag" : "0x8DCF2A3B4C5D6E7",
+      "tag" : "75KV2XTUYNFWZ2N5"
+    },
+    {
+      "etag" : "9B2CF535-F277-31C9-7434-3645A3985328",
+      "tag" : "EF27JTJVTPJKC2DI"
+    },
+    {
+      "etag" : "etag-1",
+      "tag" : "QMR6UQZ763QOJT6Q"
+    },
+    {
+      "etag" : "\"\"",
+      "tag" : "4OYMIQUY7QOBJGX3"
+    },
+    {
+      "etag" : "x",
+      "tag" : "FVYRMQVXE2YEIALC"
+    }
+  ],
+  "generator" : "swift",
+  "version" : 1
+}

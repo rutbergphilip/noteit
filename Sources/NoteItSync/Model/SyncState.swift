@@ -26,12 +26,39 @@ public struct SyncState: Codable, Sendable, Equatable {
         public var replacedMetaETag: String?
         /// Set only when this device pushed the record: the etag of the body it uploaded.
         public var bodyETag: String?
+        /// The versioned body the meta at `remoteMetaETag` references; nil for legacy bodies and older state files.
+        public var bodyVersion: UUID?
 
-        public init(revision: UUID, remoteMetaETag: String, replacedMetaETag: String? = nil, bodyETag: String? = nil) {
+        public init(revision: UUID, remoteMetaETag: String, replacedMetaETag: String? = nil, bodyETag: String? = nil,
+                    bodyVersion: UUID? = nil) {
             self.revision = revision
             self.remoteMetaETag = remoteMetaETag
             self.replacedMetaETag = replacedMetaETag
             self.bodyETag = bodyETag
+            self.bodyVersion = bodyVersion
+        }
+    }
+
+    /// A hashed-tag body kept only because its tag is live (web-app spec §3.4.9, stranded-body recovery).
+    public struct StrandedBody: Codable, Sendable, Equatable {
+        public var firstSeenPass: Int
+        public var firstSeenAt: Date
+
+        public init(firstSeenPass: Int, firstSeenAt: Date) {
+            self.firstSeenPass = firstSeenPass
+            self.firstSeenAt = firstSeenAt
+        }
+    }
+
+    /// A listed tombstone's `deletedMetaETag`, by the tombstone's ETag, so a leftover meta + tombstone pair needs no
+    /// tombstone GET on every pass (spec §3.4.9, stores without atomic conditional deletes).
+    public struct TombstoneBinding: Codable, Sendable, Equatable {
+        public var tombstoneETag: String
+        public var deletedMetaETag: String?
+
+        public init(tombstoneETag: String, deletedMetaETag: String?) {
+            self.tombstoneETag = tombstoneETag
+            self.deletedMetaETag = deletedMetaETag
         }
     }
 
@@ -50,6 +77,18 @@ public struct SyncState: Codable, Sendable, Equatable {
     public var pendingBodyVersions: [UUID: PendingBody] = [:]
     /// Remote versions the local store refused, by the meta etag it refused; not fetched again until the etag changes.
     public var refusedRemotes: [UUID: RefusedRemote] = [:]
+    // web-app Task 0.4 (spec §3.4.7, §3.4.9).
+    /// Notes whose last-seen envelope had no `bodyFormat`; the conversion sweep republishes them as noteit-doc.
+    public var legacyBodies: Set<UUID> = []
+    /// Notes whose referenced body version was missing from the listing, since when (repair grace).
+    public var bodyMissingSince: [UUID: Date] = [:]
+    /// Keyed by hashed-tag body key; only currently listed keys.
+    public var strandedBodies: [String: StrandedBody] = [:]
+    /// Incremented once per pass of a session with `noteit-doc`.
+    public var passCount = 0
+    /// Sidecars imported but not deletable (no atomic deletes), key → ETag; pruned to listed keys.
+    public var consumedSidecars: [String: String] = [:]
+    public var tombstoneBindings: [UUID: TombstoneBinding] = [:]
 
     public struct RefusedRemote: Codable, Sendable, Equatable {
         public var metaETag: String
@@ -79,6 +118,7 @@ public struct SyncState: Codable, Sendable, Equatable {
 
     private enum CodingKeys: String, CodingKey {
         case bases, knownTombstones, lastDeviceWrite, tombstoneDates, pendingPushes, sidecarFirstSeen, keyID, pendingBodyVersions, refusedRemotes
+        case legacyBodies, bodyMissingSince, strandedBodies, passCount, consumedSidecars, tombstoneBindings
     }
 
     // Every key is optional so state files written by older builds keep their bases.
@@ -93,6 +133,12 @@ public struct SyncState: Codable, Sendable, Equatable {
         keyID = try c.decodeIfPresent(String.self, forKey: .keyID)
         pendingBodyVersions = try c.decodeIfPresent([UUID: PendingBody].self, forKey: .pendingBodyVersions) ?? [:]
         refusedRemotes = try c.decodeIfPresent([UUID: RefusedRemote].self, forKey: .refusedRemotes) ?? [:]
+        legacyBodies = try c.decodeIfPresent(Set<UUID>.self, forKey: .legacyBodies) ?? []
+        bodyMissingSince = try c.decodeIfPresent([UUID: Date].self, forKey: .bodyMissingSince) ?? [:]
+        strandedBodies = try c.decodeIfPresent([String: StrandedBody].self, forKey: .strandedBodies) ?? [:]
+        passCount = try c.decodeIfPresent(Int.self, forKey: .passCount) ?? 0
+        consumedSidecars = try c.decodeIfPresent([String: String].self, forKey: .consumedSidecars) ?? [:]
+        tombstoneBindings = try c.decodeIfPresent([UUID: TombstoneBinding].self, forKey: .tombstoneBindings) ?? [:]
     }
 
     /// Missing or corrupt files yield an empty state.

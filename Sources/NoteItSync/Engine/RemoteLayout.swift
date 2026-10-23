@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public enum RemoteLayout {
@@ -34,6 +35,62 @@ public enum RemoteLayout {
 
     public static func device(_ deviceID: String) -> String {
         root + "devices/\(deviceID).json"
+    }
+
+    /// Versioned noteit-doc bodies (web-app spec §3.4.9). Old builds ignore this folder entirely.
+    public static let bodiesPrefix = root + "bodies/"
+    /// The tag of a body whose commit uses `If-None-Match: *` (the note has no meta yet).
+    public static let newTag = "new"
+
+    /// `bodies/<ID>.<VERSION>.<TAG>.body`; a locked body ends in `.locked` instead (program §4 rule 13).
+    public static func docBody(_ id: UUID, version: UUID, tag: String, locked: Bool = false) -> String {
+        bodiesPrefix + "\(id.uuidString).\(version.uuidString).\(tag).\(locked ? "locked" : "body")"
+    }
+
+    /// Spec §3.4.9: the first 10 bytes of SHA-256 over the UTF-8 of the unquoted ETag, RFC 4648 base32 without
+    /// padding: 16 characters `[A-Z2-7]`.
+    public static func baseTag(_ etag: String) -> String {
+        let digest = Array(SHA256.hash(data: Data(unquotedETag(etag).utf8)).prefix(10))
+        let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567")
+        var output = ""
+        var buffer = 0, bits = 0
+        for byte in digest {
+            buffer = (buffer << 8) | Int(byte)
+            bits += 8
+            while bits >= 5 {
+                output.append(alphabet[(buffer >> (bits - 5)) & 31])
+                bits -= 5
+            }
+        }
+        return output
+    }
+
+    /// A parsed body name under `bodiesPrefix`.
+    public struct DocBodyName: Sendable, Equatable {
+        public let id: UUID
+        public let version: UUID
+        public let tag: String
+        public let locked: Bool
+    }
+
+    /// Parses `<ID>.<VERSION>.<TAG>.body|.locked`: both UUIDs in uppercase canonical form, TAG 16 base32
+    /// characters or `new`. Anything else under `bodies/` is an unparsable ("stray") name.
+    public static func parseDocBody(_ key: String) -> DocBodyName? {
+        guard key.hasPrefix(bodiesPrefix) else { return nil }
+        let parts = key.dropFirst(bodiesPrefix.count).split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 4, parts[3] == "body" || parts[3] == "locked",
+              let id = UUID(uuidString: parts[0]), id.uuidString == parts[0],
+              let version = UUID(uuidString: parts[1]), version.uuidString == parts[1],
+              isTag(parts[2]) else { return nil }
+        return DocBodyName(id: id, version: version, tag: parts[2], locked: parts[3] == "locked")
+    }
+
+    static func isTag(_ tag: String) -> Bool {
+        tag == newTag || (tag.count == 16 && tag.allSatisfy { ("A"..."Z").contains($0) || ("2"..."7").contains($0) })
+    }
+
+    static func unquotedETag(_ etag: String) -> String {
+        etag.count >= 2 && etag.hasPrefix("\"") && etag.hasSuffix("\"") ? String(etag.dropFirst().dropLast()) : etag
     }
 
     /// Who showed a reminder (organise). No version's record sync reads this folder.
@@ -79,6 +136,7 @@ extension RemoteLayout {
         RemotePrefix(path: root + "devices/", depth: 1, sealing: .storeKey, owner: "core"),
         RemotePrefix(path: root + "smart-folders/", depth: 1, sealing: .storeKey, owner: "organise"),
         RemotePrefix(path: root + "claims/reminders/", depth: 1, sealing: .storeKey, owner: "organise"),
+        RemotePrefix(path: root + "bodies/", depth: 1, sealing: .storeKey, owner: "web-app"),
     ]
 
     /// `manifest()`; never sealed and excluded from rekey.
@@ -105,7 +163,9 @@ extension RemoteLayout {
     static func isValidKey(_ key: String, prefixes: [RemotePrefix]) -> Bool {
         guard hasValidSegments(key) else { return false }
         if key == manifestKey || isCanaryKey(key) { return true }
-        return prefix(for: key, prefixes: prefixes) != nil
+        guard let row = prefix(for: key, prefixes: prefixes) else { return false }
+        // Body names carry a second UUID and a tag the generic grammar doesn't check.
+        return row.path != bodiesPrefix || parseDocBody(key) != nil
     }
 
     /// A registered prefix path, `canaryPrefix`, or a parent root of either (every shorter prefix ending at a

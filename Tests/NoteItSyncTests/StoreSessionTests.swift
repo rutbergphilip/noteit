@@ -183,7 +183,7 @@ final class StoreSessionTests: XCTestCase {
         await assertInvalidManifest {
             try await self.connect(empty, nil, encrypted: false, initial: [.lockedNotes], supported: Set(StoreFeature.allCases))
         }
-        await assertInvalidManifest { try await self.connect(empty, nil, encrypted: false, initial: [.noteItDoc]) }
+        await assertInvalidManifest { try await self.connect(empty, nil, encrypted: false, initial: [.noteItDoc], supported: [.keyring]) }
         let left = try await snapshot(empty)
         XCTAssertTrue(left.isEmpty)
     }
@@ -303,13 +303,13 @@ final class StoreSessionTests: XCTestCase {
     }
 
     func testConnectKeyringStoreWithDefaultSupported() async throws {
-        XCTAssertEqual(StoreFeature.supported, [.keyring])
+        XCTAssertEqual(StoreFeature.supported, [.keyring, .noteItDoc], "web-app Task 0.4 adds noteit-doc")
         let backend = InMemoryBackend()
         _ = try await connect(backend, .passphrase(pass), initial: [.keyring])
         let session = try await SyncEngine.connectSession(backend: backend, kind: .library, credential: .passphrase(pass),
                                                           deviceName: "Test Mac", createIfMissing: false, encrypted: true).session
         XCTAssertEqual(session.features, [.keyring])
-        XCTAssertEqual(session.supported, [.keyring])
+        XCTAssertEqual(session.supported, [.keyring, .noteItDoc])
         // The legacy wrapper opens it too.
         let (manifest, _) = try await SyncEngine.connect(backend: backend, passphrase: pass, encryptNew: true)
         XCTAssertNotNil(manifest.keyring)
@@ -413,6 +413,10 @@ final class StoreSessionTests: XCTestCase {
         let backend = InMemoryBackend()
         let wide = StoreFeature.supported.union([.noteItDoc])
         let ref = StoreSessionRef(try await connect(backend, nil, encrypted: false, supported: wide).session)
+        // An old device that can't read noteit-doc, so this engine doesn't add the feature itself (it isn't asked).
+        let old = RemoteLayout.device("OLD")
+        let info = try SyncEngine.encode(DeviceInfo(deviceID: "OLD", name: "Old Mac", lastSync: Date()))
+        try await backend.put(old, data: try ref.current.cipher.seal(info, context: SyncEngine.context(old)), ifMatch: nil, ifNoneMatch: false)
         let engine = engine(backend, ref, FakeLocalStore(), id: "A")
         _ = try await engine.sync()
         XCTAssertEqual(ref.current.features, [])
@@ -524,7 +528,7 @@ final class StoreSessionTests: XCTestCase {
         let session = try await connect(backend, nil, encrypted: false).session
         _ = try await engine(backend, StoreSessionRef(session), FakeLocalStore(), id: "A", appVersion: "1.2.3").sync()
         let json = try await deviceRecord(backend, session, id: "A")
-        XCTAssertEqual(json["supportedFeatures"] as? [String], ["keyring"])
+        XCTAssertEqual(json["supportedFeatures"] as? [String], ["keyring", "noteit-doc"])
         XCTAssertEqual(json["appVersion"] as? String, "1.2.3")
     }
 

@@ -1,4 +1,5 @@
 import AppKit
+import NoteItDoc
 import NoteItSync
 
 enum NoteStoreSyncError: Error, Equatable {
@@ -94,22 +95,69 @@ extension NoteStore {
         }
     }
 
-    nonisolated static func completeExport(_ payload: RecordPayload, _ source: ExportBody?) throws -> RecordPayload {
+    /// `encoding` follows the session (`StoreSession.bodyEncoding`): RTFD in a store without noteit-doc, a noteit-doc
+    /// container with `extras` and `bodyFormat` set in one with it (web-app Task 0.4).
+    /// A noteit-doc export of an RTFD library file also reads its body-extras sidecar (`storage`, `extrasURL`), so code
+    /// languages and front matter travel; an unreadable sidecar holds the note back rather than dropping them.
+    nonisolated static func completeExport(_ payload: RecordPayload, _ source: ExportBody?, encoding: BodyEncoding = .rtfd,
+                                           extras: ContainerExtras = .empty, storage: NoteBodyStorage? = nil,
+                                           extrasURL: URL? = nil) throws -> RecordPayload {
         guard let source else { return payload }
+        var extras = extras
         let text: NSAttributedString
         switch source {
         case .text(let cached):
             text = cached
         case .file(let url):
             if FileManager.default.fileExists(atPath: url.path) {
-                do { text = try readBody(at: url) } catch { throw NoteStoreSyncError.unreadableBody(payload.id) }
+                if encoding == .noteItDocV1, let storage, let extrasURL, storage.kind == .rtfd {
+                    var notices: [(BodyExtrasNotice, String)] = []
+                    let stored: StoredBody
+                    do { stored = try readStoredBody(payload.id, from: storage, extrasURL: extrasURL, notices: &notices) } catch {
+                        throw NoteStoreSyncError.unreadableBody(payload.id)
+                    }
+                    if stored.readOnlyReason != nil { throw NoteStoreSyncError.unreadableBody(payload.id) }
+                    text = stored.text
+                    extras = stored.extras
+                } else {
+                    do { text = try readBody(at: url) } catch { throw NoteStoreSyncError.unreadableBody(payload.id) }
+                }
             } else {
                 text = NSAttributedString()
             }
         }
         var complete = payload
-        complete.body = try serializeBody(text)
+        switch encoding {
+        case .rtfd:
+            complete.body = try serializeBody(text)
+        case .noteItDocV1:
+            do {
+                complete.body = try BodyCodec.noteItDoc(of: text, extras: extras).encoded()
+            } catch {
+                throw NoteStoreSyncError.invalidPayload("body could not be converted to noteit-doc: \(error)")
+            }
+            complete.bodyFormat = BodyFormat.noteItDocV1
+        }
         return complete
+    }
+
+    /// A synced note body: a noteit-doc container when `format` says so, flattened RTFD otherwise. An unlabelled body
+    /// that isn't RTFD but is a noteit-doc container is read as one (spec §3.4 item 4's magic-byte fallback).
+    nonisolated static func decodeSyncBody(_ data: Data, format: String?) throws -> (body: StoredBody, isRTFD: Bool) {
+        func container() throws -> (body: StoredBody, isRTFD: Bool) {
+            let parsed: BodyContainer
+            do {
+                parsed = try BodyContainer.decode(data)
+            } catch {
+                throw NoteStoreSyncError.invalidPayload("body is not a noteit-doc container")
+            }
+            return (try BodyCodec.attributedString(from: parsed), false)
+        }
+        if format == BodyFormat.noteItDocV1 { return try container() }
+        if format != nil { throw NoteStoreSyncError.invalidPayload("unsupported body format \(format!)") }
+        if let text = NSAttributedString(rtfd: data, documentAttributes: nil) { return (StoredBody(text: text), true) }
+        if data.first == UInt8(ascii: "{"), let doc = try? container() { return doc }
+        throw NoteStoreSyncError.invalidPayload("body is not RTFD")
     }
 
     /// Inserts or replaces the record, keeping `payload.revision`. A note whose notebook hasn't arrived yet
@@ -159,7 +207,7 @@ extension NoteStore {
         let remote = try Self.decodeMeta(NoteMeta.self, payload)
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
         let suffix = " (conflict — \(name), \(Self.conflictDateFormatter.string(from: payload.modifiedAt)))"
-        let body = Self.appendingToTitleLine(try Self.deserializeBody(data), suffix)
+        let body = Self.appendingToTitleLine(try Self.decodeSyncBody(data, format: payload.bodyFormat).body.text, suffix)
         if markdownStorage != nil, let name = Self.oversizedAttachmentName(in: body) {
             throw AttachmentStore.StoreError.tooLarge(name)
         }

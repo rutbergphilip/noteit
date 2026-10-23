@@ -2607,13 +2607,17 @@ final class NoteStore: ObservableObject {
         }
     }
 
+    /// A noteit-doc body (by `payload.bodyFormat`) brings its own extras; `extras` and `bodyIsRTFD` describe an RTFD one.
     nonisolated static func prepareRemoteNote(_ payload: RecordPayload, storage: NoteBodyStorage,
                                               extras: ContainerExtras = .empty,
                                               bodyIsRTFD: Bool = true) throws -> PreparedRemoteNote {
         var meta = try decodeMeta(NoteMeta.self, payload)
         meta.revision = payload.revision
         guard let data = payload.body else { throw NoteStoreSyncError.missingBody(payload.id) }
-        let body = try deserializeBody(data)
+        let decoded = try decodeSyncBody(data, format: payload.bodyFormat)
+        let body = decoded.body.text
+        let extras = decoded.isRTFD ? extras : decoded.body.extras
+        let bodyIsRTFD = decoded.isRTFD && bodyIsRTFD
         applyDerivedFields(to: &meta, from: body)
         var tempExtras = extras
         if bodyIsRTFD, storage.kind != .rtfd {

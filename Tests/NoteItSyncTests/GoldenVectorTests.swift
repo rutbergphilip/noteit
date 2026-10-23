@@ -278,15 +278,33 @@ final class GoldenVectorTests: XCTestCase {
             ("device", RemoteLayout.device("device-1"),
              DeviceInfo(deviceID: "device-1", name: "Work Mac/Studio", lastSync: VectorIO.epoch.addingTimeInterval(0.125))),
         ]
+        // web-app Task 0.4: a noteit-doc envelope and the versioned body it names, sealed with the body key's context.
+        let docBody = BodyContainer(doc: .doc([
+            .heading(level: 1, align: nil, indent: nil, content: [.text("Plans / ideas", marks: [])]),
+            .paragraph(align: nil, indent: nil, content: [.text("Road trip: A/B testing", marks: [.bold])]),
+        ]))
+        let docBodyPlain = try docBody.encoded()
+        let docVersion = VectorIO.uuid("envelope-note-body-version")
+        let docTag = RemoteLayout.baseTag("\"5d41402abc4b2a76b9719d911017c592\"")
+        let docInputs: [(String, String, any Encodable)] = [
+            ("note-envelope-noteit-doc", RemoteLayout.meta(.note, noteID),
+             RemoteEnvelope(id: noteID, kind: .note, revision: noteMeta.revision!, modifiedAt: modifiedAt, deviceID: "device-1",
+                            deviceName: "Work Mac/Studio", meta: noteMetaData, bodySHA256: SyncEngine.sha256Hex(docBodyPlain),
+                            bodyFormat: BodyFormat.noteItDocV1, bodyVersion: docVersion)),
+        ]
         var cases: [EnvelopeCase] = []
-        for (name, key, value) in inputs {
-            let plain = try SyncEngine.encode(value)
+        func add(_ name: String, _ key: String, _ plain: Data) throws {
             let context = SyncEngine.context(key)
             cases.append(EnvelopeCase(name: name, key: key, context: context, keyB64: VectorIO.keyData(cipher.key).base64EncodedString(),
                                       sealed: try cipher.seal(plain, context: context).base64EncodedString(),
                                       plaintextJSON: String(decoding: plain, as: UTF8.self), decoded: try Self.decoded(plain)))
         }
+        for (name, key, value) in inputs + docInputs {
+            try add(name, key, try SyncEngine.encode(value))
+        }
+        try add("noteit-doc-body", RemoteLayout.docBody(noteID, version: docVersion, tag: docTag), docBodyPlain)
         XCTAssertTrue(cases[0].plaintextJSON.contains("\\/"), "Swift escapes slashes in strings")
+        XCTAssertEqual(cases.last?.context, "bodies/\(noteID.uuidString).\(docVersion.uuidString).\(docTag).body", "context without the root")
         try VectorIO.check("envelopes.json", cases)
 
         for vector in try VectorIO.load("envelopes.json", as: EnvelopeCase.self) {
@@ -298,6 +316,7 @@ final class GoldenVectorTests: XCTestCase {
             switch vector.name {
             case let name where name.hasPrefix("tombstone"): reencoded = try SyncEngine.encode(SyncEngine.decode(Tombstone.self, from: plain))
             case "device": reencoded = try SyncEngine.encode(SyncEngine.decode(DeviceInfo.self, from: plain))
+            case "noteit-doc-body": reencoded = try BodyContainer.decode(plain).encoded()
             default:
                 let envelope = try SyncEngine.decode(RemoteEnvelope.self, from: plain)
                 reencoded = try SyncEngine.encode(envelope)
@@ -310,6 +329,23 @@ final class GoldenVectorTests: XCTestCase {
             XCTAssertEqual(reencoded, plain, "\(vector.name) re-encodes to the same bytes")
             XCTAssertEqual(try Self.decoded(plain), vector.decoded, vector.name)
         }
+    }
+
+    // MARK: - base-tags.json (web-app Task 0.4)
+
+    /// `etag` as a backend returns it (quotes included or not); `tag` = `RemoteLayout.baseTag(etag)`.
+    struct BaseTagCase: Codable, Equatable {
+        var etag: String
+        var tag: String
+    }
+
+    func testBaseTags() throws {
+        let etags = ["5d41402abc4b2a76b9719d911017c592", "\"5d41402abc4b2a76b9719d911017c592\"", "d41d8cd98f00b204e9800998ecf8427e-2",
+                     "0x8DCF2A3B4C5D6E7", "9B2CF535-F277-31C9-7434-3645A3985328", "etag-1", "\"\"", "x"]
+        let cases = etags.map { BaseTagCase(etag: $0, tag: RemoteLayout.baseTag($0)) }
+        XCTAssertEqual(cases[0].tag, cases[1].tag, "quotes are not part of the ETag")
+        XCTAssertTrue(cases.allSatisfy { $0.tag.count == 16 && RemoteLayout.isTag($0.tag) })
+        try VectorIO.check("base-tags.json", cases)
     }
 
     /// The plaintext as JSON, with an envelope's `meta` bytes replaced by the inner meta's JSON.

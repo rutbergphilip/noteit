@@ -14,8 +14,9 @@ public enum StoreFeature: String, Sendable, CaseIterable {
 
     /// Features this build reads. `connectSession` refuses a store with a feature outside it (`unsupportedFeature`),
     /// and `DeviceInfo.supportedFeatures` is this set, sorted. web-app adds `.noteItDoc`, sync-security
-    /// `.lockedNotes`; sharing passes `supported ∪ [.noteItSpace]` for space sessions.
-    public static let supported: Set<StoreFeature> = [.keyring]
+    /// `.lockedNotes`; sharing passes `supported ∪ [.noteItSpace]` for space sessions. web-app Task 0.4 added
+    /// `.noteItDoc` together with the body conversion (program §4 rule 2).
+    public static let supported: Set<StoreFeature> = [.keyring, .noteItDoc]
 
     /// Features that must be present before this one.
     public var requires: [StoreFeature] {
