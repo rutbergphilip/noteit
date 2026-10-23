@@ -17,10 +17,12 @@ struct MarkdownScanReads: @unchecked Sendable {
         var noteIDs: Set<UUID>
         var notebookIDs: Set<UUID>
         var held: Set<UUID>
+        /// Notes with an edit in `recovery/`: their files are read so restoring it can tell what it would replace.
+        var recovering: Set<UUID> = []
     }
 
-    /// Content-relative path → the file's bytes, for changed, moved, added and copied files and for files of
-    /// notes the library doesn't list yet; a path that couldn't be read is missing.
+    /// Content-relative path → the file's bytes, for changed, moved, added and copied files, for files of
+    /// notes the library doesn't list yet and of notes with an edit in `recovery/`; a path that couldn't be read is missing.
     var files: [String: File] = [:]
     /// Folder path → the notebook its `.noteit-notebook.json` describes, for folders not yet known as notebooks.
     var notebookFiles: [String: Notebook] = [:]
@@ -36,6 +38,7 @@ struct MarkdownScanReads: @unchecked Sendable {
         for (id, entry) in entries where !known.noteIDs.contains(id) && !result.removed.contains(id) {
             paths.insert(entry.path)
         }
+        for id in known.recovering { if let entry = entries[id] { paths.insert(entry.path) } }
         for path in paths {
             let url = root.appendingPathComponent(path, isDirectory: false)
             guard let data = try? Data(contentsOf: url) else { continue }

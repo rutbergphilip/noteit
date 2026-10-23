@@ -241,10 +241,14 @@ final class ExternalChangeTests: XCTestCase {
         let fresh = away.createNote(in: nil, initial: NSAttributedString(string: "Fresh\n\nnew while away")).id
         away.flush()
         try await waitUntil({ self.recoveryCopies(away).count == 2 }, "both edits are kept in recovery/")
+        let versions = away.history.versions(of: kept).count
 
         quit()
         let store = open()
+        XCTAssertEqual(store.history.versions(of: kept).count, versions + 1, "restoring it keeps the text it replaces")
         XCTAssertEqual(store.body(for: kept).string, "Kept\n\nwaiting edit", "the waiting edit is back")
+        XCTAssertTrue(store.history.versions(of: kept).contains { (try? store.history.load($0))?.text.string.contains("first") == true },
+                      "the text it replaced is kept as a version")
         XCTAssertEqual(store.body(for: fresh).string, "Fresh\n\nnew while away", "so is the note created while away")
         store.flush()
         store.waitForMarkdownWrites(upTo: 10)
@@ -275,6 +279,55 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(recoveryCopies(store), [])
         let reopened = open()
         XCTAssertEqual(reopened.notes.filter { $0.conflictOriginalID == kept }.count, 1, "restored once")
+    }
+
+    /// Writes a waiting edit of Kept.md to `recovery/` while the folder hangs; `outside` runs before the edit.
+    private func keepEditInRecovery(outside: () throws -> Void = {}) async throws -> (id: UUID, quit: () -> Void, away: NoteStore) {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let (away, quit) = try openWithHungWrites()
+        let kept = try note(away, titled: "Kept").id
+        XCTAssertEqual(away.body(for: kept).string, "Kept\nfirst")
+        try outside()
+        away.updateBody(kept, NSAttributedString(string: "Kept\n\nwaiting edit"))
+        away.flush()
+        try await waitUntil({ self.recoveryCopies(away).count == 1 }, "the edit is kept in recovery/")
+        return (kept, quit, away)
+    }
+
+    private func assertKeptBeside(_ kept: UUID, file text: String) throws {
+        let store = open()
+        XCTAssertEqual(store.body(for: kept).string, text, "the file's version isn't overwritten")
+        let copy = try XCTUnwrap(store.notes.first { $0.conflictOriginalID == kept }, "the recovered edit is its own note")
+        XCTAssertTrue(store.body(for: copy.id).string.contains("waiting edit"))
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertEqual(recoveryCopies(store), [])
+        let reopened = open()
+        XCTAssertEqual(reopened.body(for: kept).string, text)
+        XCTAssertEqual(reopened.notes.filter { $0.conflictOriginalID == kept }.count, 1, "restored once")
+    }
+
+    func testARecoveredEditIsKeptBesideAFileChangedElsewhereBeforeTheCopyWasMade() async throws {
+        let (kept, quit, _) = try await keepEditInRecovery {
+            try edit("Kept.md", "first", "changed elsewhere", modified: Date().addingTimeInterval(-30))
+        }
+        quit()
+        try assertKeptBeside(kept, file: "Kept\nchanged elsewhere")
+    }
+
+    func testARecoveredEditIsKeptBesideAFileChangedOnAShareWhoseClockIsBehind() async throws {
+        let (kept, quit, _) = try await keepEditInRecovery()
+        try edit("Kept.md", "first", "changed elsewhere", modified: Date().addingTimeInterval(-3600))
+        quit()
+        try assertKeptBeside(kept, file: "Kept\nchanged elsewhere")
+    }
+
+    func testARecoveryCopyThatDoesntSayWhatItWasBasedOnIsKeptBeside() async throws {
+        let (kept, quit, away) = try await keepEditInRecovery()
+        let copy = try XCTUnwrap(recoveryCopies(away).first)
+        try fm.moveItem(at: copy, to: copy.deletingLastPathComponent().appendingPathComponent("\(kept.uuidString)-20260101-000000.md"))
+        quit()
+        try assertKeptBeside(kept, file: "Kept\nfirst")
     }
 
     func testARescanNeverWaitsForTheFolderOnTheMainThread() async throws {
@@ -1103,6 +1156,15 @@ final class ExternalChangeTests: XCTestCase {
         defer { harness.close() }
         let editor = harness.open(store, plan)
         XCTAssertEqual(editor.view.string, "Plan\nPlan text")
+        // The scan a missing read starts would move a file gone for good to Recently Deleted; here it comes back.
+        store.markdownScanTimeout = 60
+        let scanGate = DispatchSemaphore(value: 0)
+        let realScan = store.markdownFolderScan
+        store.markdownFolderScan = { root, index, ledger in
+            _ = scanGate.wait(timeout: .now() + 30)
+            return realScan(root, index, ledger)
+        }
+        addTeardownBlock { for _ in 0..<8 { scanGate.signal() } }
         try fm.removeItem(at: content.appendingPathComponent("Plan.md"))
         gates["Other"]?.leave()
         Thread.sleep(forTimeInterval: 0.3)

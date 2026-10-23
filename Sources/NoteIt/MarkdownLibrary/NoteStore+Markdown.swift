@@ -141,7 +141,8 @@ extension NoteStore {
         let ledger = storage.ledger
         let scan = markdownFolderScan
         let known = MarkdownScanReads.Known(noteIDs: Set(notes.map(\.id)), notebookIDs: Set(notebooks.map(\.id)),
-                                            held: heldMarkdownDeletions)
+                                            held: heldMarkdownDeletions,
+                                            recovering: markdownLaunchScanPending ? markdownRecoveryCopyIDs() : [])
         return {
             guard check(root) else { return .missing }
             let result = scan(root, index, ledger)
@@ -342,7 +343,7 @@ extension NoteStore {
         changed.formUnion(result.moved.keys)
         notesChangedBeforeDerivedIndexes.formUnion(changed)
         let restoredBefore = Set(notes.map(\.id))
-        restoreMarkdownRecoveryCopies()
+        restoreMarkdownRecoveryCopies(reads: reads)
         notesChangedBeforeDerivedIndexes.formUnion(Set(notes.map(\.id)).subtracting(restoredBefore))
         if note(with: selectedNoteID) == nil { selectedNoteID = notes(for: selection, search: "").first?.id }
         flush()

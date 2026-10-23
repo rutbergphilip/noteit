@@ -2034,11 +2034,20 @@ final class NoteStore: ObservableObject {
 
     static let recoveredEditSource = "an unsaved edit"
 
+    /// The notes with a Markdown copy in `recovery/` (a local folder in the data directory).
+    func markdownRecoveryCopyIDs() -> Set<UUID> {
+        let files = (try? FileManager.default.contentsOfDirectory(at: recoveryURL, includingPropertiesForKeys: nil)) ?? []
+        return Set(files.filter { $0.pathExtension == "md" }.compactMap { UUID(uuidString: String($0.lastPathComponent.prefix(36))) })
+    }
+
     /// At launch, once the folder answered: edits kept in `recovery/` because they couldn't be written before the app
-    /// quit go back into their notes. When the note's file changed after the copy was made (or can't be written, or
-    /// is gone and held), the file is left as it is and the edit becomes a note of its own beside it. Copies are
-    /// removed once their text is written; copies of notes that are deleted or locked are left in `recovery/`.
-    func restoreMarkdownRecoveryCopies() {
+    /// quit go back into their notes. A copy replaces its note's text only when the note's file is still exactly what
+    /// the edit was based on (the sha256 in the copy's name; no file then and now for a note never written), and the
+    /// text it replaces is kept as a version. Otherwise (the file changed, whatever its date says; a copy that
+    /// doesn't say what it was based on; a note that can't be written or is held) the file is left as it is and the
+    /// edit becomes a note of its own beside it. Copies are removed once their text is written; copies of notes that
+    /// are deleted or locked are left in `recovery/`.
+    func restoreMarkdownRecoveryCopies(reads: MarkdownScanReads) {
         guard let storage = markdownStorage else { return }
         let key = URLResourceKey.contentModificationDateKey
         let files = (try? FileManager.default.contentsOfDirectory(at: recoveryURL, includingPropertiesForKeys: [key])) ?? []
@@ -2061,9 +2070,13 @@ final class NoteStore: ObservableObject {
                 NSLog("NoteIt: couldn't read the recovery copy \(newest.url.path): \(error)")
                 continue
             }
-            let fileChanged = storage.index.entry(id).map { Double($0.mtimeNs) / 1e9 > newest.date.timeIntervalSince1970 } ?? false
             let target: UUID
-            if fileChanged || bodyWriteBlocked.contains(id) || heldMarkdownDeletions.contains(id) {
+            if !bodyWriteBlocked.contains(id), !heldMarkdownDeletions.contains(id),
+               let replaced = recoveryBaseMatches(id, base: MarkdownBodyStorage.recoveryBase(of: newest.url), reads: reads, storage: storage) {
+                if let replaced { history.record(replaced.text, extras: replaced.extras, of: id) }
+                restoreRecoveredBody(id, restored.text, date: newest.date, storage: storage)
+                target = id
+            } else {
                 let meta = notes[index]
                 let copy = createNote(in: meta.notebookID, initial: Self.appendingToTitleLine(restored.text, " (Recovered)"))
                 if let copyIndex = noteIndex(copy.id) {
@@ -2073,12 +2086,25 @@ final class NoteStore: ObservableObject {
                     dispatchDerivedIndexes(.metadata(notes[copyIndex]))
                 }
                 target = copy.id
-            } else {
-                restoreRecoveredBody(id, restored.text, date: newest.date, storage: storage)
-                target = id
             }
             markdownRecoveryCopies[target, default: []] += found.map(\.url)
             NSLog("NoteIt: restored note \(id) from \(newest.url.path)\(target == id ? "" : " as a note of its own")")
+        }
+    }
+
+    /// Whether the note's file is still what a recovery copy's edit was based on: `.some(text it replaces)` (nil
+    /// text for a note that has no file), or nil when it isn't, or can't be told.
+    private func recoveryBaseMatches(_ id: UUID, base: MarkdownBodyStorage.RecoveryBase?, reads: MarkdownScanReads,
+                                     storage: MarkdownBodyStorage) -> StoredBody?? {
+        switch base {
+        case nil:
+            return nil
+        case .noFile:
+            return storage.index.entry(id) == nil ? .some(nil) : nil
+        case .file(let sha):
+            guard let entry = storage.index.entry(id), entry.sha256 == sha, let file = reads.files[entry.path],
+                  AttachmentStore.sha256(file.data) == sha, file.read.body.readOnlyReason == nil else { return nil }
+            return .some(file.read.body)
         }
     }
 

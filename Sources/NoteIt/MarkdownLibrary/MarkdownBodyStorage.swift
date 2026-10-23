@@ -814,6 +814,27 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         }
     }
 
+    /// What the edit in a recovery copy was based on, in its file name so it's written with the copy: the
+    /// sha256 of the note's file as NoteIt last read or wrote it, or `none` when the note had no file.
+    static func recoveryBaseTag(_ entry: MarkdownFileEntry?) -> String {
+        guard let entry else { return "-base-none" }
+        return entry.sha256.isEmpty ? "" : "-base-" + entry.sha256
+    }
+
+    enum RecoveryBase: Equatable {
+        case noFile
+        case file(sha256: String)
+    }
+
+    /// The base a recovery copy's name records; nil for a copy that doesn't say (made by an older version).
+    static func recoveryBase(of url: URL) -> RecoveryBase? {
+        let name = url.deletingPathExtension().lastPathComponent
+        guard let range = name.range(of: "-base-") else { return nil }
+        let tag = name[range.upperBound...].prefix { $0.isHexDigit || $0.isLetter }
+        if tag == "none" { return .noFile }
+        return tag.count == 64 && tag.allSatisfy(\.isHexDigit) ? .file(sha256: String(tag)) : nil
+    }
+
     /// A `recoveryCopy` read back; its attachments are in the recovery folder's `_attachments/`.
     func readRecoveryCopy(_ url: URL) throws -> StoredBody {
         let data = try Data(contentsOf: url)
@@ -828,7 +849,8 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
 
     func recoveryCopy(_ text: NSAttributedString, for id: UUID, in directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = RTFDBodyStorage.uniqueURL(directory.appendingPathComponent("\(id.uuidString)-\(RTFDBodyStorage.timestamp()).md"))
+        let url = RTFDBodyStorage.uniqueURL(directory.appendingPathComponent(
+            "\(id.uuidString)-\(RTFDBodyStorage.timestamp())\(Self.recoveryBaseTag(index.entry(id))).md"))
         let container = try BodyCodec.noteItDoc(of: text, imagePolicy: .keepOriginal)
         let folder = directory.appendingPathComponent(AttachmentPaths.folder, isDirectory: true)
         for (sha, attachment) in container.attachments {
