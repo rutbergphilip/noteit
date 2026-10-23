@@ -1,5 +1,8 @@
-import { Extension, Mark, mergeAttributes, Node, textblockTypeInputRule, type AnyExtension, type Editor } from '@tiptap/core';
-import { history, redo, undo } from '@tiptap/pm/history';
+import { Extension, Mark, mergeAttributes, Node, type AnyExtension, type Editor } from '@tiptap/core';
+import { closeHistory, history, redo, undo } from '@tiptap/pm/history';
+import { Plugin, TextSelection } from '@tiptap/pm/state';
+import type { EditorView } from '@tiptap/pm/view';
+import { WIKI_LINK_TRIGGER } from '../linking.js';
 import { safeAlign, safeBlobUrl, safeColor, safeHref, safeInt, safeLanguage, safePositive } from './safe.js';
 
 const BULLETS = ['•', '◦', '▪'];
@@ -47,9 +50,6 @@ export const HeadingNode = Node.create({
   addAttributes: () => ({ level: { default: 1, rendered: false }, ...alignAttr, ...indentAttr }),
   parseHTML: () => [1, 2, 3].map((level) => ({ tag: `h${level}`, attrs: { level } })),
   renderHTML: ({ node, HTMLAttributes }) => [`h${safeInt(node.attrs.level, 1, 3) ?? 1}`, HTMLAttributes, 0],
-  addInputRules() {
-    return [1, 2, 3].map((level) => textblockTypeInputRule({ find: new RegExp(`^(#{${level}})\\s$`), type: this.type, getAttributes: { level } }));
-  },
 });
 
 export const CodeBlockNode = Node.create({
@@ -62,9 +62,6 @@ export const CodeBlockNode = Node.create({
   addAttributes: () => ({ ...alignAttr, language: { default: null, parseHTML: (el) => safeLanguage(el.dataset.language), renderHTML: (a) => (safeLanguage(a.language) ? { 'data-language': safeLanguage(a.language) } : {}) } }),
   parseHTML: () => [{ tag: 'pre', preserveWhitespace: 'full' }],
   renderHTML: ({ HTMLAttributes }) => ['pre', mergeAttributes(HTMLAttributes, { class: 'ni-code' }), 0],
-  addInputRules() {
-    return [textblockTypeInputRule({ find: /^```$/, type: this.type })];
-  },
   addKeyboardShortcuts() {
     return {
       // One codeBlock per native code paragraph: Enter makes the next code paragraph; Enter on an empty one leaves.
@@ -159,20 +156,8 @@ export const ListItemNode = Node.create({
       };
     };
   },
-  addInputRules() {
-    return [
-      textblockTypeInputRule({ find: /^\s*([-*•])\s$/, type: this.type, getAttributes: { kind: 'bullet', level: 0 } }),
-      textblockTypeInputRule({ find: /^(\d+)\.\s$/, type: this.type, getAttributes: (m) => ({ kind: 'ordered', level: 0, number: Number(m[1]) }) }),
-      textblockTypeInputRule({ find: /^\[( |x)?\]\s$/, type: this.type, getAttributes: (m) => ({ kind: 'task', level: 0, checked: m[1] === 'x' }) }),
-    ];
-  },
   addKeyboardShortcuts() {
     const inItem = (editor: Editor) => editor.state.selection.$from.parent.type.name === 'listItem';
-    const shift = (editor: Editor, by: number) => {
-      if (!inItem(editor)) return false;
-      const attrs = editor.state.selection.$from.parent.attrs as { level: number };
-      return editor.commands.updateAttributes('listItem', { level: Math.min(8, Math.max(0, attrs.level + by)) });
-    };
     return {
       Enter: ({ editor }) => {
         if (!inItem(editor) || !editor.state.selection.empty) return false;
@@ -182,8 +167,6 @@ export const ListItemNode = Node.create({
         const next = { kind: a.kind, level: a.level, number: a.kind === 'ordered' ? (a.number ?? 1) + 1 : null, checked: a.kind === 'task' ? false : null, align: a.align };
         return editor.chain().splitBlock().setNode('listItem', next).run();
       },
-      Tab: ({ editor }) => shift(editor, 1),
-      'Shift-Tab': ({ editor }) => shift(editor, -1),
       Backspace: ({ editor }) => {
         const { $from, empty } = editor.state.selection;
         if (!empty || $from.parent.type.name !== 'listItem' || $from.parentOffset !== 0) return false;
@@ -420,7 +403,259 @@ export const BlockShortcuts = Extension.create({
   },
 });
 
-export function noteItExtensions(opts: { resolver?: AttachmentResolver } = {}): AnyExtension[] {
+// MARK: Markdown as you type (native MarkdownShortcuts.swift)
+
+/** Native `CodeLanguage(identifier:)` aliases → the canonical id a codeBlock's `language` holds. */
+const CODE_LANGUAGES: Record<string, string> = {
+  text: 'text', txt: 'text', plain: 'text', plaintext: 'text',
+  bash: 'bash', sh: 'bash', shell: 'bash', zsh: 'bash', console: 'bash', shellsession: 'bash',
+  c: 'c', h: 'c',
+  cpp: 'cpp', 'c++': 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
+  csharp: 'csharp', cs: 'csharp', 'c#': 'csharp',
+  css: 'css', scss: 'css',
+  go: 'go', golang: 'go',
+  html: 'html', xml: 'html', xhtml: 'html', svg: 'html', plist: 'html',
+  java: 'java',
+  javascript: 'javascript', js: 'javascript', jsx: 'javascript', mjs: 'javascript', node: 'javascript',
+  json: 'json', jsonc: 'json',
+  kotlin: 'kotlin', kt: 'kotlin', kts: 'kotlin',
+  markdown: 'markdown', md: 'markdown',
+  php: 'php',
+  python: 'python', py: 'python', python3: 'python',
+  ruby: 'ruby', rb: 'ruby',
+  rust: 'rust', rs: 'rust',
+  sql: 'sql', mysql: 'sql', postgresql: 'sql', postgres: 'sql', sqlite: 'sql',
+  swift: 'swift',
+  typescript: 'typescript', ts: 'typescript', tsx: 'typescript',
+  yaml: 'yaml', yml: 'yaml',
+};
+
+/** A Markdown info string or alias (`py`, `c++`, `yml`…) → canonical language id; undefined when unknown. */
+export function codeLanguageId(raw: string): string | undefined {
+  const word = raw.trim().split(/[ {,]/)[0] ?? '';
+  return CODE_LANGUAGES[word.toLowerCase()];
+}
+
+const BOLD = /\*\*([^*\s](?:[^*\n]*[^*\s])?)\*$/;
+const ITALIC = /(?:^|(?<=[^*\w]))\*([^*\s](?:[^*\n]*[^*\s])?)$/;
+const CODE = /`([^`\n]*[^`\s][^`\n]*)$/;
+const STRIKE = /~~([^~\s](?:[^~\n]*[^~\s])?)~$/;
+const NUMBERED = /^(\d{1,3})[.)]$/;
+const FENCE = /^```([A-Za-z0-9+#_.-]*)$/;
+const DIVIDERS = ['---', '***', '___', '—-', '—', '–-'];
+
+/** ```` ``` ```` or ```` ```swift ````: a fence and its language (null = automatic); undefined when not a fence or unknown. */
+function codeFence(prefix: string): string | null | undefined {
+  const m = FENCE.exec(prefix);
+  if (!m) return undefined;
+  if (!m[1]) return null;
+  return codeLanguageId(m[1]);
+}
+
+/** Applies a conversion as its own undo step after the typed trigger, so one ⌘Z gives back the literal Markdown. */
+function convertAfterTyping(view: EditorView, from: number, to: number, text: string, convert: () => boolean): boolean {
+  view.dispatch(view.state.tr.insertText(text, from, to));
+  view.dispatch(closeHistory(view.state.tr));
+  return convert();
+}
+
+/** Turns `[[inner]` + `]` into a note link; the host resolves titles (native handleWikiLinkTrigger). */
+export type WikiLinkResolver = (inner: string) => { href: string; text: string } | undefined;
+
+function wikiLinkTyped(view: EditorView, from: number, prefix: string, start: number, resolve: WikiLinkResolver | undefined): boolean {
+  const m = resolve ? WIKI_LINK_TRIGGER.exec(prefix) : null;
+  const link = m ? resolve!(m[1]!) : undefined;
+  const linkType = view.state.schema.marks.link;
+  if (!m || !link || !linkType) return false;
+  const at = start + m.index;
+  return convertAfterTyping(view, from, from, ']', () => {
+    const tr = view.state.tr.insertText(link.text, at, from + 1);
+    tr.addMark(at, at + link.text.length, linkType.create({ href: link.href }));
+    tr.setStoredMarks([]);
+    view.dispatch(tr);
+    return true;
+  });
+}
+
+function handleTyped(editor: Editor, view: EditorView, from: number, to: number, text: string, resolve?: WikiLinkResolver): boolean {
+  if (text.length !== 1 || from !== to || !editor.isEditable) return false;
+  const { $from } = view.state.selection;
+  const parent = $from.parent;
+  if (parent.type.name === 'codeBlock' || !parent.isTextblock) return false;
+  const inCode = (view.state.storedMarks ?? $from.marks()).some((m) => m.type.name === 'code');
+  if (inCode && text !== '`') return false;
+  const prefix = parent.textBetween(0, $from.parentOffset, undefined, '￼');
+  const start = $from.start();
+
+  if (text === ' ') return blockShortcut(editor, view, prefix, from, text);
+  if (text === ']') return !inCode && wikiLinkTyped(view, from, prefix, start, resolve);
+
+  const inline: Record<string, { re: RegExp; mark: string; open: number; typedClose: number }> = {
+    '*': { re: BOLD, mark: 'bold', open: 2, typedClose: 1 },
+    '`': { re: CODE, mark: 'code', open: 1, typedClose: 0 },
+    '~': { re: STRIKE, mark: 'strike', open: 2, typedClose: 1 },
+  };
+  let rule = inline[text];
+  let m = rule ? rule.re.exec(prefix) : null;
+  if (text === '*' && !m) {
+    rule = { re: ITALIC, mark: 'italic', open: 1, typedClose: 0 };
+    m = ITALIC.exec(prefix);
+  }
+  if (!rule || !m) return false;
+  const markType = view.state.schema.marks[rule.mark];
+  if (!markType) return false;
+  const contentFrom = start + m.index + m[0].length - rule.typedClose - m[1]!.length;
+  const contentTo = contentFrom + m[1]!.length;
+  const { open, typedClose } = rule;
+  return convertAfterTyping(view, from, to, text, () => {
+    const tr = view.state.tr;
+    tr.delete(contentTo, contentTo + typedClose + 1);
+    tr.addMark(contentFrom, contentTo, markType.create());
+    tr.delete(contentFrom - open, contentFrom);
+    tr.setStoredMarks((view.state.storedMarks ?? $from.marks()).filter((x) => x.type !== markType));
+    view.dispatch(tr);
+    return true;
+  });
+}
+
+function blockShortcut(editor: Editor, view: EditorView, prefix: string, at: number, text: string): boolean {
+  const { $from } = view.state.selection;
+  if ($from.parent.type.name === 'listItem') return false;
+  const fence = codeFence(prefix);
+  const numbered = NUMBERED.exec(prefix);
+  type Target = { type: string; attrs?: Record<string, unknown>; wrap?: boolean };
+  let target: Target | undefined;
+  if (fence !== undefined) target = { type: 'codeBlock', attrs: { language: fence } };
+  else if (prefix === '#' || prefix === '##' || prefix === '###') target = { type: 'heading', attrs: { level: prefix.length } };
+  else if (prefix === '>') target = { type: 'blockquote', wrap: true };
+  else if (['-', '*', '+', '•'].includes(prefix)) target = { type: 'listItem', attrs: { kind: 'bullet', level: 0, number: null, checked: null } };
+  else if (['[]', '[ ]', '[x]', '[X]'].includes(prefix)) target = { type: 'listItem', attrs: { kind: 'task', level: 0, number: null, checked: prefix.toLowerCase() === '[x]' } };
+  else if (numbered) target = { type: 'listItem', attrs: { kind: 'ordered', level: 0, number: Number(numbered[1]), checked: null } };
+  if (!target) return false;
+  const blockStart = $from.start();
+  // Only where that block can go (not inside a table cell or a quote's quote).
+  const probe = target.wrap ? editor.can().wrapIn('blockquote') : editor.can().chain().setTextSelection(blockStart).setNode(target.type, target.attrs ?? {}).run();
+  if (!probe) return false;
+  const t = target;
+  return convertAfterTyping(view, at, at, text, () => {
+    const chain = editor.chain().deleteRange({ from: blockStart, to: blockStart + prefix.length + 1 });
+    if (t.wrap) return chain.wrapIn('blockquote').run();
+    return chain.setNode(t.type, t.attrs ?? {}).run();
+  });
+}
+
+/** Return after ```` ``` ```` (any info string) makes a code block; after `---`, `***` or `___` a divider. */
+function fenceOrDivider(editor: Editor): boolean {
+  const { $from, empty } = editor.state.selection;
+  const parent = $from.parent;
+  if (!empty || parent.type.name !== 'paragraph' || $from.depth !== 1 || $from.parentOffset !== parent.content.size) return false;
+  const trimmed = parent.textContent.trim();
+  const from = $from.before(1);
+  const to = $from.after(1);
+  if (trimmed.startsWith('```')) {
+    const language = codeLanguageId(trimmed.slice(3)) ?? null;
+    return editor.chain().insertContentAt({ from, to }, { type: 'codeBlock', attrs: { language } }).setTextSelection(from + 1).run();
+  }
+  if (DIVIDERS.includes(trimmed)) {
+    const followed = to < editor.state.doc.content.size;
+    if (followed) return editor.chain().insertContentAt({ from, to }, { type: 'horizontalRule' }).setTextSelection(from + 2).run();
+    return editor.chain().insertContentAt({ from, to }, [{ type: 'horizontalRule' }, { type: 'paragraph' }]).setTextSelection(from + 2).run();
+  }
+  return false;
+}
+
+// MARK: Tab (native insertTab / insertBacktab)
+
+const isCell = (name: string) => name === 'tableCell' || name === 'tableHeader';
+
+/** Tab / ⇧Tab in a table: the next or previous cell, its text selected; Tab in the last cell adds a row. */
+function moveToAdjacentCell(editor: Editor, forward: boolean): boolean {
+  const { $from } = editor.state.selection;
+  let d = $from.depth;
+  while (d > 0 && !isCell($from.node(d).type.name)) d--;
+  if (d < 3) return false;
+  const table = $from.node(d - 2);
+  const tableStart = $from.start(d - 2);
+  const cells: { pos: number; size: number }[] = [];
+  table.descendants((node, pos) => {
+    if (!isCell(node.type.name)) return true;
+    cells.push({ pos: tableStart + pos, size: node.nodeSize });
+    return false;
+  });
+  const index = cells.findIndex((c) => c.pos === $from.before(d));
+  const target = index + (forward ? 1 : -1);
+  if (target < 0) return true;
+  if (target >= cells.length) {
+    const row = $from.node(d - 1);
+    const after = $from.after(d - 1);
+    const cell = { type: 'tableCell', content: [{ type: 'paragraph' }] };
+    return editor.chain().insertContentAt(after, { type: 'tableRow', content: Array.from({ length: row.childCount }, () => cell) }).setTextSelection(after + 3).run();
+  }
+  const c = cells[target]!;
+  const { tr } = editor.state;
+  tr.setSelection(TextSelection.create(tr.doc, c.pos + 2, c.pos + c.size - 2));
+  editor.view.dispatch(tr.scrollIntoView());
+  return true;
+}
+
+/** Tab / ⇧Tab: a table moves between cells; selected list items change level; otherwise Tab types a tab. */
+function handleTab(editor: Editor, forward: boolean): boolean {
+  if (!editor.isEditable) return false;
+  const { state } = editor;
+  const { $from, from, to } = state.selection;
+  for (let d = $from.depth; d > 0; d--) if (isCell($from.node(d).type.name)) return moveToAdjacentCell(editor, forward);
+  const items: { pos: number; level: number }[] = [];
+  state.doc.nodesBetween(from, to, (node, pos) => {
+    if (node.type.name === 'listItem') items.push({ pos, level: Number(node.attrs.level ?? 0) });
+    return !node.isTextblock;
+  });
+  if (items.length) {
+    const tr = state.tr;
+    for (const item of items) tr.setNodeAttribute(item.pos, 'level', Math.min(8, Math.max(0, item.level + (forward ? 1 : -1))));
+    editor.view.dispatch(tr);
+    return true;
+  }
+  if (forward) return editor.commands.insertContent('\t');
+  // ⇧Tab with nothing to outdent keeps the focus in the note rather than jumping to a checkbox or button.
+  return true;
+}
+
+/** Inserts a 2×2 table (a header row and a body row) and puts the caret in its first cell. */
+export function insertTable(editor: Editor): boolean {
+  const { $from } = editor.state.selection;
+  if ($from.depth < 1) return false;
+  const top = $from.node(1);
+  const replace = top.type.name === 'paragraph' && top.content.size === 0;
+  const at = replace ? $from.before(1) : $from.after(1);
+  const cell = (type: string) => ({ type, content: [{ type: 'paragraph' }] });
+  const table = { type: 'table', content: [{ type: 'tableRow', content: [cell('tableHeader'), cell('tableHeader')] }, { type: 'tableRow', content: [cell('tableCell'), cell('tableCell')] }] };
+  return editor
+    .chain()
+    .focus()
+    .insertContentAt(replace ? { from: at, to: $from.after(1) } : at, table)
+    .setTextSelection(at + 4)
+    .run();
+}
+
+export const MarkdownShortcuts = Extension.create<{ wikiLink?: WikiLinkResolver }>({
+  name: 'noteitMarkdownShortcuts',
+  priority: 200,
+  addOptions: () => ({}),
+  addProseMirrorPlugins() {
+    const editor = this.editor;
+    const options = this.options;
+    return [new Plugin({ props: { handleTextInput: (view, from, to, text) => handleTyped(editor, view, from, to, text, options.wikiLink) } })];
+  },
+  addKeyboardShortcuts() {
+    return {
+      Enter: ({ editor }) => fenceOrDivider(editor),
+      Tab: ({ editor }) => handleTab(editor, true),
+      'Shift-Tab': ({ editor }) => handleTab(editor, false),
+    };
+  },
+});
+
+export function noteItExtensions(opts: { resolver?: AttachmentResolver; wikiLink?: WikiLinkResolver } = {}): AnyExtension[] {
   return [
     DocNodeExt,
     TextNode,
@@ -434,8 +669,8 @@ export function noteItExtensions(opts: { resolver?: AttachmentResolver } = {}): 
     TableRowNode,
     TableHeaderNode,
     TableCellNode,
-    ImageNode.configure(opts),
-    AttachmentNode.configure(opts),
+    ImageNode.configure({ resolver: opts.resolver }),
+    AttachmentNode.configure({ resolver: opts.resolver }),
     HardBreakNode,
     BoldMark,
     ItalicMark,
@@ -447,6 +682,7 @@ export function noteItExtensions(opts: { resolver?: AttachmentResolver } = {}): 
     HighlightMark,
     FontSizeMark,
     BlockShortcuts,
+    MarkdownShortcuts.configure({ wikiLink: opts.wikiLink }),
   ];
 }
 
