@@ -264,6 +264,8 @@ final class ExternalChangeTests: XCTestCase {
         let kept = try note(away, titled: "Kept").id
         away.updateBody(kept, NSAttributedString(string: "Kept\n\nwaiting edit"))
         away.flush()
+        try await waitUntil({ away.markdownFolderUnavailable }, "the hung write makes the folder unavailable")
+        away.flush()
         try await waitUntil({ self.recoveryCopies(away).count == 1 }, "the edit is kept in recovery/")
         try edit("Kept.md", "first", "changed elsewhere", modified: Date().addingTimeInterval(60))
 
@@ -289,6 +291,8 @@ final class ExternalChangeTests: XCTestCase {
         XCTAssertEqual(away.body(for: kept).string, "Kept\nfirst")
         try outside()
         away.updateBody(kept, NSAttributedString(string: "Kept\n\nwaiting edit"))
+        away.flush()
+        try await waitUntil({ away.markdownFolderUnavailable }, "the hung write makes the folder unavailable")
         away.flush()
         try await waitUntil({ self.recoveryCopies(away).count == 1 }, "the edit is kept in recovery/")
         return (kept, quit, away)
@@ -328,6 +332,67 @@ final class ExternalChangeTests: XCTestCase {
         try fm.moveItem(at: copy, to: copy.deletingLastPathComponent().appendingPathComponent("\(kept.uuidString)-20260101-000000.md"))
         quit()
         try assertKeptBeside(kept, file: "Kept\nfirst")
+    }
+
+    func testTheNewestOfTwoCopiesMadeInTheSameSecondIsRestored() async throws {
+        try put("Kept.md", "# Kept\n\nfirst\n")
+        let (away, quit) = try openWithHungWrites()
+        let kept = try note(away, titled: "Kept").id
+        XCTAssertEqual(away.body(for: kept).string, "Kept\nfirst")
+        away.updateBody(kept, NSAttributedString(string: "Kept\n\nedit one"))
+        away.flush()
+        try await waitUntil({ away.markdownFolderUnavailable }, "the hung write makes the folder unavailable")
+        while Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 1) > 0.5 { Thread.sleep(forTimeInterval: 0.05) }
+        away.updateBody(kept, NSAttributedString(string: "Kept\n\nedit two"))
+        away.flush()
+        away.updateBody(kept, NSAttributedString(string: "Kept\n\nedit three"))
+        away.flush()
+        XCTAssertEqual(recoveryCopies(away).count, 1, "each copy replaces the one before")
+
+        quit()
+        let store = open()
+        XCTAssertEqual(store.body(for: kept).string, "Kept\n\nedit three")
+        XCTAssertEqual(store.notes.filter { $0.deletedAt == nil }.count, 1)
+    }
+
+    func testACopyAnOlderVersionNamedWithANumberAfterItsExtensionIsRestored() async throws {
+        let (kept, quit, away) = try await keepEditInRecovery()
+        let copy = try XCTUnwrap(recoveryCopies(away).first)
+        try fm.moveItem(at: copy, to: copy.deletingLastPathComponent().appendingPathComponent(copy.lastPathComponent + "-1"))
+        quit()
+        let store = open()
+        XCTAssertEqual(store.body(for: kept).string, "Kept\n\nwaiting edit")
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: store.recoveryURL.path).filter { $0.contains(".md") }, [])
+    }
+
+    func testARecoveredEditWhoseNoteCantBeWrittenIsRestoredOnceAcrossLaunches() async throws {
+        let (kept, quit, _) = try await keepEditInRecovery()
+        try edit("Kept.md", "first", "changed elsewhere")
+        quit()
+        let path = content.path
+        let writable: @Sendable () -> Void = { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path) }
+        addTeardownBlock { writable() }
+        try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: content.path)
+        for launch in 1...3 {
+            let store = open()
+            let recovered = store.notes.filter { $0.conflictOriginalID == kept && $0.deletedAt == nil }
+            XCTAssertEqual(recovered.count, 1, "launch \(launch) has one recovered note")
+            if let copy = recovered.first { XCTAssertTrue(store.body(for: copy.id).string.contains("waiting edit"), "launch \(launch)") }
+            store.flush()
+            store.waitForMarkdownWrites(upTo: 10)
+        }
+        writable()
+        let store = open()
+        store.flush()
+        store.waitForMarkdownWrites(upTo: 10)
+        let recovered = store.notes.filter { $0.conflictOriginalID == kept && $0.deletedAt == nil }
+        XCTAssertEqual(recovered.count, 1)
+        XCTAssertEqual(recoveryCopies(store), [], "the copies go once the recovered note is written")
+        XCTAssertEqual(store.body(for: kept).string, "Kept\nchanged elsewhere")
+        let reopened = open()
+        XCTAssertEqual(reopened.notes.filter { $0.conflictOriginalID == kept && $0.deletedAt == nil }.count, 1)
     }
 
     func testARescanNeverWaitsForTheFolderOnTheMainThread() async throws {

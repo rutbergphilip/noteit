@@ -821,6 +821,49 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
         return entry.sha256.isEmpty ? "" : "-base-" + entry.sha256
     }
 
+    /// Where a recovery copy comes in the order they were made: the sequence number in its name (`-n<k>`, one
+    /// more than any copy in the folder), then, for copies of older versions without one, the file's date and the
+    /// number after its extension (`.md-<k>`).
+    struct RecoveryOrder: Comparable {
+        var sequence: Int
+        var date: Date
+        var suffix: Int
+
+        static func < (a: Self, b: Self) -> Bool {
+            (a.sequence, a.date, a.suffix) < (b.sequence, b.date, b.suffix)
+        }
+    }
+
+    struct RecoveryCopy {
+        var id: UUID
+        var url: URL
+        var order: RecoveryOrder
+    }
+
+    /// The Markdown recovery copies in `directory`, including ones an older version named `<…>.md-<k>`.
+    static func recoveryCopies(in directory: URL) -> [RecoveryCopy] {
+        let key = URLResourceKey.contentModificationDateKey
+        let files = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [key])) ?? []
+        return files.compactMap { url in
+            let name = url.lastPathComponent
+            let ext = url.pathExtension
+            let suffix: Int
+            if ext == "md" {
+                suffix = 0
+            } else if ext.hasPrefix("md-"), let k = Int(ext.dropFirst(3)) {
+                suffix = k
+            } else {
+                return nil
+            }
+            guard let id = UUID(uuidString: String(name.prefix(36))) else { return nil }
+            let stem = url.deletingPathExtension().lastPathComponent
+            let sequence = stem.split(separator: "-").lazy
+                .compactMap { $0.first == "n" ? Int($0.dropFirst()) : nil }.first ?? 0
+            let date = (try? url.resourceValues(forKeys: [key]).contentModificationDate) ?? .distantPast
+            return RecoveryCopy(id: id, url: url, order: RecoveryOrder(sequence: sequence, date: date, suffix: suffix))
+        }
+    }
+
     enum RecoveryBase: Equatable {
         case noFile
         case file(sha256: String)
@@ -849,8 +892,15 @@ final class MarkdownBodyStorage: NoteBodyStorage, @unchecked Sendable {
 
     func recoveryCopy(_ text: NSAttributedString, for id: UUID, in directory: URL) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = RTFDBodyStorage.uniqueURL(directory.appendingPathComponent(
-            "\(id.uuidString)-\(RTFDBodyStorage.timestamp())\(Self.recoveryBaseTag(index.entry(id))).md"))
+        var sequence = (Self.recoveryCopies(in: directory).map(\.order.sequence).max() ?? 0) + 1
+        func name() -> URL {
+            directory.appendingPathComponent("\(id.uuidString)-\(RTFDBodyStorage.timestamp())-n\(sequence)\(Self.recoveryBaseTag(index.entry(id))).md")
+        }
+        var url = name()
+        while FileManager.default.fileExists(atPath: url.path) {
+            sequence += 1
+            url = name()
+        }
         let container = try BodyCodec.noteItDoc(of: text, imagePolicy: .keepOriginal)
         let folder = directory.appendingPathComponent(AttachmentPaths.folder, isDirectory: true)
         for (sha, attachment) in container.attachments {
