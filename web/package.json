@@ -1,0 +1,18 @@
+{
+  "name": "noteit-web",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=22.12",
+    "pnpm": ">=10"
+  },
+  "scripts": {
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "dev": "pnpm --filter @noteit/web dev",
+    "build": "pnpm --filter @noteit/web build",
+    "start": "pnpm --filter @noteit/web start",
+    "e2e": "pnpm --filter @noteit/web e2e"
+  }
+}

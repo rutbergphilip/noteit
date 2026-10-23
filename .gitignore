@@ -9,3 +9,9 @@ build/
 .selftest/
 .build-*/
 *.xcuserstate
+web/node_modules/
+web/**/node_modules/
+web/apps/web/.nuxt/
+web/apps/web/.output/
+web/apps/web/.data/
+web/**/test-results/
