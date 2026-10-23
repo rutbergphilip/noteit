@@ -4,16 +4,19 @@ import { accountCreateS3Key, adminCreateInvite, setup } from '#safe-action/actio
 import { setupInput } from '#shared/schemas';
 import { useNoteit } from '~/composables/useNoteit';
 import { failureOf } from '~/utils/actions';
+import { useFocusWhenShown } from '~/utils/focus';
 
 const { state, client, refresh, toast } = useNoteit();
 const step = ref(0);
-const steps = [
+const steps: { title: string; icon: string }[] = [
   { title: 'Admin account', icon: 'i-lucide-user-round' },
   { title: 'Storage', icon: 'i-lucide-hard-drive' },
   { title: 'Encryption', icon: 'i-lucide-lock' },
   { title: 'Users & finish', icon: 'i-lucide-users' },
 ];
 const origin = location.origin;
+useFocusWhenShown(useTemplateRef<HTMLElement>('tokenField'), () => step.value === 0);
+const stepStatus = (i: number) => `Step ${i + 1} of ${steps.length}: ${steps[i]?.title ?? ''}`;
 
 const admin = useFormAction(setup, {
   initialValues: { token: '', username: 'admin', password: '' },
@@ -62,7 +65,9 @@ async function finish(): Promise<void> {
         <span class="ms-2 text-sm text-muted">Server setup</span>
       </div>
 
-      <UStepper v-model="step" :items="steps" disabled size="sm" class="w-full" />
+      <!-- Reka's own status counts steps from 0 in Nuxt UI's stepper ("Step 3 of 4" on the last); this one is right. -->
+      <div aria-hidden="true"><UStepper v-model="step" :items="steps" disabled size="sm" class="w-full" /></div>
+      <p class="sr-only" role="status">{{ stepStatus(step) }}</p>
 
       <UCard class="rounded-(--radius-2xl) shadow-(--shadow-card) ring-0" :ui="{ body: 'flex flex-col gap-6 p-5 sm:p-8' }">
         <Transition name="step" mode="out-in">
@@ -75,7 +80,7 @@ async function finish(): Promise<void> {
             </div>
             <div class="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-4">
               <UFormField label="Setup token" name="token" help=" ">
-                <UInput v-model="values.token" size="lg" autocomplete="off" spellcheck="false" autofocus />
+                <div ref="tokenField"><UInput v-model="values.token" size="lg" autocomplete="off" spellcheck="false" /></div>
               </UFormField>
               <UFormField label="Username" name="username" help=" ">
                 <UInput v-model="values.username" size="lg" autocomplete="username" autocapitalize="none" />

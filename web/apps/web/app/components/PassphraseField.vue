@@ -1,20 +1,22 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, useTemplateRef } from 'vue';
 import { PASSPHRASE_HINT } from '@noteit/doc';
+import { useFocusWhenShown } from '~/utils/focus';
 
-withDefaults(defineProps<{ label: string; autocomplete: string; autofocus?: boolean; name?: string; hint?: boolean }>(), { hint: true });
+const props = withDefaults(defineProps<{ label: string; autocomplete: string; autofocus?: boolean; name?: string; hint?: boolean }>(), { hint: true });
 const model = defineModel<string>({ required: true });
 const shown = ref(false);
+useFocusWhenShown(useTemplateRef<HTMLElement>('field'), () => props.autofocus);
 </script>
 
 <template>
   <UFormField :label="label" :name="name" :help="hint ? PASSPHRASE_HINT : undefined">
+    <div ref="field">
     <UInput
       v-model="model"
       size="xl"
       :type="shown ? 'text' : 'password'"
       :autocomplete="autocomplete"
-      :autofocus="autofocus"
       spellcheck="false"
       autocapitalize="none"
       :ui="{ trailing: 'pe-1' }"
@@ -33,5 +35,6 @@ const shown = ref(false);
         </UTooltip>
       </template>
     </UInput>
+    </div>
   </UFormField>
 </template>
