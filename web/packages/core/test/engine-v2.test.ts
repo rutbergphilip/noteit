@@ -66,11 +66,18 @@ describe('connect', () => {
     const backend = new InMemoryBackend();
     const src = new InMemoryBackend();
     await connect(src, { passphrase: PASS, createIfMissing: true });
-    for (const [k, v] of src.objects) await backend.put(k.replace('noteit/v1/', 'inkwell/v1/'), v.data);
+    for (const [k, v] of src.objects) backend.objects.set(k.replace('noteit/v1/', 'inkwell/v1/'), v);
+    // Stray or hostile names in the legacy store are never copied.
+    const junk = { data: utf8('x'), etag: 'j', lastModified: 0 };
+    backend.objects.set('inkwell/v1/notes/../../escape.meta', junk);
+    backend.objects.set('inkwell/v1/notes/6a1c8e8c-3f55-4c3a-9f7e-1d2b3c4d5e6f.meta', junk);
+    backend.objects.set('inkwell/v1/unknown/x.json', junk);
     const { created } = await connect(backend, { passphrase: PASS, createIfMissing: true });
     expect(created).toBe(false);
     expect(backend.objects.has(keys.manifest)).toBe(true);
     expect(backend.objects.has('inkwell/v1/manifest.json')).toBe(true);
+    const copied = [...backend.objects.keys()].filter((k) => k.startsWith('noteit/'));
+    expect(copied).toEqual([keys.manifest]);
   });
 });
 

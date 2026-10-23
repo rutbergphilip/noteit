@@ -1,6 +1,6 @@
 import { type Bytes, copyBytes } from '../bytes.js';
 import { StorageError } from '../errors.js';
-import { type PutOptions, type RemoteObject, type StorageBackend, unquoteETag } from './backend.js';
+import { assertListablePrefix, assertReadableKey, assertValidKey, type PutOptions, type RemoteObject, type StorageBackend, unquoteETag } from './backend.js';
 
 /** Talks to the NoteIt server's browser REST front door, `/api/storage` (spec §6.3a). */
 export class HttpProxyBackend implements StorageBackend {
@@ -52,6 +52,7 @@ export class HttpProxyBackend implements StorageBackend {
   }
 
   async list(prefix: string): Promise<RemoteObject[]> {
+    assertListablePrefix(prefix);
     const out: RemoteObject[] = [];
     let token: string | undefined;
     do {
@@ -66,6 +67,7 @@ export class HttpProxyBackend implements StorageBackend {
   }
 
   async get(key: string): Promise<{ data: Bytes; etag: string }> {
+    assertReadableKey(key);
     const res = await this.send(this.objectUrl(key), { method: 'GET' });
     const etag = unquoteETag(res.headers.get('ETag') ?? '');
     if (!etag) throw new StorageError('invalidResponse', 'ETag not exposed');
@@ -73,6 +75,7 @@ export class HttpProxyBackend implements StorageBackend {
   }
 
   async put(key: string, data: Uint8Array, opts: PutOptions = {}): Promise<string> {
+    assertValidKey(key);
     const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' };
     if (opts.ifMatch !== undefined) headers['If-Match'] = `"${opts.ifMatch}"`;
     if (opts.ifNoneMatch) headers['If-None-Match'] = '*';
@@ -83,6 +86,7 @@ export class HttpProxyBackend implements StorageBackend {
   }
 
   async delete(key: string, opts: { ifMatch?: string } = {}): Promise<void> {
+    assertValidKey(key);
     const headers: Record<string, string> = {};
     if (opts.ifMatch !== undefined) headers['If-Match'] = `"${opts.ifMatch}"`;
     await this.send(this.objectUrl(key), { method: 'DELETE', headers });

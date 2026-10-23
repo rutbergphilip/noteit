@@ -7,6 +7,13 @@
     "node": ">=22.12",
     "pnpm": ">=10"
   },
+  "pnpm": {
+    "overrides": {
+      "rollup": "4.62.3",
+      "vitest": "3.2.4",
+      "vite-node": "3.2.4"
+    }
+  },
   "scripts": {
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",

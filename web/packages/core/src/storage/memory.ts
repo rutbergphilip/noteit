@@ -1,6 +1,6 @@
 import { type Bytes, copyBytes } from '../bytes.js';
 import { StorageError } from '../errors.js';
-import type { PutOptions, RemoteObject, StorageBackend } from './backend.js';
+import { assertListablePrefix, assertReadableKey, assertValidKey, type PutOptions, type RemoteObject, type StorageBackend } from './backend.js';
 
 interface Stored {
   data: Bytes;
@@ -48,6 +48,7 @@ export class InMemoryBackend implements StorageBackend {
   }
 
   async list(prefix: string): Promise<RemoteObject[]> {
+    assertListablePrefix(prefix);
     this.takeFailure('list');
     return [...this.objects.entries()]
       .filter(([k]) => k.startsWith(prefix))
@@ -56,6 +57,7 @@ export class InMemoryBackend implements StorageBackend {
   }
 
   async get(key: string): Promise<{ data: Bytes; etag: string }> {
+    assertReadableKey(key);
     this.takeFailure('get');
     const o = this.objects.get(key);
     if (!o) throw new StorageError('notFound', key);
@@ -63,6 +65,7 @@ export class InMemoryBackend implements StorageBackend {
   }
 
   async put(key: string, data: Uint8Array, opts: PutOptions = {}): Promise<string> {
+    assertValidKey(key);
     this.takeFailure('put');
     const current = this.objects.get(key);
     if (opts.ifNoneMatch && current) throw new StorageError('preconditionFailed', key);
@@ -75,6 +78,7 @@ export class InMemoryBackend implements StorageBackend {
   }
 
   async delete(key: string, opts: { ifMatch?: string } = {}): Promise<void> {
+    assertValidKey(key);
     this.takeFailure('delete');
     const current = this.objects.get(key);
     if (opts.ifMatch !== undefined && this.opts.atomicDelete === false) {

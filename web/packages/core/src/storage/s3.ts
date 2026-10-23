@@ -2,7 +2,7 @@ import { type Bytes, copyBytes, sha256Hex, utf8 } from '../bytes.js';
 import { StorageError } from '../errors.js';
 import { CANARY_MISMATCH_ETAG, CANARY_PREFIX } from '../layout.js';
 import { newUuid } from '../uuid.js';
-import { type PutOptions, type RemoteObject, type StorageBackend, unquoteETag } from './backend.js';
+import { assertListablePrefix, assertReadableKey, assertValidKey, type PutOptions, type RemoteObject, type StorageBackend, unquoteETag } from './backend.js';
 import { parseError, parseListV2 } from './s3xml.js';
 import { EMPTY_PAYLOAD_SHA256, signRequest, uriEncode } from './sigv4.js';
 
@@ -35,6 +35,9 @@ export class S3Backend implements StorageBackend {
     private readonly retryDelaysMs: number[] = [500, 1500],
   ) {
     const trimmed = (cfg.prefix ?? '').replace(/^\/+|\/+$/g, '');
+    if (trimmed && !trimmed.split('/').every((s) => /^[A-Za-z0-9._-]{1,128}$/.test(s) && s !== '.' && s !== '..')) {
+      throw new StorageError('invalidResponse', `invalid key prefix ${JSON.stringify(cfg.prefix)}`);
+    }
     this.keyPrefix = trimmed ? `${trimmed}/` : '';
   }
 
@@ -59,6 +62,11 @@ export class S3Backend implements StorageBackend {
     key: string | undefined,
     opts: { query?: [string, string][]; body?: Uint8Array; headers?: Record<string, string>; conditional?: boolean } = {},
   ): Promise<Response> {
+    // The one choke point for object keys: nothing outside the layout grammar reaches a URL path.
+    if (key !== undefined) {
+      if (method === 'GET' || method === 'HEAD') assertReadableKey(key);
+      else assertValidKey(key);
+    }
     const url = this.makeURL(key !== undefined ? this.keyPrefix + key : undefined, opts.query);
     const payloadHash = opts.body ? await sha256Hex(opts.body) : EMPTY_PAYLOAD_SHA256;
     const label = key ?? '/';
@@ -112,6 +120,7 @@ export class S3Backend implements StorageBackend {
   }
 
   async list(prefix: string): Promise<RemoteObject[]> {
+    assertListablePrefix(prefix);
     const out: RemoteObject[] = [];
     let token: string | undefined;
     do {

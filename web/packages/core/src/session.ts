@@ -15,7 +15,7 @@ import {
 import { toDouble2001 } from './dates.js';
 import { StorageError, SyncError } from './errors.js';
 import { checkOpenable, decodeManifest, encodeJson, type Manifest, type StoreFeature, SUPPORTED_FEATURES } from './formats.js';
-import { keys, LEGACY_ROOT, ROOT } from './layout.js';
+import { isValidKey, keys, LEGACY_ROOT, ROOT } from './layout.js';
 import type { StorageBackend } from './storage/backend.js';
 
 export interface StoreSession {
@@ -110,6 +110,8 @@ export async function migrateLegacyStoreIfNeeded(backend: StorageBackend): Promi
   for (const object of legacy) {
     if (object === legacyManifest) continue;
     const target = ROOT + object.key.slice(LEGACY_ROOT.length);
+    // Anything that wouldn't be a valid key in the new root (stray files, odd names, traversal) is not copied.
+    if (!isValidKey(target)) continue;
     const { data } = await backend.get(object.key);
     await backend.put(target, data, {});
   }
