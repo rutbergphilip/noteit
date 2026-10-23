@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 import NoteItCore
 
@@ -33,7 +34,8 @@ final class NoteStoreLinksTests: XCTestCase {
     }
 
     private func waitUntil(_ condition: @escaping () -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
-        for _ in 0..<500 where !condition() { try? await Task.sleep(nanoseconds: 10_000_000) }
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
+        while !condition(), Date() < deadline { try? await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertTrue(condition(), "timed out", file: file, line: line)
     }
 
@@ -243,7 +245,7 @@ final class NoteStoreLinksTests: XCTestCase {
         let store = makeStore()
         let target = store.createNote(in: nil, initial: body("Atlas")).id
         let source = store.createNote(in: nil, initial: body("Source", linking: [("Atlas", .note(id: target, heading: nil))])).id
-        try await Task.sleep(for: .milliseconds(200))
+        await waitUntil { !store.backlinks(to: target).isEmpty }
         XCTAssertEqual(store.backlinks(to: target).map(\.source), [source])
     }
 
@@ -284,7 +286,7 @@ final class NoteStoreLinksTests: XCTestCase {
         editor.coordinator.commit()
         XCTAssertEqual(store.note(with: target)?.title, "Atlas 2")
         tracker.titleObserved("Atlas 2", of: target)
-        try await Task.sleep(for: .milliseconds(150))
+        await waitUntil { tracker.prompt != nil }
         XCTAssertEqual(tracker.prompt?.oldTitle, "Atlas")
         XCTAssertEqual(tracker.prompt?.newTitle, "Atlas 2")
     }
@@ -316,7 +318,7 @@ final class NoteStoreLinksTests: XCTestCase {
         EditorHarness.settle(undo)
         for (step, title) in [("undo", "Atlas"), ("redo", "Globe")] {
             if step == "undo" { undo.undo() } else { undo.redo() }
-            RunLoop.main.run(until: Date(timeIntervalSinceNow: RichTextEditor.Coordinator.commitDelay + 0.2))
+            RunLoop.main.run(until: Date(timeIntervalSinceNow: RichTextEditor.Coordinator.commitDelay + TestTiming.scaled(0.2)))
             XCTAssertEqual(store.note(with: target)?.title, title, step)
             tracker.titleObserved(title, of: target)
             try await Task.sleep(for: .milliseconds(150))

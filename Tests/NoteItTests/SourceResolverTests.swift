@@ -1,5 +1,6 @@
 import CoreServices
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 final class SourceResolverTests: XCTestCase {
@@ -106,7 +107,8 @@ final class SourceResolverTests: XCTestCase {
 
     @MainActor
     private func waitUntil(_ condition: () -> Bool) async throws {
-        for _ in 0..<200 where !condition() {
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
+        while !condition(), Date() < deadline {
             try await Task.sleep(for: .milliseconds(5))
         }
         XCTAssertTrue(condition())
@@ -153,15 +155,15 @@ final class SourceResolverTests: XCTestCase {
     @MainActor
     func testGivingUpOnASlowScriptFreesTheReader() async {
         let slow = fakeBrowser(runScript: { _ in
-            try? await Task.sleep(for: .seconds(1))
+            try? await Task.sleep(for: .seconds(TestTiming.scaled(1)))
             return BrowserPageReader.ScriptOutcome(output: "https://example.com/late\nLate", errorNumber: nil)
         })
         let start = ContinuousClock.now
         let first = await BrowserPageReader.read(bundleID: "test.slow", timeout: 0.05, dependencies: slow)
         XCTAssertNil(first.url)
-        XCTAssertLessThan(ContinuousClock.now - start, .milliseconds(800))
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(TestTiming.scaled(0.8)))
 
-        let next = await BrowserPageReader.read(bundleID: "test.slow", timeout: 1, dependencies: fakeBrowser())
+        let next = await BrowserPageReader.read(bundleID: "test.slow", timeout: TestTiming.scaled(1), dependencies: fakeBrowser())
         XCTAssertEqual(next.url, URL(string: "https://example.com/page"))
     }
 

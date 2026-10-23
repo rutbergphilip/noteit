@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 @testable import NoteItAPI
+import NoteItDocTestSupport
 import XCTest
 
 private struct EchoResponder: LocalAPIResponder {
@@ -311,7 +312,7 @@ final class LocalHTTPServerTests: XCTestCase {
         XCTAssertTrue(rejected.isResetOnWrite(), "the rejected connection was torn down")
     }
 
-    private func waitFor(_ what: String, timeout: TimeInterval = 5, _ condition: () -> Bool) async throws {
+    private func waitFor(_ what: String, timeout: TimeInterval = TestTiming.scaled(5), _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
         while !condition() {
             guard Date() < deadline else { return XCTFail("timed out waiting: \(what)") }
@@ -469,8 +470,7 @@ final class LocalHTTPServerTests: XCTestCase {
         } catch {
             XCTAssertEqual(error as? LocalHTTPServerError, .stopped)
         }
-        try await Task.sleep(nanoseconds: 200_000_000)
-        XCTAssertNil(RawHTTPClient(port: port, timeout: 1), "nothing listens after stop")
+        try await waitFor("nothing listens after stop") { RawHTTPClient(port: port, timeout: 1) == nil }
 
         server.listenerStarted = nil
         let restarted = try await server.start(ports: [port])

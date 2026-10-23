@@ -97,17 +97,17 @@ let package = Package(
         ),
         .testTarget(
             name: "NoteItTests",
-            dependencies: ["NoteIt", "NoteItCore", "NoteItDoc", "NoteItDocAppKit", "NoteItMarkdown", "NoteItSync"],
+            dependencies: ["NoteIt", "NoteItCore", "NoteItDoc", "NoteItDocAppKit", "NoteItMarkdown", "NoteItSync", "NoteItDocTestSupport"],
             path: "Tests/NoteItTests"
         ),
         .testTarget(
             name: "NoteItAPITests",
-            dependencies: ["NoteItAPI", "NoteItCore", "NoteItSync"],
+            dependencies: ["NoteItAPI", "NoteItCore", "NoteItSync", "NoteItDocTestSupport"],
             path: "Tests/NoteItAPITests"
         ),
         .testTarget(
             name: "NoteItCLITests",
-            dependencies: ["NoteItCLI", "NoteItAPI", "NoteItSync"],
+            dependencies: ["NoteItCLI", "NoteItAPI", "NoteItSync", "NoteItDocTestSupport"],
             path: "Tests/NoteItCLITests"
         )
     ]

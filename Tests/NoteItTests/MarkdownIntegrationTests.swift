@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 import NoteItAPI
 import NoteItCore
 @testable import NoteIt
@@ -64,7 +65,7 @@ final class MarkdownIntegrationTests: XCTestCase {
     }
 
     private func waitUntil(_ message: String, _ condition: @MainActor () -> Bool) async throws {
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
         while !condition() {
             guard Date() < deadline else { return XCTFail(message) }
             try await Task.sleep(nanoseconds: 10_000_000)

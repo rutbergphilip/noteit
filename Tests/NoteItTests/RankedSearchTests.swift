@@ -1,6 +1,7 @@
 import AppKit
 import NoteItCore
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 /// organise T5: ranked store search with highlights and snippets.
@@ -26,7 +27,8 @@ final class RankedSearchTests: XCTestCase {
     }
 
     private func indexed(_ store: NoteStore) async {
-        for _ in 0..<500 where !store.notes.allSatisfy({ store.searchIndexer.entries[$0.id]?.isComplete == true }) {
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
+        while !store.notes.allSatisfy({ store.searchIndexer.entries[$0.id]?.isComplete == true }), Date() < deadline {
             try? await Task.sleep(nanoseconds: 10_000_000)
         }
     }
@@ -127,6 +129,6 @@ final class RankedSearchTests: XCTestCase {
         let start = Date()
         let results = store.searchResults(for: .allNotes, search: "budget invoice", order: .bestMatch)
         XCTAssertFalse(results.isEmpty)
-        XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
+        XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(1.0))
     }
 }

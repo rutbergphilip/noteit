@@ -1,4 +1,5 @@
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 final class PaletteRankerTests: XCTestCase {
@@ -264,7 +265,7 @@ final class PaletteRankerTests: XCTestCase {
         let elapsed = Date().timeIntervalSince(start)
         print("Palette warm ranking of \(notes.count) titles: \(Int(elapsed * 1000)) ms")
         XCTAssertEqual(items.count, 51)
-        XCTAssertLessThan(elapsed, 0.5)
+        XCTAssertLessThan(elapsed, TestTiming.scaled(0.5))
     }
 
     // MARK: - Smart folders and tags

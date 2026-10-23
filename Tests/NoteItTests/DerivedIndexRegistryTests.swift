@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 import NoteItCore
 import NoteItSync
@@ -153,7 +154,7 @@ final class DerivedIndexRegistryTests: XCTestCase {
         let rebuilt = expectation(description: "rebuild")
         index.rebuilt = rebuilt
         store.scheduleIndexRebuild()
-        wait(for: [rebuilt], timeout: 5)
+        wait(for: [rebuilt], timeout: TestTiming.scaled(5))
         XCTAssertEqual(index.calls, [.rebuild([id, locked], [id: "Body"])], "a locked note's body is nil")
     }
 

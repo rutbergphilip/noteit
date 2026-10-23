@@ -1,6 +1,7 @@
 import AppKit
 import NoteItCore
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 @MainActor
@@ -377,7 +378,8 @@ final class MarkdownImporterTests: XCTestCase {
         let home = try note(titled: "Home", in: store), atlas = try note(titled: "The Atlas", in: store)
         XCTAssertEqual(links(in: store, home.id), [.note(id: atlas.id, heading: nil), .note(id: atlas.id, heading: "Routes")])
         XCTAssertEqual(links(in: store, atlas.id), [.note(id: home.id, heading: nil)])
-        for _ in 0..<500 where store.backlinks(to: atlas.id).isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
+        while store.backlinks(to: atlas.id).isEmpty, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertEqual(Set(store.backlinks(to: atlas.id).map(\.source)), [home.id])
     }
 
@@ -459,7 +461,8 @@ final class MarkdownImporterTests: XCTestCase {
         let plan = try note(titled: "Plan", in: store), atlas = try note(titled: "Atlas", in: store)
         let cut = String(long.prefix(NoteLink.maxTextLength))
         XCTAssertEqual(links(in: store, plan.id), [.unresolved(title: cut, heading: nil), .note(id: atlas.id, heading: cut)])
-        for _ in 0..<500 where store.outgoingLinks(from: plan.id).count < 2 { try await Task.sleep(nanoseconds: 10_000_000) }
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
+        while store.outgoingLinks(from: plan.id).count < 2, Date() < deadline { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertEqual(store.outgoingLinks(from: plan.id).compactMap(\.link), [.unresolved(title: cut, heading: nil), .note(id: atlas.id, heading: cut)])
     }
 

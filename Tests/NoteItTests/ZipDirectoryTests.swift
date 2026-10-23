@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import NoteItDocTestSupport
 import zlib
 @testable import NoteIt
 
@@ -356,7 +357,7 @@ final class ZipDirectoryTests: XCTestCase {
         for names in cases {
             let start = Date()
             let error = try assertRefused(ZipFixture(files: [page()] + names.map { .init(name: Array($0.utf8), data: Data()) }))
-            XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+            XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(2))
             let message = (error as? LocalizedError)?.errorDescription ?? ""
             XCTAssertTrue(message.contains("too deeply nested or too long"), message)
         }
@@ -400,7 +401,7 @@ final class ZipDirectoryTests: XCTestCase {
         var limits = ZipLimits.standard
         let start = Date()
         let result = try XCTUnwrap(try MarkdownImporter.unpack(url, within: &limits))
-        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(2))
         XCTAssertEqual(result.fileSizes.count, 501)
         XCTAssertNotNil(result.fileSizes[longest])
         XCTAssertNoThrow(try fm.removeItem(at: result.folder))

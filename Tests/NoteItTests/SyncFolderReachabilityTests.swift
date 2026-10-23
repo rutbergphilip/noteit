@@ -1,5 +1,6 @@
 import CryptoKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 import NoteItSync
 
@@ -58,14 +59,14 @@ final class SyncFolderReachabilityTests: XCTestCase {
         defer { timer.invalidate() }
         let started = Date()
         await assertUnreachable { try await SyncController.checkFolder(self.config, access: access, timeout: 0.3, isDirectory: hang) }
-        XCTAssertLessThan(Date().timeIntervalSince(started), 3)
+        XCTAssertLessThan(Date().timeIntervalSince(started), TestTiming.scaled(3))
         XCTAssertGreaterThan(ticks, 3, "the main run loop stalled while the folder hung")
         XCTAssertFalse(probedOnMain.value)
 
         // Still stuck: the next check gives up at once instead of queueing behind it.
         let again = Date()
         await assertUnreachable { try await SyncController.checkFolder(self.config, access: access, timeout: 5, isDirectory: hang) }
-        XCTAssertLessThan(Date().timeIntervalSince(again), 1)
+        XCTAssertLessThan(Date().timeIntervalSince(again), TestTiming.scaled(1))
 
         release.signal()
         while access.isRunning("sync-folder:\(config.storeKey)") { try await Task.sleep(for: .milliseconds(10)) }
@@ -87,14 +88,14 @@ final class SyncFolderReachabilityTests: XCTestCase {
         gate.close()
         controller.syncNow()
         let offline = SyncStatus.offline(SyncController.unreachable("Shared Notes"))
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
         while controller.status != offline, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
         XCTAssertEqual(controller.status, offline)
 
         let calls = gate.calls
         let started = Date()
         await controller.disconnect()
-        XCTAssertLessThan(Date().timeIntervalSince(started), 1)
+        XCTAssertLessThan(Date().timeIntervalSince(started), TestTiming.scaled(1))
         XCTAssertEqual(controller.status, .notConfigured)
         XCTAssertEqual(gate.calls, calls, "disconnect looked at the folder")
         XCTAssertFalse(gate.calledOnMain, "the folder was checked on the main thread")
@@ -111,7 +112,7 @@ final class SyncFolderReachabilityTests: XCTestCase {
         let id = store.createNote(in: nil, initial: NSAttributedString(string: "Keep me")).id
         let notes = folder.appendingPathComponent(RemoteLayout.root + "/notes")
         controller.syncNow()
-        var deadline = Date().addingTimeInterval(5)
+        var deadline = Date().addingTimeInterval(TestTiming.scaled(5))
         while !((try? FileManager.default.contentsOfDirectory(atPath: notes.path))?.isEmpty == false && controller.status.isIdle),
               Date() < deadline {
             try await Task.sleep(for: .milliseconds(20))
@@ -122,7 +123,7 @@ final class SyncFolderReachabilityTests: XCTestCase {
         try Data("mine".utf8).write(to: folder.appendingPathComponent("Readme.txt"))
         controller.syncNow()
         let reset = SyncStatus.error(SyncSetupError.storageReset.errorDescription ?? "")
-        deadline = Date().addingTimeInterval(5)
+        deadline = Date().addingTimeInterval(TestTiming.scaled(5))
         while controller.status != reset, Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
         XCTAssertEqual(controller.status, reset)
 

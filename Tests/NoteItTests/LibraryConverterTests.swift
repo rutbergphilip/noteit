@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 import NoteItCore
 import NoteItSync
@@ -388,9 +389,9 @@ final class LibraryConverterTests: XCTestCase {
             gate.signal()
             return try Data(contentsOf: url)
         }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 3) { gate.signal() }
+        DispatchQueue.global().asyncAfter(deadline: .now() + TestTiming.scaled(3)) { gate.signal() }
         let converter = converter(store)
-        converter.ioTimeout = 0.5
+        converter.ioTimeout = TestTiming.scaled(0.5)
         var ticks = 0
         var converting = true
         let ticker = Task { @MainActor in
@@ -408,7 +409,7 @@ final class LibraryConverterTests: XCTestCase {
         }
         converting = false
         await ticker.value
-        XCTAssertLessThan(Date().timeIntervalSince(started), 2.5)
+        XCTAssertLessThan(Date().timeIntervalSince(started), TestTiming.scaled(2.5))
         XCTAssertGreaterThan(ticks, 10)
         XCTAssertFalse(store.libraryConversionInProgress)
         XCTAssertFalse(store.isClosedForLibrarySwitch)

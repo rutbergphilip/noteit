@@ -1,5 +1,6 @@
 import AppKit
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 @MainActor
@@ -120,7 +121,7 @@ final class CodeStylingTests: XCTestCase {
         ]
         let start = Date()
         for text in awkward { _ = SyntaxHighlighter.guessLanguage(text) }
-        XCTAssertLessThan(Date().timeIntervalSince(start), 1.0)
+        XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(1.0))
     }
 
     func testTokenizersStayLinearOnLargeBlocks() {
@@ -135,13 +136,13 @@ final class CodeStylingTests: XCTestCase {
         for (text, language) in cases {
             let start = Date()
             _ = SyntaxHighlighter.tokenize(text, language: language)
-            XCTAssertLessThan(Date().timeIntervalSince(start), 0.5, "\(language) \(text.prefix(12))")
+            XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(0.5), "\(language) \(text.prefix(12))")
         }
         for language in CodeLanguage.allCases {
             for unit in ["[ & ` ( ${ \" ' /* <!-- # : ", "x\n"] {
                 let start = Date()
                 _ = SyntaxHighlighter.tokenize(sized(unit), language: language)
-                XCTAssertLessThan(Date().timeIntervalSince(start), 0.5, "\(language)")
+                XCTAssertLessThan(Date().timeIntervalSince(start), TestTiming.scaled(0.5), "\(language)")
             }
         }
     }
@@ -381,7 +382,7 @@ final class CodeStylingTests: XCTestCase {
         textView.setSelectedRange(NSRange(location: 0, length: 0))
         textView.insertText("```rust", replacementRange: textView.selectedRange())
         textView.insertText(" ", replacementRange: NSRange(location: NSNotFound, length: 0))
-        let deadline = Date().addingTimeInterval(2)
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(2))
         while textView.string.contains("```"), Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
         let ps = textView.storage.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
         XCTAssertEqual(NoteItTextView.blockKind(of: textView.storage, at: 0), .code)

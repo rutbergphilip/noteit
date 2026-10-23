@@ -1,6 +1,7 @@
 import AppKit
 import NoteItCore
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 final class FakeSpotlightIndex: SpotlightIndexing, @unchecked Sendable {
@@ -87,7 +88,7 @@ final class SpotlightItemBuilderTests: XCTestCase {
 
     /// Waits for the rebuild the indexer schedules itself to reach the fake index.
     private func settleRebuild(_ indexer: SpotlightIndexer, file: StaticString = #filePath, line: UInt = #line) async {
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
         for _ in 0..<20 { await Task.yield() }
         while defaults.object(forKey: PrefKey.spotlightIndexVersion) == nil {
             guard Date() < deadline else { return XCTFail("The rebuild didn't finish", file: file, line: line) }
@@ -271,7 +272,7 @@ final class SpotlightItemBuilderTests: XCTestCase {
 
     /// Waits for a rebuild started while the index version is still current to clear the dirty flag.
     private func settleRepair(_ indexer: SpotlightIndexer, file: StaticString = #filePath, line: UInt = #line) async {
-        let deadline = Date().addingTimeInterval(5)
+        let deadline = Date().addingTimeInterval(TestTiming.scaled(5))
         while isDirty {
             guard Date() < deadline else { return XCTFail("The repair didn't finish", file: file, line: line) }
             try? await Task.sleep(nanoseconds: 5_000_000)

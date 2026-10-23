@@ -1,5 +1,6 @@
 import Combine
 import XCTest
+import NoteItDocTestSupport
 import NoteItAPI
 import NoteItCore
 @testable import NoteIt
@@ -87,7 +88,7 @@ final class LibraryDiffTests: XCTestCase {
         }
         let id = store.createNote(in: nil, initial: NSAttributedString(string: "Start")).id
         for index in 0..<9 { store.updateBody(id, NSAttributedString(string: "Edit \(index)")) }
-        wait(for: [delivered], timeout: 2)
+        wait(for: [delivered], timeout: TestTiming.scaled(2))
         RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.3))
         XCTAssertEqual(batches.count, 1)
         XCTAssertEqual(batches.first?.map(\.op), [.created])

@@ -1,6 +1,7 @@
 import AppKit
 import NoteItCore
 import XCTest
+import NoteItDocTestSupport
 @testable import NoteIt
 
 @MainActor
@@ -198,6 +199,6 @@ final class TaskStoreTests: XCTestCase {
         let groups = store.tasks(query: "tag:none OR task", includeCompleted: true, now: now, calendar: calendar)
         let elapsed = Date().timeIntervalSince(start)
         XCTAssertEqual(groups.values.map(\.count).reduce(0, +), 5000)
-        XCTAssertLessThan(elapsed, 1.0)
+        XCTAssertLessThan(elapsed, TestTiming.scaled(1.0))
     }
 }

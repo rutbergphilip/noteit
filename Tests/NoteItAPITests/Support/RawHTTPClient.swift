@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import NoteItDocTestSupport
 
 /// A blocking TCP client for what `URLSession` can't do: a forged `Host`, reusing one connection, reading a stream.
 final class RawHTTPClient {
@@ -92,7 +93,7 @@ final class RawHTTPClient {
 
     /// Keeps writing a byte every 10 ms until a write fails, which happens once the server has torn the connection
     /// down (a lingering server still reads and discards them). False when writes still succeed after `timeout`.
-    func isResetOnWrite(timeout: TimeInterval = 2) -> Bool {
+    func isResetOnWrite(timeout: TimeInterval = TestTiming.scaled(2)) -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         var byte: UInt8 = 0x61
         while Date() < deadline {
