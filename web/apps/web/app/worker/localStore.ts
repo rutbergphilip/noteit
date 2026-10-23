@@ -201,7 +201,10 @@ export class WebLocalStore implements SyncLocalStore {
       if (r.kind !== 'notebook') continue;
       try {
         const m = decodeNotebookMeta(utf8(r.meta));
-        notebooks.push({ id: m.id, name: m.name, colorHex: m.colorHex, symbol: m.symbol, sortIndex: m.sortIndex, ...(m.parent ? { parent: m.parent } : {}) });
+        // `defaultTemplateID` (organise: the template new notes here start from) is read from the raw JSON.
+        const raw = JSON.parse(r.meta) as { defaultTemplateID?: unknown };
+        const template = typeof raw.defaultTemplateID === 'string' ? raw.defaultTemplateID : undefined;
+        notebooks.push({ id: m.id, name: m.name, colorHex: m.colorHex, symbol: m.symbol, sortIndex: m.sortIndex, ...(m.parent ? { parent: m.parent } : {}), ...(template ? { defaultTemplateID: template } : {}) });
       } catch {
         // unreadable notebook metas are skipped
       }

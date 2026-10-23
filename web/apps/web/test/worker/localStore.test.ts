@@ -80,6 +80,15 @@ describe('WebLocalStore', () => {
     expect(s.search('is:done')).toEqual([source]);
   });
 
+  it("reads a notebook's synced default template", async () => {
+    const { s } = await store();
+    const id = newUuid();
+    const tpl = newUuid();
+    const meta = { id, name: 'Work', colorHex: '#8E8E93', symbol: 'folder', sortIndex: 0, parent: null, defaultTemplateID: tpl };
+    await s.apply({ id, kind: 'notebook', revision: newUuid(), modifiedAt: new Date(), deviceID: 'MAC', meta: utf8(JSON.stringify(meta)) });
+    expect(s.snapshot().notebooks[0]?.defaultTemplateID).toBe(tpl);
+  });
+
   it('keeps meta keys it does not own through edits (RawMetaOverlay)', async () => {
     const { s } = await store();
     const id = newUuid();

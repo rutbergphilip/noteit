@@ -24,6 +24,8 @@ export interface NotebookRow {
   symbol: string;
   sortIndex: number;
   parent?: string;
+  /** Synced (organise): the template new notes in this notebook start from. */
+  defaultTemplateID?: string;
 }
 
 export interface Snapshot {

@@ -201,6 +201,12 @@ const tags = computed(() => {
 
 async function createNote(container?: BodyContainer, notebookID?: string): Promise<string> {
   const target = notebookID ?? (state.view.kind === 'notebook' ? state.view.id : undefined);
+  // A blank note in a notebook with a default template starts from it, as on the Mac.
+  const template = !container && target ? state.notebooks.find((n) => n.id === target)?.defaultTemplateID : undefined;
+  if (template && state.notes.some((n) => n.id.toUpperCase() === template.toUpperCase() && !n.deletedAt)) {
+    const row = state.notes.find((n) => n.id.toUpperCase() === template.toUpperCase())!;
+    container = await expandedTemplate(row.id, '');
+  }
   const id = await client().createNote({ ...(target ? { notebookID: target } : {}), ...(container ? { container } : {}) });
   if (state.view.kind === 'trash' || state.view.kind === 'tag' || state.view.kind === 'tasks') state.view = { kind: 'all' };
   if (state.query) await setQuery('');
