@@ -62,3 +62,12 @@ export const NOTEBOOK_COLORS: { label: string; hex: string }[] = [
 export function safeHex(v: string | undefined): string {
   return v && /^#[0-9A-Fa-f]{6}$/.test(v) ? v : '#8E8E93';
 }
+
+/**
+ * Where New Note from Template files its note: the open notebook, as ⌘N does, but never the Templates notebook
+ * (a note made from a template there would be another template); `null` files it in no notebook.
+ */
+export function templateTarget(view: { kind: string; id?: string }, templatesNotebookID: string | undefined): string | null {
+  if (view.kind !== 'notebook' || !view.id) return null;
+  return templatesNotebookID && view.id.toUpperCase() === templatesNotebookID.toUpperCase() ? null : view.id;
+}

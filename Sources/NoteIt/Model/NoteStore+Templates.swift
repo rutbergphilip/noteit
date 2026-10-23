@@ -95,10 +95,13 @@ extension NoteStore {
         return createNote(in: notebookID, initial: trimmed.isEmpty ? nil : Self.linkedNoteBody(title: trimmed))
     }
 
-    /// File › New Note from Template…: in the selected notebook, as ⌘N does, and selected.
+    /// File › New Note from Template…: in the selected notebook, as ⌘N does, and selected. Never in the Templates
+    /// notebook (that would make another template): there it goes in no notebook.
     @discardableResult
     func createNoteFromTemplateInCurrentContext(_ templateID: UUID, title: String) throws(BodyEditError) -> NoteMeta {
-        let notebookID = prepareCurrentContextForNewNote()
+        let selected = prepareCurrentContextForNewNote()
+        let notebookID = selected == templatesNotebookIDIfSet ? nil : selected
+        if selected != nil, notebookID == nil { selection = .allNotes }
         let meta = try createNote(fromTemplate: templateID, title: title, in: notebookID)
         selectedNoteID = meta.id
         return meta

@@ -2,6 +2,7 @@ import { computed, reactive, shallowRef, watch } from 'vue';
 import { type BodyContainer, dailyNotebook, dailyTitle, dayKey, DAILY_NOTEBOOK_NAME, emptyContainer, expandTemplate, findDailyNote, parseQuery, TEMPLATES_NOTEBOOK_NAME } from '@noteit/doc';
 import { serverInfo, session as sessionAction, signOut as signOutAction } from '#safe-action/actions';
 import { failureOf, type ServerInfo, type SessionInfo } from '~/utils/actions';
+import { templateTarget } from '~/utils/notebooks';
 import { createWorkerClient } from '~/utils/workerClient';
 import type { NoteRow, NotebookRow, SmartFolderRow, SyncStatus, UnlockResult } from '~/worker/types';
 
@@ -313,8 +314,9 @@ const tags = computed(() => {
   return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([tag, count]) => ({ tag, count }));
 });
 
-async function createNote(container?: BodyContainer, notebookID?: string): Promise<string> {
-  const target = notebookID ?? (state.view.kind === 'notebook' ? state.view.id : undefined);
+/** `notebookID` null files the note in no notebook; undefined uses the open notebook, as ⌘N does. */
+async function createNote(container?: BodyContainer, notebookID?: string | null): Promise<string> {
+  const target = notebookID === null ? undefined : (notebookID ?? (state.view.kind === 'notebook' ? state.view.id : undefined));
   // A blank note in a notebook with a default template starts from it, as on the Mac.
   const template = !container && target ? state.notebooks.find((n) => n.id === target)?.defaultTemplateID : undefined;
   if (template && state.notes.some((n) => n.id.toUpperCase() === template.toUpperCase() && !n.deletedAt)) {
@@ -366,7 +368,9 @@ async function expandedTemplate(templateId: string, title: string): Promise<Body
 async function newFromTemplate(templateId: string, title = ''): Promise<void> {
   const container = await expandedTemplate(templateId, title);
   if (!container) return toast("This template can't be read here.", 'error');
-  const target = state.view.kind === 'notebook' && state.view.id !== templatesNotebook.value?.id ? state.view.id : undefined;
+  const target = templateTarget(state.view, templatesNotebook.value?.id);
+  // Leaving the Templates notebook: the new note is listed in All Notes, as on the Mac.
+  if (target === null && state.view.kind === 'notebook') state.view = { kind: 'all' };
   await createNote(container, target);
 }
 

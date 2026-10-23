@@ -57,6 +57,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - An invite link opened in a web app tab that's already open is no longer ignored.
 - Moving a note to Recently Deleted in the web app can be undone from the notice. A forced password change no longer asks again for the temporary password you just used. New Notebook in the sidebar makes a top-level notebook, and Edit Notebook can move a notebook inside another.
 - Notebooks made at the top level in the web app now record that they're top level, as the Mac does, so moving a notebook out of another on the web reaches your Mac.
+- New Note from Template… run while the Templates notebook is open no longer makes another template, on the Mac and the web: the note goes in no notebook and All Notes opens.
 
 ### Security
 
