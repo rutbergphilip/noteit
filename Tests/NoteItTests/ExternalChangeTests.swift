@@ -1036,6 +1036,39 @@ final class ExternalChangeTests: XCTestCase {
 
         XCTAssertThrowsError(try store.exportBodySource(plan), "a missing file never syncs as empty")
         try await waitUntil({ editor.view.string == "" }, "the editor shows what the read found")
+        try assertMissingFileIsNeverSyncedOrEdited(store, plan)
+
+        try put("Plan.md", "# Plan\n\nback again\n")
+        store.retryReadingBody(plan)
+        try await waitUntil({ store.cachedBody(plan) != nil }, "the file is read once it's back")
+        try await waitUntil({ editor.view.string == "Plan\nback again" }, "the editor shows it")
+        guard case .text(let text) = try store.exportBodySource(plan) else { return XCTFail("not text") }
+        XCTAssertEqual(text.string, "Plan\nback again")
+        XCTAssertFalse(store.isMarkdownBodyMissing(plan))
+    }
+
+    func testSyncAfterANoteWasShownWithItsFileMissingNeverExportsItAsEmpty() throws {
+        try put("Plan.md", "# Plan\n\nPlan text\n")
+        let store = open()
+        let plan = try note(store, titled: "Plan").id
+        store.dropCachedBody(plan)
+        try fm.removeItem(at: content.appendingPathComponent("Plan.md"))
+        XCTAssertEqual(store.body(for: plan).string, "")
+        try assertMissingFileIsNeverSyncedOrEdited(store, plan)
+    }
+
+    private func assertMissingFileIsNeverSyncedOrEdited(_ store: NoteStore, _ plan: UUID,
+                                                        file: StaticString = #filePath, line: UInt = #line) throws {
+        for pass in 1...3 {
+            XCTAssertThrowsError(try store.exportBodySource(plan), "sync pass \(pass)", file: file, line: line)
+        }
+        XCTAssertNil(store.cachedBody(plan), file: file, line: line)
+        XCTAssertTrue(store.isMarkdownBodyMissing(plan), "shown read-only as missing", file: file, line: line)
+        XCTAssertNil(store.bodyForOutput(plan), file: file, line: line)
+        XCTAssertNotNil(store.bodyNotReadError(plan), file: file, line: line)
+        store.updateBody(plan, NSAttributedString(string: "Plan\nbuilt on nothing"))
+        XCTAssertFalse(store.isBodyDirty(plan), file: file, line: line)
+        XCTAssertThrowsError(try store.exportBodySource(plan), file: file, line: line)
     }
 
     func testANoteWhoseFileFailedToReadIsNeverOutputAsEmpty() async throws {

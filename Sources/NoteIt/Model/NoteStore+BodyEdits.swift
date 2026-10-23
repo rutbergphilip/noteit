@@ -81,7 +81,7 @@ extension NoteStore {
         guard !meta.isLocked else { throw BodyEditError.locked }
         // Reading the body is what finds an unreadable body or sidecar, which blocks writes.
         _ = body(for: id)
-        if let folder = unreadMarkdownFolder(of: id) { throw BodyEditError.folderNotAvailable(folder) }
+        if let error = bodyNotReadError(id) { throw error }
         guard !isBodyWriteBlocked(id) else { throw BodyEditError.writeBlocked }
 
         if let view = OpenEditorRegistry.shared.textView(for: id), view.isEditable,
