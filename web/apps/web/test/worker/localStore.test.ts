@@ -26,6 +26,11 @@ class MemoryKV implements KeyValue {
   async clear(n: StoreName) {
     this.s(n).clear();
   }
+  async bump() {
+    const before = (this.s('kv').get('generation') as number | undefined) ?? 0;
+    this.s('kv').set('generation', before + 1);
+    return before;
+  }
 }
 
 const text = (s: string): BodyContainer => ({ ...emptyContainer(), doc: { type: 'doc', content: s.split('\n').map((line) => (line ? { type: 'paragraph', content: [{ type: 'text', text: line }] } : { type: 'paragraph' })) } });
@@ -161,5 +166,95 @@ describe('WebLocalStore', () => {
     expect(titles(la)).toEqual(titles(lb));
     expect(titles(la)[0]).toMatch(/^From A \(conflict — Browser A, .+\)$/);
     expect(titles(la)).toContain('From B');
+  });
+
+  it('syncs smart folders (native SmartFolder records): create, edit, last writer wins, delete', async () => {
+    const backend = new InMemoryBackend();
+    const pass = 'smart folders everywhere';
+    const a = await connect(backend, { passphrase: pass, createIfMissing: true });
+    const b = await connect(backend, { passphrase: pass, createIfMissing: false });
+    const la = new WebLocalStore(new MemoryKV(), a.session.cipher, 'A');
+    const lb = new WebLocalStore(new MemoryKV(), b.session.cipher, 'B');
+    const ea = new SyncEngine({ backend, session: a.session, local: la, state: new MemoryStateStore(), deviceID: 'A', deviceName: 'Browser A' });
+    const eb = new SyncEngine({ backend, session: b.session, local: lb, state: new MemoryStateStore(), deviceID: 'B', deviceName: 'Browser B' });
+    const id = await la.createSmartFolder({ name: 'Due soon', query: 'is:todo due:this-week' });
+    expect((await backend.list('noteit/v1/smart-folders/')).map((o) => o.key)).toEqual([]);
+    await ea.sync();
+    expect((await backend.list('noteit/v1/smart-folders/')).map((o) => o.key)).toEqual([`noteit/v1/smart-folders/${id}.json`]);
+    await eb.sync();
+    expect(lb.snapshot().smartFolders).toEqual([{ id, name: 'Due soon', query: 'is:todo due:this-week', symbol: 'folder.badge.gearshape', sortIndex: 0 }]);
+    const raw = JSON.parse(fromUtf8((await lb.export(id)).meta)) as Record<string, unknown>;
+    expect(Object.keys(raw).sort()).toEqual(['id', 'modifiedAt', 'name', 'query', 'revision', 'sortIndex', 'symbol']);
+    await lb.updateSmartFolder(id, { name: 'This week' });
+    await eb.sync();
+    await ea.sync();
+    expect(la.snapshot().smartFolders[0]?.name).toBe('This week');
+    await expect(la.createSmartFolder({ name: ' ', query: 'x' })).rejects.toThrow(/name/);
+    await la.deleteSmartFolder(id);
+    await ea.sync();
+    await eb.sync();
+    expect(lb.snapshot().smartFolders).toEqual([]);
+  });
+
+  describe('two tabs on one library', () => {
+    it('never overwrites the other tab: a save from an older base keeps the other version as a conflict copy', async () => {
+      const kv = new MemoryKV();
+      const a = await store(kv);
+      const b = await store(kv);
+      const id = await a.s.createNote({ container: text('Plan\nfrom A') });
+      await b.s.ensureFresh();
+      const base = b.s.getNote(id)!.row.revision;
+      // Tab A saves first; tab B's editor still has the old base.
+      await a.s.saveNote(id, text('Plan\nA edit'), base);
+      const saved = await b.s.saveNote(id, text('Plan\nB edit'), base);
+      expect(saved.conflictCopy).toBeDefined();
+      await a.s.ensureFresh();
+      const notes = a.s.snapshot().notes;
+      expect(notes).toHaveLength(2);
+      const original = a.s.getNote(id)!;
+      const copy = a.s.getNote(saved.conflictCopy!)!;
+      expect(JSON.stringify(original.container!.doc)).toContain('B edit');
+      expect(JSON.stringify(copy.container!.doc)).toContain('A edit');
+      expect(copy.row).toMatchObject({ conflictOriginalID: id, conflictSource: 'this browser' });
+      // From the current base, a save is a plain edit.
+      const again = await a.s.saveNote(id, text('Plan\nB edit, more'), original.row.revision);
+      expect(again.conflictCopy).toBeUndefined();
+    });
+
+    it("sees the other tab's writes before listing records for a pass", async () => {
+      const kv = new MemoryKV();
+      const a = await store(kv);
+      const b = await store(kv);
+      const id = await a.s.createNote({ container: text('One') });
+      const listed = await b.s.records();
+      expect(listed.map((r) => r.id)).toEqual([id]);
+    });
+
+    it('defers a pull over a record edited since the pass read it (native localEditInProgress)', async () => {
+      const kv = new MemoryKV();
+      const a = await store(kv);
+      const id = await a.s.createNote({ container: text('One') });
+      const [seen] = await a.s.records();
+      const payload = await a.s.export(id);
+      await a.s.saveNote(id, text('One, edited'), seen!.revision);
+      await expect(a.s.apply({ ...payload, revision: newUuid() })).rejects.toThrow(/local edit in progress/);
+    });
+  });
+});
+
+describe('notebook parent (interop with native Notebook)', () => {
+  it('always writes `parent`, null at the top level, as native does; moves keep it and refuse cycles', async () => {
+    const { s, kv, cipher } = await store();
+    const top = await s.createNotebook({ name: 'Work', colorHex: '#007AFF', symbol: 'tray' });
+    const child = await s.createNotebook({ name: 'Clients', colorHex: '#007AFF', symbol: 'tray', parent: top });
+    const raw = async (id: string) => JSON.parse(fromUtf8(utf8((JSON.parse(fromUtf8(await cipher.open((await kv.get<Uint8Array>('records', id))!, `local/records/${id}`))) as { meta: string }).meta))) as Record<string, unknown>;
+    expect(await raw(top)).toHaveProperty('parent', null);
+    expect(await raw(child)).toHaveProperty('parent', top);
+    await s.updateNotebook(top, { name: 'Work 2' });
+    expect(await raw(top)).toHaveProperty('parent', null);
+    await s.updateNotebook(child, { parent: null });
+    expect(await raw(child)).toHaveProperty('parent', null);
+    await s.updateNotebook(child, { parent: top });
+    await expect(s.updateNotebook(top, { parent: child })).rejects.toThrow(/inside itself/);
   });
 });

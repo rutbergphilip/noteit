@@ -4,6 +4,8 @@ export type NoteKind = 'doc' | 'legacy' | 'locked';
 
 export interface NoteRow {
   id: string;
+  /** The record revision; every write mints a new one. */
+  revision: string;
   title: string;
   preview: string;
   tags: string[];
@@ -28,9 +30,19 @@ export interface NotebookRow {
   defaultTemplateID?: string;
 }
 
+/** A saved search (native SmartFolder), synced as `smart-folders/<ID>.json`. */
+export interface SmartFolderRow {
+  id: string;
+  name: string;
+  query: string;
+  symbol: string;
+  sortIndex: number;
+}
+
 export interface Snapshot {
   notes: NoteRow[];
   notebooks: NotebookRow[];
+  smartFolders: SmartFolderRow[];
 }
 
 export type SyncPhase = 'locked' | 'idle' | 'syncing' | 'offline' | 'error' | 'legacy';

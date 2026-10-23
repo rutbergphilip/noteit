@@ -17,9 +17,13 @@ export class Idb {
       r.onupgradeneeded = () => {
         for (const s of ['kv', 'records', 'pending']) if (!r.result.objectStoreNames.contains(s)) r.result.createObjectStore(s);
       };
-      r.onsuccess = () => resolve(new Idb(r.result));
+      r.onsuccess = () => {
+        // Another page (a newer version, or a deletion) needs the database: let go rather than block it.
+        r.result.onversionchange = () => r.result.close();
+        resolve(new Idb(r.result));
+      };
       r.onerror = () => reject(r.error);
-      r.onblocked = () => reject(new Error('database blocked'));
+      // Blocked by a connection that hasn't closed yet (a page being unloaded): success follows once it does.
     });
   }
 
@@ -60,6 +64,22 @@ export class Idb {
     tx.objectStore(store).delete(key);
     return new Promise((resolve, reject) => {
       tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  /** Increments kv `generation` in one transaction; resolves with the value it replaced. */
+  bump(): Promise<number> {
+    const tx = this.db.transaction('kv', 'readwrite');
+    const store = tx.objectStore('kv');
+    let before = 0;
+    const r = store.get('generation');
+    r.onsuccess = () => {
+      before = typeof r.result === 'number' ? r.result : 0;
+      store.put(before + 1, 'generation');
+    };
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve(before);
       tx.onerror = () => reject(tx.error);
     });
   }

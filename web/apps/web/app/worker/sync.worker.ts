@@ -8,6 +8,7 @@ import {
   openSession,
   type StoreSession,
   StorageError,
+  storeExists,
   SyncEngine,
   SyncError,
   utf8,
@@ -64,7 +65,7 @@ function defaultDeviceName(): string {
 
 // MARK: lifecycle
 
-async function init(args: { userId: string; baseUrl: string }): Promise<{ deviceName: string; hasCache: boolean }> {
+async function init(args: { userId: string; baseUrl: string }): Promise<{ deviceName: string; hasCache: boolean; hasStore?: boolean }> {
   userId = args.userId;
   baseUrl = args.baseUrl;
   db?.close();
@@ -78,13 +79,23 @@ async function init(args: { userId: string; baseUrl: string }): Promise<{ device
   backend = new HttpProxyBackend({ baseUrl, fetch: (i, init) => fetch(i, { ...init, credentials: 'same-origin' }) });
   channel?.close();
   channel = new BroadcastChannel(`noteit-${userId}`);
+  // Another tab of this browser wrote to the shared library: reload, so this tab's editor and list see it now.
   channel.onmessage = async (m: MessageEvent<{ type: string }>) => {
     if (m.data.type === 'changed' && local) {
-      await local.load();
+      await local.ensureFresh();
       emit({ type: 'changed' });
+      void setStatus({});
     }
   };
-  return { deviceName, hasCache: (await db.get('kv', 'manifest')) !== undefined };
+  // Whether the account has a library yet, so a new account sees "Encrypt Your Notes" rather than an unlock screen
+  // that would only discard the passphrase. Unknown (offline) falls back to the unlock screen.
+  let hasStore: boolean | undefined;
+  try {
+    hasStore = await storeExists(backend);
+  } catch {
+    hasStore = undefined;
+  }
+  return { deviceName, hasCache: (await db.get('kv', 'manifest')) !== undefined, ...(hasStore === undefined ? {} : { hasStore }) };
 }
 
 function errorResult(e: unknown): UnlockResult {
@@ -130,7 +141,9 @@ async function unlock(args: { passphrase: string; create: boolean }): Promise<Un
     await db.delete('kv', 'syncState');
     await db.put('kv', 'keyID', keyID);
   }
-  local = new WebLocalStore(db, session.cipher, deviceID);
+  const locks = (navigator as unknown as { locks?: LockManager }).locks;
+  const exclusive = <T,>(fn: () => Promise<T>): Promise<T> => (locks ? (locks.request(`noteit-local-${userId}`, fn) as Promise<T>) : fn());
+  local = new WebLocalStore(db, session.cipher, deviceID, () => new Date(), exclusive, deviceName);
   state = new WebStateStore(db, session.cipher);
   await local.load();
   await local.purgeExpired();
@@ -244,8 +257,23 @@ function needLocal(): WebLocalStore {
   return local;
 }
 
+/** Requests still running; `close` waits for them so a save flushed on pagehide still reaches IndexedDB. */
+let inflight = 0;
+let idle: (() => void) | undefined;
+
+/** pagehide: stop syncing and close IndexedDB, so the next page load (a reload) never waits on this connection. */
+async function close(): Promise<void> {
+  if (inflight > 1) await new Promise<void>((resolve) => (idle = resolve));
+  if (interval) clearInterval(interval);
+  if (debounce) clearTimeout(debounce);
+  channel?.close();
+  channel = undefined;
+  db?.close();
+}
+
 const api = {
   init,
+  close,
   unlock,
   recheckLegacy,
   lock: async () => lock(),
@@ -266,12 +294,15 @@ const api = {
   tasks: async () => needLocal().tasks(),
   setTaskChecked: async (id: string, block: number, checked: boolean) => needLocal().setTaskChecked(id, block, checked),
   createNote: async (opts: { notebookID?: string; container?: BodyContainer }) => needLocal().createNote(opts),
-  saveNote: async (id: string, container: BodyContainer) => needLocal().saveNote(id, container),
+  saveNote: async (id: string, container: BodyContainer, baseRevision?: string) => needLocal().saveNote(id, container, baseRevision),
   updateNoteMeta: async (id: string, change: { isPinned?: boolean; notebookID?: string | null; trashed?: boolean }) => needLocal().updateNoteMeta(id, change),
   deleteForever: async (id: string) => needLocal().deleteForever(id),
   createNotebook: async (opts: { name: string; colorHex: string; symbol: string; parent?: string }) => needLocal().createNotebook(opts),
-  updateNotebook: async (id: string, change: { name?: string; colorHex?: string; symbol?: string }) => needLocal().updateNotebook(id, change),
+  updateNotebook: async (id: string, change: { name?: string; colorHex?: string; symbol?: string; parent?: string | null }) => needLocal().updateNotebook(id, change),
   deleteNotebook: async (id: string) => needLocal().deleteNotebook(id),
+  createSmartFolder: async (opts: { name: string; query: string; symbol?: string }) => needLocal().createSmartFolder(opts),
+  updateSmartFolder: async (id: string, change: { name?: string; query?: string; symbol?: string }) => needLocal().updateSmartFolder(id, change),
+  deleteSmartFolder: async (id: string) => needLocal().deleteSmartFolder(id),
   devices: async (): Promise<DeviceView[]> => {
     if (!engine) return [];
     return (await engine.devices()).map((d) => ({ deviceID: d.deviceID, name: d.name, lastSync: (d.lastSync + 978307200) * 1000, ...(d.platform ? { platform: d.platform } : {}), current: d.deviceID === deviceID }));
@@ -287,11 +318,19 @@ export type WorkerApi = typeof api;
 
 self.onmessage = async (m: MessageEvent<{ id: number; method: keyof WorkerApi; args: unknown[] }>) => {
   const { id, method, args } = m.data;
+  inflight += 1;
   try {
     const fn = api[method] as (...a: unknown[]) => Promise<unknown>;
     const result = await fn(...args);
     self.postMessage({ id, result });
   } catch (e) {
     self.postMessage({ id, error: e instanceof Error ? e.message : String(e) });
+  } finally {
+    inflight -= 1;
+    if (inflight <= 1 && idle) {
+      const done = idle;
+      idle = undefined;
+      done();
+    }
   }
 };
