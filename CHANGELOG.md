@@ -60,6 +60,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - New Note from Template… run while the Templates notebook is open no longer makes another template, on the Mac and the web: the note goes in no notebook and All Notes opens.
 - In the web app, typing in the search box while Tasks is open filters the tasks, as the Mac's Search Tasks does. Tasks rows are keyboard-navigable: ↑ and ↓ select, Space checks, and Return or a double-click opens the note; a single click shows it beside the list. Tasks in the Templates notebook are left out, as on the Mac.
 - Daily Note for Date… in the web app is a calendar: the arrow keys move a day or a week, Page Up and Page Down a month, days with a note are marked, and Return or a double-click opens the day.
+- The web app's `[[` note list no longer pops up when a note is restored or opened with `[[` at its end, and stays inside the window near its right and bottom edges.
 
 ### Security
 

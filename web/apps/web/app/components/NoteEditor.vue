@@ -89,7 +89,9 @@ const editor = useEditor({
       return true;
     },
   },
-  onSelectionUpdate: () => updateLinkList(),
+  // Typing opens the `[[` list; moving the caret only updates or closes an open one, so a body loaded or restored
+  // with `[[` at its end doesn't pop it up (native opens completions on typing).
+  onSelectionUpdate: () => linkList.value && updateLinkList(),
   onUpdate: () => {
     updateLinkList();
     scheduleSave();
@@ -100,7 +102,9 @@ const editor = useEditor({
 
 // MARK: `[[` note suggestions and Link to Note… (native InlineCompletionController / LinkCompletionSource)
 
-const linkList = ref<{ from: number; typed: string; items: LinkTarget[]; index: number; x: number; y: number }>();
+const linkList = ref<{ from: number; typed: string; items: LinkTarget[]; index: number; x: number; y: number; above: boolean }>();
+const LINK_LIST_WIDTH = 288;
+const LINK_LIST_MAX_HEIGHT = 256;
 function updateLinkList(): void {
   const ed = editor.value;
   if (!ed || !editable.value) return void (linkList.value = undefined);
@@ -115,7 +119,10 @@ function updateLinkList(): void {
   const from = $from.start() + m.index;
   const at = ed.view.coordsAtPos(from);
   const keep = linkList.value?.from === from ? Math.min(linkList.value.index, Math.max(0, items.length - 1)) : 0;
-  linkList.value = { from, typed, items, index: keep, x: at.left, y: at.bottom + 4 };
+  // Kept inside the window: shifted left at the right edge, and flipped above the line near the bottom.
+  const x = Math.max(8, Math.min(at.left, window.innerWidth - LINK_LIST_WIDTH - 8));
+  const above = at.bottom + 4 + LINK_LIST_MAX_HEIGHT > window.innerHeight - 8 && at.top - 4 - LINK_LIST_MAX_HEIGHT >= 8;
+  linkList.value = { from, typed, items, index: keep, x, y: above ? at.top - 4 : at.bottom + 4, above };
 }
 function chooseLink(target: LinkTarget): void {
   const ed = editor.value;
@@ -760,7 +767,8 @@ onBeforeUnmount(() => {
         <EditorContent v-show="row?.kind === 'doc'" :editor="editor" />
         <div
           v-if="linkList"
-          class="fixed z-50 w-72 overflow-hidden rounded-lg bg-default py-1 text-sm shadow-lg ring ring-default"
+          class="fixed z-50 max-h-64 w-72 max-w-[calc(100vw-16px)] overflow-y-auto rounded-lg bg-default py-1 text-sm shadow-lg ring ring-default"
+          :class="linkList.above && '-translate-y-full'"
           :style="{ left: `${linkList.x}px`, top: `${linkList.y}px` }"
           role="listbox"
           aria-label="Link to note"
