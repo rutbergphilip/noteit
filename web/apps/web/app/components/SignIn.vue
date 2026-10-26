@@ -4,6 +4,7 @@ import { redeemInvite, signIn } from '#safe-action/actions';
 import { redeemInviteInput, signInInput } from '#shared/schemas';
 import { useNoteit } from '~/composables/useNoteit';
 import { failureOf } from '~/utils/actions';
+import { useFocusWhenShown } from '~/utils/focus';
 
 const { enter, state } = useNoteit();
 const hashInvite = state.inviteToken;
@@ -42,6 +43,9 @@ watch(
   },
 );
 
+// The first field of whichever form is showing; the plain `autofocus` attribute misses after sign-out and on reload.
+useFocusWhenShown(useTemplateRef<HTMLElement>('firstField'));
+
 const active = computed(() => (mode.value === 'invite' ? invite : login));
 /** Failures that aren't about one field: wrong credentials, rate limits, an unreachable server. */
 const error = computed(() => {
@@ -62,7 +66,7 @@ const error = computed(() => {
 
     <UForm v-if="mode === 'invite'" ref="inviteForm" :state="inviteValues" :validate-on="[]" class="flex flex-col gap-1.5" @submit="invite.submit()">
       <UFormField label="Invite code" name="token" help=" ">
-        <UInput v-model="inviteValues.token" size="xl" autocomplete="off" spellcheck="false" />
+        <div ref="firstField"><UInput v-model="inviteValues.token" size="xl" autocomplete="off" spellcheck="false" /></div>
       </UFormField>
       <UFormField label="Username" name="username" help=" ">
         <UInput v-model="inviteValues.username" size="xl" autocomplete="username" autocapitalize="none" spellcheck="false" />
@@ -76,7 +80,7 @@ const error = computed(() => {
 
     <UForm v-else ref="loginForm" :state="loginValues" :validate-on="[]" class="flex flex-col gap-1.5" @submit="login.submit()">
       <UFormField label="Username" name="username" help=" ">
-        <UInput v-model="loginValues.username" size="xl" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus />
+        <div ref="firstField"><UInput v-model="loginValues.username" size="xl" autocomplete="username" autocapitalize="none" spellcheck="false" /></div>
       </UFormField>
       <UFormField label="Password" name="password" help=" ">
         <UInput v-model="loginValues.password" size="xl" type="password" autocomplete="current-password" />
