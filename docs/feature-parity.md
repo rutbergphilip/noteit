@@ -80,7 +80,7 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Insert Template… (`insertTemplate`), New Template (`newTemplate`) | Yes | Yes | Parity |
 | Template placeholders `{{title}}` `{{date:…}}` `{{time:…}}` `{{clipboard}}` `{{cursor}}` | Yes | Yes (the caret isn't placed at `{{cursor}}`) | Parity |
 | Which notebook holds templates | Preference, else "Templates" | The notebook named "Templates" | Native-only (local data): Mac preference |
-| Tasks view (`showTasks`) | ⇧⌘T | ⌥⇧⌘T (⇧⌘T where the browser allows it); check off there | Parity |
+| Tasks view (`showTasks`) | ⇧⌘T | ⌥⇧⌘T (⇧⌘T where the browser allows it); check off there, ⌘Z undoes the last check | Parity |
 | Show completed tasks (`showCompletedTasks`) | Yes | Completed switch in Tasks | Parity |
 | `@due(…)` dates, Set Due Date… (`setDueDate`), natural dates such as `@due(fri)` | ⇧⌘D | ⇧⌘D picker; `@due(fri)`, `@remind(tomorrow 9am)` become dates on `)` with the same parser (shared vectors). Long forms only the Mac's data detector reads, such as "October 21", stay as typed | Parity |
 | Reminders: `@remind(…)` notifications (`addReminder`) | ⌃⌘R, notifications | ⌃⌘R; browser notifications (Settings › General) while NoteIt is open in a tab, else a notice in the app. Claims in the same `claims/reminders/` format (shared vectors), so only one device rings | Parity |

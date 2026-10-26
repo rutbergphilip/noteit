@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { compareLocal, type LocalDateTime, localDateTimeToken, localToDate } from '@noteit/doc';
 import { useNoteit } from '~/composables/useNoteit';
 
@@ -78,9 +78,34 @@ function onKey(e: KeyboardEvent): void {
   }
 }
 
+// ⌘Z undoes the last check or uncheck, then the one before (native registers each with the window's undo manager).
+const undoStack: { noteId: string; block: number; checked: boolean }[] = [];
 async function toggle(t: Task): Promise<void> {
   try {
     await client().setTaskChecked(t.noteId, t.block, !t.checked);
+    undoStack.push({ noteId: t.noteId, block: t.block, checked: t.checked });
+  } catch (e) {
+    toast(e instanceof Error ? e.message : "Couldn't change the task", 'error');
+  }
+}
+// On the window, as a checked row leaves the list (and focus with it); text fields keep their own ⌘Z.
+function onUndoKey(e: KeyboardEvent): void {
+  if (e.code !== 'KeyZ' || !(e.metaKey || e.ctrlKey) || e.shiftKey || e.altKey || e.defaultPrevented || !undoStack.length) return;
+  const t = e.target;
+  if (t instanceof HTMLElement && (t.isContentEditable || t.closest('input, textarea, [contenteditable="true"], [role="dialog"]'))) return;
+  e.preventDefault();
+  void undoCheck();
+}
+onMounted(() => window.addEventListener('keydown', onUndoKey));
+onBeforeUnmount(() => window.removeEventListener('keydown', onUndoKey));
+async function undoCheck(): Promise<void> {
+  const last = undoStack.pop();
+  if (!last) return;
+  // Only while the item is still there as it was left; an edit to the note since then drops the undo.
+  const t = tasks.value.find((x) => x.noteId === last.noteId && x.block === last.block && x.checked !== last.checked);
+  if (!t) return;
+  try {
+    await client().setTaskChecked(t.noteId, t.block, last.checked);
   } catch (e) {
     toast(e instanceof Error ? e.message : "Couldn't change the task", 'error');
   }
