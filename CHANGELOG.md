@@ -66,6 +66,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - The web app's setup wizard tells screen readers the right step, and the setup token and Unlock passphrase fields have the cursor on a first load or reload.
 - The web app's Sign In and Choose a New Password screens have the cursor in their first field after signing out and after a reload.
 - At tablet widths, the web app's dialogs opened while the sidebar drawer is open, such as Daily Note for Date… from the command palette, show above the drawer instead of underneath it.
+- In the web app, closing Link to Note…'s list with Esc takes out the `[[` it typed, as on the Mac, and an editor closed while a note was still loading no longer throws an error.
 
 ### Security
 

@@ -12,6 +12,7 @@ import { formatDateTime } from '~/utils/format';
 import { notebookIcon, safeHex } from '~/utils/notebooks';
 import { comboKbds } from '~/utils/shortcuts';
 import type { OpenedNote } from '~/worker/types';
+import { useOpeningKey } from '~/utils/overlay';
 
 const props = defineProps<{ noteId: string }>();
 const { state, client, toast, refresh, openNote, createNote, trashNote, openDaily } = useNoteit();
@@ -100,20 +101,39 @@ const editor = useEditor({
   },
 });
 
+/** The editor while it's mounted: after unmount useEditor keeps the destroyed instance, whose `commands` throw. */
+function liveEditor(): typeof editor.value {
+  const ed = editor.value;
+  return ed && !ed.isDestroyed ? ed : undefined;
+}
+
 // MARK: `[[` note suggestions and Link to Note… (native InlineCompletionController / LinkCompletionSource)
 
 const linkList = ref<{ from: number; typed: string; items: LinkTarget[]; index: number; x: number; y: number; above: boolean }>();
 const LINK_LIST_WIDTH = 288;
 const LINK_LIST_MAX_HEIGHT = 256;
+/** Where Link to Note… put its `[[`, while its list is open: closing the list without a choice takes them out again. */
+let insertedOpening: number | undefined;
+/** Closes the `[[` list as Esc does (native InlineCompletionController.cancel / LinkCompletionSource.didCancel). */
+function closeLinkList(): void {
+  linkList.value = undefined;
+  const at = insertedOpening;
+  insertedOpening = undefined;
+  const ed = liveEditor();
+  if (at === undefined || !ed || at + 2 > ed.state.doc.content.size) return;
+  // Only while they are still there: an undo may have taken them out already.
+  if (ed.state.doc.textBetween(at, at + 2) !== '[[') return;
+  ed.view.dispatch(ed.state.tr.delete(at, at + 2));
+}
 function updateLinkList(): void {
-  const ed = editor.value;
-  if (!ed || !editable.value) return void (linkList.value = undefined);
+  const ed = liveEditor();
+  if (!ed || !editable.value) return closeLinkList();
   const { $from, empty } = ed.state.selection;
   const parent = $from.parent;
-  if (!empty || parent.type.name === 'codeBlock' || ed.isActive('code')) return void (linkList.value = undefined);
+  if (!empty || parent.type.name === 'codeBlock' || ed.isActive('code')) return closeLinkList();
   const prefix = parent.textBetween(0, $from.parentOffset, undefined, '\ufffc');
   const m = WIKI_LINK_OPEN.exec(prefix);
-  if (!m) return void (linkList.value = undefined);
+  if (!m) return closeLinkList();
   const typed = m[1]!;
   const items = linkSuggestions(state.notes, typed, { exclude: props.noteId });
   const from = $from.start() + m.index;
@@ -125,7 +145,7 @@ function updateLinkList(): void {
   linkList.value = { from, typed, items, index: keep, x, y: above ? at.top - 4 : at.bottom + 4, above };
 }
 function chooseLink(target: LinkTarget): void {
-  const ed = editor.value;
+  const ed = liveEditor();
   const list = linkList.value;
   if (!ed || !list) return;
   const heading = list.typed.includes('#') ? list.typed.slice(list.typed.indexOf('#') + 1).split('|')[0]!.trim() : '';
@@ -133,6 +153,7 @@ function chooseLink(target: LinkTarget): void {
   const text = heading ? `${target.title} › ${heading}` : target.title;
   const to = ed.state.selection.from;
   linkList.value = undefined;
+  insertedOpening = undefined;
   ed.chain()
     .focus()
     .insertContentAt({ from: list.from, to }, [{ type: 'text', text, marks: [{ type: 'link', attrs: { href } }] }])
@@ -153,7 +174,7 @@ function linkListKey(e: KeyboardEvent): boolean {
     return true;
   }
   if (e.key === 'Escape') {
-    linkList.value = undefined;
+    closeLinkList();
     return true;
   }
   return false;
@@ -161,12 +182,13 @@ function linkListKey(e: KeyboardEvent): boolean {
 
 /** Link to Note… (⇧⌘K): types `[[` at the caret (around the selection's text) and opens the list. */
 function linkToNote(): void {
-  const ed = editor.value;
+  const ed = liveEditor();
   if (!ed || !editable.value) return;
   const { from, to, empty } = ed.state.selection;
   const selected = empty ? '' : ed.state.doc.textBetween(from, to, ' ');
   ed.chain().focus().insertContentAt({ from, to }, `[[${selected.replace(/[[\]\n]/g, ' ')}`).run();
   updateLinkList();
+  if (linkList.value) insertedOpening = from;
 }
 watch(
   () => state.linkToNote,
@@ -182,7 +204,7 @@ watch(
 
 let plainPaste = false;
 function pasteMarkdown(asText: boolean, data: DataTransfer | null): boolean {
-  const ed = editor.value;
+  const ed = liveEditor();
   const text = data?.getData('text/plain') ?? '';
   if (asText || !ed || !text || data?.types.includes('text/html')) return false;
   const pasted = markdownForPaste(text, { resolveNoteLink: (title) => noteIDForTitle(state.notes, title, row.value?.notebookID) });
@@ -203,7 +225,7 @@ watch(
   () => state.dueDate,
   (n) => {
     if (!n) return;
-    const ed = editor.value;
+    const ed = liveEditor();
     if (!ed || !editable.value) return;
     const { $from } = ed.state.selection;
     const item = $from.parent;
@@ -218,7 +240,7 @@ watch(
   () => state.addReminder,
   (n) => {
     if (!n) return;
-    const ed = editor.value;
+    const ed = liveEditor();
     if (!ed || !editable.value) return;
     const { $from } = ed.state.selection;
     if (!$from.parent.isTextblock || $from.parent.type.name === 'codeBlock') return;
@@ -238,7 +260,7 @@ function dayToken(offset: number): string {
 }
 /** Writes `@due(…)` into the item: replaces the one there, else adds it at the end; empty removes it. */
 function applyDue(token: string | undefined): void {
-  const ed = editor.value;
+  const ed = liveEditor();
   const d = due.value;
   due.value = undefined;
   if (!ed || !d) return;
@@ -275,7 +297,7 @@ async function followNoteLink(href: string): Promise<void> {
 
 /** Scrolls to a top-level block (Outline). */
 function jumpTo(block: number): void {
-  const ed = editor.value;
+  const ed = liveEditor();
   if (!ed) return;
   let pos = 0;
   for (let i = 0; i < block && i < ed.state.doc.childCount; i++) pos += ed.state.doc.child(i).nodeSize;
@@ -286,7 +308,7 @@ function jumpTo(block: number): void {
 watch(
   () => state.pendingInsert,
   (c) => {
-    const ed = editor.value;
+    const ed = liveEditor();
     if (!c || !ed || !container.value || !editable.value) return;
     state.pendingInsert = undefined;
     Object.assign(container.value.attachments, c.attachments);
@@ -302,7 +324,7 @@ async function load(): Promise<void> {
   baseRevision = opened.row.revision;
   container.value = opened.container;
   readOnlyReason.value = opened.readOnly;
-  const ed = editor.value;
+  const ed = liveEditor();
   if (!ed) return;
   if (opened.container && !opened.readOnly) {
     const prepared = prepareForEditor(opened.container);
@@ -353,7 +375,7 @@ function save(): Promise<void> {
 
 async function saveNow(): Promise<void> {
   saveTimer = undefined;
-  const ed = editor.value;
+  const ed = liveEditor();
   if (!ed || !container.value || !editable.value) return;
   const doc = fromEditorJSON(ed.getJSON());
   const json = JSON.stringify(doc);
@@ -420,7 +442,7 @@ onBeforeUnmount(() => {
 });
 
 async function insertFiles(files: File[]): Promise<void> {
-  const ed = editor.value;
+  const ed = liveEditor();
   if (!ed || !container.value || !editable.value) return;
   for (const file of files) {
     if (file.size > MAX_ATTACHMENT_BYTES) {
@@ -450,7 +472,7 @@ async function onFiles(e: Event): Promise<void> {
 
 type Block = 'paragraph' | 'h1' | 'h2' | 'h3' | 'code' | 'quote';
 const blockType = computed<Block>(() => {
-  const ed = editor.value;
+  const ed = liveEditor();
   if (!ed) return 'paragraph';
   void state.selectedId;
   if (ed.isActive('heading', { level: 1 })) return 'h1';
@@ -471,7 +493,7 @@ const BLOCKS: { value: Block; label: string }[] = [
 ];
 
 function setBlock(v: Block): void {
-  const ed = editor.value as Editor | undefined;
+  const ed = liveEditor() as Editor | undefined;
   if (!ed || v === blockType.value) return;
   const chain = ed.chain().focus();
   if (ed.isActive('blockquote')) chain.lift('blockquote');
@@ -485,14 +507,15 @@ const mark = (name: string) => editor.value?.chain().focus().toggleMark(name).ru
 const active = (name: string, attrs?: Record<string, unknown>) => !!editor.value?.isActive(name, attrs);
 
 function toggleList(kind: 'bullet' | 'ordered' | 'task'): void {
-  const ed = editor.value;
+  const ed = liveEditor();
   if (!ed) return;
   if (ed.isActive('listItem', { kind })) ed.chain().focus().setNode('paragraph').run();
   else ed.chain().focus().setNode('listItem', { kind, level: 0, number: kind === 'ordered' ? 1 : null, checked: kind === 'task' ? false : null }).run();
 }
 
 function insertTable(): void {
-  if (editor.value) insertTableAt(editor.value);
+  const ed = liveEditor();
+  if (ed) insertTableAt(ed);
 }
 
 const linkOpen = ref(false);
@@ -504,7 +527,7 @@ watch(linkOpen, (open) => {
   linkError.value = '';
 });
 function applyLink(): void {
-  const ed = editor.value;
+  const ed = liveEditor();
   if (!ed) return;
   const href = linkHref.value.trim();
   if (href && !isAllowedLink(href)) {
@@ -594,6 +617,9 @@ onBeforeUnmount(() => {
   narrowQuery?.removeEventListener('change', onNarrow);
   if (liveTimer) clearTimeout(liveTimer);
 });
+// Fresh portals per opening, so these show above the sidebar drawer (see useOpeningKey).
+const duePortalKey = useOpeningKey(() => due.value);
+const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.value);
 </script>
 
 <template>
@@ -793,7 +819,7 @@ onBeforeUnmount(() => {
         <NoteInspector :note-id="noteId" :doc="liveDoc" @jump="jumpTo" />
       </div>
     </div>
-    <UModal :open="!!due" :title="due?.kind === 'remind' ? 'Add Reminder' : 'Set Due Date'" :description="due?.kind === 'remind' ? 'For the line under the cursor' : 'For the checklist item under the cursor'" :ui="{ content: 'sm:max-w-[380px]', footer: 'justify-end gap-2' }" @update:open="(o: boolean) => !o && (due = undefined)">
+    <UModal :key="duePortalKey" :open="!!due" :title="due?.kind === 'remind' ? 'Add Reminder' : 'Set Due Date'" :description="due?.kind === 'remind' ? 'For the line under the cursor' : 'For the checklist item under the cursor'" :ui="{ content: 'sm:max-w-[380px]', footer: 'justify-end gap-2' }" @update:open="(o: boolean) => !o && (due = undefined)">
       <template #body>
         <form v-if="due" id="due-form" class="flex flex-col gap-3" @submit.prevent="applyDue(due.date ? `${due.date}${due.time || due.kind === 'remind' ? ` ${due.time || '09:00'}` : ''}` : undefined)">
           <div class="flex gap-2">
@@ -814,6 +840,7 @@ onBeforeUnmount(() => {
       </template>
     </UModal>
     <USlideover
+      :key="inspectorPortalKey"
       :open="state.inspector.open && !row?.deletedAt && narrow"
       side="right"
       title="Links and Outline"
