@@ -45,6 +45,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The New Notebook and Edit Notebook sheet keeps its colours and icons inside its margins instead of running to the edges.
+- The sidebar's New Notebook button and sync status stay readable when notes and tags scroll underneath them.
 - Two tabs of the NoteIt web app editing the same note no longer lose an edit. Tabs see each other's saves straight away, and a save made from an older version keeps the other version as a conflict copy, as the Mac does when a note changes on two devices at once.
 - In the web app, a note edited less than a second before a reload or a closed tab is saved; the browser asks you to stay while the save finishes. Reloading also opens faster.
 - Confirmation dialogs in the web app, such as Delete Notebook and Delete Now, open again after you cancel one.

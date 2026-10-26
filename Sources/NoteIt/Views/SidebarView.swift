@@ -92,6 +92,9 @@ struct SidebarView: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
+            // Opaque so rows scrolling under the footer don't show through the button and pill.
+            .background(.bar)
+            .overlay(alignment: .top) { Divider() }
         }
         .confirmationDialog(
             "Delete the smart folder “\(smartFolderPendingDelete?.name ?? "")”?",

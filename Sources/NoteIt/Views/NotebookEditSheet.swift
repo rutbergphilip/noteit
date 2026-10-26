@@ -61,7 +61,8 @@ struct NotebookEditSheet: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Color").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                HStack(spacing: 10) {
+                // Flexible columns spread the swatches across the content width instead of overflowing the padding.
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(minimum: 28), spacing: 4), count: NotebookPalette.colors.count), spacing: 8) {
                     ForEach(NotebookPalette.colors, id: \.self) { hex in
                         let selected = hex == draft.colorHex
                         Button {
@@ -82,7 +83,7 @@ struct NotebookEditSheet: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Icon").font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(34), spacing: 6), count: 8), spacing: 6) {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 8), spacing: 6) {
                     ForEach(NotebookPalette.symbols, id: \.self) { symbol in
                         let selected = symbol == draft.symbol
                         Button {
@@ -90,7 +91,7 @@ struct NotebookEditSheet: View {
                         } label: {
                             Image(systemName: symbol)
                                 .font(.system(size: 15))
-                                .frame(width: 34, height: 34)
+                                .frame(maxWidth: .infinity, minHeight: 34, maxHeight: 34)
                                 .foregroundStyle(selected ? .white : .primary)
                                 .background(
                                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -131,8 +132,8 @@ struct NotebookEditSheet: View {
                     .disabled(trimmedName.isEmpty)
             }
         }
-        .padding(22)
-        .frame(width: 380)
+        .padding(24)
+        .frame(width: 420)
         .onAppear { nameFocused = true }
     }
 
