@@ -63,9 +63,11 @@ const align = (a?: string) => (a && a !== 'left' ? ` style="text-align:${a}"` : 
 
 export function docToHtmlBody(doc: NoteItDoc, o: HtmlOptions): string {
   const out: string[] = [];
-  let list: { tag: string; level: number }[] = [];
+  // Open lists, innermost last, each with an unclosed <li>: a nested list goes inside its parent item, as native
+  // HTMLWriter writes it. Checklists are their own kind of list, so their items never get a bullet.
+  const lists: { key: string; tag: string; level: number }[] = [];
   const closeLists = (level = -1) => {
-    while (list.length && list[list.length - 1]!.level > level) out.push(`</${list.pop()!.tag}>`);
+    while (lists.length && lists[lists.length - 1]!.level > level) out.push(`</li></${lists.pop()!.tag}>`);
   };
   for (const b of doc.content as Block[]) {
     if (b.type !== 'listItem') closeLists();
@@ -86,17 +88,29 @@ export function docToHtmlBody(doc: NoteItDoc, o: HtmlOptions): string {
         out.push('<hr>');
         break;
       case 'listItem': {
-        const tag = b.attrs.kind === 'ordered' ? 'ol' : 'ul';
-        closeLists(b.attrs.level);
-        const top = list[list.length - 1];
-        if (top && top.level === b.attrs.level && top.tag !== tag) closeLists(b.attrs.level - 1);
-        if (!list.length || list[list.length - 1]!.level < b.attrs.level) {
-          const start = b.attrs.kind === 'ordered' && (b.attrs.number ?? 1) !== 1 ? ` start="${b.attrs.number}"` : '';
-          out.push(`<${tag}${b.attrs.kind === 'task' ? ' class="tasks"' : ''}${start}>`);
-          list.push({ tag, level: b.attrs.level });
+        const { kind, level } = b.attrs;
+        const tag = kind === 'ordered' ? 'ol' : 'ul';
+        const key = kind === 'task' ? 'checklist' : tag;
+        const start = kind === 'ordered' && (b.attrs.number ?? 1) !== 1 ? ` start="${b.attrs.number}"` : '';
+        const opening = kind === 'task' ? '<ul class="checklist">' : `<${tag}${start}>`;
+        closeLists(level);
+        const last = lists[lists.length - 1];
+        if (last && last.level === level) {
+          if (last.key === key) out.push('</li>');
+          else {
+            out.push(`</li></${last.tag}>`);
+            lists.pop();
+          }
         }
-        const box = b.attrs.kind === 'task' ? `<input type="checkbox" disabled${b.attrs.checked ? ' checked' : ''}> ` : '';
-        out.push(`<li>${box}${inline(b.content, o)}</li>`);
+        if (!lists.length || lists[lists.length - 1]!.level < level) {
+          out.push(opening);
+          lists.push({ key, tag, level });
+        }
+        const text = inline(b.content, o);
+        if (kind === 'task') {
+          const box = `<input type="checkbox" disabled${b.attrs.checked ? ' checked' : ''}> `;
+          out.push(`<li class="${b.attrs.checked ? 'checked' : 'unchecked'}"${align(b.attrs.align)}>${box}${b.attrs.checked ? `<span class="done">${text}</span>` : text}`);
+        } else out.push(`<li${align(b.attrs.align)}>${text}`);
         break;
       }
       case 'table':
@@ -111,7 +125,6 @@ export function docToHtmlBody(doc: NoteItDoc, o: HtmlOptions): string {
     }
   }
   closeLists();
-  list = [];
   return out.join('\n');
 }
 
@@ -121,7 +134,7 @@ export function docToHtml(doc: NoteItDoc, o: HtmlOptions): string {
 <style>body{font:16px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:720px;margin:40px auto;padding:0 20px;color:#1d1d1f}
 pre{background:#f5f5f7;padding:12px;border-radius:8px;overflow:auto}code{font-family:ui-monospace,Menlo,monospace}
 blockquote{border-left:3px solid #d2d2d7;margin:0;padding-left:14px;color:#555}table{border-collapse:collapse}td,th{border:1px solid #d2d2d7;padding:6px 10px}
-ul.tasks{list-style:none;padding-left:4px}img{max-width:100%}</style></head>
+ul,ol{padding-left:1.6em}li>ul,li>ol{margin:.2em 0 0}ul.checklist{list-style:none;padding-left:.3em}ul.checklist ul.checklist{padding-left:1.6em}\nul.checklist input{margin:0 .4em 0 0;vertical-align:-1px}.done{color:#6e6e73;text-decoration:line-through}img{max-width:100%}</style></head>
 <body>
 ${docToHtmlBody(doc, o)}
 </body></html>

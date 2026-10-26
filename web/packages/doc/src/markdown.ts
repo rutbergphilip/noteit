@@ -164,16 +164,24 @@ function codeText(content: Inline[] | undefined): string {
 export function docToMarkdown(doc: NoteItDoc, opts: MarkdownOptions = {}): string {
   const inline = new InlineWriter(opts, false);
   const cells = new InlineWriter(opts, true);
-  const chunks: { text: string; list: boolean }[] = [];
+  // An empty paragraph is one more blank line before the next block, as the Swift codec writes it (and reads back).
+  const chunks: { text: string; list: boolean; emptiesBefore: number }[] = [];
+  let empties = 0;
+  const take = () => {
+    const n = empties;
+    empties = 0;
+    return n;
+  };
   const blocks = doc.content;
   for (let i = 0; i < blocks.length; i++) {
     const b = blocks[i]!;
     switch (b.type) {
       case 'paragraph':
-        chunks.push({ text: inline.write(b.content), list: false });
+        if (!b.content?.length) empties += 1;
+        else chunks.push({ text: inline.write(b.content), list: false, emptiesBefore: take() });
         break;
       case 'heading':
-        chunks.push({ text: `${'#'.repeat(b.attrs.level)} ${inline.write(b.content)}`, list: false });
+        chunks.push({ text: `${'#'.repeat(b.attrs.level)} ${inline.write(b.content)}`, list: false, emptiesBefore: take() });
         break;
       case 'codeBlock': {
         // Consecutive code blocks in one language are one fenced block, a line each.
@@ -185,17 +193,17 @@ export function docToMarkdown(doc: NoteItDoc, opts: MarkdownOptions = {}): strin
         }
         const body = lines.join('\n');
         const fence = body.includes('```') ? '````' : '```';
-        chunks.push({ text: `${fence}${language}\n${body}\n${fence}`, list: false });
+        chunks.push({ text: `${fence}${language}\n${body}\n${fence}`, list: false, emptiesBefore: take() });
         break;
       }
       case 'blockquote':
-        chunks.push({ text: b.content.map((p: ParagraphNode) => `> ${inline.write(p.content)}`.trimEnd()).join('\n>\n'), list: false });
+        chunks.push({ text: b.content.map((p: ParagraphNode) => `> ${inline.write(p.content)}`.trimEnd()).join('\n>\n'), list: false, emptiesBefore: take() });
         break;
       case 'horizontalRule':
-        chunks.push({ text: '---', list: false });
+        chunks.push({ text: '---', list: false, emptiesBefore: take() });
         break;
       case 'listItem':
-        chunks.push({ text: `${listPrefix(b.attrs)}${inline.write(b.content)}`, list: true });
+        chunks.push({ text: `${listPrefix(b.attrs)}${inline.write(b.content)}`, list: true, emptiesBefore: take() });
         break;
       case 'table': {
         const rows = b.content ?? [];
@@ -206,7 +214,7 @@ export function docToMarkdown(doc: NoteItDoc, opts: MarkdownOptions = {}): strin
         const header = hasHeader ? Array.from({ length: width }, (_, k) => cellText(rows[0]!.content[k])) : Array.from({ length: width }, () => '');
         const out = [hasHeader ? line(header) : `|${' '.repeat(2)}${'|  '.repeat(width - 1)}|`, line(Array.from({ length: width }, () => '---'))];
         for (const r of rows.slice(hasHeader ? 1 : 0)) out.push(line(Array.from({ length: width }, (_, k) => cellText(r.content[k]))));
-        chunks.push({ text: out.join('\n'), list: false });
+        chunks.push({ text: out.join('\n'), list: false, emptiesBefore: take() });
         break;
       }
       default:
@@ -216,7 +224,7 @@ export function docToMarkdown(doc: NoteItDoc, opts: MarkdownOptions = {}): strin
   let md = '';
   chunks.forEach((c, k) => {
     if (k > 0) md += c.list && chunks[k - 1]!.list ? '\n' : '\n\n';
-    md += c.text;
+    md += '\n'.repeat(c.emptiesBefore) + c.text;
   });
   return md ? `${md.replace(/\n+$/, '')}\n` : '';
 }

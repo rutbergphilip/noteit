@@ -68,6 +68,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - At tablet widths, the web app's dialogs opened while the sidebar drawer is open, such as Daily Note for Date… from the command palette, show above the drawer instead of underneath it.
 - In the web app, closing Link to Note…'s list with Esc takes out the `[[` it typed, as on the Mac, and an editor closed while a note was still loading no longer throws an error.
 - ⌘Z in the web app's Tasks view undoes the last check or uncheck, and the ones before it, as on the Mac.
+- Web app exports: HTML and print put nested lists inside their parent item and show checklist items with a checkbox only, without a bullet; Markdown export writes an empty line as one blank line, so importing the file again no longer adds an empty paragraph.
 
 ### Security
 

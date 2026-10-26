@@ -12,7 +12,9 @@ import {
   findDailyNote,
   parseDailyTitle,
   docToHtml,
+  docToHtmlBody,
   docToMarkdown,
+  importMarkdown,
   expandTemplate,
   formatDatePattern,
   localDateTimeToken,
@@ -155,6 +157,49 @@ describe('Markdown export matches the Swift codec fixtures', () => {
       expect(md).toBe(readFileSync(resolve(dir, `${name}.md`), 'utf8'));
     });
   }
+});
+
+describe('Markdown export round trip and HTML lists', () => {
+  const t = (text: string) => [{ type: 'text' as const, text }];
+  const p = (text?: string) => (text ? { type: 'paragraph' as const, content: t(text) } : { type: 'paragraph' as const });
+  const li = (kind: 'bullet' | 'ordered' | 'task', level: number, text: string, extra: { number?: number; checked?: boolean } = {}) => ({
+    type: 'listItem' as const,
+    attrs: { kind, level, ...extra },
+    content: t(text),
+  });
+  const heading = { type: 'heading' as const, attrs: { level: 1 as const }, content: t('Note') };
+
+  it('writes an empty paragraph as one blank line, as the Swift codec does (empty-paragraphs.md)', () => {
+    const doc = { type: 'doc' as const, content: [p(), p('One'), p(), p('Two'), p(), li('bullet', 0, 'a'), p(), li('bullet', 0, 'b')] };
+    expect(docToMarkdown(doc)).toBe('\nOne\n\n\nTwo\n\n\n- a\n\n- b\n');
+  });
+
+  it('re-imports an export without extra empty paragraphs', () => {
+    const doc = { type: 'doc' as const, content: [heading, p(), p('x'), p(), p('y'), li('bullet', 0, 'a'), li('bullet', 1, 'a1'), li('ordered', 0, 'one', { number: 1 }), li('task', 0, 'done', { checked: true }), p('End')] };
+    expect(importMarkdown(docToMarkdown(doc), { fallbackTitle: 'x' }).body.doc).toEqual(doc);
+  });
+
+  it('nests HTML lists inside the parent item and gives checklist items no bullet', () => {
+    const doc = { type: 'doc' as const, content: [li('bullet', 0, 'a'), li('bullet', 1, 'a1'), li('task', 1, 'sub', { checked: true }), li('ordered', 0, 'one', { number: 3 }), p('end')] };
+    expect(docToHtmlBody(doc, { title: 'x' })).toBe(
+      [
+        '<ul>',
+        '<li>a',
+        '<ul>',
+        '<li>a1',
+        '</li></ul>',
+        '<ul class="checklist">',
+        '<li class="checked"><input type="checkbox" disabled checked> <span class="done">sub</span>',
+        '</li></ul>',
+        '</li></ul>',
+        '<ol start="3">',
+        '<li>one',
+        '</li></ol>',
+        '<p>end</p>',
+      ].join('\n'),
+    );
+    expect(docToHtml(doc, { title: 'x' })).toContain('ul.checklist{list-style:none');
+  });
 });
 
 describe('note info, links and outline', () => {
