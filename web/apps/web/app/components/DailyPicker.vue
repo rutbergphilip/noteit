@@ -8,6 +8,7 @@ import { useNoteit } from '~/composables/useNoteit';
 // PageUp/PageDown a month, Return opens.
 const { state, openDaily } = useNoteit();
 const value = shallowRef<DateValue>(today(getLocalTimeZone()));
+// Remounts the modal (a fresh portal, above the sidebar drawer: see useOpeningKey) and the calendar per opening.
 const opening = ref(0);
 watch(
   () => state.dailyPicker,
@@ -48,11 +49,10 @@ function onPlaceholder(d: DateValue): void {
 </script>
 
 <template>
-  <UModal v-model:open="state.dailyPicker" title="Daily Note for Date" :ui="{ content: 'sm:max-w-[360px]', footer: 'justify-end gap-2' }">
+  <UModal :key="opening" v-model:open="state.dailyPicker" title="Daily Note for Date" :ui="{ content: 'sm:max-w-[360px]', footer: 'justify-end gap-2' }">
     <template #body>
       <div class="flex flex-col items-center gap-3" @keydown.capture="onKey">
         <UCalendar
-          :key="opening"
           :model-value="value"
           initial-focus
           fixed-weeks

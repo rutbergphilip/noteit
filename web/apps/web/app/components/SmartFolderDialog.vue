@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { parseQuery } from '@noteit/doc';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
+import { useOpeningKey } from '~/utils/overlay';
 
 // Native SmartFolder: a name and a saved search in the sidebar, synced to every device.
 const { state, client, refresh, toast, setQuery } = useNoteit();
@@ -66,10 +67,12 @@ async function remove(): Promise<void> {
   open.value = false;
   toast('Smart folder deleted');
 }
+// A fresh portal per opening, so it shows above the sidebar drawer (see useOpeningKey).
+const portalKey = useOpeningKey(() => open.value);
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="existing ? 'Edit Smart Folder' : 'New Smart Folder'" :ui="{ content: 'sm:max-w-[460px]', footer: 'justify-end gap-2' }">
+  <UModal :key="portalKey" v-model:open="open" :title="existing ? 'Edit Smart Folder' : 'New Smart Folder'" :ui="{ content: 'sm:max-w-[460px]', footer: 'justify-end gap-2' }">
     <template #body>
       <form id="smart-folder-form" class="flex flex-col gap-4" @submit.prevent="submit">
         <UFormField label="Name">

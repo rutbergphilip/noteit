@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import type { CommandPaletteGroup, CommandPaletteItem } from '@nuxt/ui';
 import { emptyContainer, templateDisplayName } from '@noteit/doc';
 import { useNoteit } from '~/composables/useNoteit';
+import { useOpeningKey } from '~/utils/overlay';
 
 // Native's New Note from Template… (⌥⌘N on the Mac) and Edit › Insert Template…: templates are the notes in the
 // "Templates" notebook, and their {{title}}, {{date}}, {{time}}, {{clipboard}} and {{cursor}} are filled in.
@@ -55,10 +56,12 @@ const groups = computed<CommandPaletteGroup<CommandPaletteItem>[]>(() => {
   }
   return out;
 });
+// A fresh portal per opening, so it shows above the sidebar drawer (see useOpeningKey).
+const portalKey = useOpeningKey(() => open.value);
 </script>
 
 <template>
-  <UModal v-model:open="open" :title="state.templatePicker === 'insert' ? 'Insert Template' : 'New Note from Template'" description="Templates are the notes in your Templates notebook." :ui="{ content: 'sm:max-w-[520px] top-[14dvh] translate-y-0 sm:top-28' }">
+  <UModal :key="portalKey" v-model:open="open" :title="state.templatePicker === 'insert' ? 'Insert Template' : 'New Note from Template'" description="Templates are the notes in your Templates notebook." :ui="{ content: 'sm:max-w-[520px] top-[14dvh] translate-y-0 sm:top-28' }">
     <template #content>
       <UCommandPalette v-model:search-term="query" :groups="groups" placeholder="Find a template" :close="{ color: 'neutral', variant: 'ghost' }" class="max-h-[min(440px,65dvh)]" @update:open="(v: boolean) => !v && (open = false)">
         <template #empty>

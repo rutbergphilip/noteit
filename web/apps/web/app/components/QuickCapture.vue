@@ -2,6 +2,7 @@
 import { computed, reactive, ref } from 'vue';
 import type { Block, BodyContainer } from '@noteit/doc';
 import { useNoteit } from '~/composables/useNoteit';
+import { useOpeningKey } from '~/utils/overlay';
 
 const { state, createNote, toast } = useNoteit();
 
@@ -60,11 +61,13 @@ function onKey(e: KeyboardEvent): void {
     void save();
   }
 }
+// A fresh portal per opening, so it shows above the sidebar drawer (see useOpeningKey).
+const portalKey = useOpeningKey(() => state.capture);
 </script>
 
 <template>
   <!-- design p04 -->
-  <UModal v-model:open="state.capture" title="Quick Capture" description="Draft a note without leaving what you're doing." :content="{ onOpenAutoFocus: focusTitle }" :ui="{ content: 'sm:max-w-[600px] sm:top-[140px] sm:translate-y-0 top-auto' }" @update:open="onOpen">
+  <UModal :key="portalKey" v-model:open="state.capture" title="Quick Capture" description="Draft a note without leaving what you're doing." :content="{ onOpenAutoFocus: focusTitle }" :ui="{ content: 'sm:max-w-[600px] sm:top-[140px] sm:translate-y-0 top-auto' }" @update:open="onOpen">
     <template #content>
       <form class="flex flex-col gap-3 px-5.5 py-4.5" @submit.prevent="save" @keydown="onKey">
         <div class="flex flex-wrap items-center gap-2.5">

@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { NOTEBOOK_COLORS, NOTEBOOK_SYMBOLS, notebookIcon, safeHex } from '~/utils/notebooks';
+import { useOpeningKey } from '~/utils/overlay';
 
 const { state, client, refresh, toast, descendants } = useNoteit();
 const confirm = useConfirm();
@@ -73,11 +74,13 @@ async function remove(): Promise<void> {
   open.value = false;
   toast('Notebook deleted');
 }
+// A fresh portal per opening, so it shows above the sidebar drawer (see useOpeningKey).
+const portalKey = useOpeningKey(() => open.value);
 </script>
 
 <template>
   <!-- design p05 -->
-  <UModal v-model:open="open" :title="existing ? 'Edit Notebook' : 'New Notebook'" :ui="{ content: 'sm:max-w-[460px]', footer: 'justify-end gap-2' }">
+  <UModal :key="portalKey" v-model:open="open" :title="existing ? 'Edit Notebook' : 'New Notebook'" :ui="{ content: 'sm:max-w-[460px]', footer: 'justify-end gap-2' }">
     <template #body>
       <form id="notebook-form" class="flex flex-col gap-5" @submit.prevent="submit">
         <div class="flex items-end gap-3">

@@ -6,6 +6,7 @@ import { webCommands } from '~/utils/commands';
 import { notebookIcon } from '~/utils/notebooks';
 import { parsePaletteQuery, rankPalette, type PaletteRow } from '~/utils/paletteRank';
 import { comboKbds } from '~/utils/shortcuts';
+import { useOpeningKey } from '~/utils/overlay';
 
 const { state, client, tags, createNote, setTheme } = useNoteit();
 const query = ref('');
@@ -104,11 +105,13 @@ const groups = computed<CommandPaletteGroup<CommandPaletteItem>[]>(() => {
   const label = mode === 'commands' ? 'Commands' : text ? undefined : 'Recent notes';
   return [{ id: 'results', ...(label ? { label } : {}), ignoreFilter: true, items: rows.map(item) }];
 });
+// A fresh portal per opening, so it shows above the sidebar drawer (see useOpeningKey).
+const portalKey = useOpeningKey(() => state.palette);
 </script>
 
 <template>
   <!-- design p03 -->
-  <UModal v-model:open="state.palette" title="Search notes and commands" description="Search runs on this device; nothing leaves it." :ui="{ content: 'sm:max-w-[640px] top-[12dvh] translate-y-0 sm:top-24' }">
+  <UModal :key="portalKey" v-model:open="state.palette" title="Search notes and commands" description="Search runs on this device; nothing leaves it." :ui="{ content: 'sm:max-w-[640px] top-[12dvh] translate-y-0 sm:top-24' }">
     <template #content>
       <UCommandPalette
         v-model:search-term="query"

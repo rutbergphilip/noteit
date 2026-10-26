@@ -25,6 +25,7 @@ import { failureOf, unwrap } from '~/utils/actions';
 import { formatBytes, formatDateTime, relativeTime } from '~/utils/format';
 import { askNotificationPermission, notificationsSupported } from '~/utils/reminders';
 import type { DeviceView } from '~/worker/types';
+import { useOpeningKey } from '~/utils/overlay';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
 const confirm = useConfirm();
@@ -221,11 +222,14 @@ const roles = [
   { label: 'User', value: 'user' },
   { label: 'Admin', value: 'admin' },
 ];
+// A fresh portal per opening, so it shows above the sidebar drawer (see useOpeningKey).
+const portalKey = useOpeningKey(() => state.settings);
 </script>
 
 <template>
   <!-- design p09 / p15 -->
   <UModal
+    :key="portalKey"
     v-model:open="state.settings"
     title="Settings"
     description="NoteIt settings"
