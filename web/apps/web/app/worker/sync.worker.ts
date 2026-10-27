@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import {
+  type CleanupReport,
   connect,
   decodeManifest,
   encodeJson,
@@ -317,6 +318,20 @@ const api = {
   devices: async (): Promise<DeviceView[]> => {
     if (!engine) return [];
     return (await engine.devices()).map((d) => ({ deviceID: d.deviceID, name: d.name, lastSync: (d.lastSync + 978307200) * 1000, ...(d.platform ? { platform: d.platform } : {}), current: d.deviceID === deviceID }));
+  },
+  /** Whether the storage has atomic conditional writes (S3 checks this with its canary). */
+  cleanupAvailable: async () => (engine ? engine.cleanupAvailable() : false),
+  /** "Clean Up Unused Storage…", only after the user confirmed it; held under the sync lock like a pass. */
+  cleanUpUnusedStorage: async () => {
+    const e = engine;
+    if (!e) throw new Error('locked');
+    if (running) await running.catch(() => undefined);
+    const locks = (navigator as unknown as { locks?: LockManager }).locks;
+    const run = () => e.cleanUpUnusedStorage();
+    const report = await (locks ? (locks.request(`noteit-sync-${userId}`, run) as unknown as Promise<CleanupReport>) : run());
+    // The cleanup ran a full pass first.
+    await setStatus({ lastSync: Date.now() });
+    return report;
   },
   setDeviceName: async (name: string) => {
     deviceName = name.trim() || defaultDeviceName();

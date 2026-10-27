@@ -113,7 +113,7 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 |---|---|---|---|
 | End-to-end encrypted sync, same store | iCloud, folder, S3, NoteIt Server | NoteIt Server (its own) | Parity |
 | Passphrase change, re-key, devices list | Yes | Yes | Parity |
-| Clean Up Unused Storage… | Yes | In the sync engine (`cleanUpUnusedStorage`, same rules and vectors as the Mac); no Settings button yet | Web gap |
+| Clean Up Unused Storage… | Settings › Sync | Settings › Sync & storage: the same confirmation, wording and rules (`cleanUpUnusedStorage`, same vectors), only on storage with atomic conditional writes | Parity |
 | Direct browser→S3 sync, without a server | Syncs straight to S3 | — (deferred: needs the connect wizard and the sealed key vault, plan Tasks 3.9, 4.8, 5.3) | Web gap |
 | Sync Now (`syncNow`), Lock (`lock`) | Automatic; no app lock | Commands | Web-only |
 | Server accounts, invites, access keys, users | — | Yes | Web-only |
@@ -130,4 +130,4 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 
 ## Summary
 
-As of this page's last change, by row: 60 parity, 2 web gaps (the Clean Up Unused Storage button and direct browser→S3 sync), 1 planned (locked notes, on both apps), 12 native-only by design, 4 native-only (local data), 4 web-only. Smaller differences noted in Parity rows: choosing a notebook's default template, the caret at `{{cursor}}`, heading suggestions after `[[Title#`, the tag list drawn as a tree, Undo for a tag rename, and PDF, RTFD and plain text folder exports.
+As of this page's last change, by row: 61 parity, 1 web gap (direct browser→S3 sync), 1 planned (locked notes, on both apps), 12 native-only by design, 4 native-only (local data), 4 web-only. Smaller differences noted in Parity rows: choosing a notebook's default template, the caret at `{{cursor}}`, heading suggestions after `[[Title#`, the tag list drawn as a tree, Undo for a tag rename, and PDF, RTFD and plain text folder exports.

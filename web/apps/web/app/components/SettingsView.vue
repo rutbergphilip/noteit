@@ -28,6 +28,7 @@ import type { DeviceView } from '~/worker/types';
 import { useOpeningKey } from '~/utils/overlay';
 import { linkRenameMode, setLinkRenameMode, type LinkRenameMode } from '~/composables/useRenameTracker';
 import { CODE_THEMES, codeStyle, setCodeStyle, type CodeThemeId } from '~/utils/codeStyle';
+import { CLEANUP, cleanupButtonState, cleanupResultText } from '~/utils/cleanup';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
 const confirm = useConfirm();
@@ -71,7 +72,29 @@ const { data: invites } = useAsyncData('settings:invites', async () => (isAdmin.
 useActionQueryTags('settings:invites', ['invites']);
 
 const devices = ref<DeviceView[]>([]);
+// "Clean Up Unused Storage…" (spec §3.4.9): only after the confirmation, never automatically.
+const cleanupAvailable = ref(false);
+const cleanupBusy = ref(false);
+const cleanupResult = ref<string>();
+const cleanup = computed(() => cleanupButtonState(state.status.phase !== 'locked' && !!state.status.lastSync, cleanupAvailable.value));
+async function confirmCleanup(): Promise<void> {
+  const ok = await confirm({ title: CLEANUP.title, description: CLEANUP.message, confirmLabel: CLEANUP.confirm, danger: true, cancelDefault: true });
+  if (!ok) return;
+  cleanupBusy.value = true;
+  try {
+    cleanupResult.value = cleanupResultText(await client().cleanUpUnusedStorage());
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    cleanupResult.value = message.startsWith('cleanupUnavailable') ? CLEANUP.unavailableCaption : `Couldn’t clean up: ${message}`;
+  } finally {
+    cleanupBusy.value = false;
+  }
+}
 async function loadSync(): Promise<void> {
+  cleanupResult.value = undefined;
+  void client()
+    .cleanupAvailable()
+    .then((v) => (cleanupAvailable.value = v));
   devices.value = await client().devices();
   const s = await queries.session.executeAsync(undefined);
   if (s.data) state.session = s.data;
@@ -350,6 +373,13 @@ const portalKey = useOpeningKey(() => state.settings);
                 <UBadge v-if="d.current" variant="soft" label="This browser" />
               </SettingsRow>
               <div v-if="!devices.length" class="py-3 text-sm text-muted">No devices have synced yet.</div>
+            </SettingsCard>
+            <SettingsCard title="Storage">
+              <SettingsRow :sub="cleanup.caption">
+                <template #label><span class="text-xs/normal text-muted">{{ CLEANUP.footnote }}</span></template>
+                <UButton color="neutral" variant="outline" :label="CLEANUP.button" :disabled="!cleanup.enabled || cleanupBusy" :loading="cleanupBusy" @click="confirmCleanup" />
+              </SettingsRow>
+              <div v-if="cleanupResult" class="py-2 text-xs text-muted" role="status">{{ cleanupResult }}</div>
             </SettingsCard>
           </template>
 

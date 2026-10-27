@@ -9,6 +9,8 @@ const props = defineProps<{
   danger?: boolean;
   /** When set, the button stays disabled until this exact text is typed (destructive admin actions). */
   typeToConfirm?: string;
+  /** Cancel takes the focus (Return), as for the Mac's destructive alerts. */
+  cancelDefault?: boolean;
 }>();
 const emit = defineEmits<{ close: [boolean] }>();
 const typed = ref('');
@@ -23,8 +25,8 @@ const ready = computed(() => !props.typeToConfirm || typed.value === props.typeT
       </UFormField>
     </template>
     <template #footer>
-      <UButton color="neutral" variant="ghost" label="Cancel" @click="emit('close', false)" />
-      <UButton :color="danger ? 'error' : 'primary'" :label="confirmLabel ?? 'OK'" :disabled="!ready" autofocus @click="emit('close', true)" />
+      <UButton color="neutral" variant="ghost" label="Cancel" :autofocus="cancelDefault" @click="emit('close', false)" />
+      <UButton :color="danger ? 'error' : 'primary'" :label="confirmLabel ?? 'OK'" :disabled="!ready" :autofocus="!cancelDefault" @click="emit('close', true)" />
     </template>
   </UModal>
 </template>

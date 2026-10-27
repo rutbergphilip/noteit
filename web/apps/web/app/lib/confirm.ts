@@ -1,7 +1,7 @@
 import ConfirmDialog from '~/components/ConfirmDialog.vue';
 
 // Not in composables/: auto-imports are also typed into the server tsc program, which can't resolve .vue.
-type ConfirmOptions = { title: string; description?: string; confirmLabel?: string; danger?: boolean; typeToConfirm?: string };
+type ConfirmOptions = { title: string; description?: string; confirmLabel?: string; danger?: boolean; typeToConfirm?: string; cancelDefault?: boolean };
 
 /**
  * An awaitable confirmation in a Nuxt UI modal, in place of window.confirm/prompt. Call in setup.
