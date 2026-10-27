@@ -14,7 +14,34 @@ struct SidebarView: View {
     @State private var todayNumber = Self.currentDayNumber()
     @State private var showsTodayCalendar = false
 
+    // The footer sits below the list, not in its safe area inset: a sidebar List on macOS draws rows under an inset.
     var body: some View {
+        VStack(spacing: 0) {
+            sidebarList
+            Divider()
+            footer
+        }
+    }
+
+    private var footer: some View {
+        HStack {
+            Button {
+                notebookDraft = NotebookDraft()
+            } label: {
+                Label("New Notebook", systemImage: "plus.circle")
+                    .font(.callout)
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("New Notebook (⇧⌘N)")
+            Spacer(minLength: 8)
+            SyncStatusPill()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var sidebarList: some View {
         List(selection: $store.selection) {
             let tags = store.tagTree
             let smartFolders = store.sortedSmartFolders
@@ -75,26 +102,6 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
             todayNumber = Self.currentDayNumber()
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            HStack {
-                Button {
-                    notebookDraft = NotebookDraft()
-                } label: {
-                    Label("New Notebook", systemImage: "plus.circle")
-                        .font(.callout)
-                }
-                .buttonStyle(.borderless)
-                .foregroundStyle(.secondary)
-                .help("New Notebook (⇧⌘N)")
-                Spacer(minLength: 8)
-                SyncStatusPill()
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            // Opaque so rows scrolling under the footer don't show through the button and pill.
-            .background(.bar)
-            .overlay(alignment: .top) { Divider() }
         }
         .confirmationDialog(
             "Delete the smart folder “\(smartFolderPendingDelete?.name ?? "")”?",

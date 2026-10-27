@@ -47,11 +47,15 @@ BIN="$BIN_DIR/$APP_NAME"
 # Where this build writes the app's swiftconstvalues, so a file left by another kind of build is never used:
 # SwiftPM puts $APP_NAME.swiftconstvalues next to the binary; universal builds go through Xcode's build system,
 # which writes $APP_NAME-primary.swiftconstvalues per architecture (the host's matches --target-triple below).
+# SwiftPM's Swift Build backend (the default from Swift 6.4 / Xcode 27) also uses that layout for host-only builds,
+# with the target directory named $APP_NAME-p.build, so both layouts are checked.
+INTERMEDIATES="$(dirname "$(dirname "$BIN_DIR")")/Intermediates.noindex/$APP_NAME.build/$(basename "$BIN_DIR")"
 if [[ "${NOTEIT_UNIVERSAL:-0}" == "1" ]]; then
-    OBJECTS_DIR="$(dirname "$(dirname "$BIN_DIR")")/Intermediates.noindex/$APP_NAME.build/$(basename "$BIN_DIR")/$APP_NAME.build/Objects-normal"
-    CONST_DIR="$OBJECTS_DIR/$(uname -m)"
+    CONST_DIRS=("$INTERMEDIATES/$APP_NAME.build/Objects-normal/$(uname -m)" "$INTERMEDIATES/$APP_NAME-p.build/Objects-normal/$(uname -m)")
+elif [[ "$(basename "$(dirname "$BIN_DIR")")" == "Products" ]]; then
+    CONST_DIRS=("$INTERMEDIATES/$APP_NAME-p.build/Objects-normal/$(uname -m)")
 else
-    CONST_DIR="$BIN_DIR/$APP_NAME.build"
+    CONST_DIRS=("$BIN_DIR/$APP_NAME.build")
 fi
 CONST_NAMES=("$APP_NAME.swiftconstvalues" "$APP_NAME-primary.swiftconstvalues")
 
@@ -170,13 +174,15 @@ ditto "$RESOURCE_BUNDLE" "$APP/Contents/Resources/$(basename "$RESOURCE_BUNDLE")
 
 echo "==> Generating App Intents metadata"
 CONST_VALS=""
-for name in "${CONST_NAMES[@]}"; do
-    if [[ -f "$CONST_DIR/$name" ]]; then
-        CONST_VALS="$CONST_DIR/$name"
-        break
-    fi
+for dir in "${CONST_DIRS[@]}"; do
+    for name in "${CONST_NAMES[@]}"; do
+        if [[ -f "$dir/$name" ]]; then
+            CONST_VALS="$dir/$name"
+            break 2
+        fi
+    done
 done
-[[ -n "$CONST_VALS" ]] || { echo "error: missing $APP_NAME.swiftconstvalues in $CONST_DIR" >&2; exit 1; }
+[[ -n "$CONST_VALS" ]] || { echo "error: missing $APP_NAME.swiftconstvalues in ${CONST_DIRS[*]}" >&2; exit 1; }
 # Its age can't be checked: the compiler leaves the file untouched when its contents wouldn't change.
 grep -q "CreateNoteIntent" "$CONST_VALS" || { echo "error: $CONST_VALS doesn't list CreateNoteIntent" >&2; exit 1; }
 INTENTS_WORK="$BUILD_DIR/appintents"
