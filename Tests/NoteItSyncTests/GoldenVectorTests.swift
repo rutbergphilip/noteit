@@ -531,6 +531,8 @@ final class GoldenVectorTests: XCTestCase {
             var at: String?
             var seconds: Int?
             var count: Int?
+            /// v2 fault ops: the request the fault applies to, "meta" or "body" of `id`.
+            var target: String?
         }
         struct Step: Codable, Equatable { var device: String; var op: String; var args: Args }
         struct Record: Codable, Equatable {
@@ -544,7 +546,10 @@ final class GoldenVectorTests: XCTestCase {
         }
 
         var name: String
+        /// "v2" for a trace on a noteit-doc store (web-app Task 0.4); absent for the v1 traces.
+        var store: String?
         var steps: [Step]
+        /// For v2 traces, a versioned body key's version is "V" and a hashed tag "TAG".
         var expectRemoteKeys: [String]
         var expectLocal: [String: [Record]]
     }
@@ -555,16 +560,20 @@ final class GoldenVectorTests: XCTestCase {
             cases.append(try await run(name, steps))
         }
         XCTAssertEqual(cases.count, 10)
+        for (name, steps) in Self.v2Scenarios {
+            cases.append(try await runV2(name, steps))
+        }
         try VectorIO.check("engine-scenarios.json", cases)
     }
 
     private typealias ScriptStep = (device: String, op: String, args: ScenarioCase.Args)
 
     private static func step(_ device: String, _ op: String, id: String? = nil, kind: String? = nil, title: String? = nil,
-                             revision: String? = nil, seconds: Int? = nil, count: Int? = nil) -> ScriptStep {
+                             revision: String? = nil, seconds: Int? = nil, count: Int? = nil, target: String? = nil) -> ScriptStep {
         let idString = id.map { VectorIO.uuid("scenario-\($0)").uuidString }
         let revisionString = revision.map { VectorIO.uuid("scenario-rev-\($0)").uuidString }
-        return (device, op, .init(id: idString, kind: kind, title: title, revision: revisionString, seconds: seconds, count: count))
+        return (device, op, .init(id: idString, kind: kind, title: title, revision: revisionString, seconds: seconds, count: count,
+                                  target: target))
     }
 
     private static func sync(_ device: String) -> ScriptStep { step(device, "sync") }
@@ -695,5 +704,202 @@ final class GoldenVectorTests: XCTestCase {
             return key.replacingOccurrences(of: id, with: "new")
         }.sorted()
         return ScenarioCase(name: name, steps: steps, expectRemoteKeys: keys, expectLocal: local)
+    }
+
+    // MARK: v2 traces
+
+    /// Traces on a noteit-doc store (web-app Task 0.4; spec §3.4.9). A device whose name starts with "W" is wiped
+    /// after its crash: it never syncs again. `@noteit/core` replays them (`engine.test.ts`).
+    private static let v2Scenarios: [(String, [ScriptStep])] = [
+        ("v2-publish", [
+            step("A", "create", id: "n1", kind: "note", title: "First", revision: "1"),
+            sync("A"), sync("B"),
+            step("B", "edit", id: "n1", title: "Second", revision: "2"),
+            sync("B"), sync("A"),
+        ]),
+        ("v2-crash-before-commit", [
+            step("A", "create", id: "n1", kind: "note", title: "Draft", revision: "1"),
+            sync("A"), sync("B"),
+            step("A", "edit", id: "n1", title: "Final", revision: "2"),
+            step("A", "crashDuring", id: "n1", target: "meta"),
+            sync("A"),
+            step("A", "restart"),
+            sync("A"), sync("B"),
+        ]),
+        ("v2-lost-response", [
+            step("A", "create", id: "n1", kind: "note", title: "Draft", revision: "1"),
+            sync("A"), sync("B"),
+            step("A", "edit", id: "n1", title: "Final", revision: "2"),
+            step("A", "landThenFail", id: "n1", target: "meta"),
+            sync("A"), sync("A"), sync("B"),
+        ]),
+        ("v2-orphan-sweep", [
+            step("A", "create", id: "n1", kind: "note", title: "Shared", revision: "1"),
+            sync("A"), sync("W1"), sync("B"),
+            step("W1", "edit", id: "n1", title: "Lost", revision: "2"),
+            step("W1", "crashDuring", id: "n1", target: "meta"),
+            sync("W1"),
+            step("A", "edit", id: "n1", title: "Kept", revision: "3"),
+            sync("A"), sync("B"),
+        ]),
+        ("v2-stranded", [
+            step("A", "create", id: "n1", kind: "note", title: "Shared", revision: "1"),
+            sync("A"), sync("W1"), sync("B"),
+            step("W1", "edit", id: "n1", title: "Lost", revision: "2"),
+            step("W1", "crashDuring", id: "n1", target: "meta"),
+            sync("W1"),
+            step("W2", "create", id: "n2", kind: "note", title: "Never created", revision: "3"),
+            step("W2", "crashDuring", id: "n2", target: "meta"),
+            sync("W2"),
+            step("B", "syncRepeat", count: 20),
+            step("B", "advanceClock", seconds: 86_400),
+            sync("B"), sync("B"), sync("A"),
+            step("B", "advanceClock", seconds: 31 * 86_400),
+            step("B", "cleanup"),
+        ]),
+        ("v2-held-create", [
+            step("A", "create", id: "n1", kind: "note", title: "Held", revision: "1"),
+            step("A", "hold", id: "n1", target: "meta"),
+            sync("A"),
+            step("B", "syncRepeat", count: 5),
+            step("B", "advanceClock", seconds: 2 * 86_400),
+            step("B", "syncRepeat", count: 5),
+            step("A", "release"),
+            sync("B"), sync("A"),
+        ]),
+        ("v2-repair", [
+            step("A", "create", id: "n1", kind: "note", title: "Lost body", revision: "1"),
+            sync("A"), sync("B"),
+            step("A", "deleteBodies", id: "n1"),
+            sync("B"),
+            step("B", "advanceClock", seconds: 2 * 86_400),
+            sync("B"), sync("A"),
+        ]),
+    ]
+
+    private final class V2Device {
+        let store: FakeLocalStore
+        let ref: StoreSessionRef
+        let stateURL: URL
+        var engine: SyncEngine
+
+        init(store: FakeLocalStore, ref: StoreSessionRef, stateURL: URL, engine: SyncEngine) {
+            self.store = store
+            self.ref = ref
+            self.stateURL = stateURL
+            self.engine = engine
+        }
+    }
+
+    /// Like `run`, on a noteit-doc store over an atomic `InMemoryBackend` wrapped in `ScriptedBackend` for the fault ops.
+    private func runV2(_ name: String, _ script: [ScriptStep]) async throws -> ScenarioCase {
+        let clock = FixedClock(VectorIO.epoch)
+        let memory = InMemoryBackend(now: { clock.now() })
+        let backend = ScriptedBackend(memory)
+        var devices: [String: V2Device] = [:]
+        var held: [String: HeldRequest] = [:]
+        func engine(_ device: String, _ ref: StoreSessionRef, _ store: FakeLocalStore, _ url: URL) -> SyncEngine {
+            SyncEngine(backend: backend, session: ref, local: store, stateURL: url, deviceID: "device-\(device)", deviceName: device,
+                       now: { clock.now() })
+        }
+        func device(_ name: String, _ scenario: String) async throws -> V2Device {
+            if let existing = devices[name] { return existing }
+            let session = try await SyncEngine.connectSession(backend: backend, kind: .library, credential: nil, deviceName: name,
+                                                              createIfMissing: true, encrypted: false, initialFeatures: [.noteItDoc],
+                                                              supported: StoreFeature.supported).session
+            let ref = StoreSessionRef(session)
+            let store = FakeLocalStore(session: ref)
+            let url = scratch.appendingPathComponent("\(scenario)-\(name).json")
+            let made = V2Device(store: store, ref: ref, stateURL: url, engine: engine(name, ref, store, url))
+            devices[name] = made
+            return made
+        }
+        func pattern(_ args: ScenarioCase.Args) -> String {
+            let id = UUID(uuidString: args.id!)!
+            return args.target == "body" ? "bodies/\(id.uuidString)" : RemoteLayout.meta(.note, id)
+        }
+        func sync(_ d: V2Device) async throws {
+            do {
+                _ = try await d.engine.sync()
+            } catch let error as StorageError where error == testCrash {
+                // The device crashed mid-pass; `restart` (or nothing, for a wiped device) follows.
+            }
+        }
+
+        var steps: [ScenarioCase.Step] = []
+        for (deviceName, op, scripted) in script {
+            clock.advance(60)
+            var args = scripted
+            let d = try await device(deviceName, name)
+            switch op {
+            case "create", "edit":
+                args.at = VectorIO.iso(clock.now())
+                let id = UUID(uuidString: args.id!)!
+                let kind = op == "create" ? RecordKind(rawValue: args.kind!)! : await d.store.entries[id]!.record.kind
+                let meta = try JSONSerialization.data(withJSONObject: ["title": args.title!], options: [.sortedKeys])
+                try await d.store.apply(RecordPayload(id: id, kind: kind, revision: UUID(uuidString: args.revision!)!, modifiedAt: clock.now(),
+                                                      deviceID: "device-\(deviceName)", meta: meta,
+                                                      body: kind == .note ? FakeLocalStore.body(for: args.title!) : nil))
+            case "delete":
+                args.at = VectorIO.iso(clock.now())
+                await d.store.delete(UUID(uuidString: args.id!)!, at: clock.now())
+            case "sync":
+                try await sync(d)
+            case "syncRepeat":
+                for _ in 0..<args.count! {
+                    clock.advance(60)
+                    try await sync(d)
+                }
+            case "advanceClock":
+                clock.advance(TimeInterval(args.seconds!))
+            case "crashDuring":
+                await backend.on(.put, pattern(args), .crashDuring)
+            case "landThenFail":
+                await backend.on(.put, pattern(args), .landThenFail)
+            case "hold":
+                let request = HeldRequest()
+                held[deviceName] = request
+                await backend.on(.put, pattern(args), .hold(request))
+            case "release":
+                await held[deviceName]?.release()
+            case "restart":
+                d.engine = engine(deviceName, d.ref, d.store, d.stateURL)
+            case "deleteBodies":
+                let id = UUID(uuidString: args.id!)!
+                for object in try await memory.list(prefix: RemoteLayout.root + "bodies/\(id.uuidString)") {
+                    try await memory.delete(object.key, ifMatch: nil)
+                }
+            case "cleanup":
+                _ = try await d.engine.cleanUpUnusedStorage()
+            default:
+                XCTFail("Unknown op \(op)")
+            }
+            steps.append(.init(device: deviceName, op: op, args: args))
+        }
+
+        var local: [String: [ScenarioCase.Record]] = [:]
+        for (name, d) in devices where !name.hasPrefix("W") {
+            local[name] = await d.store.entries.values.map { entry in
+                let copy = entry.conflictSource != nil
+                return ScenarioCase.Record(id: copy ? "new" : entry.record.id.uuidString, kind: entry.record.kind.rawValue,
+                                           revision: copy ? "new" : entry.record.revision.uuidString, title: entry.title,
+                                           body: entry.body.map { String(decoding: $0, as: UTF8.self) }, conflictSource: entry.conflictSource)
+            }.sorted { ($0.kind, $0.id, $0.title) < ($1.kind, $1.id, $1.title) }
+        }
+        let known = Set(script.compactMap(\.args.id))
+        let version = try NSRegularExpression(pattern: #"\.[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\.([^.]+)\.body$"#)
+        let keys = try await memory.list(prefix: RemoteLayout.root).map(\.key).map { key -> String in
+            var key = key
+            let range = NSRange(key.startIndex..., in: key)
+            if let match = version.firstMatch(in: key, range: range), let tagRange = Range(match.range(at: 1), in: key) {
+                let tag = key[tagRange] == "new" ? "new" : "TAG"
+                key = version.stringByReplacingMatches(in: key, range: range, withTemplate: ".V.\(tag).body")
+            }
+            let file = key.split(separator: "/").last.map(String.init) ?? key
+            let id = String(file.prefix(36))
+            guard UUID(uuidString: id) != nil, !known.contains(id) else { return key }
+            return key.replacingOccurrences(of: id, with: "new")
+        }.sorted()
+        return ScenarioCase(name: name, store: "v2", steps: steps, expectRemoteKeys: keys, expectLocal: local)
     }
 }
