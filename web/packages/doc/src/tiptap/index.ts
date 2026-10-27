@@ -6,6 +6,7 @@ import { WIKI_LINK_TRIGGER } from '../linking.js';
 import { dateTokenRewrite, localFirstWeekday } from '../natural.js';
 import { FindHighlight } from './find.js';
 import { CodeHighlight } from './highlight.js';
+import { adjustFontSize, clearFormatting, setAlignment } from './format.js';
 import { codeLanguageId } from './languages.js';
 import { safeAlign, safeBlobUrl, safeColor, safeHref, safeInt, safeLanguage, safePositive } from './safe.js';
 
@@ -404,6 +405,18 @@ export const BlockShortcuts = Extension.create({
       'Shift-Mod-Alt-d': () => this.editor.chain().insertContent({ type: 'horizontalRule' }).run(),
       'Mod-]': () => shiftLevel(this.editor, 1),
       'Mod-[': () => shiftLevel(this.editor, -1),
+      // Format › Font and Text (native FormatCommand): ⌘+ (also ⇧⌘=) ⌘−, ⇧⌘{ ⇧⌘| ⇧⌘}, ⌥⌘\.
+      'Mod-=': () => adjustFontSize(this.editor, 1),
+      'Shift-Mod-=': () => adjustFontSize(this.editor, 1),
+      'Mod-+': () => adjustFontSize(this.editor, 1),
+      'Mod--': () => adjustFontSize(this.editor, -1),
+      'Shift-Mod-[': () => setAlignment(this.editor, 'left'),
+      'Mod-{': () => setAlignment(this.editor, 'left'),
+      'Shift-Mod-\\': () => setAlignment(this.editor, 'center'),
+      'Mod-|': () => setAlignment(this.editor, 'center'),
+      'Shift-Mod-]': () => setAlignment(this.editor, 'right'),
+      'Mod-}': () => setAlignment(this.editor, 'right'),
+      'Mod-Alt-\\': () => clearFormatting(this.editor),
     };
   },
 });
@@ -677,5 +690,6 @@ export function noteItExtensions(opts: { resolver?: AttachmentResolver; wikiLink
 export { toEditorJSON, fromEditorJSON, prepareForEditor } from './convert.js';
 export * from './find.js';
 export * from './highlight.js';
+export * from './format.js';
 export * from './languages.js';
 export * from './safe.js';

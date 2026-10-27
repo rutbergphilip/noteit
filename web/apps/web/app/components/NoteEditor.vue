@@ -5,7 +5,7 @@ import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
 import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS, isTagBoundary, tagQueryEnds, tagSuggestions, type TagSuggestion, deriveTitleAndPreview, searchFold, NOTE_LINK_MAX_TEXT } from '@noteit/doc';
 import { useRenameTracker } from '~/composables/useRenameTracker';
-import { CODE_LANGUAGES, codeBlockGroups, codeLanguageId, effectiveCodeLanguage, fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
+import { adjustFontSize, clearFormatting, currentAlignment, setAlignment, CODE_LANGUAGES, codeBlockGroups, codeLanguageId, effectiveCodeLanguage, fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
@@ -694,6 +694,29 @@ function setCodeLanguage(value: string): void {
 }
 
 const mark = (name: string) => editor.value?.chain().focus().toggleMark(name).run();
+
+// Format › Font and Text: Bigger/Smaller, alignment and Clear Formatting, with native's shortcuts.
+function formatWith(run: (ed: Editor) => boolean): void {
+  const ed = liveEditor() as Editor | undefined;
+  if (!ed) return;
+  ed.commands.focus();
+  run(ed);
+}
+const alignment = computed(() => {
+  const ed = liveEditor() as Editor | undefined;
+  void state.selectedId;
+  return (ed && currentAlignment(ed)) ?? 'left';
+});
+const ALIGN_ICONS = { left: 'i-lucide-align-left', center: 'i-lucide-align-center', right: 'i-lucide-align-right', justify: 'i-lucide-align-justify' } as const;
+const alignItems = computed<DropdownMenuItem[]>(() =>
+  (
+    [
+      ['left', 'Align Left', ['meta', 'shift', '{']],
+      ['center', 'Align Center', ['meta', 'shift', '|']],
+      ['right', 'Align Right', ['meta', 'shift', '}']],
+    ] as const
+  ).map(([value, label, kbds]) => ({ label, icon: ALIGN_ICONS[value], kbds: [...kbds], type: 'checkbox' as const, checked: alignment.value === value, onSelect: () => formatWith((ed) => setAlignment(ed, value)) })),
+);
 const active = (name: string, attrs?: Record<string, unknown>) => !!editor.value?.isActive(name, attrs);
 
 function toggleList(kind: 'bullet' | 'ordered' | 'task'): void {
@@ -921,6 +944,18 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
           </div>
         </template>
       </UPopover>
+      <UTooltip text="Smaller" :kbds="['meta', '-']">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-a-arrow-down" aria-label="Smaller" @click="formatWith((ed) => adjustFontSize(ed, -1))" />
+      </UTooltip>
+      <UTooltip text="Bigger" :kbds="['meta', '+']">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-a-arrow-up" aria-label="Bigger" @click="formatWith((ed) => adjustFontSize(ed, 1))" />
+      </UTooltip>
+      <UDropdownMenu :items="alignItems">
+        <UButton color="neutral" variant="ghost" size="sm" :icon="ALIGN_ICONS[alignment]" aria-label="Alignment" />
+      </UDropdownMenu>
+      <UTooltip text="Clear Formatting" :kbds="['alt', 'meta', '\\']">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-remove-formatting" aria-label="Clear Formatting" @click="formatWith(clearFormatting)" />
+      </UTooltip>
       <USeparator orientation="vertical" class="mx-1.5 h-[18px]" />
       <UTooltip v-for="l in LISTS" :key="l.kind" :text="l.label">
         <UButton
