@@ -135,7 +135,7 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 
   To test against another server, such as your own MinIO, set `NOTEIT_LIVE_S3_ENDPOINT` and optionally `NOTEIT_LIVE_S3_REGION`, `_BUCKET`, `_ACCESS_KEY`, `_SECRET` and `_CREATE_BUCKET=1`.
 - The app layer is checked with debug-only self-test modes such as `NOTEIT_SYNC_SELFTEST=1` and `NOTEIT_EDITOR_SELFTEST=1`. Always pair them with `NOTEIT_DATA_DIR`.
-- CI runs `swift build`, `swift test` and a release build on macOS. Releases are built, signed and published by a separate workflow; see [docs/releasing.md](docs/releasing.md). The live emulator tests don't run in CI, because the macOS runners have no Docker.
+- CI runs `swift build`, `swift test` and a release build on macOS, and builds, typechecks and tests the web workspace and its Docker image. The E2E workflow runs the web app's Playwright suite in Chromium, Firefox and WebKit, and a web ⇄ Mac interop test through the server. Releases are built, signed and published by a separate workflow; see [docs/releasing.md](docs/releasing.md). The live emulator tests don't run in CI, because the macOS runners have no Docker.
 
 ## Roadmap
 
