@@ -779,7 +779,7 @@ extension NoteItTextView {
             piece.addAttributes(attrs, range: NSRange(location: 0, length: piece.length))
             s.append(piece)
         }
-        if let first = refused.first { refuseAttachment(named: first.lastPathComponent) }
+        refuseAttachments(named: refused.map(\.lastPathComponent))
         guard s.length > 0 else { return }
         window?.makeFirstResponder(self)
         breakUndoCoalescing()

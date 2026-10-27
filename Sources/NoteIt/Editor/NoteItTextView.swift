@@ -129,7 +129,13 @@ final class NoteItTextView: NSTextView, NSTextStorageDelegate {
     }
 
     func refuseAttachment(named name: String) {
-        let message = AttachmentLimit.tooLargeMessage(name: name)
+        refuseAttachments(named: [name])
+    }
+
+    /// One alert for every refused file, a line each.
+    func refuseAttachments(named names: [String]) {
+        guard !names.isEmpty else { return }
+        let message = names.map { AttachmentLimit.tooLargeMessage(name: $0) }.joined(separator: "\n")
         if let onAttachmentRefused { return onAttachmentRefused(message) }
         NSSound.beep()
         guard let window else { return }

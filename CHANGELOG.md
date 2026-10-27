@@ -36,6 +36,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Every passphrase field in Settings › Sync now says to type the passphrase exactly as on your other devices, because letters with accents can differ between keyboards.
+- Insert Image with several files over the 25 MB attachment limit names all of them in one alert, and still adds the others.
 - Saving a note to sync is now crash-safe: a note's new text is uploaded completely before other devices are pointed at it, so they never see half a save.
 - On S3 storage, a request that could change data is never sent twice automatically. A dropped connection is sorted out on the next sync instead.
 - On storage that can't delete conditionally (sync folders and some S3 providers), NoteIt checks that a note is unchanged right before deleting it, and leaves anything another device changed meanwhile.

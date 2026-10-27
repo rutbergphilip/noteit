@@ -579,4 +579,24 @@ final class MarkdownPasteTests: XCTestCase {
         XCTAssertEqual(refused.count, 3)
         XCTAssertTrue(view.storage.containsAttachments)
     }
+
+    func testInsertImageAddsTheFilesUnderTheCapAndListsEveryRefusedOneInOneAlert() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("noteit-insert-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let big = try OversizedAttachment.file(named: "big.png", in: folder)
+        let huge = try OversizedAttachment.file(named: "huge.png", in: folder)
+        let small = try OversizedAttachment.file(named: "small.png", in: folder, bytes: 1000)
+        let view = editor(body("Note"))
+        var refused: [String] = []
+        view.onAttachmentRefused = { refused.append($0) }
+
+        view.insertImages([big, small, huge])
+        XCTAssertEqual(refused, [AttachmentLimit.tooLargeMessage(name: "big.png") + "\n"
+                                    + AttachmentLimit.tooLargeMessage(name: "huge.png")])
+        var attachments = 0
+        view.storage.enumerateAttribute(.attachment, in: NSRange(location: 0, length: view.storage.length)) { value, _, _ in
+            if value != nil { attachments += 1 }
+        }
+        XCTAssertEqual(attachments, 1, "only the file under the cap is inserted")
+    }
 }
