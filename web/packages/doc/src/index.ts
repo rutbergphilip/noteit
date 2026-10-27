@@ -11,6 +11,7 @@ export * from './info.js';
 export * from './markdown.js';
 export * from './markdown-read.js';
 export * from './html.js';
+export * from './folder-export.js';
 export * from './template.js';
 export * from './palette.js';
 export * from './daily.js';

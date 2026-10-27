@@ -12,6 +12,10 @@ export interface MarkdownOptions {
   attachmentPath?: (sha: string, name: string) => string;
   /** A linked note's name for `[[Name]]`; undefined → the link's own text. */
   noteName?: (id: string) => string | undefined;
+  /** The whole `[[…]]` target for a note link (native ExportLinkContext.wikiName); null writes only the link's text. */
+  wikiName?: (link: { id: string } | { title: string }) => string | null;
+  /** Writes an image or file itself (native export's per-note assets folder); replaces `attachmentPath`. */
+  attachment?: (node: Extract<Inline, { type: 'image' | 'attachment' }>, inTable: boolean) => string;
 }
 
 /** Native's yellow highlight, written as `==text==`. */
@@ -81,6 +85,7 @@ class InlineWriter {
       if (node.type !== 'text') {
         closeTo(0);
         if (node.type === 'hardBreak') out += '\\\n';
+        else if (this.opts.attachment) out += this.opts.attachment(node, this.inTable);
         else if (node.type === 'image') out += `![${node.attrs.name}${node.attrs.width ? `|${node.attrs.width}` : ''}](${this.path(node.attrs.sha, node.attrs.name)})`;
         else out += `[${node.attrs.name}](${this.path(node.attrs.sha, node.attrs.name)})`;
         i += 1;
@@ -136,11 +141,16 @@ class InlineWriter {
     const text = runs.map((r) => (r.type === 'text' ? r.text : '')).join('');
     const note = parseNoteLink(href);
     if (note) {
-      const target = 'id' in note ? (this.opts.noteName?.(note.id) ?? text) : note.title;
+      const name = this.opts.wikiName ? this.opts.wikiName(note) : undefined;
+      if (name === null) return new InlineWriter(this.opts, this.inTable).write(runs);
+      const target = name ?? ('id' in note ? (this.opts.noteName?.(note.id) ?? text) : note.title);
       let s = `[[${target}`;
       const heading = new URL(href).searchParams.get('heading');
-      if (heading) s += `#${heading}`;
-      if (text && text !== target) s += `${this.inTable ? '\\|' : '|'}${text}`;
+      const clean = (v: string) => (this.opts.wikiName ? v.replace(/[[\]|#^\n\r]/g, '') : v);
+      if (heading && clean(heading)) s += `#${clean(heading)}`;
+      // Compared with the name's last part, so `[[Folder/Plan]]` shown as "Plan" needs no alias (native wikiLink).
+      const shown = this.opts.wikiName ? text.replace(/[[\]|\n\r]/g, '').trim() : text;
+      if (shown && shown !== (this.opts.wikiName ? (target.split('/').pop() ?? target) : target)) s += `${this.inTable ? '\\|' : '|'}${shown}`;
       return `${s}]]`;
     }
     if (text === href && runs.every((r) => r.type === 'text' && !r.marks?.length)) return href;
@@ -229,4 +239,9 @@ export function docToMarkdown(doc: NoteItDoc, opts: MarkdownOptions = {}): strin
     md += '\n'.repeat(c.emptiesBefore) + c.text;
   });
   return md ? `${md.replace(/\n+$/, '')}\n` : '';
+}
+
+/** Text escaped as the writer escapes it mid-line (an attachment's file name in an export). */
+export function escapeMarkdownText(text: string, inTable = false): string {
+  return escapeText(text, false, inTable);
 }
