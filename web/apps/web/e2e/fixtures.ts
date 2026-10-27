@@ -56,10 +56,10 @@ export interface Account {
 }
 
 /** A fresh account made by the admin, signed in on `context` with its forced password change already done. */
-export async function newAccount(context: BrowserContext, info: TestInfo, baseURL: string, opts: { changePassword?: boolean } = {}): Promise<Account & { temporaryPassword: string }> {
+export async function newAccount(context: BrowserContext, info: TestInfo, baseURL: string, opts: { changePassword?: boolean; role?: 'user' | 'admin' } = {}): Promise<Account & { temporaryPassword: string }> {
   const admin = await adminRequest(info, baseURL);
   const username = `u${randomBytes(5).toString('hex')}`;
-  const created = await action<{ temporaryPassword: string }>(admin, baseURL, 'admin/create-user', { username, displayName: `User ${username}` });
+  const created = await action<{ temporaryPassword: string }>(admin, baseURL, 'admin/create-user', { username, displayName: `User ${username}`, role: opts.role ?? 'user' });
   await admin.dispose();
   expect(created.data, JSON.stringify(created)).toBeTruthy();
   const temporaryPassword = created.data!.temporaryPassword;
