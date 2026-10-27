@@ -14,6 +14,8 @@ import {
   docToHtml,
   docToHtmlBody,
   docToMarkdown,
+  searchHighlightRanges,
+  searchSnippet,
   importMarkdown,
   expandTemplate,
   formatDatePattern,
@@ -90,6 +92,14 @@ describe('organise vectors (shared with Swift)', () => {
       if (v.text !== undefined) expect(q.hasTextTerms, v.input).toBe(v.text);
       if (v.issues !== undefined) expect(q.issues.length, v.input).toBe(v.issues);
       if (v.message) expect(q.issues[0]?.message).toBe(v.message);
+    }
+  });
+
+  it('search highlights and snippets', () => {
+    expect(vectors.snippets.length).toBeGreaterThan(5);
+    for (const v of vectors.snippets) {
+      expect(searchHighlightRanges(v.terms, v.text), v.text).toEqual(v.ranges);
+      expect(searchSnippet(v.text, v.terms, v.maxLength) ?? null, v.text).toEqual(v.snippet);
     }
   });
 
@@ -172,6 +182,12 @@ describe('Markdown export round trip and HTML lists', () => {
   it('writes an empty paragraph as one blank line, as the Swift codec does (empty-paragraphs.md)', () => {
     const doc = { type: 'doc' as const, content: [p(), p('One'), p(), p('Two'), p(), li('bullet', 0, 'a'), p(), li('bullet', 0, 'b')] };
     expect(docToMarkdown(doc)).toBe('\nOne\n\n\nTwo\n\n\n- a\n\n- b\n');
+  });
+
+  it('starts a new list of another kind after a blank line, which reads back as no empty paragraph (lists.md)', () => {
+    const doc = { type: 'doc' as const, content: [heading, li('bullet', 0, 'a'), li('ordered', 0, 'one', { number: 1 }), p(), li('task', 0, 't', { checked: false }), li('bullet', 0, 'b')] };
+    expect(docToMarkdown(doc)).toBe('# Note\n\n- a\n\n1. one\n\n\n- [ ] t\n\n- b\n');
+    expect(importMarkdown(docToMarkdown(doc), { fallbackTitle: 'x' }).body.doc).toEqual(doc);
   });
 
   it('re-imports an export without extra empty paragraphs', () => {

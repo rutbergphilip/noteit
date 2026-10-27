@@ -33,6 +33,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - In the web app: Go Back and Go Forward (⌃⌘← ⌃⌘→) between the notes you opened, Daily Note for Date… with ‹ › on a daily note to the days around it, and Unlinked Mentions in the Links tab, with Link and Link All.
 - Searching for words in the web app lists the best matches first, ranked as on the Mac.
 - Pasting Markdown in the web app brings it in formatted, by the same rules as the Mac: only text that's clearly Markdown source, never inside a code block, and ⇧⌘V pastes plain text.
+- Tag suggestions in the web app: typing `#` lists your tags, best match first and then the most used, as on the Mac.
+- When you rename a note in the web app, it offers to update links to it that still show the old title, with Undo, as the Mac does. Settings › General › When a note is renamed can make it always or never update them.
+- The web app exports a notebook, or all your notes, as folders in a zip, with the Mac's folder layout, file names and links between notes. Right-click a notebook or All Notes.
+- Code blocks in the web app are coloured by language. Pick the language from the toolbar, or leave it on Automatic to have it guessed as on the Mac. Settings › General has the Mac's four code themes and a switch to turn colouring off.
+- Bigger and Smaller text (⌘+ ⌘−), alignment (⇧⌘{ ⇧⌘| ⇧⌘}) and Clear Formatting (⌥⌘\\) in the web app, saved the same way as on the Mac. The text colour menu also takes any colour.
+- Searching in the web app shows a snippet of each note with the search words marked, and marks them in the note you open. Esc clears the marks.
+- Quick Capture in the web app offers a reminder when the first line has a date, such as “Call the bank tomorrow”.
+- The web app imports Evernote (.enex) files, a Notion export (its zip or folder) and TextBundle or TextPack files, as the Mac does: the same notebooks, checklists, attachments, tags, reminders and links between imported notes.
+- Settings › Shortcuts in the web app changes menu shortcuts, with the Mac's rules for keys that can't be used or are taken. They're kept in each browser, as the Mac keeps its own.
+- Add Row Above, Add Row Below and Delete Row for tables in the web app, from the toolbar while you're in a table.
 
 ### Changed
 
@@ -49,6 +59,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - The web app shows the same note titles and previews as the Mac for notes with a table whose first row is bold or has a shaded cell, and it reads tags, due dates and reminders on the line after a code block as the Mac does.
+- Markdown export puts a blank line between a bulleted list and a numbered or checklist list after it on the Mac and in the web app alike, and reading that Markdown back no longer adds an empty line between the two lists.
 - The New Notebook and Edit Notebook sheet keeps its colours and icons inside its margins instead of running to the edges.
 - The sidebar's New Notebook button and sync status stay readable when notes and tags scroll underneath them.
 - Two tabs of the NoteIt web app editing the same note no longer lose an edit. Tabs see each other's saves straight away, and a save made from an older version keeps the other version as a conflict copy, as the Mac does when a note changes on two devices at once.

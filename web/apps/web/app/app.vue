@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, watch } from 'vue';
 import { setNotifier, type Theme, useNoteit } from '~/composables/useNoteit';
-import { PALETTE_KEYS, webCommands } from '~/utils/commands';
+import { paletteKeys, webCommands } from '~/utils/commands';
+import { loadMenuShortcuts } from '~/utils/menuShortcuts';
+import { applyCodeStyle } from '~/utils/codeStyle';
 import { matchesCombo } from '~/utils/shortcuts';
 import { startReminders, stopReminders } from '~/utils/reminders';
 
@@ -31,7 +33,7 @@ watch(
 // Global shortcuts: native's menu shortcuts (utils/commands.ts), matched on e.code so ⌥ combinations work on a Mac.
 function onKey(e: KeyboardEvent): void {
   if (state.phase !== 'ready' || e.repeat) return;
-  if (PALETTE_KEYS.some((k) => matchesCombo(e, k))) {
+  if (paletteKeys().some((k) => matchesCombo(e, k))) {
     e.preventDefault();
     state.palette = !state.palette;
     return;
@@ -68,6 +70,8 @@ const onPageHide = (e: PageTransitionEvent) => {
 };
 
 onMounted(() => {
+  loadMenuShortcuts();
+  applyCodeStyle();
   window.addEventListener('pagehide', onPageHide);
   window.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', onVisibility);

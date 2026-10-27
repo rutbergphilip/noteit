@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import type { ContextMenuItem } from '@nuxt/ui';
 import { useNoteit, type View } from '~/composables/useNoteit';
 import { useConfirm } from '~/lib/confirm';
+import { exportFolder } from '~/utils/exporting';
 import { relativeTime } from '~/utils/format';
 import { notebookIcon, safeHex } from '~/utils/notebooks';
 import type { NotebookRow } from '~/worker/types';
@@ -58,7 +59,14 @@ const notebookMenu = (nb: NotebookRow): ContextMenuItem[][] => [
     { label: 'New Notebook Inside…', icon: 'i-lucide-folder-plus', onSelect: () => (state.notebookDialog = { mode: 'create', parent: nb.id }) },
   ],
   [{ label: 'Edit Notebook…', icon: 'i-lucide-pencil', onSelect: () => (state.notebookDialog = { mode: 'edit', id: nb.id }) }],
+  [{ label: 'Export Notebook', icon: 'i-lucide-folder-down', children: exportFormats(nb.id) }],
 ];
+/** Native Export Notebook… / Export All Notes…: a zip of folders, in Markdown or HTML. */
+const exportFormats = (notebookID: string | undefined): ContextMenuItem[] => [
+  { label: 'As Markdown', icon: 'i-lucide-file-down', onSelect: () => void exportFolder(notebookID, 'markdown') },
+  { label: 'As HTML', icon: 'i-lucide-file-code', onSelect: () => void exportFolder(notebookID, 'html') },
+];
+const libraryMenu = (v: View): ContextMenuItem[][] => (v.kind === 'all' && counts.value.all ? [[{ label: 'Export All Notes', icon: 'i-lucide-folder-down', children: exportFormats(undefined) }]] : []);
 const tagMenu = (tag: string): ContextMenuItem[][] => [
   [
     { label: 'Rename Tag…', icon: 'i-lucide-pencil', onSelect: () => (state.tagRename = tag) },
@@ -108,19 +116,19 @@ const item = (active: boolean) => [
         <UIcon name="i-lucide-calendar" class="size-[17px] shrink-0" style="color: var(--recent)" />
         <span class="truncate">Today</span>
       </UButton>
-      <UButton
-        v-for="l in library"
-        :key="l.label"
-        color="neutral"
-        variant="ghost"
-        :class="item(isActive(l.view))"
-        :aria-current="isActive(l.view) ? 'page' : undefined"
-        @click="go(l.view)"
-      >
-        <UIcon :name="l.icon" class="size-[17px] shrink-0" :style="{ color: l.color }" />
-        <span class="truncate">{{ l.label }}</span>
-        <span class="ms-auto text-xs text-muted">{{ l.count }}</span>
-      </UButton>
+      <UContextMenu v-for="l in library" :key="l.label" :items="libraryMenu(l.view)" :disabled="!libraryMenu(l.view).length">
+        <UButton
+          color="neutral"
+          variant="ghost"
+          :class="item(isActive(l.view))"
+          :aria-current="isActive(l.view) ? 'page' : undefined"
+          @click="go(l.view)"
+        >
+          <UIcon :name="l.icon" class="size-[17px] shrink-0" :style="{ color: l.color }" />
+          <span class="truncate">{{ l.label }}</span>
+          <span class="ms-auto text-xs text-muted">{{ l.count }}</span>
+        </UButton>
+      </UContextMenu>
 
       <div class="px-2.5 pt-4 pb-1.5 text-[11px] font-semibold text-muted">Notebooks</div>
       <UContextMenu v-for="{ nb, depth } in tree" :key="nb.id" :items="notebookMenu(nb)">

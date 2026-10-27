@@ -5,6 +5,10 @@ import type { EditorView } from '@tiptap/pm/view';
 import { WIKI_LINK_TRIGGER } from '../linking.js';
 import { dateTokenRewrite, localFirstWeekday } from '../natural.js';
 import { FindHighlight } from './find.js';
+import { CodeHighlight } from './highlight.js';
+import { SearchHighlight } from './searchHighlight.js';
+import { adjustFontSize, clearFormatting, setAlignment } from './format.js';
+import { codeLanguageId } from './languages.js';
 import { safeAlign, safeBlobUrl, safeColor, safeHref, safeInt, safeLanguage, safePositive } from './safe.js';
 
 const BULLETS = ['•', '◦', '▪'];
@@ -402,42 +406,23 @@ export const BlockShortcuts = Extension.create({
       'Shift-Mod-Alt-d': () => this.editor.chain().insertContent({ type: 'horizontalRule' }).run(),
       'Mod-]': () => shiftLevel(this.editor, 1),
       'Mod-[': () => shiftLevel(this.editor, -1),
+      // Format › Font and Text (native FormatCommand): ⌘+ (also ⇧⌘=) ⌘−, ⇧⌘{ ⇧⌘| ⇧⌘}, ⌥⌘\.
+      'Mod-=': () => adjustFontSize(this.editor, 1),
+      'Shift-Mod-=': () => adjustFontSize(this.editor, 1),
+      'Mod-+': () => adjustFontSize(this.editor, 1),
+      'Mod--': () => adjustFontSize(this.editor, -1),
+      'Shift-Mod-[': () => setAlignment(this.editor, 'left'),
+      'Mod-{': () => setAlignment(this.editor, 'left'),
+      'Shift-Mod-\\': () => setAlignment(this.editor, 'center'),
+      'Mod-|': () => setAlignment(this.editor, 'center'),
+      'Shift-Mod-]': () => setAlignment(this.editor, 'right'),
+      'Mod-}': () => setAlignment(this.editor, 'right'),
+      'Mod-Alt-\\': () => clearFormatting(this.editor),
     };
   },
 });
 
 // MARK: Markdown as you type (native MarkdownShortcuts.swift)
-
-/** Native `CodeLanguage(identifier:)` aliases → the canonical id a codeBlock's `language` holds. */
-const CODE_LANGUAGES: Record<string, string> = {
-  text: 'text', txt: 'text', plain: 'text', plaintext: 'text',
-  bash: 'bash', sh: 'bash', shell: 'bash', zsh: 'bash', console: 'bash', shellsession: 'bash',
-  c: 'c', h: 'c',
-  cpp: 'cpp', 'c++': 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp',
-  csharp: 'csharp', cs: 'csharp', 'c#': 'csharp',
-  css: 'css', scss: 'css',
-  go: 'go', golang: 'go',
-  html: 'html', xml: 'html', xhtml: 'html', svg: 'html', plist: 'html',
-  java: 'java',
-  javascript: 'javascript', js: 'javascript', jsx: 'javascript', mjs: 'javascript', node: 'javascript',
-  json: 'json', jsonc: 'json',
-  kotlin: 'kotlin', kt: 'kotlin', kts: 'kotlin',
-  markdown: 'markdown', md: 'markdown',
-  php: 'php',
-  python: 'python', py: 'python', python3: 'python',
-  ruby: 'ruby', rb: 'ruby',
-  rust: 'rust', rs: 'rust',
-  sql: 'sql', mysql: 'sql', postgresql: 'sql', postgres: 'sql', sqlite: 'sql',
-  swift: 'swift',
-  typescript: 'typescript', ts: 'typescript', tsx: 'typescript',
-  yaml: 'yaml', yml: 'yaml',
-};
-
-/** A Markdown info string or alias (`py`, `c++`, `yml`…) → canonical language id; undefined when unknown. */
-export function codeLanguageId(raw: string): string | undefined {
-  const word = raw.trim().split(/[ {,]/)[0] ?? '';
-  return CODE_LANGUAGES[word.toLowerCase()];
-}
 
 const BOLD = /\*\*([^*\s](?:[^*\n]*[^*\s])?)\*$/;
 const ITALIC = /(?:^|(?<=[^*\w]))\*([^*\s](?:[^*\n]*[^*\s])?)$/;
@@ -699,9 +684,16 @@ export function noteItExtensions(opts: { resolver?: AttachmentResolver; wikiLink
     BlockShortcuts,
     MarkdownShortcuts.configure({ wikiLink: opts.wikiLink }),
     FindHighlight,
+    CodeHighlight,
+    SearchHighlight,
   ];
 }
 
 export { toEditorJSON, fromEditorJSON, prepareForEditor } from './convert.js';
 export * from './find.js';
+export * from './highlight.js';
+export * from './format.js';
+export * from './searchHighlight.js';
+export * from './tableRows.js';
+export * from './languages.js';
 export * from './safe.js';

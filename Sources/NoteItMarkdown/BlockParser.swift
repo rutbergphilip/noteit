@@ -3,7 +3,8 @@ import NoteItDoc
 
 /// Block structure: CommonMark + GFM (ATX and setext headings, paragraphs, fenced and indented code, lists, task
 /// items, quotes, thematic breaks, pipe tables) plus NoteIt's attribute comment lines, with the source range of
-/// every block. Blank lines beyond the one that separates two blocks are empty paragraphs (none between list items).
+/// every block. Blank lines beyond the one that separates two blocks are empty paragraphs (none between list items,
+/// except the one before a new list of another kind; see `ListRuns`).
 struct BlockParser {
     struct SourceLine {
         var text: String
@@ -176,9 +177,11 @@ struct BlockParser {
         }
 
         var result: [(DocNode, Range<String.Index>)] = []
+        var runs = ListRuns()
         for (index, unit) in units.enumerated() {
             let gap = blanks[index]
-            let separator = index == 0 ? 0 : (units[index - 1].isListItem && unit.isListItem ? 0 : 1)
+            let newList = runs.startsNewList(unit.isListItem ? unit.nodes.first : nil)
+            let separator = index == 0 ? 0 : (units[index - 1].isListItem && unit.isListItem && !newList ? 0 : 1)
             for range in gap.dropFirst(min(separator, gap.count)) { result.append((Self.emptyParagraph, range)) }
             for node in unit.nodes { result.append((node, unit.range)) }
         }

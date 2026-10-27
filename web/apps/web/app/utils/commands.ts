@@ -7,6 +7,7 @@
 import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
 import { pickImport } from '~/utils/importing';
+import { keysForWebCommand, paletteCombos } from '~/utils/menuShortcuts';
 
 export interface WebCommand {
   id: string;
@@ -52,8 +53,8 @@ export function webCommands(): WebCommand[] {
     { id: 'showTasks', title: 'Show Tasks', icon: 'i-lucide-list-checks', keys: ['shift+mod+t', 'alt+shift+mod+t'], keywords: ['todo', 'checkbox', 'due'], available: always, run: () => ((state.view = { kind: 'tasks' }), (state.pane = 'list')) },
     { id: 'searchNotes', title: 'Search Notes', icon: 'i-lucide-search', keys: ['mod+f'], keywords: ['find', 'filter'], available: always, run: () => document.querySelector<HTMLInputElement>('input[aria-label="Search notes"]')?.focus() },
     { id: 'export', title: 'Export Note as Markdown', icon: 'i-lucide-file-down', keys: ['shift+mod+s'], keywords: ['save', 'markdown', 'download'], available: () => !!note(), run: () => exportNote(state.selectedId!, 'markdown') },
-    { id: 'import', title: 'Import Markdown Files…', icon: 'i-lucide-file-up', keywords: ['markdown', 'obsidian', 'text', 'md'], available: always, run: () => pickImport(false) },
-    { id: 'importFolder', title: 'Import Markdown Folder…', icon: 'i-lucide-folder-up', keywords: ['markdown', 'obsidian', 'vault', 'md'], available: always, run: () => pickImport(true) },
+    { id: 'import', title: 'Import…', icon: 'i-lucide-file-up', keywords: ['markdown', 'obsidian', 'text', 'md', 'evernote', 'enex', 'notion', 'textbundle', 'textpack', 'bear'], available: always, run: () => pickImport(false) },
+    { id: 'importFolder', title: 'Import Folder…', icon: 'i-lucide-folder-up', keywords: ['markdown', 'obsidian', 'vault', 'md', 'evernote', 'notion', 'textbundle', 'bear'], available: always, run: () => pickImport(true) },
     { id: 'exportHTML', title: 'Export Note as HTML', icon: 'i-lucide-file-code', keywords: ['save', 'html', 'download'], available: () => !!note(), run: () => exportNote(state.selectedId!, 'html') },
     { id: 'print', title: 'Print…', icon: 'i-lucide-printer', keys: ['mod+p'], keywords: ['pdf'], available: () => !!note(), run: () => printNote(state.selectedId!) },
     { id: 'copyMarkdown', title: 'Copy as Markdown', icon: 'i-lucide-clipboard-copy', keys: ['alt+shift+mod+c'], keywords: ['clipboard'], available: () => !!note(), run: () => copyMarkdown(state.selectedId!) },
@@ -92,8 +93,9 @@ export function webCommands(): WebCommand[] {
     { id: 'quickCapture', title: 'Open Quick Capture', icon: 'i-lucide-pen-line', keys: ['alt+mod+c'], available: always, run: () => (state.capture = true) },
     { id: 'syncNow', title: 'Sync Now', icon: 'i-lucide-refresh-cw', available: always, run: () => void n.client().syncNow() },
     { id: 'lock', title: 'Lock NoteIt', icon: 'i-lucide-lock', available: always, run: () => void n.lock() },
-  ].map((c) => ({ ...c, run: () => (close(), c.run()) })) as WebCommand[];
+    // Settings › Shortcuts can change native's menu shortcuts (utils/menuShortcuts.ts).
+  ].map((c) => ({ ...c, keys: keysForWebCommand(c.id, c.keys), run: () => (close(), c.run()) })) as WebCommand[];
 }
 
-/** Commands that open the palette itself (native ⌘O Open Quickly, ⇧⌘P Command Palette; ⌘K on the web too). */
-export const PALETTE_KEYS = ['mod+o', 'shift+mod+p', 'mod+k'];
+/** Combos that open the palette itself (native ⌘O Open Quickly, ⇧⌘P Command Palette, as set in Settings; ⌘K on the web too). */
+export const paletteKeys = (): string[] => paletteCombos();

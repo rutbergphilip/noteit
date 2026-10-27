@@ -26,14 +26,17 @@ import { formatBytes, formatDateTime, relativeTime } from '~/utils/format';
 import { askNotificationPermission, notificationsSupported } from '~/utils/reminders';
 import type { DeviceView } from '~/worker/types';
 import { useOpeningKey } from '~/utils/overlay';
+import { linkRenameMode, setLinkRenameMode, type LinkRenameMode } from '~/composables/useRenameTracker';
+import { CODE_THEMES, codeStyle, setCodeStyle, type CodeThemeId } from '~/utils/codeStyle';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
 const confirm = useConfirm();
-type Section = 'general' | 'sync' | 'security' | 'account' | 'users' | 'about';
+type Section = 'general' | 'shortcuts' | 'sync' | 'security' | 'account' | 'users' | 'about';
 const section = ref<Section>('sync');
 const isAdmin = computed(() => state.session?.user.role === 'admin');
 const sections = computed(() => [
   { id: 'general' as const, label: 'General', icon: 'i-lucide-settings' },
+  { id: 'shortcuts' as const, label: 'Shortcuts', icon: 'i-lucide-keyboard' },
   { id: 'sync' as const, label: 'Sync & storage', icon: 'i-lucide-refresh-cw' },
   { id: 'security' as const, label: 'Security & devices', icon: 'i-lucide-shield' },
   { id: 'account' as const, label: 'Account', icon: 'i-lucide-user-round' },
@@ -123,6 +126,24 @@ const notifySub = computed(() =>
 async function allowNotifications(): Promise<void> {
   notifyState.value = await askNotificationPermission();
 }
+// When a note is renamed (native Settings › Editor › Links), kept in this browser.
+const renameMode = ref<LinkRenameMode>(linkRenameMode());
+const renameModes = [
+  { label: 'Ask', value: 'ask' },
+  { label: 'Always update links', value: 'always' },
+  { label: 'Never update links', value: 'never' },
+];
+// Code blocks (native Settings › Editor › Code), kept in this browser.
+const code = ref(codeStyle());
+function changeCode(change: { theme?: CodeThemeId; highlighting?: boolean }): void {
+  setCodeStyle(change);
+  code.value = codeStyle();
+}
+function changeRenameMode(v: LinkRenameMode): void {
+  renameMode.value = v;
+  setLinkRenameMode(v);
+}
+
 const themes = [
   { label: 'System', value: 'system' },
   { label: 'Light', value: 'light' },
@@ -267,6 +288,14 @@ const portalKey = useOpeningKey(() => state.settings);
                 <USelect :model-value="state.theme" :items="themes" class="w-36" aria-label="Theme" @update:model-value="(t) => setTheme(t as 'system' | 'light' | 'dark')" />
               </SettingsRow>
             </SettingsCard>
+            <SettingsCard title="Code blocks">
+              <SettingsRow label="Syntax highlighting" sub="Colours code by language, set from the code block or guessed.">
+                <USwitch :model-value="code.highlighting" aria-label="Syntax highlighting" @update:model-value="(v) => changeCode({ highlighting: !!v })" />
+              </SettingsRow>
+              <SettingsRow label="Theme">
+                <USelect :model-value="code.theme" :items="[...CODE_THEMES]" class="w-36" aria-label="Code block theme" :disabled="!code.highlighting" @update:model-value="(v) => changeCode({ theme: v as CodeThemeId })" />
+              </SettingsRow>
+            </SettingsCard>
             <SettingsCard title="This browser">
               <SettingsRow label="Device name" sub="Shown in conflict copies on your other devices.">
                 <form class="flex gap-2" @submit.prevent="saveDeviceName">
@@ -277,7 +306,15 @@ const portalKey = useOpeningKey(() => state.settings);
               <SettingsRow label="Reminder notifications" :sub="notifySub">
                 <UButton v-if="notifyState === 'default'" color="neutral" variant="outline" label="Allow" @click="allowNotifications" />
               </SettingsRow>
+              <SettingsRow label="When a note is renamed" sub="Update the text of links to it that still show the old title.">
+                <USelect :model-value="renameMode" :items="renameModes" class="w-52" aria-label="When a note is renamed" @update:model-value="(v) => changeRenameMode(v as LinkRenameMode)" />
+              </SettingsRow>
             </SettingsCard>
+          </template>
+
+          <template v-else-if="section === 'shortcuts'">
+            <h2 class="text-xl font-bold">Shortcuts</h2>
+            <ShortcutsSettings />
           </template>
 
           <template v-else-if="section === 'sync'">

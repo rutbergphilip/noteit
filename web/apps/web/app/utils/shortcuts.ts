@@ -8,19 +8,38 @@ export const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(
 
 const CODES: Record<string, string> = {
   ',': 'Comma',
+  '.': 'Period',
+  '/': 'Slash',
+  ';': 'Semicolon',
+  "'": 'Quote',
+  '`': 'Backquote',
+  '-': 'Minus',
+  '=': 'Equal',
   '[': 'BracketLeft',
   ']': 'BracketRight',
+  '\\': 'Backslash',
   backspace: 'Backspace',
   delete: 'Backspace',
+  forwarddelete: 'Delete',
   arrowleft: 'ArrowLeft',
   arrowright: 'ArrowRight',
+  arrowup: 'ArrowUp',
+  arrowdown: 'ArrowDown',
+  enter: 'Enter',
+  tab: 'Tab',
+  space: 'Space',
+  escape: 'Escape',
+  home: 'Home',
+  end: 'End',
+  pageup: 'PageUp',
+  pagedown: 'PageDown',
 };
 
 function parse(combo: string) {
   const parts = combo.toLowerCase().split('+');
   const key = parts.pop()!;
   const has = (p: string) => parts.includes(p);
-  const code = CODES[key] ?? (/^[a-z]$/.test(key) ? `Key${key.toUpperCase()}` : /^[0-9]$/.test(key) ? `Digit${key}` : key);
+  const code = CODES[key] ?? (/^[a-z]$/.test(key) ? `Key${key.toUpperCase()}` : /^[0-9]$/.test(key) ? `Digit${key}` : /^f\d{1,2}$/.test(key) ? key.toUpperCase() : key);
   // Off a Mac ⌃ becomes Alt, so ⌃⌘L is Ctrl+Alt+L.
   return isMac
     ? { meta: has('mod'), ctrl: has('ctrl'), alt: has('alt'), shift: has('shift'), code }
@@ -29,7 +48,8 @@ function parse(combo: string) {
 
 export function matchesCombo(e: KeyboardEvent, combo: string): boolean {
   const c = parse(combo);
-  return e.code === c.code && e.metaKey === c.meta && e.ctrlKey === c.ctrl && e.altKey === c.alt && e.shiftKey === c.shift;
+  const code = e.code === 'NumpadEnter' ? 'Enter' : e.code;
+  return code === c.code && e.metaKey === c.meta && e.ctrlKey === c.ctrl && e.altKey === c.alt && e.shiftKey === c.shift;
 }
 
 /** Nuxt UI `kbds` for a tooltip or palette row (`meta` already shows ⌘ or Ctrl per platform). */
@@ -41,6 +61,6 @@ export function comboKbds(combo: string): string[] {
   if (parts.includes('alt') && !(out.includes('alt'))) out.push('alt');
   if (parts.includes('shift')) out.push('shift');
   if (parts.includes('mod')) out.push('meta');
-  out.push(key.length === 1 ? key.toUpperCase() : key);
+  out.push(key.length === 1 || /^f\d{1,2}$/.test(key) ? key.toUpperCase() : key);
   return out;
 }

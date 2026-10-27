@@ -1,5 +1,5 @@
 import { computed, reactive, shallowRef, watch } from 'vue';
-import { type BodyContainer, dailyNotebook, dailyTitle, dayKey, DAILY_NOTEBOOK_NAME, emptyContainer, expandTemplate, findDailyNote, parseQuery, TEMPLATES_NOTEBOOK_NAME } from '@noteit/doc';
+import { type BodyContainer, dailyNotebook, dailyTitle, dayKey, DAILY_NOTEBOOK_NAME, emptyContainer, expandTemplate, findDailyNote, parseQuery, type Snippet, TEMPLATES_NOTEBOOK_NAME, type TextRange } from '@noteit/doc';
 import { serverInfo, session as sessionAction, signOut as signOutAction } from '#safe-action/actions';
 import { failureOf, type ServerInfo, type SessionInfo } from '~/utils/actions';
 import { templateTarget } from '~/utils/notebooks';
@@ -54,6 +54,8 @@ const state = reactive({
   searchRank: undefined as Map<string, number> | undefined,
   /** Problems in the search query (an unknown filter is searched as a word, as on the Mac). */
   searchIssues: [] as string[],
+  /** Title highlights and body snippets of the search hits (native SearchResult), by note id. */
+  searchDecorations: {} as Record<string, { title: TextRange[]; snippet?: Snippet }>,
   /** The Links and Outline panel (native ⌥⌘I), with its Info tab (⌃⌘I). */
   inspector: { open: false, tab: 'links' as InspectorTab },
   /** New Note from Template… or Insert Template…. */
@@ -223,6 +225,9 @@ async function setQuery(q: string): Promise<void> {
 function setHits(ids: string[] | undefined): void {
   state.searchHits = ids ? new Set(ids) : undefined;
   state.searchRank = ids && state.query && parseQuery(state.query).hasTextTerms ? new Map(ids.map((id, i) => [id, i])) : undefined;
+  const query = state.query;
+  if (!ids || !query.trim()) state.searchDecorations = {};
+  else void client().searchDecorations(query, ids).then((d) => state.query === query && (state.searchDecorations = d));
 }
 
 const RECENT_DAYS = 7;

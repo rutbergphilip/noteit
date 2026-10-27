@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref } from 'vue';
-import type { Block, BodyContainer } from '@noteit/doc';
+import { addingCaptureReminder, captureReminder, localFirstWeekday, reminderDayAndTime, type Block, type BodyContainer } from '@noteit/doc';
 import { useNoteit } from '~/composables/useNoteit';
 import { useOpeningKey } from '~/utils/overlay';
 
@@ -11,6 +11,11 @@ const { state, createNote, toast } = useNoteit();
 const draft = ((globalThis as { __noteitCaptureDraft?: { title: string; body: string; notebook: string } }).__noteitCaptureDraft ??= reactive({ title: '', body: '', notebook: 'none' }));
 const destinations = computed(() => [{ label: 'No Notebook', value: 'none' }, ...state.notebooks.map((n) => ({ label: n.name || 'Untitled', value: n.id }))]);
 const empty = computed(() => !draft.title.trim() && !draft.body.trim());
+// Remind at the date in the first line (native QuickCapturePanel): offered while that line has a future date, and off
+// again for every new capture.
+const remind = ref(false);
+const offered = computed(() => captureReminder(draft.title, draft.body, new Date(), { firstWeekday: localFirstWeekday() }));
+const offerLabel = computed(() => (offered.value ? `Remind ${reminderDayAndTime(offered.value)}` : ''));
 
 function onOpen(open: boolean): void {
   if (open && draft.notebook === 'none') draft.notebook = state.notebooks.find((n) => n.name.toLowerCase() === 'inbox')?.id ?? 'none';
@@ -19,8 +24,9 @@ function onOpen(open: boolean): void {
 /** Plain text → noteit-doc: the title as a Title line, "- [ ]" lines as checklist items, "- " as bullets. */
 function toContainer(): BodyContainer {
   const content: Block[] = [];
-  if (draft.title.trim()) content.push({ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: draft.title.trim() }] });
-  for (const line of draft.body.split('\n')) {
+  const text = remind.value && offered.value ? addingCaptureReminder(offered.value, draft.title, draft.body) : { title: draft.title, body: draft.body };
+  if (text.title.trim()) content.push({ type: 'heading', attrs: { level: 1 }, content: [{ type: 'text', text: text.title.trim() }] });
+  for (const line of text.body.split('\n')) {
     const task = /^\s*[-*] \[( |x|X)\] (.*)$/.exec(line);
     const bullet = /^\s*[-*•] (.*)$/.exec(line);
     const text = task?.[2] ?? bullet?.[1] ?? line;
@@ -41,6 +47,7 @@ async function save(): Promise<void> {
 function discard(): void {
   draft.title = '';
   draft.body = '';
+  remind.value = false;
   state.capture = false;
 }
 const titleInput = ref<HTMLInputElement>();
@@ -81,6 +88,18 @@ const portalKey = useOpeningKey(() => state.capture);
         <input ref="titleInput" v-model="draft.title" class="w-full bg-transparent text-[22px] font-semibold outline-none placeholder:text-dimmed" placeholder="Title" aria-label="Title" @keydown.enter="titleEnter" />
         <UTextarea v-model="draft.body" :rows="6" autoresize :maxrows="14" variant="none" placeholder="Write something. - [ ] makes a checklist item." aria-label="Note" :ui="{ base: 'px-0 text-sm/normal' }" />
         <div class="flex flex-wrap items-center gap-2 border-t border-default pt-3">
+          <UTooltip v-if="offered" text="Add a reminder for the date in the first line when the note is saved">
+            <UButton
+              color="neutral"
+              :variant="remind ? 'soft' : 'ghost'"
+              size="sm"
+              icon="i-lucide-alarm-clock"
+              :label="offerLabel"
+              :aria-pressed="remind"
+              :class="remind ? 'text-(--acct)' : 'text-muted'"
+              @click="remind = !remind"
+            />
+          </UTooltip>
           <UKbd value="escape" />
           <span class="me-auto text-xs text-muted">to dismiss · draft is kept until you close this tab</span>
           <UButton color="neutral" variant="ghost" size="sm" label="Discard" @click="discard" />

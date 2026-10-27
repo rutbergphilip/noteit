@@ -38,6 +38,20 @@ const sortOptions = [
   { value: 'title', label: 'Title' },
 ];
 
+/** Text split at highlighted [start, end) ranges, for marking the search's words (native NoteListView.highlighted). */
+function runs(text: string, ranges: readonly (readonly [number, number])[] | undefined): { text: string; hit: boolean }[] {
+  if (!ranges?.length) return [{ text, hit: false }];
+  const out: { text: string; hit: boolean }[] = [];
+  let at = 0;
+  for (const [a, b] of ranges) {
+    if (a > at) out.push({ text: text.slice(at, a), hit: false });
+    out.push({ text: text.slice(a, b), hit: true });
+    at = b;
+  }
+  if (at < text.length) out.push({ text: text.slice(at), hit: false });
+  return out;
+}
+
 const notebookOf = (id?: string) => (id ? state.notebooks.find((n) => n.id === id) : undefined);
 function open(id: string): void {
   state.selectedId = id;
@@ -146,10 +160,14 @@ function rowMenu(n: NoteRow): ContextMenuItem[][] {
           >
             <div class="flex items-center gap-1.5 text-sm font-semibold">
               <UIcon v-if="n.kind === 'locked'" name="i-lucide-lock" class="size-[13px] shrink-0" />
-              <span class="truncate">{{ n.title || 'Untitled' }}</span>
+              <span v-if="n.title && state.searchDecorations[n.id]?.title.length" class="truncate"><template v-for="(r, k) in runs(n.title, state.searchDecorations[n.id]!.title)" :key="k"><mark v-if="r.hit" class="search-hit">{{ r.text }}</mark><template v-else>{{ r.text }}</template></template></span>
+              <span v-else class="truncate">{{ n.title || 'Untitled' }}</span>
               <UIcon v-if="n.isPinned" name="i-lucide-pin" class="ms-auto size-3.5 shrink-0 text-(--pinned)" />
             </div>
-            <div v-if="n.preview" class="mt-1 line-clamp-2 text-[13px]/[18px] text-muted">{{ n.preview }}</div>
+            <div v-if="state.searchDecorations[n.id]?.snippet" class="mt-1 line-clamp-2 text-[13px]/[18px] text-muted">
+              <template v-for="(r, k) in runs(state.searchDecorations[n.id]!.snippet!.text, state.searchDecorations[n.id]!.snippet!.highlights)" :key="k"><mark v-if="r.hit" class="search-hit">{{ r.text }}</mark><template v-else>{{ r.text }}</template></template>
+            </div>
+            <div v-else-if="n.preview" class="mt-1 line-clamp-2 text-[13px]/[18px] text-muted">{{ n.preview }}</div>
             <div class="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
               {{ relativeTime(n.updatedAt) }}
               <template v-if="notebookOf(n.notebookID)">

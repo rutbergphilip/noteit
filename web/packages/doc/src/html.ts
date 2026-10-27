@@ -5,12 +5,28 @@ export interface HtmlOptions {
   title: string;
   /** A `src` for an image (a data: URL to make the page self-contained); undefined drops the image. */
   imageSrc?: (sha: string, mime: string) => string | undefined;
+  /** A relative link to a note written by the same export (native ExportLinkContext.href); undefined keeps the text. */
+  noteHref?: (link: { id: string; heading?: string }) => string | undefined;
+}
+
+/** A heading's HTML `id` (native HeadingSlug): lowercased letters and digits, other runs as `-`. */
+export function headingSlug(text: string): string {
+  let out = '';
+  let dash = false;
+  for (const ch of text.toLowerCase()) {
+    if (/[\p{L}\p{N}]/u.test(ch)) {
+      if (dash && out) out += '-';
+      out += ch;
+      dash = false;
+    } else dash = true;
+  }
+  return out || 'heading';
 }
 
 export const escapeHtml = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const safeColor = (c: string) => (/^#[0-9A-Fa-f]{6}$/.test(c) ? c : undefined);
 
-function markOpen(m: Mark): [string, string] | undefined {
+function markOpen(m: Mark, o: HtmlOptions): [string, string] | undefined {
   switch (m.type) {
     case 'bold':
       return ['<strong>', '</strong>'];
@@ -31,8 +47,13 @@ function markOpen(m: Mark): [string, string] | undefined {
       return c ? [`<mark style="background-color:${c}">`, '</mark>'] : undefined;
     }
     case 'link': {
-      // Note links have no target outside NoteIt; their text is kept.
-      if (parseNoteLink(m.attrs.href) || !isAllowedLink(m.attrs.href)) return undefined;
+      // Note links point at the linked note's file when it's in the same export; otherwise their text is kept.
+      const note = parseNoteLink(m.attrs.href);
+      if (note) {
+        const href = 'id' in note ? o.noteHref?.(note) : undefined;
+        return href ? [`<a href="${escapeHtml(href)}">`, '</a>'] : ['<span class="note-link">', '</span>'];
+      }
+      if (!isAllowedLink(m.attrs.href)) return undefined;
       return [`<a href="${escapeHtml(m.attrs.href)}">`, '</a>'];
     }
     default:
@@ -51,7 +72,7 @@ function inline(content: Inline[] | undefined, o: HtmlOptions): string {
       if (n.type === 'attachment') return `<span class="file">📎 ${escapeHtml(n.attrs.name)}</span>`;
       let html = escapeHtml(n.text);
       for (const m of [...(n.marks ?? [])].reverse()) {
-        const w = markOpen(m);
+        const w = markOpen(m, o);
         if (w) html = `${w[0]}${html}${w[1]}`;
       }
       return html;
@@ -66,6 +87,13 @@ export function docToHtmlBody(doc: NoteItDoc, o: HtmlOptions): string {
   // Open lists, innermost last, each with an unclosed <li>: a nested list goes inside its parent item, as native
   // HTMLWriter writes it. Checklists are their own kind of list, so their items never get a bullet.
   const lists: { key: string; tag: string; level: number }[] = [];
+  const slugs = new Map<string, number>();
+  const headingId = (text: string) => {
+    const base = headingSlug(text);
+    const n = (slugs.get(base) ?? 0) + 1;
+    slugs.set(base, n);
+    return n === 1 ? base : `${base}-${n}`;
+  };
   const closeLists = (level = -1) => {
     while (lists.length && lists[lists.length - 1]!.level > level) out.push(`</li></${lists.pop()!.tag}>`);
   };
@@ -76,7 +104,7 @@ export function docToHtmlBody(doc: NoteItDoc, o: HtmlOptions): string {
         out.push(`<p${align(b.attrs?.align)}>${inline(b.content, o) || '<br>'}</p>`);
         break;
       case 'heading':
-        out.push(`<h${b.attrs.level}${align(b.attrs.align)}>${inline(b.content, o)}</h${b.attrs.level}>`);
+        out.push(`<h${b.attrs.level} id="${escapeHtml(headingId((b.content ?? []).map((n) => (n.type === 'text' ? n.text : '')).join('')))}"${align(b.attrs.align)}>${inline(b.content, o)}</h${b.attrs.level}>`);
         break;
       case 'codeBlock':
         out.push(`<pre><code>${inline(b.content, o)}</code></pre>`);

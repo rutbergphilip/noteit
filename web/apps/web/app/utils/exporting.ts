@@ -1,4 +1,4 @@
-import { type BodyContainer, defaultAttachmentPath, docToHtml, docToMarkdown, noteLink } from '@noteit/doc';
+import { type BodyContainer, defaultAttachmentPath, docToHtml, docToMarkdown, type FolderExportFormat, noteLink, planAllExport, planNotebookExport, writeFolderExport, zipFolderExport } from '@noteit/doc';
 import { useNoteit } from '~/composables/useNoteit';
 
 export type ExportFormat = 'markdown' | 'html' | 'noteitdoc';
@@ -46,6 +46,28 @@ export async function exportNote(id: string, format: ExportFormat): Promise<void
   if (format === 'markdown') download(`${name}.md`, new Blob([noteMarkdown(note.container)], { type: 'text/markdown' }));
   else if (format === 'html') download(`${name}.html`, new Blob([docToHtml(note.container.doc, { title: note.title || 'Untitled', imageSrc: dataUrl(note.container) })], { type: 'text/html' }));
   else download(`${name}.noteitdoc`, new Blob([JSON.stringify(note.container)], { type: 'application/json' }));
+}
+
+/**
+ * Export Notebook… and Export All Notes… (native NoteExporter): the same folders and file names as on the Mac, as a
+ * zip named after the top folder. Notes this browser can't read (locked, or from an older Mac) are left out and named.
+ */
+export async function exportFolder(notebookID: string | undefined, format: FolderExportFormat): Promise<void> {
+  const { state, client, toast } = useNoteit();
+  const plan = notebookID ? planNotebookExport(notebookID, state.notebooks, state.notes, format) : planAllExport(state.notebooks, state.notes, format);
+  const bodies = new Map<string, BodyContainer>();
+  for (const f of plan.files) {
+    const opened = await client().getNote(f.note.id);
+    if (opened?.container && opened.readOnly !== 'locked' && opened.readOnly !== 'legacy') bodies.set(f.note.id, opened.container);
+  }
+  const result = writeFolderExport(plan, state.notes, (id) => bodies.get(id));
+  download(`${plan.root}.zip`, new Blob([zipFolderExport(result) as BlobPart], { type: 'application/zip' }));
+  const total = plan.files.length;
+  const done = result.written < total ? `Exported ${result.written} of ${total} notes` : result.written === 1 ? 'Exported 1 note' : `Exported ${result.written} notes`;
+  if (!result.skipped.length) return toast(`${done} to “${plan.root}.zip”`, 'success');
+  const shown = result.skipped.slice(0, 10).map((t) => `“${t}”`).join(', ');
+  const more = result.skipped.length > 10 ? ` and ${result.skipped.length - 10} more` : '';
+  toast(`${done}. Not exported: ${shown}${more} can't be read here; export ${result.skipped.length === 1 ? 'it' : 'them'} from NoteIt on your Mac.`, 'info');
 }
 
 /** Print… (native ⌘P); the browser's print dialog also saves as PDF. */

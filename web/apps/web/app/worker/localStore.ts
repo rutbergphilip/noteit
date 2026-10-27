@@ -11,6 +11,7 @@ import {
   type LocalDeletion,
   type LocalRecord,
   newUuid,
+  normalizeUuid,
   NOTE_META_OWNED_KEYS,
   NOTEBOOK_META_OWNED_KEYS,
   type NoteMeta,
@@ -57,6 +58,12 @@ import {
   rankSearch,
   findMentions,
   linkMentions,
+  rewriteLinkText,
+  plainLines,
+  searchHighlightRanges,
+  searchSnippet,
+  type Snippet,
+  type TextRange,
   mentionsAreSearched,
   noteLink,
   reminderId,
@@ -313,6 +320,30 @@ export class WebLocalStore implements SyncLocalStore {
     return rankSearch(docs, q, searchFold(query), now).map((i) => hits[i]!.row.id);
   }
 
+  /**
+   * Title highlights and a body snippet for the first 150 hits (native NoteStore.search, decorated): the window of
+   * the text after the title with the most search words, 140 characters long.
+   */
+  searchDecorations(query: string, ids: Uuid[]): Record<Uuid, { title: TextRange[]; snippet?: Snippet }> {
+    const terms = parseQuery(query).highlightTerms;
+    const out: Record<Uuid, { title: TextRange[]; snippet?: Snippet }> = {};
+    if (!terms.length) return out;
+    ids.slice(0, 150).forEach((id) => {
+      const d = this.derived.get(id);
+      if (!d) return;
+      const entry: { title: TextRange[]; snippet?: Snippet } = { title: searchHighlightRanges(terms, d.row.title) };
+      const doc = d.row.kind === 'doc' ? this.getNote(id)?.container?.doc : undefined;
+      if (doc) {
+        const plain = plainLines(doc).join('\n').replace(/^\s+/, '');
+        const newline = plain.search(/[\n\r]/);
+        const snippet = newline < 0 ? undefined : searchSnippet(plain.slice(newline + 1), terms, 140);
+        if (snippet) entry.snippet = snippet;
+      }
+      out[id] = entry;
+    });
+    return out;
+  }
+
   /** Notes that link here (with the line for context), and the notes this one links to. */
   links(id: Uuid): { backlinks: { id: Uuid; title: string; context: string }[]; outgoing: { id?: Uuid; title: string; text: string; exists: boolean }[] } {
     const target = id.toUpperCase();
@@ -370,6 +401,68 @@ export class WebLocalStore implements SyncLocalStore {
         changed += 1;
       }
       return changed;
+    });
+  }
+
+  /** Live, editable notes other than `exclude` with links to `id` that read `oldTitle` (native renameCandidates). */
+  linkRenameCandidates(id: Uuid, oldTitle: string, exclude?: Uuid): Uuid[] {
+    const wanted = searchFold(oldTitle.trim());
+    if (!wanted) return [];
+    const target = id.toUpperCase();
+    const out: Uuid[] = [];
+    for (const d of this.derived.values()) {
+      if (d.row.id === exclude || d.row.deletedAt || d.row.kind !== 'doc') continue;
+      if (d.links.some((l) => l.id === target && !l.heading && searchFold(l.text.trim()) === wanted)) out.push(d.row.id);
+    }
+    return out.sort();
+  }
+
+  /**
+   * Rewrites the text of those links to `newTitle` (native rewriteLinkText). Returns the links changed, the notes
+   * that couldn't be, and each changed note's previous body and new revision for Undo.
+   */
+  rewriteLinkText(id: Uuid, oldTitle: string, newTitle: string, exclude?: Uuid): Promise<{ updated: number; skipped: number; notes: { id: Uuid; revision: Uuid; before: BodyContainer }[] }> {
+    return this.exclusive(async () => {
+      await this.ensureFresh();
+      const result = { updated: 0, skipped: 0, notes: [] as { id: Uuid; revision: Uuid; before: BodyContainer }[] };
+      for (const source of this.linkRenameCandidates(id, oldTitle, exclude)) {
+        const opened = this.getNote(source);
+        if (!opened?.container || opened.readOnly) {
+          result.skipped += 1;
+          continue;
+        }
+        const rewritten = rewriteLinkText(opened.container.doc, id, oldTitle, newTitle);
+        if (!rewritten) continue;
+        try {
+          const saved = await this.saveNoteLocked(source, { ...opened.container, doc: rewritten.doc }, opened.row.revision);
+          result.updated += rewritten.count;
+          result.notes.push({ id: source, revision: saved.revision, before: opened.container });
+        } catch {
+          result.skipped += 1;
+        }
+      }
+      return result;
+    });
+  }
+
+  /** Puts back the bodies `rewriteLinkText` changed, for notes not edited since; returns how many were left alone. */
+  undoLinkRewrite(notes: { id: Uuid; revision: Uuid; before: BodyContainer }[]): Promise<number> {
+    return this.exclusive(async () => {
+      await this.ensureFresh();
+      let leftAlone = 0;
+      for (const n of notes) {
+        const row = this.derived.get(n.id)?.row;
+        if (!row || row.revision !== n.revision) {
+          leftAlone += 1;
+          continue;
+        }
+        try {
+          await this.saveNoteLocked(n.id, n.before, n.revision);
+        } catch {
+          leftAlone += 1;
+        }
+      }
+      return leftAlone;
     });
   }
 
@@ -489,12 +582,15 @@ export class WebLocalStore implements SyncLocalStore {
   }
 
   /** A new note; an import passes the source's dates and pin. */
-  createNote(opts: { notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean } = {}): Promise<Uuid> {
+  /** `id` is an id handed out ahead (an import that links its notes to each other); it must be new. */
+  createNote(opts: { id?: Uuid; notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean } = {}): Promise<Uuid> {
     return this.exclusive(() => this.createNoteLocked(opts));
   }
 
-  private async createNoteLocked(opts: { notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }): Promise<Uuid> {
-    const id = newUuid();
+  private async createNoteLocked(opts: { id?: Uuid; notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }): Promise<Uuid> {
+    const given = opts.id ? normalizeUuid(opts.id) : undefined;
+    if (opts.id && (!given || this.records_.has(given))) throw new Error('That note id is already taken');
+    const id = given ?? newUuid();
     const container = opts.container ?? emptyContainer();
     const now = toIsoSeconds(this.now());
     const { title, preview } = deriveTitleAndPreview(container.doc);

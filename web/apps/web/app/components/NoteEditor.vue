@@ -3,14 +3,15 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
-import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS } from '@noteit/doc';
-import { fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
+import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS, isTagBoundary, tagQueryEnds, tagSuggestions, type TagSuggestion, deriveTitleAndPreview, parseQuery, searchFold, NOTE_LINK_MAX_TEXT } from '@noteit/doc';
+import { useRenameTracker } from '~/composables/useRenameTracker';
+import { addTableRow, deleteTableRow, searchHighlightKey, searchHighlightPositions, adjustFontSize, clearFormatting, currentAlignment, setAlignment, CODE_LANGUAGES, codeBlockGroups, codeLanguageId, effectiveCodeLanguage, fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
 import { formatDateTime } from '~/utils/format';
 import { notebookIcon, safeHex } from '~/utils/notebooks';
-import { comboKbds } from '~/utils/shortcuts';
+import { commandKbds } from '~/utils/menuShortcuts';
 import type { OpenedNote } from '~/worker/types';
 import { useOpeningKey } from '~/utils/overlay';
 
@@ -59,7 +60,15 @@ const editor = useEditor({
     handleKeyDown: (_view, e) => {
       // ⇧⌘V / ⌥⇧⌘V: Paste and Match Style, so the next paste stays plain text.
       if (e.code === 'KeyV' && e.shiftKey && (e.metaKey || e.ctrlKey)) plainPaste = true;
-      return linkListKey(e);
+      if (linkListKey(e) || tagListKey(e)) return true;
+      // Esc clears the search's marks in the note (native SearchHighlightController).
+      if (e.key === 'Escape' && searchHighlightKey.getState(_view.state)?.find().length) return showSearchTerms([]), true;
+      return false;
+    },
+    // `#` at a tag boundary opens tag suggestions once it's in (native beginTagCompletionIfNeeded).
+    handleTextInput: (_view, from, to, text) => {
+      if (text === '#' && from === to) tagListPending = from + 1;
+      return false;
     },
     attributes: { class: 'ni-prose', 'aria-label': 'Note' },
     transformPastedHTML: (html) => sanitizePastedHtml(html),
@@ -92,12 +101,70 @@ const editor = useEditor({
   },
   // Typing opens the `[[` list; moving the caret only updates or closes an open one, so a body loaded or restored
   // with `[[` at its end doesn't pop it up (native opens completions on typing).
-  onSelectionUpdate: () => linkList.value && updateLinkList(),
+  onSelectionUpdate: () => {
+    if (linkList.value) updateLinkList();
+    if (tagList.value) updateTagList();
+  },
   onUpdate: () => {
     updateLinkList();
+    beginTagList();
     scheduleSave();
     if (liveTimer) clearTimeout(liveTimer);
-    liveTimer = setTimeout(() => editor.value && (liveDoc.value = fromEditorJSON(editor.value.getJSON())), 250);
+    liveTimer = setTimeout(() => {
+      if (!editor.value) return;
+      liveDoc.value = fromEditorJSON(editor.value.getJSON());
+      rename.changed(deriveTitleAndPreview(liveDoc.value).title);
+    }, 250);
+  },
+});
+
+// MARK: update links on rename (native RenameTracker): the open note's own links change in the editor, as one undo step.
+
+/** The ranges of links to this note (no heading) whose text reads `title`, with the first node's marks. */
+function ownLinkRanges(title: string): { from: number; to: number; marks: readonly import('@tiptap/pm/model').Mark[] }[] {
+  const ed = liveEditor();
+  const wanted = searchFold(title.trim());
+  if (!ed || !wanted) return [];
+  const out: { from: number; to: number; marks: readonly import('@tiptap/pm/model').Mark[] }[] = [];
+  const hrefOf = (n: import('@tiptap/pm/model').Node) => (n.isText ? (n.marks.find((m) => m.type.name === 'link')?.attrs.href as string | undefined) : undefined);
+  const mine = (href: string) => {
+    const l = parseNoteLink(href);
+    return !!l && 'id' in l && !l.heading && l.id.toUpperCase() === props.noteId.toUpperCase();
+  };
+  ed.state.doc.descendants((block, pos) => {
+    if (!block.isTextblock) return true;
+    let run: { from: number; to: number; href: string; text: string; marks: readonly import('@tiptap/pm/model').Mark[] } | undefined;
+    const flush = () => {
+      if (run && searchFold(run.text.trim()) === wanted) out.push({ from: run.from, to: run.to, marks: run.marks });
+      run = undefined;
+    };
+    block.forEach((child, offset) => {
+      const href = hrefOf(child);
+      const at = pos + 1 + offset;
+      if (href && run && run.href === href && run.to === at) {
+        run.to = at + child.nodeSize;
+        run.text += child.text ?? '';
+        return;
+      }
+      flush();
+      if (href && mine(href)) run = { from: at, to: at + child.nodeSize, href, text: child.text ?? '', marks: child.marks };
+    });
+    flush();
+    return false;
+  });
+  return out;
+}
+const rename = useRenameTracker(() => props.noteId, {
+  count: (old) => ownLinkRanges(old).length,
+  rewrite: (old, next) => {
+    const ed = liveEditor();
+    const ranges = ownLinkRanges(old);
+    const text = [...next.trim()].slice(0, NOTE_LINK_MAX_TEXT).join('');
+    if (!ed || !ranges.length || !text) return 0;
+    const tr = ed.state.tr;
+    for (const r of [...ranges].reverse()) tr.replaceWith(r.from, r.to, ed.schema.text(text, r.marks));
+    ed.view.dispatch(tr);
+    return ranges.length;
   },
 });
 
@@ -198,6 +265,99 @@ watch(
     linkToNote();
   },
 );
+
+// MARK: `#` tag suggestions (native TagCompletionSource / InlineCompletionController)
+
+/** `start` is just after the `#`; the query is the text from there to the caret. The list hides while nothing matches. */
+const tagList = ref<{ start: number; items: TagSuggestion[]; index: number; x: number; y: number; above: boolean }>();
+let tagListPending: number | undefined;
+function beginTagList(): void {
+  const start = tagListPending;
+  tagListPending = undefined;
+  const ed = liveEditor();
+  if (start === undefined || !ed || !editable.value || linkList.value) {
+    if (tagList.value) updateTagList();
+    return;
+  }
+  const { $from, empty } = ed.state.selection;
+  if (!empty || $from.pos !== start || $from.parent.type.name === 'codeBlock' || !$from.parent.isTextblock) return;
+  // Not in code or a link, and only where a tag can start: the line start, a space or opening punctuation.
+  if ($from.marks().some((m) => m.type.name === 'code' || m.type.name === 'link')) return;
+  const before = $from.parentOffset >= 2 ? $from.parent.textBetween($from.parentOffset - 2, $from.parentOffset - 1, undefined, '\ufffc') : undefined;
+  if (!isTagBoundary(before)) return;
+  tagList.value = { start, items: [], index: 0, x: 0, y: 0, above: false };
+  updateTagList();
+}
+function updateTagList(): void {
+  const ed = liveEditor();
+  const list = tagList.value;
+  if (!ed || !list || !editable.value) return void (tagList.value = undefined);
+  const { $from, empty } = ed.state.selection;
+  if (!empty || $from.pos < list.start || list.start < $from.start() || list.start > $from.end()) return void (tagList.value = undefined);
+  const query = ed.state.doc.textBetween(list.start, $from.pos, '\n', '\ufffc');
+  if (query.includes('\n') || tagQueryEnds(query)) return void (tagList.value = undefined);
+  const items = tagSuggestions(state.notes, query);
+  const previous = list.items[list.index]?.tag;
+  const at = ed.view.coordsAtPos(list.start - 1);
+  const x = Math.max(8, Math.min(at.left, window.innerWidth - LINK_LIST_WIDTH - 8));
+  const above = at.bottom + 4 + LINK_LIST_MAX_HEIGHT > window.innerHeight - 8 && at.top - 4 - LINK_LIST_MAX_HEIGHT >= 8;
+  const kept = previous ? items.findIndex((t) => t.tag === previous) : -1;
+  tagList.value = { start: list.start, items, index: Math.max(0, kept), x, y: above ? at.top - 4 : at.bottom + 4, above };
+}
+/** Replaces the typed query with the tag (the `#` stays), and a space unless one follows (native accept). */
+function chooseTag(t: TagSuggestion): void {
+  const ed = liveEditor();
+  const list = tagList.value;
+  tagList.value = undefined;
+  if (!ed || !list) return;
+  const to = ed.state.selection.from;
+  const next = ed.state.doc.textBetween(to, Math.min(to + 1, ed.state.selection.$from.end()), undefined, '\ufffc');
+  const text = t.tag + (next && /\s/.test(next) ? '' : ' ');
+  const link = ed.schema.marks.link;
+  const tr = ed.state.tr.insertText(text, list.start, to);
+  if (link) tr.removeMark(list.start, list.start + text.length, link).removeStoredMark(link);
+  ed.view.dispatch(tr);
+  ed.commands.focus();
+}
+function tagListKey(e: KeyboardEvent): boolean {
+  const list = tagList.value;
+  if (!list) return false;
+  const rows = list.items.length;
+  if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) {
+    if (rows) list.index = (list.index + 1) % rows;
+    return rows > 0;
+  }
+  if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) {
+    if (rows) list.index = (list.index - 1 + rows) % rows;
+    return rows > 0;
+  }
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    const row = list.items[list.index];
+    if (!row) {
+      tagList.value = undefined;
+      return false;
+    }
+    chooseTag(row);
+    return true;
+  }
+  if (e.key === 'Escape') {
+    tagList.value = undefined;
+    return true;
+  }
+  return false;
+}
+/** The tag split into matched and unmatched runs, for bolding what was typed. */
+function tagRuns(t: TagSuggestion): { text: string; hit: boolean }[] {
+  const hits = new Set(t.matched);
+  const runs: { text: string; hit: boolean }[] = [];
+  [...t.tag].forEach((c, i) => {
+    const hit = hits.has(i);
+    const last = runs[runs.length - 1];
+    if (last && last.hit === hit) last.text += c;
+    else runs.push({ text: c, hit });
+  });
+  return runs;
+}
 
 // MARK: pasting Markdown (native MarkdownPaste): clearly-Markdown plain text comes in formatted; HTML from a web page
 // keeps its own formatting, and code blocks and Paste and Match Style take the text as it is.
@@ -317,6 +477,24 @@ watch(
   },
 );
 
+// MARK: the list search's words in the note (native SearchHighlightController)
+
+/** Marks `terms` in the note; with `scroll`, shows the first one after the title. */
+function showSearchTerms(terms: string[], scroll = false): void {
+  const ed = liveEditor();
+  if (!ed) return;
+  ed.view.dispatch(ed.state.tr.setMeta(searchHighlightKey, terms));
+  if (!scroll || !terms.length) return;
+  const titleEnd = ed.state.doc.firstChild?.nodeSize ?? 0;
+  const first = searchHighlightPositions(ed.state.doc, terms).find((r) => r.from >= titleEnd);
+  if (first) ed.view.domAtPos(first.from).node.parentElement?.scrollIntoView({ block: 'center' });
+}
+const searchTerms = () => (state.query.trim() ? parseQuery(state.query).highlightTerms : []);
+watch(
+  () => state.query,
+  () => showSearchTerms(searchTerms()),
+);
+
 async function load(): Promise<void> {
   const opened = await client().getNote(props.noteId);
   note.value = opened;
@@ -333,6 +511,7 @@ async function load(): Promise<void> {
     ed.commands.setContent(prepared.doc, { emitUpdate: false });
     lastSaved = JSON.stringify(opened.container.doc);
     liveDoc.value = opened.container.doc;
+    rename.observed(deriveTitleAndPreview(opened.container.doc).title);
   } else if (opened.container) {
     const prepared = prepareForEditor(opened.container);
     editable.value = false;
@@ -343,6 +522,7 @@ async function load(): Promise<void> {
   }
   ed.setEditable(editable.value && !row.value?.deletedAt);
   if (editable.value && !row.value?.title) ed.commands.focus('end');
+  showSearchTerms(searchTerms(), true);
 }
 
 const row = computed(() => state.notes.find((n) => n.id === props.noteId) ?? note.value?.row);
@@ -503,7 +683,62 @@ function setBlock(v: Block): void {
   else chain.setNode('heading', { level: Number(v.slice(1)) }).run();
 }
 
+// MARK: code block language (native CodeStyler's corner menu): Automatic (the guess) or one of native's languages.
+
+const AUTOMATIC = 'auto';
+/** The code block under the caret: the run of code lines it belongs to, with what it's set to and what it shows as. */
+const codeGroup = computed(() => {
+  const ed = liveEditor();
+  void state.selectedId;
+  if (!ed || !ed.isActive('codeBlock')) return undefined;
+  const pos = ed.state.selection.$from.before(1);
+  const group = codeBlockGroups(ed.state.doc).find((g) => g.lines.some((l) => l.pos === pos));
+  if (!group) return undefined;
+  const text = group.lines.map((l) => l.node.textContent).join('\n');
+  const known = group.language ? codeLanguageId(group.language) : undefined;
+  const shown = effectiveCodeLanguage(group.language, text);
+  return { group, value: known ?? AUTOMATIC, guess: shown.guessed ? shown.id : undefined };
+});
+const languageItems = computed(() => {
+  const guess = CODE_LANGUAGES.find((l) => l.id === codeGroup.value?.guess)?.name;
+  return [{ label: guess ? `Automatic (${guess})` : 'Automatic', value: AUTOMATIC }, ...CODE_LANGUAGES.map((l) => ({ label: l.name, value: l.id }))];
+});
+/** Sets every line of the block to the canonical id native writes, or removes it for Automatic. */
+function setCodeLanguage(value: string): void {
+  const ed = liveEditor();
+  const g = codeGroup.value;
+  if (!ed || !g) return;
+  const language = value === AUTOMATIC ? null : value;
+  const tr = ed.state.tr;
+  for (const line of g.group.lines) tr.setNodeAttribute(line.pos, 'language', language);
+  ed.view.dispatch(tr);
+  ed.commands.focus();
+}
+
 const mark = (name: string) => editor.value?.chain().focus().toggleMark(name).run();
+
+// Format › Font and Text: Bigger/Smaller, alignment and Clear Formatting, with native's shortcuts.
+function formatWith(run: (ed: Editor) => boolean): void {
+  const ed = liveEditor() as Editor | undefined;
+  if (!ed) return;
+  ed.commands.focus();
+  run(ed);
+}
+const alignment = computed(() => {
+  const ed = liveEditor() as Editor | undefined;
+  void state.selectedId;
+  return (ed && currentAlignment(ed)) ?? 'left';
+});
+const ALIGN_ICONS = { left: 'i-lucide-align-left', center: 'i-lucide-align-center', right: 'i-lucide-align-right', justify: 'i-lucide-align-justify' } as const;
+const alignItems = computed<DropdownMenuItem[]>(() =>
+  (
+    [
+      ['left', 'Align Left', ['meta', 'shift', '{']],
+      ['center', 'Align Center', ['meta', 'shift', '|']],
+      ['right', 'Align Right', ['meta', 'shift', '}']],
+    ] as const
+  ).map(([value, label, kbds]) => ({ label, icon: ALIGN_ICONS[value], kbds: [...kbds], type: 'checkbox' as const, checked: alignment.value === value, onSelect: () => formatWith((ed) => setAlignment(ed, value)) })),
+);
 const active = (name: string, attrs?: Record<string, unknown>) => !!editor.value?.isActive(name, attrs);
 
 function toggleList(kind: 'bullet' | 'ordered' | 'task'): void {
@@ -517,6 +752,12 @@ function insertTable(): void {
   const ed = liveEditor();
   if (ed) insertTableAt(ed);
 }
+/** Format › Table's row commands while the caret is in a table (native addTableRow / deleteTableRow). */
+const tableItems = computed<DropdownMenuItem[]>(() => [
+  { label: 'Add Row Above', icon: 'i-lucide-between-horizontal-end', onSelect: () => formatWith((ed) => addTableRow(ed, false)) },
+  { label: 'Add Row Below', icon: 'i-lucide-between-horizontal-start', onSelect: () => formatWith((ed) => addTableRow(ed, true)) },
+  { label: 'Delete Row', icon: 'i-lucide-trash-2', color: 'error', onSelect: () => formatWith(deleteTableRow) },
+]);
 
 const linkOpen = ref(false);
 const linkHref = ref('');
@@ -598,14 +839,14 @@ async function deleteForever(): Promise<void> {
 }
 const shareItems = computed<DropdownMenuItem[][]>(() => [
   [
-    { label: 'Export as Markdown', icon: 'i-lucide-file-down', kbds: comboKbds('shift+mod+s'), onSelect: () => void exportNote(props.noteId, 'markdown') },
+    { label: 'Export as Markdown', icon: 'i-lucide-file-down', kbds: commandKbds('exportNote'), onSelect: () => void exportNote(props.noteId, 'markdown') },
     { label: 'Export as HTML', icon: 'i-lucide-file-code', onSelect: () => void exportNote(props.noteId, 'html') },
-    { label: 'Print or Save as PDF…', icon: 'i-lucide-printer', kbds: comboKbds('mod+p'), onSelect: () => void printNote(props.noteId) },
+    { label: 'Print or Save as PDF…', icon: 'i-lucide-printer', kbds: commandKbds('print'), onSelect: () => void printNote(props.noteId) },
     { label: 'Download NoteIt Document', icon: 'i-lucide-download', onSelect: () => void exportNote(props.noteId, 'noteitdoc') },
   ],
   [
-    { label: 'Copy as Markdown', icon: 'i-lucide-clipboard-copy', kbds: comboKbds('alt+shift+mod+c'), onSelect: () => void copyMarkdown(props.noteId) },
-    { label: 'Copy Note Link', icon: 'i-lucide-link', kbds: comboKbds('ctrl+mod+l'), onSelect: () => void copyNoteLink(props.noteId) },
+    { label: 'Copy as Markdown', icon: 'i-lucide-clipboard-copy', kbds: commandKbds('copyAsMarkdown'), onSelect: () => void copyMarkdown(props.noteId) },
+    { label: 'Copy Note Link', icon: 'i-lucide-link', kbds: commandKbds('copyNoteLink'), onSelect: () => void copyNoteLink(props.noteId) },
   ],
 ]);
 
@@ -662,7 +903,7 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
               @click="togglePin"
             />
           </UTooltip>
-          <UTooltip text="Links and Outline" :kbds="comboKbds('alt+mod+i')">
+          <UTooltip text="Links and Outline" :kbds="commandKbds('toggleInspector')">
             <UButton
               color="neutral"
               variant="ghost"
@@ -690,6 +931,17 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
       aria-label="Formatting"
     >
       <USelect :model-value="blockType" :items="BLOCKS" size="sm" variant="soft" aria-label="Text style" class="w-32 flex-none bg-(--fill)" @update:model-value="(v) => setBlock(v as Block)" />
+      <USelect
+        v-if="codeGroup"
+        :model-value="codeGroup.value"
+        :items="languageItems"
+        size="sm"
+        variant="soft"
+        aria-label="Code language"
+        class="ms-1 w-44 flex-none bg-(--fill)"
+        :ui="{ content: 'max-h-80' }"
+        @update:model-value="(v) => setCodeLanguage(String(v))"
+      />
       <USeparator orientation="vertical" class="mx-1.5 h-[18px]" />
       <UTooltip v-for="m in MARKS" :key="m.mark" :text="m.label" :kbds="[...m.kbds]">
         <UButton color="neutral" variant="ghost" size="sm" square class="size-[30px] justify-center" :icon="m.icon" :aria-label="m.label" :aria-pressed="active(m.mark)" :class="active(m.mark) && 'bg-(--sel) text-(--acct)'" @click="mark(m.mark)" />
@@ -706,6 +958,10 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
           <div class="flex gap-1.5 p-2">
             <button v-for="c in COLORS" :key="c" type="button" class="size-[22px] cursor-pointer rounded-full ring-1 ring-(--line) hover:scale-110 transition-transform" :aria-label="`Color ${c}`" :style="{ background: c }" @click="applyColor('textColor', c)" />
             <UButton color="neutral" variant="outline" size="xs" class="size-[22px] justify-center rounded-full p-0" icon="i-lucide-x" aria-label="No color" @click="applyColor('textColor', undefined)" />
+            <!-- Format › Show Colors on the Mac: any colour, stored as native's #RRGGBB. -->
+            <label class="relative size-[22px] cursor-pointer overflow-hidden rounded-full ring-1 ring-(--line)" style="background: conic-gradient(red, yellow, lime, aqua, blue, magenta, red)" aria-label="Other color" title="Other color">
+              <input type="color" class="absolute inset-0 cursor-pointer opacity-0" @change="(e) => applyColor('textColor', (e.target as HTMLInputElement).value.toUpperCase())" />
+            </label>
           </div>
         </template>
       </UPopover>
@@ -720,6 +976,18 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
           </div>
         </template>
       </UPopover>
+      <UTooltip text="Smaller" :kbds="['meta', '-']">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-a-arrow-down" aria-label="Smaller" @click="formatWith((ed) => adjustFontSize(ed, -1))" />
+      </UTooltip>
+      <UTooltip text="Bigger" :kbds="['meta', '+']">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-a-arrow-up" aria-label="Bigger" @click="formatWith((ed) => adjustFontSize(ed, 1))" />
+      </UTooltip>
+      <UDropdownMenu :items="alignItems">
+        <UButton color="neutral" variant="ghost" size="sm" :icon="ALIGN_ICONS[alignment]" aria-label="Alignment" />
+      </UDropdownMenu>
+      <UTooltip text="Clear Formatting" :kbds="['alt', 'meta', '\\']">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-remove-formatting" aria-label="Clear Formatting" @click="formatWith(clearFormatting)" />
+      </UTooltip>
       <USeparator orientation="vertical" class="mx-1.5 h-[18px]" />
       <UTooltip v-for="l in LISTS" :key="l.kind" :text="l.label">
         <UButton
@@ -736,6 +1004,9 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
       <UTooltip text="Table">
         <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-table" aria-label="Table" @click="insertTable" />
       </UTooltip>
+      <UDropdownMenu v-if="active('table')" :items="tableItems">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-rows-3" aria-label="Table rows" />
+      </UDropdownMenu>
       <UPopover v-model:open="linkOpen">
         <UTooltip text="Link">
           <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-link" aria-label="Link" :aria-pressed="active('link')" :class="active('link') && 'bg-(--sel) text-(--acct)'" />
@@ -760,6 +1031,29 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
     </div>
 
     <FindBar :editor="editor" :can-replace="editable && !row?.deletedAt" />
+
+    <div v-if="rename.prompt.value || rename.updating.value || rename.outcome.value" class="flex flex-wrap items-center gap-2 border-b border-default bg-(--side) px-6 py-1.5 text-xs max-md:px-3" role="status">
+      <template v-if="rename.prompt.value">
+        <UIcon name="i-lucide-link" class="size-3.5 text-muted" />
+        <span class="min-w-0 flex-1">{{
+          rename.prompt.value.noteCount === 1
+            ? `1 note links here as “${rename.prompt.value.oldTitle}”. Update the link to “${rename.prompt.value.newTitle}”?`
+            : `${rename.prompt.value.noteCount} notes link here as “${rename.prompt.value.oldTitle}”. Update the links to “${rename.prompt.value.newTitle}”?`
+        }}</span>
+        <UButton color="neutral" variant="soft" size="xs" label="Not Now" @click="rename.notNow()" />
+        <UButton size="xs" label="Update" @click="rename.update()" />
+      </template>
+      <template v-else-if="rename.updating.value">
+        <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin text-muted" />
+        <span>Updating links…</span>
+      </template>
+      <template v-else-if="rename.outcome.value">
+        <UIcon name="i-lucide-circle-check" class="size-3.5 text-muted" />
+        <span class="min-w-0 flex-1">{{ rename.outcome.value.message }}</span>
+        <UButton v-if="rename.outcome.value.undo" color="neutral" variant="soft" size="xs" label="Undo" @click="rename.undo()" />
+        <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-x" aria-label="Dismiss" @click="rename.dismiss()" />
+      </template>
+    </div>
 
     <div v-if="readOnlyReason || row?.conflictSource" class="flex flex-col gap-2 px-6 pt-3">
       <UAlert
@@ -812,6 +1106,29 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
           >
             <UIcon name="i-lucide-file-text" class="size-4 shrink-0 text-muted" />
             <span class="truncate">{{ n.title }}</span>
+          </button>
+        </div>
+        <div
+          v-if="tagList && tagList.items.length"
+          class="fixed z-50 max-h-64 w-72 max-w-[calc(100vw-16px)] overflow-y-auto rounded-lg bg-default py-1 text-sm shadow-lg ring ring-default"
+          :class="tagList.above && '-translate-y-full'"
+          :style="{ left: `${tagList.x}px`, top: `${tagList.y}px` }"
+          role="listbox"
+          aria-label="Tag"
+        >
+          <button
+            v-for="(t, i) in tagList.items"
+            :key="t.tag"
+            type="button"
+            role="option"
+            :aria-selected="i === tagList.index"
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+            :class="i === tagList.index ? 'bg-(--sel)' : 'hover:bg-(--fill)'"
+            @mousedown.prevent="chooseTag(t)"
+          >
+            <UIcon name="i-lucide-hash" class="size-4 shrink-0 text-muted" />
+            <span class="truncate"><span v-for="(r, k) in tagRuns(t)" :key="k" :class="r.hit && 'font-semibold'">{{ r.text }}</span></span>
+            <span class="ms-auto shrink-0 text-xs text-muted">{{ t.count === 1 ? '1 note' : `${t.count} notes` }}</span>
           </button>
         </div>
       </article>
