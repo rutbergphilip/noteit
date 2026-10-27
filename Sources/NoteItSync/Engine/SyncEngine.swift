@@ -657,7 +657,10 @@ public actor SyncEngine {
 
     /// Returns false (skipped) when the remote is mid-upload or the local record changed during the pass.
     private func pull(_ id: UUID, kind: RecordKind, expectedLocalRevision: UUID?, _ pass: Pass) async throws -> Bool {
-        let remote = try await fetchRemote(id, kind: kind, pass)
+        let fetched = try await fetchEnvelope(id, kind: kind)
+        // A meta refresh (spec §3.4.9): same revision and body version under a new ETag. Nothing to download.
+        if try adoptRefreshedMeta(id, fetched) { return false }
+        let remote = try await fetchRemote(id, kind: kind, pass, fetched: fetched)
         guard let payload = remote.payload, await currentRevision(id) == expectedLocalRevision else {
             pass.report.skipped += 1
             return false
@@ -699,9 +702,28 @@ public actor SyncEngine {
         }
     }
 
+    /// A noteit-doc envelope with the base's revision and body version under a new ETag is another device's meta
+    /// refresh, not an edit: only `base.remoteMetaETag` moves. True when that is what `fetched` is.
+    private func adoptRefreshedMeta(_ id: UUID, _ fetched: (envelope: RemoteEnvelope, etag: String)) throws -> Bool {
+        let envelope = fetched.envelope
+        guard envelope.kind == .note, let base = state.bases[id], let version = base.bodyVersion,
+              envelope.bodyFormat != nil, envelope.revision == base.revision, envelope.bodyVersion == version,
+              base.remoteMetaETag != fetched.etag else { return false }
+        state.bases[id]?.remoteMetaETag = fetched.etag
+        noteBodyFormat(of: envelope)
+        try saveState()
+        return true
+    }
+
     private func resolveConflict(_ id: UUID, local localRecord: LocalRecord, _ pass: Pass) async throws {
         let kind = localRecord.kind
-        let remote = try await fetchRemote(id, kind: kind, pass)
+        let fetched = try await fetchEnvelope(id, kind: kind)
+        if fetched.envelope.revision != localRecord.revision, try adoptRefreshedMeta(id, fetched) {
+            // The remote didn't change: push the local edit against the refreshed ETag, with no conflict copy.
+            try await push(id, kind: kind, remoteETag: fetched.etag, pass)
+            return
+        }
+        let remote = try await fetchRemote(id, kind: kind, pass, fetched: fetched)
         let envelope = remote.envelope
 
         if envelope.revision == localRecord.revision {
@@ -1060,8 +1082,10 @@ public actor SyncEngine {
     /// A noteit-doc envelope's body is the listed `bodies/<id>.<bodyVersion>.<TAG>.body`; a version missing from the
     /// listing, a 404 or a hash mismatch all leave `payload` nil, as for a legacy body mid-upload. An envelope that
     /// breaks the pairing rule is a per-record `invalidPayload` and nothing is applied.
-    func fetchRemote(_ id: UUID, kind: RecordKind, _ pass: Pass) async throws -> FetchedRemote {
-        let (envelope, etag) = try await fetchEnvelope(id, kind: kind)
+    func fetchRemote(_ id: UUID, kind: RecordKind, _ pass: Pass,
+                     fetched: (envelope: RemoteEnvelope, etag: String)? = nil) async throws -> FetchedRemote {
+        let (envelope, etag): (RemoteEnvelope, String)
+        if let fetched { (envelope, etag) = fetched } else { (envelope, etag) = try await fetchEnvelope(id, kind: kind) }
         try BodyFormat.validateEnvelope(envelope, features: session.current.features)
         var body: Data?
         var bodyETag: String?

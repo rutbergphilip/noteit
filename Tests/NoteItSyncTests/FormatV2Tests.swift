@@ -996,6 +996,117 @@ final class FormatV2Tests: XCTestCase {
         let title = await b.store.title(id)
         XCTAssertEqual(title, "held create")
     }
+
+    // MARK: Stranded bodies
+
+    /// Devices that upload a version against the current meta and are wiped before committing it.
+    private func strandBodies(of id: UUID, _ backend: ScriptedBackend, count: Int) async throws {
+        for index in 1...count {
+            let wiped = try await device("W\(index)", backend)
+            try await sync(wiped)
+            await wiped.store.edit(id, title: "lost \(index)")
+            await backend.on(.put, RemoteLayout.meta(.note, id), .crashDuring)
+            do {
+                _ = try await wiped.engine.sync()
+                XCTFail("the commit crashes")
+            } catch {}
+        }
+    }
+
+    func testStrandedBodiesGoStaleAfterAMetaRefreshAndTheSweepDeletesThem() async throws {
+        let clock = TestClock()
+        let memory = InMemoryBackend()
+        let backend = ScriptedBackend(memory)
+        let a = try await device("A", backend, initial: [.noteItDoc])
+        let b = try await device("B", backend, now: { clock.now() })
+        let d = try await device("D", backend)
+        let id = await a.store.create(title: "v0")
+        try await sync(a, b, d)
+        try await strandBodies(of: id, backend, count: 3)
+        try await assertEqualAsync(try await bodyKeys(memory, id).count, 4)
+        let listed = try await memory.list(prefix: RemoteLayout.meta(.note, id)).first?.etag
+
+        // 20 passes, but not yet 24 hours: kept, and nothing is written.
+        try await sync(b)
+        XCTAssertEqual(b.state.strandedBodies.count, 3)
+        clock.advance(2 * 86_400)
+        for _ in 0..<19 { try await sync(b) }
+        try await assertEqualAsync(try await memory.list(prefix: RemoteLayout.meta(.note, id)).first?.etag, listed)
+        try await assertEqualAsync(try await bodyKeys(memory, id).count, 4)
+
+        // The 20th pass after the bodies were first seen, and over 24 hours: the meta is refreshed, unchanged inside.
+        let before = try await envelope(memory, id)
+        try await sync(b)
+        let refreshed = try await memory.list(prefix: RemoteLayout.meta(.note, id)).first?.etag
+        XCTAssertNotEqual(refreshed, listed)
+        let after = try await envelope(memory, id)
+        XCTAssertEqual(after.revision, before.revision)
+        XCTAssertEqual(after.bodyVersion, before.bodyVersion)
+        XCTAssertEqual(after.bodySHA256, before.bodySHA256)
+        XCTAssertEqual(b.state.bases[id]?.remoteMetaETag, refreshed)
+
+        // The next sweep deletes the stale bodies; the committed one stays.
+        try await sync(b)
+        try await assertEqualAsync(try await bodyKeys(memory, id).count, 1)
+        XCTAssertTrue(b.state.strandedBodies.isEmpty)
+
+        // A refresh is not an edit: A takes the new ETag without reading the body, and D's unpushed edit is pushed
+        // against it with no conflict copy.
+        await backend.clearOps()
+        let report = try await a.engine.sync()
+        XCTAssertEqual(report.pulled, 0)
+        try await assertTrueAsync(await backend.ops(.get, containing: "bodies/").isEmpty)
+        XCTAssertEqual(a.state.bases[id]?.remoteMetaETag, refreshed)
+        await d.store.edit(id, title: "d edit")
+        let pushed = try await d.engine.sync()
+        XCTAssertEqual(pushed.conflicts, 0)
+        try await sync(a, b)
+        for device in [a, b, d] {
+            let titles = await device.store.titles()
+            XCTAssertEqual(titles, ["d edit"], device.name)
+        }
+    }
+
+    func testAMetaRefreshWaitsForAnUnpushedEditAndHappensAtMostFiveTimesAPass() async throws {
+        let clock = TestClock()
+        let memory = InMemoryBackend()
+        let backend = ScriptedBackend(memory)
+        let a = try await device("A", backend, initial: [.noteItDoc])
+        let b = try await device("B", backend, now: { clock.now() })
+        var ids: [UUID] = []
+        for index in 0..<7 { ids.append(await a.store.create(title: "note \(index)")) }
+        try await sync(a, b)
+        for (index, id) in ids.enumerated() {
+            // A fresh wiped device each time.
+            let wiped = try await device("W-\(index)", backend)
+            try await sync(wiped)
+            await wiped.store.edit(id, title: "lost")
+            await backend.on(.put, RemoteLayout.meta(.note, id), .crashDuring)
+            do { _ = try await wiped.engine.sync(); XCTFail("the commit crashes") } catch {}
+        }
+        try await sync(b)
+        clock.advance(2 * 86_400)
+        for _ in 0..<19 { try await sync(b) }
+        let metas = { try await memory.list(prefix: RemoteLayout.root + "notes/").filter { $0.key.hasSuffix(".meta") } }
+        let listed = Dictionary(uniqueKeysWithValues: try await metas().map { ($0.key, $0.etag) })
+
+        // Due now. B's own edit of the first note fails to push this pass: it stays unpushed, so no refresh for it.
+        await b.store.edit(ids[0], title: "unpushed")
+        await backend.on(.put, RemoteLayout.meta(.note, ids[0]), .failBefore)
+        await backend.clearOps()
+        try await sync(b)
+        let firstKey = RemoteLayout.meta(.note, ids[0])
+        let refreshes = await backend.ops(.put, containing: ".meta").filter { $0.key != firstKey }.count
+        XCTAssertEqual(refreshes, 5, "at most five refreshes a pass")
+        try await assertEqualAsync(await backend.ops(.put, containing: firstKey).count, 1, "only the failed push, no refresh")
+
+        // The next pass pushes the edit and refreshes the last note.
+        try await sync(b)
+        let changed = try await metas().filter { listed[$0.key] != $0.etag }.map(\.key)
+        XCTAssertEqual(changed.count, 7)
+        let title = await b.store.title(ids[0])
+        XCTAssertEqual(title, "unpushed")
+    }
 }
 
 // XCTest's assertions take synchronous autoclosures; these await first.
