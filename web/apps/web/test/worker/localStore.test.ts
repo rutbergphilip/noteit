@@ -54,6 +54,15 @@ describe('WebLocalStore', () => {
     expect(reopened.s.search('MILK')).toEqual([id]);
   });
 
+  it('creates a note with an id handed out ahead, as an import that links its notes does', async () => {
+    const { s } = await store();
+    const id = await s.createNote({ id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', container: text('Imported') });
+    expect(id).toBe('AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE');
+    expect(s.snapshot().notes[0]?.id).toBe(id);
+    await expect(s.createNote({ id, container: text('Again') })).rejects.toThrow();
+    await expect(s.createNote({ id: 'not-a-uuid', container: text('Bad') })).rejects.toThrow();
+  });
+
   it('searches with the native search language, and lists links and tasks', async () => {
     const { s } = await store();
     const target = await s.createNote({ container: text('Budget #work/acme') });

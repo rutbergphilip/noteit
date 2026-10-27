@@ -11,6 +11,7 @@ import {
   type LocalDeletion,
   type LocalRecord,
   newUuid,
+  normalizeUuid,
   NOTE_META_OWNED_KEYS,
   NOTEBOOK_META_OWNED_KEYS,
   type NoteMeta,
@@ -552,12 +553,15 @@ export class WebLocalStore implements SyncLocalStore {
   }
 
   /** A new note; an import passes the source's dates and pin. */
-  createNote(opts: { notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean } = {}): Promise<Uuid> {
+  /** `id` is an id handed out ahead (an import that links its notes to each other); it must be new. */
+  createNote(opts: { id?: Uuid; notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean } = {}): Promise<Uuid> {
     return this.exclusive(() => this.createNoteLocked(opts));
   }
 
-  private async createNoteLocked(opts: { notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }): Promise<Uuid> {
-    const id = newUuid();
+  private async createNoteLocked(opts: { id?: Uuid; notebookID?: Uuid; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }): Promise<Uuid> {
+    const given = opts.id ? normalizeUuid(opts.id) : undefined;
+    if (opts.id && (!given || this.records_.has(given))) throw new Error('That note id is already taken');
+    const id = given ?? newUuid();
     const container = opts.container ?? emptyContainer();
     const now = toIsoSeconds(this.now());
     const { title, preview } = deriveTitleAndPreview(container.doc);

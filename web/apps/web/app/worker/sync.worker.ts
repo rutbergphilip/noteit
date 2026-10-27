@@ -293,7 +293,7 @@ const api = {
   links: async (id: string) => needLocal().links(id),
   tasks: async (query = '') => needLocal().tasks(query),
   setTaskChecked: async (id: string, block: number, checked: boolean) => needLocal().setTaskChecked(id, block, checked),
-  createNote: async (opts: { notebookID?: string; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }) => needLocal().createNote(opts),
+  createNote: async (opts: { id?: string; notebookID?: string; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }) => needLocal().createNote(opts),
   saveNote: async (id: string, container: BodyContainer, baseRevision?: string) => needLocal().saveNote(id, container, baseRevision),
   updateNoteMeta: async (id: string, change: { isPinned?: boolean; notebookID?: string | null; trashed?: boolean }) => needLocal().updateNoteMeta(id, change),
   deleteForever: async (id: string) => needLocal().deleteForever(id),
