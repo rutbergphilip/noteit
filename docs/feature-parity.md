@@ -9,6 +9,7 @@ Statuses:
 - **Native-only by design**: a browser can't do it (global hotkeys, the menu bar, Finder, AppleScript and Shortcuts, local files). The *web equivalent* column says what comes closest.
 - **Native-only (local data)**: the Mac keeps this data on the Mac only; it isn't synced, so the web can't show the Mac's copy.
 - **Web-only**: the web app has it and the Mac app doesn't need it.
+- **Planned**: neither app has it yet; it lands on both together.
 
 Command IDs in backticks are the native command palette's (`Sources/NoteIt/Palette/PaletteCommandRegistry.swift`); the web's palette and shortcuts use the same IDs (`web/apps/web/app/utils/commands.ts`). A test (`web/apps/web/test/parity.test.ts`) fails when a native palette command or a web command has no row here.
 
@@ -37,7 +38,7 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | Recently Deleted, recover, delete now, 30-day purge (`deleteNote`, `showRecentlyDeleted`) | ⌘⌫ | ⌘⌫ outside text, toolbar | Parity |
 | Undo a deletion | ⌘Z | Undo in the "Moved to Recently Deleted" notice, or Recover | Parity |
 | Conflict copies | Yes | Yes, with the same notice | Parity |
-| Locked notes | Lock and unlock | Listed by title, read-only | Web gap: needs the notes password, the wrapped key in `keys/locked-notes.json`, `noteit-locked/1` bodies with shared vectors, `ensureFeature(locked-notes)` and relock timers; about 2–3 days to do safely |
+| Locked notes | Not yet: the note metadata, the `noteit-locked/1` name and the exclusions exist, but there is no lock, notes password or relock | Listed by title, read-only | Planned: ships on both together ([roadmap](roadmap.md)); a first draft of the shared crypto is parked on `wip/locked-notes` |
 | Notes from older Macs (RTFD bodies) | Yes | Listed, read-only until a Mac converts them | Native-only by design |
 | Version history (`versionHistory`) | ⌥⌘Y | — | Native-only (local data): versions stay on the Mac that saved them |
 | Note list sorting | Date edited; Best Match while searching | Edited (Best Match while searching), created or title | Web-only (the extra orders) |
@@ -113,7 +114,7 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 | End-to-end encrypted sync, same store | iCloud, folder, S3, NoteIt Server | NoteIt Server (its own) | Parity |
 | Passphrase change, re-key, devices list | Yes | Yes | Parity |
 | Clean Up Unused Storage… | Yes | Server-side storage | Native-only by design |
-| Sync Now (`syncNow`), Lock (`lock`) | Automatic; app lock via locked notes | Commands | Web-only |
+| Sync Now (`syncNow`), Lock (`lock`) | Automatic; no app lock | Commands | Web-only |
 | Server accounts, invites, access keys, users | — | Yes | Web-only |
 | Settings (`settings`) | ⌘, | ⌘, | Parity |
 | Menu shortcut editor | Settings › Shortcuts | Settings › Shortcuts: the same commands and conflict rules, kept per browser in localStorage (the Mac keeps its own locally) | Parity |
@@ -127,4 +128,4 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 
 ## Summary
 
-As of this page's last change, by row: 60 parity, 1 web gap, 13 native-only by design, 4 native-only (local data), 3 web-only. The one web gap is locked notes (notes password, wrapped key and locked bodies with shared vectors). Smaller differences noted in Parity rows: choosing a notebook's default template, the caret at `{{cursor}}`, heading suggestions after `[[Title#`, the tag list drawn as a tree, Undo for a tag rename, and PDF, RTFD and plain text folder exports.
+As of this page's last change, by row: 60 parity, 0 web gaps, 1 planned (locked notes, on both apps), 13 native-only by design, 4 native-only (local data), 3 web-only. Smaller differences noted in Parity rows: choosing a notebook's default template, the caret at `{{cursor}}`, heading suggestions after `[[Title#`, the tag list drawn as a tree, Undo for a tag rename, and PDF, RTFD and plain text folder exports.
