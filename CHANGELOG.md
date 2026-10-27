@@ -9,47 +9,22 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
-- The NoteIt web app ships as a Docker image for linux/amd64 and linux/arm64, `ghcr.io/rutbergphilip/noteit-web`, with a [self-hosting guide](docs/self-hosting.md) for Docker, Compose, reverse proxies (Caddy, nginx, Traefik), the first admin, connecting your Mac, backups, upgrades and running without Docker.
-- The web app's server can keep everyone's encrypted notes in an S3 bucket instead of its own disk (`NOTEIT_STORE=s3`). It checks at startup that the bucket supports the conditional requests sync relies on, and keeps running, reporting itself not ready, while the bucket can't be reached.
-- The web app cleans up note versions left behind by interrupted saves and repairs a note whose stored body went missing, with the same rules as the Mac, and handles storage without conditional deletes as the Mac does.
-- Each release signs a manifest of the web app's client files. `scripts/verify-web-client.mjs` checks that a server, or the static client attached to the release, serves exactly that client.
-- A portable note format for sync, so the upcoming NoteIt web app can open your notes. The first time this version syncs, it switches your storage over and converts your notes in the background; there's nothing to set up. If another Mac still runs an older NoteIt, it asks you first, because that Mac stops syncing until it's updated. Nothing on it is lost. Each of your devices downloads every note once while this happens.
+- The NoteIt web app: your notes in a browser, from a server you host yourself. It opens the same end-to-end encrypted store as your Macs, so notes, notebooks, tags, tasks, reminders and smart folders stay in sync, and the server only ever sees encrypted data. One server serves several people, each with their own store, with invites, an admin role, storage quotas and S3 access keys for the Mac. It's built on Nuxt UI, and its server actions on [nuxt-safe-action](https://github.com/rutbergphilip/nuxt-safe-action), so forms check what you type before anything is sent. The [feature parity](https://github.com/rutbergphilip/noteit/blob/main/docs/feature-parity.md) page lists every feature of the Mac and web apps and where each stands.
+- Self-hosting: a Docker image for linux/amd64 and linux/arm64, `ghcr.io/rutbergphilip/noteit-web`, and a [self-hosting guide](https://github.com/rutbergphilip/noteit/blob/main/docs/self-hosting.md) covering Docker, Compose, reverse proxies (Caddy, nginx, Traefik), first-admin setup with a setup token, backups and upgrades. The server can keep its stores on its own disk or in an S3 bucket (`NOTEIT_STORE=s3`), and can run without Docker as a plain Node server.
+- Single sign-on for the web app's server through an OpenID Connect provider such as Authentik, Authelia, Keycloak or Pocket ID. It's off unless you configure it, and password sign-in can be turned off.
+- The web app can also run without a server: the static client attached to each release (or the Docker image with `NOTEIT_MODE=static`) syncs straight from the browser to your own S3-compatible bucket, the same store your Mac syncs to.
+- Each release signs a manifest of the web app's client files with minisign. `scripts/verify-web-client.mjs` checks that a server, or the static client attached to the release, serves exactly that client.
+- Writing in the web app works as on the Mac: the Mac's Markdown shortcuts as you type and when pasting, find and replace, tables, code blocks coloured by language with the Mac's four themes, text colours, sizes, alignment and Clear Formatting, checklists with `@due(…)` and `@remind(…)` dates, `#` tag suggestions and `[[` note links with suggestions.
+- Organising and finding in the web app: the Mac's search language (`tag:`, `notebook:`, `is:todo`, `has:due`, dates, `OR`, `-word`, "phrases") with best matches first and highlighted snippets, smart folders, Tasks, templates and daily notes, Links and Outline with backlinks and unlinked mentions, Note Info, renaming, merging and deleting tags, Go Back and Go Forward, and offering to update links when a note is renamed.
+- Importing and exporting in the web app: Markdown files and folders such as an Obsidian vault, Evernote (.enex), Notion exports and TextBundle; export a note as Markdown, HTML or PDF, or a notebook or all notes as folders in a zip, with the Mac's layout and file names.
+- The web app's command palette, menus and keyboard shortcuts follow the Mac's, with Ctrl in place of ⌘ off a Mac, and Settings › Shortcuts changes them. Quick Capture, reminders that ring in an open tab (only one of your devices rings), and Clean Up Unused Storage… work as on the Mac.
+- A portable note format for sync, so the NoteIt web app can open your notes. The first time this version syncs, it switches your storage over and converts your notes in the background; there's nothing to set up. If another Mac still runs an older NoteIt, it asks you first, because that Mac stops syncing until it's updated. Nothing on it is lost. Each of your devices downloads every note once while this happens.
 - A “NoteIt Server” choice when you set up sync, for syncing with your own NoteIt web app.
 - Clean Up Unused Storage… in Settings › Sync removes leftover copies of notes that were never finished saving, for example from a Mac that was erased while it was syncing. It's available on storage that supports conditional writes, and it asks first.
-- The NoteIt web app can run without a server: the static client from the release (or the Docker image with `NOTEIT_MODE=static`) syncs straight from the browser to your own S3-compatible bucket, the same store your Mac syncs to. A connect wizard checks the bucket's CORS rules and conditional requests before saving anything, and keeps the access key in the browser encrypted with your sync passphrase. The [self-hosting guide](docs/self-hosting.md#direct-mode-no-server) has the CORS rules for AWS S3, Cloudflare R2, MinIO and Backblaze B2.
-- Single sign-on for the web app's server through an OpenID Connect provider such as Authentik, Authelia, Keycloak or Pocket ID: sign in, set up the first admin, accept an invite or link your account with “Sign In With …”. It's off unless configured, accounts are matched by the provider's subject, new accounts come only from invites or allowed groups, and `NOTEIT_PASSWORD_LOGIN=false` leaves single sign-on as the only way in.
-- Clean Up Unused Storage… in the web app's Settings › Sync & storage, with the same confirmation and rules as the Mac.
 - A short first-run guide. On a fresh library NoteIt opens a Welcome window that asks whether you are new or already use NoteIt on another Mac, then walks through recording hotkeys, the menu bar icon, importing notes and sync. Skip it any time; Help › Welcome to NoteIt… and the command palette open it again.
 - A waiting Quick Capture draft now shows. While a draft is kept after you dismiss the panel, the menu bar icon gets a small dot and the menu bar panel shows a *Quick Capture draft waiting* row with a Resume button.
 - Importing twice no longer makes duplicates. NoteIt remembers what each import made, by the source note's file path or id and a fingerprint of its content. Notes that are already in NoteIt are left alone and counted in the summary. A note whose source has changed since is imported again as a new note, so nothing you edited in NoteIt is overwritten. The memory is kept on this Mac only.
 - Note info. The Links and Outline panel has a new Info tab with the note's word count, character count, reading time, created and last edited dates, notebook and tags. Counts update as you type. Show it with Show Note Info in the View menu (⌃⌘I) or from the command palette.
-- The NoteIt web app searches with the same filters as the Mac: `tag:`, `notebook:`, `is:todo`, `has:due`, `due:today`, dates, `OR`, `-word` and "phrases". A filter it can't read shows a warning and is searched as a word.
-- Tasks in the web app (⇧⌘T, or ⌥⇧⌘T where the browser keeps ⇧⌘T): checklist items from all your notes, grouped by due date, to check off or open.
-- Templates and daily notes in the web app: New Note from Template…, Insert Template… and New Template use your Templates notebook and fill in `{{title}}`, `{{date}}`, `{{time}}` and `{{clipboard}}`; a notebook's default template starts its new notes; Today in the sidebar (⌃⌘T) opens the same daily note as your Mac.
-- Links and Outline in the web app (⌥⌘I): notes that link here, links in this note, headings, and a Note Info tab (⌃⌘I) with the same word and character counts as the Mac. Clicking a link to a note opens it.
-- Export from the web app as Markdown (⇧⌘S) or HTML, print or save as PDF (⌘P), Copy as Markdown and Copy Note Link. Markdown export writes links between notes as `[[wiki links]]`, as the Mac does.
-- The web app's command palette and keyboard shortcuts follow the Mac's menus, with Ctrl in place of ⌘ off a Mac; type `>` in the palette for commands only.
-- A [feature parity](docs/feature-parity.md) page lists every feature of the Mac and web apps and where each stands.
-- Smart folders in the web app: New Smart Folder… and Save Search as Smart Folder… make a saved search in the sidebar, and smart folders made on a Mac show up on the web and the other way round.
-- Note links as you type in the web app: `[[` lists your notes as you type, `[[Title]]`, `[[Title#Heading]]` and `[[Title|text]]` become links as on the Mac, and Link to Note… (⇧⌘K) starts one.
-- Import Markdown in the web app: choose `.md` or `.txt` files, or a whole folder such as an Obsidian vault. Titles, front matter dates and tags, and images come in as on the Mac, and subfolders become nested notebooks.
-- Rename, merge and delete tags in the web app: right-click a tag in the sidebar. Tags inside it change too, and smart folder searches follow a rename.
-- Find and replace in a note in the web app (⌥⌘F, ⇧⌘F), with Match Case, Whole Word and regular expressions, as on the Mac. ⌘E now uses the selection for find, and inline code is ⇧⌘E, as on the Mac.
-- Due dates in the web app: Set Due Date… (⇧⌘D) for a checklist item, and `@due(fri)`, `@due(+3d)` or `@remind(tomorrow 9am)` turn into full dates as you type the `)`, as on the Mac.
-- Reminders ring in the web app while it's open in a tab, as a browser notification once you allow it in Settings › General. Like the Mac it claims each reminder first, so only one of your devices rings. Add Reminder… (⌃⌘R) is there too.
-- In the web app: Go Back and Go Forward (⌃⌘← ⌃⌘→) between the notes you opened, Daily Note for Date… with ‹ › on a daily note to the days around it, and Unlinked Mentions in the Links tab, with Link and Link All.
-- Searching for words in the web app lists the best matches first, ranked as on the Mac.
-- Pasting Markdown in the web app brings it in formatted, by the same rules as the Mac: only text that's clearly Markdown source, never inside a code block, and ⇧⌘V pastes plain text.
-- Tag suggestions in the web app: typing `#` lists your tags, best match first and then the most used, as on the Mac.
-- When you rename a note in the web app, it offers to update links to it that still show the old title, with Undo, as the Mac does. Settings › General › When a note is renamed can make it always or never update them.
-- The web app exports a notebook, or all your notes, as folders in a zip, with the Mac's folder layout, file names and links between notes. Right-click a notebook or All Notes.
-- Code blocks in the web app are coloured by language. Pick the language from the toolbar, or leave it on Automatic to have it guessed as on the Mac. Settings › General has the Mac's four code themes and a switch to turn colouring off.
-- Bigger and Smaller text (⌘+ ⌘−), alignment (⇧⌘{ ⇧⌘| ⇧⌘}) and Clear Formatting (⌥⌘\\) in the web app, saved the same way as on the Mac. The text colour menu also takes any colour.
-- Searching in the web app shows a snippet of each note with the search words marked, and marks them in the note you open. Esc clears the marks.
-- Quick Capture in the web app offers a reminder when the first line has a date, such as “Call the bank tomorrow”.
-- The web app imports Evernote (.enex) files, a Notion export (its zip or folder) and TextBundle or TextPack files, as the Mac does: the same notebooks, checklists, attachments, tags, reminders and links between imported notes.
-- Settings › Shortcuts in the web app changes menu shortcuts, with the Mac's rules for keys that can't be used or are taken. They're kept in each browser, as the Mac keeps its own.
-- Add Row Above, Add Row Below and Delete Row for tables in the web app, from the toolbar while you're in a table.
 
 ### Changed
 
@@ -59,40 +34,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Saving a note to sync is now crash-safe: a note's new text is uploaded completely before other devices are pointed at it, so they never see half a save.
 - On S3 storage, a request that could change data is never sent twice automatically. A dropped connection is sorted out on the next sync instead.
 - On storage that can't delete conditionally (sync folders and some S3 providers), NoteIt checks that a note is unchanged right before deleting it, and leaves anything another device changed meanwhile.
-- In the NoteIt web app, server setup, sign-in, invites, passwords and user management now run as type-checked server actions built with nuxt-safe-action. Forms point at the field that needs fixing, often before anything is sent, and lists such as your access keys and the server's users refresh by themselves after a change. Sync is unchanged.
-- Text colours and highlights picked in the web app are now the same swatches as the Mac's Format menu, and the web app has the Mac's paragraph shortcuts (⌥⌘4 and ⌥⌘5, ⇧⌘7, ⇧⌘8, ⇧⌘L, ⇧⌘U, ⇧⌘H, ⌥⇧⌘D, ⌘[ and ⌘]). Inline code is ⇧⌘E, as on the Mac; ⌘E still works.
-- The NoteIt web app is rebuilt on Nuxt UI, keeping its look. Dialogs, menus and the command palette handle the keyboard, focus and Escape consistently and animate in and out. Notes and notebooks have right-click menus, buttons show when they're working, confirmations are in-app dialogs instead of browser pop-ups, the sidebar and note list can be resized, and Settings opens over your notes.
 
 ### Fixed
 
-- The web app shows the same note titles and previews as the Mac for notes with a table whose first row is bold or has a shaded cell, and it reads tags, due dates and reminders on the line after a code block as the Mac does.
-- Markdown export puts a blank line between a bulleted list and a numbered or checklist list after it on the Mac and in the web app alike, and reading that Markdown back no longer adds an empty line between the two lists.
+- Markdown export puts a blank line between a bulleted list and a numbered or checklist list after it, and reading that Markdown back no longer adds an empty line between the two lists.
+- New Note from Template… run while the Templates notebook is open no longer makes another template: the note goes in no notebook and All Notes opens.
 - The New Notebook and Edit Notebook sheet keeps its colours and icons inside its margins instead of running to the edges.
-- The sidebar's New Notebook button and sync status stay readable when notes and tags scroll underneath them.
-- Two tabs of the NoteIt web app editing the same note no longer lose an edit. Tabs see each other's saves straight away, and a save made from an older version keeps the other version as a conflict copy, as the Mac does when a note changes on two devices at once.
-- In the web app, a note edited less than a second before a reload or a closed tab is saved; the browser asks you to stay while the save finishes. Reloading also opens faster.
-- Confirmation dialogs in the web app, such as Delete Notebook and Delete Now, open again after you cancel one.
-- In the web app, Tab and ⇧Tab indent and outdent list items and move between table cells (Tab in the last cell adds a row), and a new table starts with the cursor in its first cell. Focus no longer jumps out of the note.
-- The web app's Markdown shortcuts now match the Mac's: `>`, `+`, `1)`, ```` ``` ```` with a language, `---` then Return, and `**bold**`, `*italic*`, `` `code` `` and `~~strike~~` as you type. One ⌘Z gives back what you typed.
-- Quick Capture in the web app opens on the title, and Return in the title moves to the note.
-- A new web account, or a reload in the middle of setup, goes straight to choosing an encryption passphrase instead of asking to unlock a library that doesn't exist yet.
-- The web app's command palette matches and ranks like the Mac's, so `gn` finds *Grocery Notes*, and *New Note “…”* comes after every match.
-- In the web app's Settings, a new S3 secret is shown only once, revoking a key asks first, the Users list shows a renamed account's new name, and this browser's last sync time matches the header.
-- An invite link opened in a web app tab that's already open is no longer ignored.
-- Moving a note to Recently Deleted in the web app can be undone from the notice. A forced password change no longer asks again for the temporary password you just used. New Notebook in the sidebar makes a top-level notebook, and Edit Notebook can move a notebook inside another.
-- Notebooks made at the top level in the web app now record that they're top level, as the Mac does, so moving a notebook out of another on the web reaches your Mac.
-- New Note from Template… run while the Templates notebook is open no longer makes another template, on the Mac and the web: the note goes in no notebook and All Notes opens.
-- In the web app, typing in the search box while Tasks is open filters the tasks, as the Mac's Search Tasks does. Tasks rows are keyboard-navigable: ↑ and ↓ select, Space checks, and Return or a double-click opens the note; a single click shows it beside the list. Tasks in the Templates notebook are left out, as on the Mac.
-- Daily Note for Date… in the web app is a calendar: the arrow keys move a day or a week, Page Up and Page Down a month, days with a note are marked, and Return or a double-click opens the day.
-- The web app's `[[` note list no longer pops up when a note is restored or opened with `[[` at its end, and stays inside the window near its right and bottom edges.
-- The web app's setup wizard tells screen readers the right step, and the setup token and Unlock passphrase fields have the cursor on a first load or reload.
-- The web app's Sign In and Choose a New Password screens have the cursor in their first field after signing out and after a reload.
-- At tablet widths, the web app's dialogs opened while the sidebar drawer is open, such as Daily Note for Date… from the command palette, show above the drawer instead of underneath it.
-- In the web app, closing Link to Note…'s list with Esc takes out the `[[` it typed, as on the Mac, and an editor closed while a note was still loading no longer throws an error.
-- ⌘Z in the web app's Tasks view undoes the last check or uncheck, and the ones before it, as on the Mac.
-- Web app exports: HTML and print put nested lists inside their parent item and show checklist items with a checkbox only, without a bullet; Markdown export writes an empty line as one blank line, so importing the file again no longer adds an empty paragraph.
-- In Safari, the web app no longer loses an edit typed just before you close the tab and choose Leave. Any edit still being saved as a tab closes or goes into the background is kept, encrypted, in the browser and saved the next time you unlock; if the note changed elsewhere meanwhile, the other version is kept as a conflict copy.
-- The web app's secondary text, links and accent buttons now meet WCAG AA contrast (4.5:1) in light and dark, including on hover. The account button is named after you, and the command palette's results list has a name for screen readers.
+- The sidebar's New Notebook button and sync status sit below the list, so notes and tags no longer scroll underneath them.
 
 ### Security
 
