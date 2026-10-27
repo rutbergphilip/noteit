@@ -958,6 +958,10 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
           <div class="flex gap-1.5 p-2">
             <button v-for="c in COLORS" :key="c" type="button" class="size-[22px] cursor-pointer rounded-full ring-1 ring-(--line) hover:scale-110 transition-transform" :aria-label="`Color ${c}`" :style="{ background: c }" @click="applyColor('textColor', c)" />
             <UButton color="neutral" variant="outline" size="xs" class="size-[22px] justify-center rounded-full p-0" icon="i-lucide-x" aria-label="No color" @click="applyColor('textColor', undefined)" />
+            <!-- Format › Show Colors on the Mac: any colour, stored as native's #RRGGBB. -->
+            <label class="relative size-[22px] cursor-pointer overflow-hidden rounded-full ring-1 ring-(--line)" style="background: conic-gradient(red, yellow, lime, aqua, blue, magenta, red)" aria-label="Other color" title="Other color">
+              <input type="color" class="absolute inset-0 cursor-pointer opacity-0" @change="(e) => applyColor('textColor', (e.target as HTMLInputElement).value.toUpperCase())" />
+            </label>
           </div>
         </template>
       </UPopover>
