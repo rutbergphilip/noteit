@@ -7,6 +7,7 @@ import { S3Store } from './s3Store';
 import type { ObjectStore } from './store';
 import { Mutex } from './files';
 import { BootstrapToken, RateLimiter, SessionSigner } from './sessions';
+import { OidcProvider } from './oidc';
 
 /** Per-user usage, recounted from disk on first use and then kept in step with every write. */
 export class Quotas {
@@ -70,6 +71,8 @@ export interface ServerContext {
   quotas: Quotas;
   loginLimiter: RateLimiter;
   setupLimiter: RateLimiter;
+  /** OpenID Connect sign-in, when NOTEIT_OIDC_ISSUER is set. */
+  oidc: OidcProvider | undefined;
   /** Serializes per-user writes so quota accounting stays exact. */
   log: (msg: string) => void;
 }
@@ -104,6 +107,16 @@ export async function createContext(
   const bootstrap = new BootstrapToken(cfg.dataDir, cfg.setupToken);
   await bootstrap.load(accounts.isEmpty, log);
   if (!accounts.isEmpty) await unlink(join(cfg.dataDir, 'setup-token')).catch(() => undefined);
+  const oidc = cfg.oidc ? new OidcProvider(cfg.oidc, log) : undefined;
+  if (oidc) {
+    // Checked at startup; an identity provider that is still starting (another container) is retried at sign-in.
+    try {
+      await oidc.discover();
+      log(`NoteIt OIDC: sign-in through ${cfg.oidc!.issuer} ("${cfg.oidc!.label}")${cfg.passwordLogin ? '' : ', password sign-in off'}`);
+    } catch (e) {
+      log(`NoteIt OIDC: discovery of ${cfg.oidc!.issuer} failed (${(e as Error).message}); retried at the next sign-in`);
+    }
+  }
   return {
     cfg,
     store,
@@ -113,6 +126,7 @@ export async function createContext(
     quotas: new Quotas(store),
     loginLimiter: new RateLimiter(10, 60_000),
     setupLimiter: new RateLimiter(10, 60_000),
+    oidc,
     log,
   };
 }

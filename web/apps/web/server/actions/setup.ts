@@ -14,8 +14,10 @@ export default publicClient
     alreadySetUp: 'This server already has an admin.',
     invalidSetupToken: 'That setup token is not right.',
     rateLimited: 'Too many attempts. Try again in a minute.',
+    passwordLoginDisabled: 'Password sign-in is turned off on this server. Use the sign-in button instead.',
   })
   .action(async ({ parsedInput, ctx: { noteit }, event, fail }) => {
+    if (!noteit.cfg.passwordLogin) return fail('passwordLoginDisabled');
     if (!noteit.accounts.isEmpty) return fail('alreadySetUp');
     const wait = noteit.setupLimiter.hit(clientIp(event, noteit.cfg));
     if (wait) {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, useTemplateRef, watch } from 'vue';
-import { redeemInvite, signIn } from '#safe-action/actions';
+import { oidcStart, redeemInvite, signIn } from '#safe-action/actions';
 import { redeemInviteInput, signInInput } from '#shared/schemas';
 import { useNoteit } from '~/composables/useNoteit';
 import { failureOf } from '~/utils/actions';
@@ -10,6 +10,27 @@ const { enter, state } = useNoteit();
 const hashInvite = state.inviteToken;
 const mode = ref<'signin' | 'invite'>(hashInvite ? 'invite' : 'signin');
 const host = location.host;
+const passwordOn = computed(() => state.server?.auth.password !== false);
+const sso = computed(() => state.server?.auth.oidc ?? undefined);
+
+// Single sign-on: the server returns the identity provider's URL and the browser goes there; the callback comes
+// back to / with a session, or with `#oidc-error` (state.oidcError).
+const oidc = useAction(oidcStart, {
+  onSuccess: ({ data }) => {
+    if (data) location.assign(data.url);
+  },
+});
+const oidcError = computed(() => {
+  const f = failureOf({ businessError: oidc.businessError.value, serverError: oidc.serverError.value, validationErrors: oidc.validationErrors.value });
+  return f?.message ?? state.oidcError;
+});
+function startSso(): void {
+  state.oidcError = undefined;
+  if (mode.value === 'invite') {
+    const name = inviteValues.value.username.trim().toLowerCase();
+    oidc.execute({ intent: 'invite', token: inviteValues.value.token, ...(name ? { username: name } : {}) });
+  } else oidc.execute({ intent: 'login' });
+}
 
 // useFormAction owns values, validation and the request; UForm renders the field errors.
 const login = useFormAction(signIn, {
@@ -47,8 +68,9 @@ watch(
 useFocusWhenShown(useTemplateRef<HTMLElement>('firstField'));
 
 const active = computed(() => (mode.value === 'invite' ? invite : login));
-/** Failures that aren't about one field: wrong credentials, rate limits, an unreachable server. */
+/** Failures that aren't about one field: wrong credentials, rate limits, an unreachable server, a failed SSO. */
 const error = computed(() => {
+  if (oidcError.value) return oidcError.value;
   const f = active.value;
   const failure = failureOf({ businessError: f.businessError.value, serverError: f.serverError.value });
   return failure && !Object.keys(f.fieldErrors.value).length ? failure.message : undefined;
@@ -64,7 +86,7 @@ const error = computed(() => {
       </p>
     </div>
 
-    <UForm v-if="mode === 'invite'" ref="inviteForm" :state="inviteValues" :validate-on="[]" class="flex flex-col gap-1.5" @submit="invite.submit()">
+    <UForm v-if="mode === 'invite'" ref="inviteForm" :state="inviteValues" :validate-on="[]" class="flex flex-col gap-1.5" @submit="passwordOn ? invite.submit() : startSso()">
       <UFormField label="Invite code" name="token" help=" ">
         <div ref="firstField"><UInput v-model="inviteValues.token" size="xl" autocomplete="off" spellcheck="false" /></div>
       </UFormField>
@@ -78,7 +100,7 @@ const error = computed(() => {
       <UButton type="submit" size="xl" block label="Create Account" :loading="invite.isExecuting.value" />
     </UForm>
 
-    <UForm v-else ref="loginForm" :state="loginValues" :validate-on="[]" class="flex flex-col gap-1.5" @submit="login.submit()">
+    <UForm v-else-if="passwordOn" ref="loginForm" :state="loginValues" :validate-on="[]" class="flex flex-col gap-1.5" @submit="login.submit()">
       <UFormField label="Username" name="username" help=" ">
         <div ref="firstField"><UInput v-model="loginValues.username" size="xl" autocomplete="username" autocapitalize="none" spellcheck="false" /></div>
       </UFormField>
@@ -88,6 +110,14 @@ const error = computed(() => {
       <UAlert v-if="error" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="error" />
       <UButton type="submit" size="xl" block label="Sign In" :loading="login.isExecuting.value" />
     </UForm>
+    <UAlert v-else-if="error" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="error" />
+
+    <template v-if="sso && mode === 'signin'">
+      <div v-if="passwordOn" class="flex items-center gap-3 text-xs text-muted"><span class="h-px flex-1 bg-(--ui-border)" />or<span class="h-px flex-1 bg-(--ui-border)" /></div>
+      <div>
+        <UButton :color="passwordOn ? 'neutral' : 'primary'" :variant="passwordOn ? 'outline' : 'solid'" size="xl" block icon="i-lucide-key-round" :label="`Sign In With ${sso.label}`" :loading="oidc.isExecuting.value" @click="startSso" />
+      </div>
+    </template>
 
     <p class="text-[13px]/normal text-muted">Signing in only opens your account. Your notes stay encrypted until you unlock them with your passphrase on the next step.</p>
     <UButton

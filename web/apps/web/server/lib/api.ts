@@ -141,7 +141,17 @@ export function createApiHandler(ctx: ServerContext) {
     }),
   );
 
-  const SETUP_ALLOWED = new Set(['/health', '/health/live']);
+  // OIDC (spec §7.2): the identity provider redirects the browser here. A plain route, since it answers a top-level
+  // navigation with a page, not JSON.
+  router.get(
+    '/oidc/callback',
+    defineEventHandler(async (event) => {
+      if (!ctx.oidc) fail(404, 'notFound');
+      return ctx.oidc.callback(event, ctx);
+    }),
+  );
+
+  const SETUP_ALLOWED = new Set(['/health', '/health/live', '/oidc/callback']);
 
   const inner = useBase('/api', router.handler);
   return defineEventHandler(async (event) => {

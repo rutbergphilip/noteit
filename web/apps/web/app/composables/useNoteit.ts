@@ -3,6 +3,7 @@ import { type BodyContainer, dailyNotebook, dailyTitle, dayKey, DAILY_NOTEBOOK_N
 import { serverInfo, session as sessionAction, signOut as signOutAction } from '#safe-action/actions';
 import { failureOf, type ServerInfo, type SessionInfo } from '~/utils/actions';
 import { templateTarget } from '~/utils/notebooks';
+import { OIDC_ERRORS, type OidcErrorCode } from '#shared/oidc';
 import { createWorkerClient } from '~/utils/workerClient';
 import type { NoteRow, NotebookRow, SmartFolderRow, SyncStatus, UnlockResult } from '~/worker/types';
 
@@ -88,7 +89,19 @@ const state = reactive({
   inviteToken: '',
   /** The temporary password just used to sign in, kept in memory so the forced change doesn't ask for it again. */
   temporaryPassword: undefined as string | undefined,
+  /** Why the last single sign-on didn't work (the callback names it in the URL fragment). */
+  oidcError: undefined as string | undefined,
 });
+
+/** The OIDC callback's outcome (`#oidc-error=<code>`, `#oidc-linked`), read once and removed from the address. */
+function readOidcFromHash(): void {
+  const params = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const code = params.get('oidc-error');
+  if (code === null && !params.has('oidc-linked')) return;
+  window.history.replaceState(null, '', location.pathname + location.search);
+  if (code !== null) state.oidcError = OIDC_ERRORS[code as OidcErrorCode] ?? OIDC_ERRORS.failed;
+  else toast(`Linked. You can now sign in with ${state.server?.auth.oidc?.label ?? 'single sign-on'}.`, 'success');
+}
 
 function readInviteFromHash(): void {
   const token = new URLSearchParams(location.hash.replace(/^#/, '')).get('invite') ?? '';
@@ -152,6 +165,7 @@ async function boot(): Promise<void> {
     return;
   }
   state.server = info.data;
+  readOidcFromHash();
   if (info.data.needsSetup) {
     state.phase = 'setup';
     return;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, useTemplateRef } from 'vue';
-import { accountCreateS3Key, adminCreateInvite, setup } from '#safe-action/actions';
+import { accountCreateS3Key, adminCreateInvite, oidcStart, setup } from '#safe-action/actions';
 import { setupInput } from '#shared/schemas';
 import { useNoteit } from '~/composables/useNoteit';
 import { failureOf } from '~/utils/actions';
@@ -35,6 +35,17 @@ const adminError = computed(() => {
   // A wrong token is shown under its field already.
   return f && !Object.keys(fieldErrors.value).length ? f.message : undefined;
 });
+
+// "Set Up With <label>" (spec §7.1): the same token, then the identity provider; the callback creates the admin.
+const passwordOn = computed(() => state.server?.auth.password !== false);
+const sso = computed(() => state.server?.auth.oidc ?? undefined);
+const oidc = useAction(oidcStart, { onSuccess: ({ data }) => data && location.assign(data.url) });
+function setUpWithSso(): void {
+  state.oidcError = undefined;
+  const username = values.value.username.trim().toLowerCase();
+  oidc.execute({ intent: 'setup', token: values.value.token, ...(username ? { username } : {}) });
+}
+const ssoError = computed(() => failureOf({ businessError: oidc.businessError.value, serverError: oidc.serverError.value, validationErrors: oidc.validationErrors.value })?.message ?? state.oidcError);
 
 const storage = ref('disk');
 const storageChoices = [
@@ -71,7 +82,7 @@ async function finish(): Promise<void> {
 
       <UCard class="rounded-(--radius-2xl) shadow-(--shadow-card) ring-0" :ui="{ body: 'flex flex-col gap-6 p-5 sm:p-8' }">
         <Transition name="step" mode="out-in">
-          <UForm v-if="step === 0" key="0" ref="adminForm" :state="values" :validate-on="[]" class="flex flex-col gap-6" @submit="admin.submit()">
+          <UForm v-if="step === 0" key="0" ref="adminForm" :state="values" :validate-on="[]" class="flex flex-col gap-6" @submit="passwordOn ? admin.submit() : setUpWithSso()">
             <div>
               <h1 class="text-[26px] font-bold max-sm:text-[22px]">Create the admin account</h1>
               <p class="mt-2 text-[15px]/normal text-muted">
@@ -85,12 +96,15 @@ async function finish(): Promise<void> {
               <UFormField label="Username" name="username" help=" ">
                 <UInput v-model="values.username" size="lg" autocomplete="username" autocapitalize="none" />
               </UFormField>
-              <UFormField label="Password" name="password" help="This signs you in to the server. Your notes get their own passphrase in step 3.">
+              <UFormField v-if="passwordOn" label="Password" name="password" help="This signs you in to the server. Your notes get their own passphrase in step 3.">
                 <UInput v-model="values.password" size="lg" type="password" autocomplete="new-password" />
               </UFormField>
             </div>
-            <UAlert v-if="adminError" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="adminError" />
-            <div class="flex justify-end"><UButton type="submit" size="lg" trailing-icon="i-lucide-arrow-right" label="Continue" :loading="admin.isExecuting.value" /></div>
+            <UAlert v-if="adminError ?? ssoError" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="adminError ?? ssoError" />
+            <div class="flex flex-wrap justify-end gap-2">
+              <UButton v-if="sso" type="button" :color="passwordOn ? 'neutral' : 'primary'" :variant="passwordOn ? 'outline' : 'solid'" size="lg" icon="i-lucide-key-round" :label="`Set Up With ${sso.label}`" :loading="oidc.isExecuting.value" @click="setUpWithSso" />
+              <UButton v-if="passwordOn" type="submit" size="lg" trailing-icon="i-lucide-arrow-right" label="Continue" :loading="admin.isExecuting.value" />
+            </div>
           </UForm>
 
           <section v-else-if="step === 1" key="1" class="flex flex-col gap-6">

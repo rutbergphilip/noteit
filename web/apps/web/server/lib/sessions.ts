@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, hkdfSync, randomBytes, timingSafeEqual } from 'node:crypto';
 import { join } from 'node:path';
 import { readIfExists, writeFileAtomic } from './files';
 
@@ -31,6 +31,37 @@ export class SessionSigner {
     const body = Buffer.from(JSON.stringify(p)).toString('base64url');
     const mac = createHmac('sha256', this.secret).update(body).digest('base64url');
     return `${body}.${mac}`;
+  }
+
+  /**
+   * An encrypted, authenticated cookie value (AES-256-GCM under a key derived from the session secret) for state
+   * the browser must carry but not read, such as the OIDC verifier. `purpose` binds it to one use.
+   */
+  seal(purpose: string, value: object, ttlS: number, nowS = Math.floor(Date.now() / 1000)): string {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', this.sealKey(purpose), iv);
+    const plain = Buffer.from(JSON.stringify({ v: value, exp: nowS + ttlS }));
+    const body = Buffer.concat([cipher.update(plain), cipher.final()]);
+    return Buffer.concat([iv, cipher.getAuthTag(), body]).toString('base64url');
+  }
+
+  unseal<T>(purpose: string, sealed: string | undefined, nowS = Math.floor(Date.now() / 1000)): T | undefined {
+    if (!sealed) return undefined;
+    try {
+      const raw = Buffer.from(sealed, 'base64url');
+      if (raw.length < 29) return undefined;
+      const decipher = createDecipheriv('aes-256-gcm', this.sealKey(purpose), raw.subarray(0, 12));
+      decipher.setAuthTag(raw.subarray(12, 28));
+      const plain = Buffer.concat([decipher.update(raw.subarray(28)), decipher.final()]);
+      const parsed = JSON.parse(plain.toString('utf8')) as { v: T; exp: number };
+      return typeof parsed.exp === 'number' && parsed.exp > nowS ? parsed.v : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private sealKey(purpose: string): Buffer {
+    return Buffer.from(hkdfSync('sha256', this.secret, Buffer.alloc(0), `noteit-seal:${purpose}`, 32));
   }
 
   verify(value: string | undefined, nowS = Math.floor(Date.now() / 1000)): SessionPayload | undefined {

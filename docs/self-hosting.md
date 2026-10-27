@@ -81,7 +81,8 @@ value, for Docker or Compose secrets (the file must be readable by uid 1000).
 | `NOTEIT_DEFAULT_MAX_OBJECTS` | `100000` | Object count for each new account. |
 | `NOTEIT_MAX_OBJECT_MB` | `50` | Largest single upload. Bigger requests are refused while streaming. |
 | `NOTEIT_INVITE_TTL_HOURS` | `72` | How long invite links work. |
-| `NOTEIT_PASSWORD_LOGIN` | `true` | Password sign-in. |
+| `NOTEIT_PASSWORD_LOGIN` | `true` | Password sign-in. `false` leaves only single sign-on, and needs `NOTEIT_OIDC_ISSUER`. |
+| `NOTEIT_OIDC_ISSUER` | — | Turns on single sign-on through your identity provider. See [Single sign-on (OIDC)](#single-sign-on-oidc) for this and the other `NOTEIT_OIDC_*` settings. |
 | `NOTEIT_SOURCE_URL` | this repository | The source link in About (the AGPL source offer). Point it at your fork if you change the code. |
 | `NOTEIT_STORE` | `disk` | Where the encrypted stores live: `disk` (the data volume) or `s3` (an upstream bucket, see [Store notes in an S3 bucket](#store-notes-in-an-s3-bucket)). |
 | `NOTEIT_S3_ENDPOINT`, `NOTEIT_S3_BUCKET` | — | The upstream S3 endpoint URL and bucket, with `NOTEIT_STORE=s3`. |
@@ -215,6 +216,81 @@ closed until then.
 The token works once; the server deletes it after setup. Invite other people from Settings › Users (admins see
 it): an invite is a link that works for `NOTEIT_INVITE_TTL_HOURS`. Each person chooses their own password and
 passphrase, and nobody can read anyone else's notes.
+
+## Single sign-on (OIDC)
+
+NoteIt can sign people in through an OpenID Connect identity provider such as Authentik, Authelia, Keycloak or
+Pocket ID. It's off unless `NOTEIT_OIDC_ISSUER` is set. Single sign-on only opens the NoteIt account: notes still
+need each person's own encryption passphrase, which the identity provider never sees.
+
+In the provider, create a confidential OpenID Connect client (authorization code flow, PKCE with S256) with the
+redirect URI `https://notes.example.com/api/oidc/callback`. Then:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NOTEIT_OIDC_ISSUER` | — | The issuer URL; NoteIt reads `<issuer>/.well-known/openid-configuration`. Must be `https://` (plain `http://` only for `localhost`). |
+| `NOTEIT_OIDC_CLIENT_ID`, `NOTEIT_OIDC_CLIENT_SECRET` (`_FILE`) | — | The client's credentials. The secret is sent as `client_secret_post`. |
+| `NOTEIT_OIDC_REDIRECT_URL` | `<NOTEIT_PUBLIC_URL>/api/oidc/callback` | Only if the provider must use another URL. |
+| `NOTEIT_OIDC_SCOPES` | `openid profile` | Add the scope your provider releases groups with, such as `groups`. |
+| `NOTEIT_OIDC_LABEL` | `Single Sign-On` | The button reads "Sign In With <label>". |
+| `NOTEIT_OIDC_GROUPS_CLAIM` | `groups` | Where the groups are, as a dot path (`realm_access.roles`). Read from the ID token, or from userinfo when it isn't there. |
+| `NOTEIT_OIDC_AUTO_PROVISION` | `false` | `true` creates an account the first time someone signs in, but only for members of `NOTEIT_OIDC_ALLOWED_GROUPS` (required with it). |
+| `NOTEIT_OIDC_ALLOWED_GROUPS` | — | Comma-separated groups that may get an account by signing in. |
+| `NOTEIT_OIDC_ADMIN_GROUPS` | — | Comma-separated groups whose members are NoteIt admins. When set, the role follows the groups at every single sign-on (the last admin is never demoted). Unset: roles are managed in NoteIt. |
+
+How accounts are matched and created:
+
+- Accounts are found by the provider's issuer and subject (`sub`), never by email or username, which can change.
+  The name and username claims only suggest a display name and username.
+- The first admin can be created with "Set Up With <label>" on the setup page; it still needs the setup token.
+- An invite link offers "Create Account With <label>", which links the new account to that sign-in.
+- Someone who already has an account links a sign-in in Settings › Account › Sign-in methods, and can unlink it
+  again if the account has a password.
+- Anyone else gets "No NoteIt account is linked to this sign-in. Ask your admin for an invite.", unless
+  auto-provisioning is on and they are in an allowed group. Disabled accounts can't sign in either way.
+- Signing out of NoteIt doesn't sign you out of the provider.
+
+The server checks the issuer at startup and logs the result. If the provider isn't reachable yet (for example
+another container still starting), it tries again at the next sign-in.
+
+Provider examples, for `https://notes.example.com`:
+
+- **Authentik**: Applications › Providers › Create › OAuth2/OpenID Provider, client type Confidential, redirect URI
+  as above; then an Application using it. The issuer is `https://auth.example.com/application/o/<app-slug>/`.
+  Authentik's `profile` scope already includes `groups`.
+
+  ```sh
+  NOTEIT_OIDC_ISSUER=https://auth.example.com/application/o/noteit/
+  NOTEIT_OIDC_CLIENT_ID=… NOTEIT_OIDC_CLIENT_SECRET=… NOTEIT_OIDC_LABEL=Authentik
+  NOTEIT_OIDC_ADMIN_GROUPS=noteit-admins
+  ```
+- **Authelia** (`configuration.yml`; the issuer is Authelia's own URL):
+
+  ```yaml
+  identity_providers:
+    oidc:
+      clients:
+        - client_id: noteit
+          client_name: NoteIt
+          client_secret: '$pbkdf2-sha512$…'   # authelia crypto hash generate pbkdf2
+          redirect_uris: ['https://notes.example.com/api/oidc/callback']
+          scopes: [openid, profile, groups]
+          require_pkce: true
+          pkce_challenge_method: S256
+          token_endpoint_auth_method: client_secret_post
+          authorization_policy: two_factor
+  ```
+  with `NOTEIT_OIDC_ISSUER=https://auth.example.com` and `NOTEIT_OIDC_SCOPES="openid profile groups"`.
+- **Keycloak**: in the realm, Clients › Create client, Client authentication on, Standard flow, the redirect URI
+  as above, and PKCE method S256 under Advanced. Groups need a mapper: Client scopes › `<client>-dedicated` › Add
+  mapper › Group Membership, token claim name `groups`, Full group path off. The issuer is
+  `https://keycloak.example.com/realms/<realm>`.
+- **Pocket ID**: OIDC Clients › Add, callback URL as above (PKCE is supported). The issuer is Pocket ID's URL,
+  `https://id.example.com`; add `groups` to `NOTEIT_OIDC_SCOPES` for group rules.
+
+To use only single sign-on, set `NOTEIT_PASSWORD_LOGIN=false` after the admin can sign in with it. Password
+sign-in, password setup, password invites and new users with temporary passwords are then refused; invite people
+with links instead.
 
 ## Sync your Mac with the server
 

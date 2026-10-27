@@ -16,6 +16,8 @@ import {
   adminRevokeInvite,
   adminUpdateUser,
   adminUsers,
+  accountOidcUnlink,
+  oidcStart,
   session,
 } from '#safe-action/actions';
 import { changePasswordInput, createUserInput } from '#shared/schemas';
@@ -194,6 +196,21 @@ const password = useFormAction(accountChangePassword, {
   },
   onError: ({ error }) => error.serverError && report(error),
 });
+// Sign-in methods (spec §7.2): link one OIDC identity; unlinking needs a password on the account.
+const sso = computed(() => state.server?.auth.oidc ?? undefined);
+const passwordOn = computed(() => state.server?.auth.password !== false);
+const linkSso = useAction(oidcStart, { onSuccess: ({ data }) => data && location.assign(data.url), onError: ({ error }) => report(error) });
+const unlinkSso = useAction(accountOidcUnlink, {
+  onSuccess: ({ data }) => {
+    if (state.session && data) state.session.user = data;
+    toast('Sign-in unlinked', 'success');
+  },
+  onError: ({ error }) => report(error),
+});
+async function confirmUnlink(): Promise<void> {
+  const ok = await confirm({ title: `Unlink ${sso.value?.label}?`, description: 'You sign in with your username and password afterwards.', confirmLabel: 'Unlink', danger: true });
+  if (ok) unlinkSso.execute(undefined);
+}
 const signOutEverywhere = useAction(accountSignOutEverywhere, { onSuccess: () => signOut(), onError: ({ error }) => report(error) });
 
 const keyLabel = ref('Mac');
@@ -418,6 +435,22 @@ const portalKey = useOpeningKey(() => state.settings);
                 </UFormField>
                 <UButton type="submit" color="neutral" variant="outline" label="Save" :loading="profile.isExecuting.value" class="mb-6" />
               </UForm>
+            </SettingsCard>
+            <SettingsCard v-if="sso" title="Sign-in methods">
+              <SettingsRow v-if="passwordOn" label="Password" :sub="state.session?.user.hasPassword ? 'Change it in Security & devices.' : 'This account has no password.'" />
+              <SettingsRow :label="sso.label" :sub="state.session?.user.oidcLinked ? 'Linked. You can sign in with it.' : 'Not linked.'">
+                <UButton
+                  v-if="state.session?.user.oidcLinked"
+                  color="neutral"
+                  variant="outline"
+                  label="Unlink"
+                  :disabled="!state.session?.user.hasPassword || !passwordOn"
+                  :title="state.session?.user.hasPassword && passwordOn ? undefined : 'Unlinking needs a password on this account.'"
+                  :loading="unlinkSso.isExecuting.value"
+                  @click="confirmUnlink"
+                />
+                <UButton v-else color="neutral" variant="outline" icon="i-lucide-link" :label="`Link ${sso.label}`" :loading="linkSso.isExecuting.value" @click="linkSso.execute({ intent: 'link' })" />
+              </SettingsRow>
             </SettingsCard>
             <SettingsCard title="S3 access keys">
               <template #sub>
