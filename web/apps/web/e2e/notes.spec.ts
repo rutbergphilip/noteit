@@ -71,3 +71,16 @@ test('pin from the row menu puts the note in Pinned', async ({ page, account }) 
   await expect(noteRow(page, 'Important')).toBeVisible();
   await expect(noteRow(page, 'Other')).toHaveCount(0);
 });
+
+// Regression: an edit typed less than the 600 ms save debounce before switching notes was lost, because useEditor
+// destroys the editor before the component's unmount flush could read it.
+test('switching notes right after typing keeps the edit', async ({ page, account }) => {
+  void account;
+  await newNote(page, 'First', 'body');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('typed just before switching');
+  await page.getByRole('button', { name: 'New note', exact: true }).click();
+  await page.keyboard.type('Second');
+  await noteRow(page, 'First').click();
+  await expect(editorOf(page)).toContainText('typed just before switching');
+});
