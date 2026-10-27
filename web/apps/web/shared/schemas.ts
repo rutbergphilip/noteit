@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { OIDC_INTENTS } from './oidc';
 
 /**
  * Input contracts for the control-plane actions. The server validates with them (`.schema()`) and the forms reuse
@@ -93,4 +94,11 @@ export const createInviteInput = z.object({
     .max(24 * 30)
     .optional(),
   quotaBytes: positiveInt.optional(),
+});
+
+/** OIDC sign-in (spec §7.2). `token` is the setup token (setup) or the invite token (invite). */
+export const oidcStartInput = z.object({
+  intent: z.enum(OIDC_INTENTS),
+  token: z.string().trim().max(200).optional(),
+  username: username.optional(),
 });

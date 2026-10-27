@@ -16,6 +16,8 @@ import {
   adminRevokeInvite,
   adminUpdateUser,
   adminUsers,
+  accountOidcUnlink,
+  oidcStart,
   session,
 } from '#safe-action/actions';
 import { changePasswordInput, createUserInput } from '#shared/schemas';
@@ -28,18 +30,21 @@ import type { DeviceView } from '~/worker/types';
 import { useOpeningKey } from '~/utils/overlay';
 import { linkRenameMode, setLinkRenameMode, type LinkRenameMode } from '~/composables/useRenameTracker';
 import { CODE_THEMES, codeStyle, setCodeStyle, type CodeThemeId } from '~/utils/codeStyle';
+import { CLEANUP, cleanupButtonState, cleanupResultText } from '~/utils/cleanup';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
 const confirm = useConfirm();
 type Section = 'general' | 'shortcuts' | 'sync' | 'security' | 'account' | 'users' | 'about';
 const section = ref<Section>('sync');
 const isAdmin = computed(() => state.session?.user.role === 'admin');
+/** Direct mode: no server, no account; the bucket from this browser's vault. */
+const isDirect = computed(() => state.mode === 'direct');
 const sections = computed(() => [
   { id: 'general' as const, label: 'General', icon: 'i-lucide-settings' },
   { id: 'shortcuts' as const, label: 'Shortcuts', icon: 'i-lucide-keyboard' },
   { id: 'sync' as const, label: 'Sync & storage', icon: 'i-lucide-refresh-cw' },
   { id: 'security' as const, label: 'Security & devices', icon: 'i-lucide-shield' },
-  { id: 'account' as const, label: 'Account', icon: 'i-lucide-user-round' },
+  ...(isDirect.value ? [] : [{ id: 'account' as const, label: 'Account', icon: 'i-lucide-user-round' }]),
   ...(isAdmin.value ? [{ id: 'users' as const, label: 'Users', icon: 'i-lucide-users', admin: true }] : []),
   { id: 'about' as const, label: 'About NoteIt', icon: 'i-lucide-info' },
 ]);
@@ -63,7 +68,7 @@ const queries = {
   users: useAction(adminUsers),
   invites: useAction(adminInvites),
 };
-const { data: keys, status: keysStatus } = useAsyncData('settings:s3-keys', async () => unwrap(await queries.keys.executeAsync(undefined)), { default: () => [] });
+const { data: keys, status: keysStatus } = useAsyncData('settings:s3-keys', async () => (isDirect.value ? [] : unwrap(await queries.keys.executeAsync(undefined))), { default: () => [] });
 useActionQueryTags('settings:s3-keys', ['s3-keys']);
 const { data: users, status: usersStatus } = useAsyncData('settings:users', async () => (isAdmin.value ? unwrap(await queries.users.executeAsync(undefined)).users : []), { default: () => [] });
 useActionQueryTags('settings:users', ['users']);
@@ -71,8 +76,35 @@ const { data: invites } = useAsyncData('settings:invites', async () => (isAdmin.
 useActionQueryTags('settings:invites', ['invites']);
 
 const devices = ref<DeviceView[]>([]);
+const bucket = ref<Awaited<ReturnType<ReturnType<typeof client>['directInfo']>>>();
+// "Clean Up Unused Storage…" (spec §3.4.9): only after the confirmation, never automatically.
+const cleanupAvailable = ref(false);
+const cleanupBusy = ref(false);
+const cleanupResult = ref<string>();
+const cleanup = computed(() => cleanupButtonState(state.status.phase !== 'locked' && !!state.status.lastSync, cleanupAvailable.value));
+async function confirmCleanup(): Promise<void> {
+  const ok = await confirm({ title: CLEANUP.title, description: CLEANUP.message, confirmLabel: CLEANUP.confirm, danger: true, cancelDefault: true });
+  if (!ok) return;
+  cleanupBusy.value = true;
+  try {
+    cleanupResult.value = cleanupResultText(await client().cleanUpUnusedStorage());
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    cleanupResult.value = message.startsWith('cleanupUnavailable') ? CLEANUP.unavailableCaption : `Couldn’t clean up: ${message}`;
+  } finally {
+    cleanupBusy.value = false;
+  }
+}
 async function loadSync(): Promise<void> {
+  cleanupResult.value = undefined;
+  void client()
+    .cleanupAvailable()
+    .then((v) => (cleanupAvailable.value = v));
   devices.value = await client().devices();
+  if (isDirect.value) {
+    bucket.value = await client().directInfo();
+    return;
+  }
   const s = await queries.session.executeAsync(undefined);
   if (s.data) state.session = s.data;
   else report(s);
@@ -103,11 +135,18 @@ async function saveDeviceName(): Promise<void> {
   savingDevice.value = false;
   toast('Device name saved', 'success');
 }
+async function setUpAgain(): Promise<void> {
+  await lock();
+  state.settings = false;
+  state.phase = 'connectDirect';
+}
 async function forget(): Promise<void> {
   const ok = await confirm({
     title: 'Forget this browser?',
-    description: 'Signs out and deletes the encrypted copy of your notes from this browser. Notes on the server are kept.',
-    confirmLabel: 'Sign Out & Forget',
+    description: isDirect.value
+      ? 'Deletes the bucket key and the encrypted copy of your notes from this browser. Notes in the bucket are kept.'
+      : 'Signs out and deletes the encrypted copy of your notes from this browser. Notes on the server are kept.',
+    confirmLabel: isDirect.value ? 'Forget' : 'Sign Out & Forget',
     danger: true,
   });
   if (ok) await signOut(true);
@@ -171,6 +210,21 @@ const password = useFormAction(accountChangePassword, {
   },
   onError: ({ error }) => error.serverError && report(error),
 });
+// Sign-in methods (spec §7.2): link one OIDC identity; unlinking needs a password on the account.
+const sso = computed(() => state.server?.auth.oidc ?? undefined);
+const passwordOn = computed(() => state.server?.auth.password !== false);
+const linkSso = useAction(oidcStart, { onSuccess: ({ data }) => data && location.assign(data.url), onError: ({ error }) => report(error) });
+const unlinkSso = useAction(accountOidcUnlink, {
+  onSuccess: ({ data }) => {
+    if (state.session && data) state.session.user = data;
+    toast('Sign-in unlinked', 'success');
+  },
+  onError: ({ error }) => report(error),
+});
+async function confirmUnlink(): Promise<void> {
+  const ok = await confirm({ title: `Unlink ${sso.value?.label}?`, description: 'You sign in with your username and password afterwards.', confirmLabel: 'Unlink', danger: true });
+  if (ok) unlinkSso.execute(undefined);
+}
 const signOutEverywhere = useAction(accountSignOutEverywhere, { onSuccess: () => signOut(), onError: ({ error }) => report(error) });
 
 const keyLabel = ref('Mac');
@@ -325,8 +379,8 @@ const portalKey = useOpeningKey(() => state.settings);
             <div class="flex flex-wrap items-center gap-4 rounded-xl bg-default p-5 ring ring-default">
               <span class="grid size-11 place-items-center rounded-xl bg-(--sel)"><UIcon name="i-lucide-server" class="size-[22px] text-primary" /></span>
               <div class="min-w-0 flex-1">
-                <h3 class="font-semibold">Connected to this server</h3>
-                <div class="text-sm text-muted">{{ origin }} · last synced {{ state.status.lastSync ? relativeTime(state.status.lastSync).toLowerCase() : 'not yet' }}</div>
+                <h3 class="font-semibold">{{ isDirect ? `Syncing with ${bucket?.bucket ?? 'your bucket'}` : 'Connected to this server' }}</h3>
+                <div class="text-sm text-muted">{{ isDirect ? `${bucket?.endpoint ?? ''}${bucket?.prefix ? ` · prefix ${bucket.prefix}` : ''}` : origin }} · last synced {{ state.status.lastSync ? relativeTime(state.status.lastSync).toLowerCase() : 'not yet' }}</div>
               </div>
               <div class="flex gap-5 text-xs text-muted">
                 <div class="flex flex-col"><strong class="text-lg text-default">{{ noteCount }}</strong>notes</div>
@@ -337,6 +391,10 @@ const portalKey = useOpeningKey(() => state.settings);
               <UButton icon="i-lucide-refresh-cw" label="Sync Now" :loading="state.status.phase === 'syncing'" @click="client().syncNow()" />
             </div>
             <UProgress v-if="state.session" :model-value="Math.min(100, (state.session.quota.usedBytes / state.session.quota.limitBytes) * 100)" size="sm" aria-label="Storage used" />
+            <div v-if="isDirect && bucket && (!bucket.writes || !bucket.deletes)" class="flex flex-wrap gap-2">
+              <UBadge v-if="!bucket.writes" color="warning" variant="soft" icon="i-lucide-triangle-alert" label="Conditional Writes: Not Supported" />
+              <UBadge v-if="!bucket.deletes" color="warning" variant="soft" icon="i-lucide-triangle-alert" label="Conditional Deletes: Not Supported" />
+            </div>
             <SettingsCard v-if="state.status.recordErrors.length" :title="`${state.status.recordErrors.length} items will be retried on the next sync`">
               <div v-for="(e, i) in state.status.recordErrors" :key="i" class="py-2 text-sm text-muted">{{ e.message }}</div>
             </SettingsCard>
@@ -351,6 +409,13 @@ const portalKey = useOpeningKey(() => state.settings);
               </SettingsRow>
               <div v-if="!devices.length" class="py-3 text-sm text-muted">No devices have synced yet.</div>
             </SettingsCard>
+            <SettingsCard title="Storage">
+              <SettingsRow :sub="cleanup.caption">
+                <template #label><span class="text-xs/normal text-muted">{{ CLEANUP.footnote }}</span></template>
+                <UButton color="neutral" variant="outline" :label="CLEANUP.button" :disabled="!cleanup.enabled || cleanupBusy" :loading="cleanupBusy" @click="confirmCleanup" />
+              </SettingsRow>
+              <div v-if="cleanupResult" class="py-2 text-xs text-muted" role="status">{{ cleanupResult }}</div>
+            </SettingsCard>
           </template>
 
           <template v-else-if="section === 'security'">
@@ -359,11 +424,14 @@ const portalKey = useOpeningKey(() => state.settings);
               <SettingsRow label="Lock NoteIt" sub="Forgets the key in memory. You'll need your passphrase to open your notes again.">
                 <UButton color="neutral" variant="outline" icon="i-lucide-lock" label="Lock" @click="lock()" />
               </SettingsRow>
-              <SettingsRow label="Sign out & forget this device" sub="Deletes the encrypted offline copy from this browser.">
+              <SettingsRow v-if="isDirect" label="Set up again" sub="Change the bucket or its access key. The current setup stays until the new one works.">
+                <UButton color="neutral" variant="outline" label="Set Up Again…" @click="setUpAgain" />
+              </SettingsRow>
+              <SettingsRow :label="isDirect ? 'Forget this browser' : 'Sign out & forget this device'" :sub="isDirect ? 'Deletes the bucket key and the encrypted offline copy from this browser.' : 'Deletes the encrypted offline copy from this browser.'">
                 <UButton color="error" variant="soft" label="Forget" @click="forget" />
               </SettingsRow>
             </SettingsCard>
-            <SettingsCard title="Password" sub="Your password opens your account. Your notes use your separate encryption passphrase, which never reaches the server.">
+            <SettingsCard v-if="!isDirect" title="Password" sub="Your password opens your account. Your notes use your separate encryption passphrase, which never reaches the server.">
               <UForm ref="passwordForm" :state="passwordValues" :validate-on="[]" class="grid max-w-xl gap-4 py-3 sm:grid-cols-2" @submit="password.submit()">
                 <UFormField label="Current password" name="current">
                   <UInput v-model="passwordValues.current" type="password" autocomplete="current-password" />
@@ -388,6 +456,22 @@ const portalKey = useOpeningKey(() => state.settings);
                 </UFormField>
                 <UButton type="submit" color="neutral" variant="outline" label="Save" :loading="profile.isExecuting.value" class="mb-6" />
               </UForm>
+            </SettingsCard>
+            <SettingsCard v-if="sso" title="Sign-in methods">
+              <SettingsRow v-if="passwordOn" label="Password" :sub="state.session?.user.hasPassword ? 'Change it in Security & devices.' : 'This account has no password.'" />
+              <SettingsRow :label="sso.label" :sub="state.session?.user.oidcLinked ? 'Linked. You can sign in with it.' : 'Not linked.'">
+                <UButton
+                  v-if="state.session?.user.oidcLinked"
+                  color="neutral"
+                  variant="outline"
+                  label="Unlink"
+                  :disabled="!state.session?.user.hasPassword || !passwordOn"
+                  :title="state.session?.user.hasPassword && passwordOn ? undefined : 'Unlinking needs a password on this account.'"
+                  :loading="unlinkSso.isExecuting.value"
+                  @click="confirmUnlink"
+                />
+                <UButton v-else color="neutral" variant="outline" icon="i-lucide-link" :label="`Link ${sso.label}`" :loading="linkSso.isExecuting.value" @click="linkSso.execute({ intent: 'link' })" />
+              </SettingsRow>
             </SettingsCard>
             <SettingsCard title="S3 access keys">
               <template #sub>
@@ -465,7 +549,7 @@ const portalKey = useOpeningKey(() => state.settings);
                   <div class="ni-wordmark">Note<span>It</span> web {{ state.server?.version }}</div>
                   <div class="text-sm text-muted">
                     Free software under the AGPL-3.0-or-later.
-                    <ULink :to="state.server?.sourceUrl" external target="_blank" rel="noopener noreferrer" class="text-primary">Source code</ULink>
+                    <ULink :to="state.server?.sourceUrl ?? state.sourceUrl ?? 'https://github.com/rutbergphilip/noteit'" external target="_blank" rel="noopener noreferrer" class="text-primary">Source code</ULink>
                   </div>
                 </div>
               </div>

@@ -3,11 +3,13 @@ import { type BodyContainer, dailyNotebook, dailyTitle, dayKey, DAILY_NOTEBOOK_N
 import { serverInfo, session as sessionAction, signOut as signOutAction } from '#safe-action/actions';
 import { failureOf, type ServerInfo, type SessionInfo } from '~/utils/actions';
 import { templateTarget } from '~/utils/notebooks';
+import { OIDC_ERRORS, type OidcErrorCode } from '#shared/oidc';
 import { createWorkerClient } from '~/utils/workerClient';
 import { clearJournalKey, clearUnsaved, hasJournalKey, readUnsaved, setJournalKey } from '~/utils/unloadJournal';
+import { ClientConfigError, loadClientConfig } from '~/utils/clientConfig';
 import type { NoteRow, NotebookRow, SmartFolderRow, SyncStatus, UnlockResult } from '~/worker/types';
 
-export type Phase = 'loading' | 'setup' | 'signin' | 'changePassword' | 'unlock' | 'createStore' | 'legacy' | 'ready' | 'serverDown';
+export type Phase = 'loading' | 'setup' | 'signin' | 'changePassword' | 'unlock' | 'createStore' | 'legacy' | 'ready' | 'serverDown' | 'connectDirect' | 'configError';
 export type View =
   | { kind: 'all' }
   | { kind: 'pinned' }
@@ -35,6 +37,14 @@ export function setNotifier(fn: (notice: Notice) => void): void {
 
 const state = reactive({
   phase: 'loading' as Phase,
+  /** From noteit-client.json: a NoteIt server, or direct mode (the browser syncs straight to the user's bucket). */
+  mode: 'server' as 'server' | 'direct',
+  /** Why the client can't start (a bad noteit-client.json). */
+  configError: '',
+  /** Direct mode: the AGPL source link from noteit-client.json. */
+  sourceUrl: undefined as string | undefined,
+  /** Direct mode: this browser has a sealed vault (a bucket set up before). */
+  directVault: false,
   server: undefined as ServerInfo | undefined,
   session: undefined as SessionInfo | undefined,
   deviceName: '',
@@ -89,7 +99,19 @@ const state = reactive({
   inviteToken: '',
   /** The temporary password just used to sign in, kept in memory so the forced change doesn't ask for it again. */
   temporaryPassword: undefined as string | undefined,
+  /** Why the last single sign-on didn't work (the callback names it in the URL fragment). */
+  oidcError: undefined as string | undefined,
 });
+
+/** The OIDC callback's outcome (`#oidc-error=<code>`, `#oidc-linked`), read once and removed from the address. */
+function readOidcFromHash(): void {
+  const params = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const code = params.get('oidc-error');
+  if (code === null && !params.has('oidc-linked')) return;
+  window.history.replaceState(null, '', location.pathname + location.search);
+  if (code !== null) state.oidcError = OIDC_ERRORS[code as OidcErrorCode] ?? OIDC_ERRORS.failed;
+  else toast(`Linked. You can now sign in with ${state.server?.auth.oidc?.label ?? 'single sign-on'}.`, 'success');
+}
 
 function readInviteFromHash(): void {
   const token = new URLSearchParams(location.hash.replace(/^#/, '')).get('invite') ?? '';
@@ -146,6 +168,18 @@ async function trashNote(id: string): Promise<void> {
 
 /** Where the SPA starts: server info, then the session (null when signed out), then the account's next step. */
 async function boot(): Promise<void> {
+  try {
+    const config = await loadClientConfig();
+    state.mode = config.mode;
+    if (config.mode === 'direct') return bootDirect(config.sourceUrl);
+  } catch (e) {
+    if (e instanceof ClientConfigError && e.network) state.phase = 'serverDown';
+    else {
+      state.configError = e instanceof Error ? e.message : String(e);
+      state.phase = 'configError';
+    }
+    return;
+  }
   readInviteFromHash();
   const info = await useAction(serverInfo).executeAsync(undefined);
   if (!info.data) {
@@ -153,6 +187,7 @@ async function boot(): Promise<void> {
     return;
   }
   state.server = info.data;
+  readOidcFromHash();
   if (info.data.needsSetup) {
     state.phase = 'setup';
     return;
@@ -163,6 +198,16 @@ async function boot(): Promise<void> {
     return;
   }
   await enter(current.data ?? undefined);
+}
+
+/** Direct mode (spec §6.4): no server and no account; this browser's vault holds the bucket and its key. */
+async function bootDirect(sourceUrl: string | undefined): Promise<void> {
+  state.sourceUrl = sourceUrl;
+  const init = await client().init({ userId: 'direct', baseUrl: location.origin, direct: true });
+  state.deviceName = init.deviceName;
+  state.hasCache = init.hasCache;
+  state.directVault = !!init.hasVault;
+  state.phase = init.hasVault ? 'unlock' : 'connectDirect';
 }
 
 /** After boot, sign-in, setup or an invite: the session the action returned decides the next screen. */
@@ -188,7 +233,8 @@ async function enter(session: SessionInfo | undefined): Promise<void> {
  * whose save did land before the page went away is skipped.
  */
 async function restoreUnsaved(): Promise<void> {
-  const userId = state.session?.user.id;
+  // Direct mode has no account; its one library per browser uses a fixed owner, as reminders do.
+  const userId = state.mode === 'direct' ? 'direct' : state.session?.user.id;
   if (!userId) return;
   try {
     setJournalKey(userId, await client().journalKey());
@@ -217,12 +263,13 @@ async function restoreUnsaved(): Promise<void> {
 watch(
   () => state.phase,
   (phase) => {
-    if (phase === 'ready' && state.session && !hasJournalKey(state.session.user.id)) void restoreUnsaved().then(refresh);
+    const owner = state.mode === 'direct' ? 'direct' : state.session?.user.id;
+    if (phase === 'ready' && owner && !hasJournalKey(owner)) void restoreUnsaved().then(refresh);
   },
 );
 
-async function unlock(passphrase: string, create = false, enter = true): Promise<UnlockResult> {
-  const result = await client().unlock({ passphrase, create });
+async function unlock(passphrase: string, create = false, enter = true, vaultPassphrase?: string): Promise<UnlockResult> {
+  const result = state.mode === 'direct' ? await client().unlockDirect({ passphrase, ...(vaultPassphrase !== undefined ? { vaultPassphrase } : {}) }) : await client().unlock({ passphrase, create });
   if (result.status === 'ok') {
     await restoreUnsaved();
     if (enter) {
@@ -245,6 +292,15 @@ async function lock(): Promise<void> {
 
 async function signOut(forget = false): Promise<void> {
   clearJournalKey();
+  if (state.mode === 'direct') {
+    // No account to sign out of: "Sign out & forget this device" deletes the vault and the cache.
+    await client().forgetDevice();
+    await bootDirect(state.sourceUrl);
+    state.notes = [];
+    state.notebooks = [];
+    state.selectedId = undefined;
+    return;
+  }
   if (forget) await client().forgetDevice();
   else await client().lock();
   await useAction(signOutAction).executeAsync(undefined);

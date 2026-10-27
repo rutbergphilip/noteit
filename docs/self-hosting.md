@@ -29,7 +29,8 @@ Every release tag `vX.Y.Z` publishes:
 
 The image runs as uid 1000, keeps everything in the `/data` volume, and has a health check on
 `/api/health/live`. The static tarball is the exact client the image serves (see
-[Verifying the client](#verifying-the-client)); the web app still needs the server for sign-in and sync.
+[Verifying the client](#verifying-the-client)). Served on its own it runs in
+[direct mode](#direct-mode-no-server), syncing straight to your own S3 bucket.
 
 ## Run it with Docker
 
@@ -81,7 +82,8 @@ value, for Docker or Compose secrets (the file must be readable by uid 1000).
 | `NOTEIT_DEFAULT_MAX_OBJECTS` | `100000` | Object count for each new account. |
 | `NOTEIT_MAX_OBJECT_MB` | `50` | Largest single upload. Bigger requests are refused while streaming. |
 | `NOTEIT_INVITE_TTL_HOURS` | `72` | How long invite links work. |
-| `NOTEIT_PASSWORD_LOGIN` | `true` | Password sign-in. |
+| `NOTEIT_PASSWORD_LOGIN` | `true` | Password sign-in. `false` leaves only single sign-on, and needs `NOTEIT_OIDC_ISSUER`. |
+| `NOTEIT_OIDC_ISSUER` | — | Turns on single sign-on through your identity provider. See [Single sign-on (OIDC)](#single-sign-on-oidc) for this and the other `NOTEIT_OIDC_*` settings. |
 | `NOTEIT_SOURCE_URL` | this repository | The source link in About (the AGPL source offer). Point it at your fork if you change the code. |
 | `NOTEIT_STORE` | `disk` | Where the encrypted stores live: `disk` (the data volume) or `s3` (an upstream bucket, see [Store notes in an S3 bucket](#store-notes-in-an-s3-bucket)). |
 | `NOTEIT_S3_ENDPOINT`, `NOTEIT_S3_BUCKET` | — | The upstream S3 endpoint URL and bucket, with `NOTEIT_STORE=s3`. |
@@ -90,6 +92,7 @@ value, for Docker or Compose secrets (the file must be readable by uid 1000).
 | `NOTEIT_S3_PREFIX` | (bucket root) | Key prefix in the bucket; stores go under `<prefix>/users/<USER-ID>/`. |
 | `NOTEIT_S3_PATH_STYLE` | `true` | Path-style URLs; `false` for virtual-hosted buckets (`bucket.endpoint`). |
 | `NOTEIT_STORE_TIMEOUT_S` | `120` | Timeout of each upstream request. |
+| `NOTEIT_MODE` | `server` | `static` serves only the client, in [direct mode](#direct-mode-no-server): no accounts, no `/api` except the health checks, no `/s3`, nothing written to `/data`. |
 | `NOTEIT_DATA_DIR` | `/data` | Where everything is stored. The image sets it; change it only when running without Docker. |
 | `PORT`, `HOST` | `3000`, `0.0.0.0` | Listen address. |
 | `NOTEIT_VERSION`, `NOTEIT_COMMIT` | set by the image | Shown in About and checked by the client verifier. Don't override them. |
@@ -123,6 +126,127 @@ Other things to know:
   `502 storeUnavailable`. The container is never restarted for this, since the health check is liveness only.
 - Give the key access to that bucket (and prefix) only. Backups of the volume no longer include the stores; back up
   the bucket (versioning, replication or rclone) as well.
+
+## Direct mode (no server)
+
+The web app can also run without a NoteIt server: the browser syncs straight to an S3-compatible bucket you own,
+the same store the Mac's S3 sync uses. A Mac and a browser can share one bucket (and key prefix). There are no
+accounts: it's one person's client for one bucket or prefix. Families use one bucket or prefix per person, each
+with its own key.
+
+### Serve the static client
+
+Any static host works. Unpack `noteit-web-static-X.Y.Z.tar.gz` from the release; it holds
+`noteit-client.json` = `{"mode": "direct"}`, which makes it start in direct mode. You may add
+`"sourceUrl": "https://…"` (the source link in About, for a fork); nothing else is allowed, and the client refuses to
+start with anything else in it. That file isn't in the signed hashes, so `scripts/verify-web-client.mjs` checks it
+against its schema instead.
+
+The page carries its own `<meta>` Content-Security-Policy, which lets it reach any `https:` bucket (and
+`http://localhost` for testing). Add the headers a `<meta>` policy can't set, and serve `200.html` for unknown
+paths:
+
+```caddyfile
+notes.example.com {
+	root * /srv/noteit-web-static-0.7.0
+	try_files {path} /200.html
+	header {
+		Content-Security-Policy "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Cross-Origin-Opener-Policy same-origin
+	}
+	file_server
+}
+```
+
+```nginx
+server {
+    server_name notes.example.com;
+    root /srv/noteit-web-static-0.7.0;
+    location / { try_files $uri /200.html; }
+    add_header Content-Security-Policy "frame-ancestors 'none'; object-src 'none'; base-uri 'none'" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Cross-Origin-Opener-Policy same-origin always;
+}
+```
+
+A bucket website (S3, R2, B2) works too: upload the files, set `index.html` as the index and `200.html` as the error
+document. Or run the Docker image with `NOTEIT_MODE=static`, which serves the same files with the full policy as a
+header and nothing else.
+
+Serve it over HTTPS: browsers only give Web Crypto to secure origins (`http://localhost` aside).
+
+### Connect a bucket
+
+Open the site and fill in the endpoint, region, bucket, path-style (on for MinIO, Garage and most self-hosted
+servers), an optional key prefix (the same as on your Mac, if you set one there), and an access key. NoteIt checks
+the bucket before saving anything:
+
+1. it lists the prefix, which shows the bucket allows this site and the key works;
+2. it uploads a small check object with `If-None-Match: *` and reads its `ETag`, then deletes it;
+3. it runs the same conditional request check the Mac runs, and shows "Conditional Writes: Not Supported" or
+   "Conditional Deletes: Not Supported" when the provider doesn't honour them (sync still works, more slowly and
+   keeping earlier copies of notes).
+
+A failed step names what's missing, such as "origin not allowed", "PUT or If-None-Match not allowed" or "ETag not
+exposed", and shows the CORS rules below. Then enter your sync passphrase (or choose one for an empty bucket).
+
+The access key is stored only in this browser's IndexedDB, encrypted with your sync passphrase (AES-256-GCM, key from
+PBKDF2-SHA256 with 210,000 iterations and a salt made on the device); it never goes into cookies, `localStorage` or
+a URL, and requests carry only SigV4 signatures. Unlocking opens it with the passphrase, then your notes. If you
+changed the passphrase on another device, unlocking asks for the current one (or the previous and the current one,
+under "Passphrase changed on another device?") and re-encrypts the key with it; "Set up again" starts over and
+replaces the saved key only once the new setup works. Settings › Security › Forget this browser deletes the key and
+the offline copy.
+
+Give the browser a **bucket-scoped key** that can only read, write, delete and list that one bucket: an AWS IAM
+policy on `arn:aws:s3:::my-notes` and `arn:aws:s3:::my-notes/*`, an R2 API token with Object Read & Write for one
+bucket, a B2 application key restricted to the bucket, or a MinIO user with a bucket policy. Script running on the
+site, or whoever controls the static host, could use the key to delete or roll back objects (never to read notes
+without the passphrase), so use a host you run or trust.
+
+### Bucket CORS rules
+
+The bucket must allow the site's origin (exactly, not `*`), the methods `GET`, `PUT`, `HEAD` and `DELETE`, the request
+headers `authorization`, `content-type`, `if-match`, `if-none-match`, `x-amz-content-sha256` and `x-amz-date`, and
+**expose `ETag`**. Error responses must carry the CORS headers too (all the providers below do).
+
+- **AWS S3**: `aws s3api put-bucket-cors --bucket my-notes --cors-configuration file://cors.json` with
+
+  ```json
+  {"CORSRules": [{
+    "AllowedOrigins": ["https://notes.example.com"],
+    "AllowedMethods": ["GET", "PUT", "HEAD", "DELETE"],
+    "AllowedHeaders": ["authorization", "content-type", "if-match", "if-none-match",
+                       "x-amz-content-sha256", "x-amz-date"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }]}
+  ```
+- **Cloudflare R2**: bucket › Settings › CORS Policy in the dashboard, which takes the rules without the wrapper (or
+  the AWS command with `--endpoint-url https://<account-id>.r2.cloudflarestorage.com`):
+
+  ```json
+  [{"AllowedOrigins": ["https://notes.example.com"], "AllowedMethods": ["GET", "PUT", "HEAD", "DELETE"],
+    "AllowedHeaders": ["authorization", "content-type", "if-match", "if-none-match",
+                       "x-amz-content-sha256", "x-amz-date"],
+    "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3600}]
+  ```
+- **MinIO**: CORS is server-wide (per-bucket `PutBucketCors` isn't implemented in the community edition). Set
+  `MINIO_API_CORS_ALLOW_ORIGIN=https://notes.example.com` (the default is `*`) and restart; MinIO already allows the
+  methods and exposes `ETag`.
+- **Backblaze B2**, with the `b2` CLI (v4):
+
+  ```sh
+  b2 bucket update --cors-rules '[{"corsRuleName": "noteit",
+    "allowedOrigins": ["https://notes.example.com"],
+    "allowedOperations": ["s3_get", "s3_head", "s3_put", "s3_delete"],
+    "allowedHeaders": ["authorization", "content-type", "if-match", "if-none-match",
+                       "x-amz-content-sha256", "x-amz-date"],
+    "exposeHeaders": ["ETag"], "maxAgeSeconds": 3600}]' my-notes allPrivate
+  ```
 
 ## Reverse proxy
 
@@ -215,6 +339,81 @@ closed until then.
 The token works once; the server deletes it after setup. Invite other people from Settings › Users (admins see
 it): an invite is a link that works for `NOTEIT_INVITE_TTL_HOURS`. Each person chooses their own password and
 passphrase, and nobody can read anyone else's notes.
+
+## Single sign-on (OIDC)
+
+NoteIt can sign people in through an OpenID Connect identity provider such as Authentik, Authelia, Keycloak or
+Pocket ID. It's off unless `NOTEIT_OIDC_ISSUER` is set. Single sign-on only opens the NoteIt account: notes still
+need each person's own encryption passphrase, which the identity provider never sees.
+
+In the provider, create a confidential OpenID Connect client (authorization code flow, PKCE with S256) with the
+redirect URI `https://notes.example.com/api/oidc/callback`. Then:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `NOTEIT_OIDC_ISSUER` | — | The issuer URL; NoteIt reads `<issuer>/.well-known/openid-configuration`. Must be `https://` (plain `http://` only for `localhost`). |
+| `NOTEIT_OIDC_CLIENT_ID`, `NOTEIT_OIDC_CLIENT_SECRET` (`_FILE`) | — | The client's credentials. The secret is sent as `client_secret_post`. |
+| `NOTEIT_OIDC_REDIRECT_URL` | `<NOTEIT_PUBLIC_URL>/api/oidc/callback` | Only if the provider must use another URL. |
+| `NOTEIT_OIDC_SCOPES` | `openid profile` | Add the scope your provider releases groups with, such as `groups`. |
+| `NOTEIT_OIDC_LABEL` | `Single Sign-On` | The button reads "Sign In With <label>". |
+| `NOTEIT_OIDC_GROUPS_CLAIM` | `groups` | Where the groups are, as a dot path (`realm_access.roles`). Read from the ID token, or from userinfo when it isn't there. |
+| `NOTEIT_OIDC_AUTO_PROVISION` | `false` | `true` creates an account the first time someone signs in, but only for members of `NOTEIT_OIDC_ALLOWED_GROUPS` (required with it). |
+| `NOTEIT_OIDC_ALLOWED_GROUPS` | — | Comma-separated groups that may get an account by signing in. |
+| `NOTEIT_OIDC_ADMIN_GROUPS` | — | Comma-separated groups whose members are NoteIt admins. When set, the role follows the groups at every single sign-on (the last admin is never demoted). Unset: roles are managed in NoteIt. |
+
+How accounts are matched and created:
+
+- Accounts are found by the provider's issuer and subject (`sub`), never by email or username, which can change.
+  The name and username claims only suggest a display name and username.
+- The first admin can be created with "Set Up With <label>" on the setup page; it still needs the setup token.
+- An invite link offers "Create Account With <label>", which links the new account to that sign-in.
+- Someone who already has an account links a sign-in in Settings › Account › Sign-in methods, and can unlink it
+  again if the account has a password.
+- Anyone else gets "No NoteIt account is linked to this sign-in. Ask your admin for an invite.", unless
+  auto-provisioning is on and they are in an allowed group. Disabled accounts can't sign in either way.
+- Signing out of NoteIt doesn't sign you out of the provider.
+
+The server checks the issuer at startup and logs the result. If the provider isn't reachable yet (for example
+another container still starting), it tries again at the next sign-in.
+
+Provider examples, for `https://notes.example.com`:
+
+- **Authentik**: Applications › Providers › Create › OAuth2/OpenID Provider, client type Confidential, redirect URI
+  as above; then an Application using it. The issuer is `https://auth.example.com/application/o/<app-slug>/`.
+  Authentik's `profile` scope already includes `groups`.
+
+  ```sh
+  NOTEIT_OIDC_ISSUER=https://auth.example.com/application/o/noteit/
+  NOTEIT_OIDC_CLIENT_ID=… NOTEIT_OIDC_CLIENT_SECRET=… NOTEIT_OIDC_LABEL=Authentik
+  NOTEIT_OIDC_ADMIN_GROUPS=noteit-admins
+  ```
+- **Authelia** (`configuration.yml`; the issuer is Authelia's own URL):
+
+  ```yaml
+  identity_providers:
+    oidc:
+      clients:
+        - client_id: noteit
+          client_name: NoteIt
+          client_secret: '$pbkdf2-sha512$…'   # authelia crypto hash generate pbkdf2
+          redirect_uris: ['https://notes.example.com/api/oidc/callback']
+          scopes: [openid, profile, groups]
+          require_pkce: true
+          pkce_challenge_method: S256
+          token_endpoint_auth_method: client_secret_post
+          authorization_policy: two_factor
+  ```
+  with `NOTEIT_OIDC_ISSUER=https://auth.example.com` and `NOTEIT_OIDC_SCOPES="openid profile groups"`.
+- **Keycloak**: in the realm, Clients › Create client, Client authentication on, Standard flow, the redirect URI
+  as above, and PKCE method S256 under Advanced. Groups need a mapper: Client scopes › `<client>-dedicated` › Add
+  mapper › Group Membership, token claim name `groups`, Full group path off. The issuer is
+  `https://keycloak.example.com/realms/<realm>`.
+- **Pocket ID**: OIDC Clients › Add, callback URL as above (PKCE is supported). The issuer is Pocket ID's URL,
+  `https://id.example.com`; add `groups` to `NOTEIT_OIDC_SCOPES` for group rules.
+
+To use only single sign-on, set `NOTEIT_PASSWORD_LOGIN=false` after the admin can sign in with it. Password
+sign-in, password setup, password invites and new users with temporary passwords are then refused; invite people
+with links instead.
 
 ## Sync your Mac with the server
 

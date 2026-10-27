@@ -34,8 +34,18 @@ services:
       # Largest single upload; match the reverse proxy's body size limit.
       # NOTEIT_MAX_OBJECT_MB: "50"
       # NOTEIT_INVITE_TTL_HOURS: "72"
-      # Password sign-in (on by default).
+      # Password sign-in (on by default). "false" leaves only single sign-on.
       # NOTEIT_PASSWORD_LOGIN: "true"
+      # Single sign-on through an OpenID Connect provider (docs/self-hosting.md#single-sign-on-oidc).
+      # NOTEIT_OIDC_ISSUER: "https://auth.example.com/application/o/noteit/"
+      # NOTEIT_OIDC_CLIENT_ID: "noteit"
+      # NOTEIT_OIDC_CLIENT_SECRET_FILE: /run/secrets/noteit_oidc_secret
+      # NOTEIT_OIDC_LABEL: "Authentik"
+      # NOTEIT_OIDC_SCOPES: "openid profile"
+      # NOTEIT_OIDC_GROUPS_CLAIM: "groups"
+      # NOTEIT_OIDC_AUTO_PROVISION: "false"
+      # NOTEIT_OIDC_ALLOWED_GROUPS: "noteit"
+      # NOTEIT_OIDC_ADMIN_GROUPS: "noteit-admins"
       # Keep the encrypted stores in an S3 bucket instead of /data (docs/self-hosting.md). The upstream must
       # support conditional requests; the server checks at startup and refuses one that doesn't.
       # NOTEIT_STORE: "s3"

@@ -50,8 +50,9 @@ export function stopReminders(): void {
 
 async function check(): Promise<void> {
   const { state, client, openNote, toast } = useNoteit();
-  if (state.phase !== 'ready' || !state.session) return;
-  const key = `noteit-reminders-${state.session.user.id}`;
+  const owner = state.mode === 'direct' ? 'direct' : state.session?.user.id;
+  if (state.phase !== 'ready' || !owner) return;
+  const key = `noteit-reminders-${owner}`;
   const now = Date.now();
   // Only reminders whose time came since the last check (at most a day back) ring, never a backlog on first run.
   const last = store<number | undefined>(`${key}-last`, undefined);

@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import {
+  type CleanupReport,
   connect,
   decodeManifest,
   encodeJson,
@@ -8,6 +9,8 @@ import {
   openSession,
   randomBytes,
   sha256Hex,
+  S3Backend,
+  type StorageBackend,
   type StoreSession,
   type SyncCipher,
   StorageError,
@@ -17,6 +20,8 @@ import {
   utf8,
 } from '@noteit/core';
 import type { BodyContainer } from '@noteit/doc';
+import { corsCheck, type CorsResult } from './corsCheck';
+import { type DirectCredentials, normalizeCredentials, openCredentials, sealCredentials, VaultError, type VaultRecord } from './credentialVault';
 import { Idb } from './idb';
 import { WebLocalStore, WebStateStore } from './localStore';
 import type { DeviceView, OpenedNote, Snapshot, SyncStatus, UnlockResult, WorkerEvent } from './types';
@@ -34,7 +39,10 @@ let userId = '';
 let baseUrl = '';
 let deviceID = '';
 let deviceName = '';
-let backend: HttpProxyBackend | undefined;
+let backend: StorageBackend | undefined;
+/** Direct mode (spec §6.4): the browser talks to the user's bucket with the vault's key; no NoteIt server. */
+let direct = false;
+let directCreds: DirectCredentials | undefined;
 let local: WebLocalStore | undefined;
 let state: WebStateStore | undefined;
 /** The unlocked store's cipher, for the unload journal's key. */
@@ -70,9 +78,10 @@ function defaultDeviceName(): string {
 
 // MARK: lifecycle
 
-async function init(args: { userId: string; baseUrl: string }): Promise<{ deviceName: string; hasCache: boolean; hasStore?: boolean }> {
+async function init(args: { userId: string; baseUrl: string; direct?: boolean }): Promise<{ deviceName: string; hasCache: boolean; hasStore?: boolean; hasVault?: boolean }> {
   userId = args.userId;
   baseUrl = args.baseUrl;
+  direct = !!args.direct;
   db?.close();
   db = await Idb.open(`noteit-${userId}`);
   deviceID = (await db.get<string>('kv', 'deviceID')) ?? '';
@@ -81,7 +90,8 @@ async function init(args: { userId: string; baseUrl: string }): Promise<{ device
     await db.put('kv', 'deviceID', deviceID);
   }
   deviceName = (await db.get<string>('kv', 'deviceName')) ?? defaultDeviceName();
-  backend = new HttpProxyBackend({ baseUrl, fetch: (i, init) => fetch(i, { ...init, credentials: 'same-origin' }) });
+  backend = direct ? undefined : new HttpProxyBackend({ baseUrl, fetch: (i, init) => fetch(i, { ...init, credentials: 'same-origin' }) });
+  directCreds = undefined;
   channel?.close();
   channel = new BroadcastChannel(`noteit-${userId}`);
   // Another tab of this browser wrote to the shared library: reload, so this tab's editor and list see it now.
@@ -92,15 +102,89 @@ async function init(args: { userId: string; baseUrl: string }): Promise<{ device
       void setStatus({});
     }
   };
+  const hasCache = (await db.get('kv', 'manifest')) !== undefined;
+  // Direct mode: the bucket and its key are sealed in the vault until the passphrase opens it.
+  if (direct) return { deviceName, hasCache, hasVault: (await db.get('kv', 'vault')) !== undefined };
   // Whether the account has a library yet, so a new account sees "Encrypt Your Notes" rather than an unlock screen
   // that would only discard the passphrase. Unknown (offline) falls back to the unlock screen.
   let hasStore: boolean | undefined;
   try {
-    hasStore = await storeExists(backend);
+    hasStore = await storeExists(backend!);
   } catch {
     hasStore = undefined;
   }
-  return { deviceName, hasCache: (await db.get('kv', 'manifest')) !== undefined, ...(hasStore === undefined ? {} : { hasStore }) };
+  return { deviceName, hasCache, ...(hasStore === undefined ? {} : { hasStore }) };
+}
+
+// MARK: direct mode
+
+function s3For(creds: DirectCredentials): S3Backend {
+  const c = normalizeCredentials(creds);
+  return new S3Backend({ endpoint: c.endpoint, region: c.region, bucket: c.bucket, prefix: c.prefix, pathStyle: c.pathStyle, accessKeyId: c.accessKeyId, secretAccessKey: c.secretAccessKey });
+}
+
+/** The connect wizard's check (spec §6.4): CORS and credentials, then whether the bucket already holds a store. */
+async function checkDirect(creds: DirectCredentials): Promise<{ cors: CorsResult; hasStore?: boolean }> {
+  let s3: S3Backend;
+  try {
+    s3 = s3For(creds);
+  } catch (e) {
+    return { cors: { ok: false, problem: 'bucket', hint: 'That key prefix or endpoint is not valid.', detail: e instanceof Error ? e.message : String(e) } };
+  }
+  const cors = await corsCheck(s3);
+  if (!cors.ok) return { cors };
+  return { cors, hasStore: await storeExists(s3) };
+}
+
+/** Finishes the wizard: opens (or creates) the store, and only then seals the vault, replacing any older one. */
+async function connectDirect(args: { creds: DirectCredentials; passphrase: string; create: boolean }): Promise<UnlockResult> {
+  if (!db || !direct) throw new Error('not initialized');
+  backend = s3For(args.creds);
+  const result = await unlock({ passphrase: args.passphrase, create: args.create });
+  // A store without noteit-doc yet (legacy) is still this bucket: keep it, and the recheck continues on its own.
+  if (result.status !== 'ok' && result.status !== 'legacy') return result;
+  directCreds = normalizeCredentials(args.creds);
+  await db.put('kv', 'vault', await sealCredentials(args.passphrase, directCreds));
+  return result;
+}
+
+/**
+ * Unlock in direct mode: the vault, then the store, both with the passphrase. After a passphrase change on another
+ * device the vault still opens with the previous one: pass it as `vaultPassphrase` and the current one as
+ * `passphrase`, and the vault is resealed under the current one once it opens the store. Never writes to the store.
+ */
+async function unlockDirect(args: { passphrase: string; vaultPassphrase?: string }): Promise<UnlockResult> {
+  if (!db || !direct) throw new Error('not initialized');
+  const record = await db.get<VaultRecord>('kv', 'vault');
+  if (!record) return { status: 'error', kind: 'noVault', message: 'This browser has no bucket set up.' };
+  let creds: DirectCredentials;
+  try {
+    creds = await openCredentials(args.vaultPassphrase ?? args.passphrase, record);
+  } catch (e) {
+    if (e instanceof VaultError && e.kind === 'wrongPassphrase') return { status: 'error', kind: args.vaultPassphrase !== undefined ? 'wrongPreviousPassphrase' : 'wrongPassphrase', message: 'Wrong passphrase' };
+    throw e;
+  }
+  backend = s3For(creds);
+  const result = await unlock({ passphrase: args.passphrase, create: false });
+  if (result.status === 'error' && result.kind === 'wrongPassphrase' && args.vaultPassphrase === undefined) {
+    // The vault opened, so this was the passphrase this browser knew; the store has another one now.
+    return { status: 'error', kind: 'passphraseChanged', message: 'Your sync passphrase was changed on another device. Enter the current one.' };
+  }
+  if (result.status !== 'ok') return result;
+  directCreds = creds;
+  if (args.vaultPassphrase !== undefined && args.vaultPassphrase !== args.passphrase) {
+    // Write the new record first; it replaces the old one in the same put.
+    await db.put('kv', 'vault', await sealCredentials(args.passphrase, creds));
+  }
+  return result;
+}
+
+/** What Settings shows about the bucket (never the secret). */
+async function directInfo(): Promise<{ endpoint: string; bucket: string; prefix: string; region: string; writes: boolean; deletes: boolean } | undefined> {
+  if (!directCreds || !(backend instanceof S3Backend)) return undefined;
+  await backend.verifyConditionals();
+  const { endpoint, bucket, prefix, region } = directCreds;
+  return { endpoint, bucket, prefix, region, ...backend.capabilities };
 }
 
 function errorResult(e: unknown): UnlockResult {
@@ -186,6 +270,10 @@ function lock(): void {
   state = undefined;
   cipher = undefined;
   pendingPassphrase = undefined;
+  if (direct) {
+    backend = undefined;
+    directCreds = undefined;
+  }
   void setStatus({ phase: 'locked', recordErrors: [] });
 }
 
@@ -247,7 +335,8 @@ async function syncNow(): Promise<void> {
       }
       const offline = e instanceof StorageError && e.kind === 'network';
       const unauthorized = e instanceof StorageError && e.kind === 'unauthorized';
-      await setStatus({ phase: offline ? 'offline' : 'error', detail: unauthorized ? 'signedOut' : e instanceof Error ? e.message : String(e) });
+      const detail = unauthorized ? (direct ? 'The bucket refused the access key. Check it in the bucket provider, then set up this browser again.' : 'signedOut') : e instanceof Error ? e.message : String(e);
+      await setStatus({ phase: offline ? 'offline' : 'error', detail });
     }
   };
   const locks = (navigator as unknown as { locks?: LockManager }).locks;
@@ -328,6 +417,10 @@ const api = {
   init,
   close,
   unlock,
+  checkDirect,
+  connectDirect,
+  unlockDirect,
+  directInfo,
   recheckLegacy,
   lock: async () => lock(),
   journalKey,
@@ -372,6 +465,20 @@ const api = {
   devices: async (): Promise<DeviceView[]> => {
     if (!engine) return [];
     return (await engine.devices()).map((d) => ({ deviceID: d.deviceID, name: d.name, lastSync: (d.lastSync + 978307200) * 1000, ...(d.platform ? { platform: d.platform } : {}), current: d.deviceID === deviceID }));
+  },
+  /** Whether the storage has atomic conditional writes (S3 checks this with its canary). */
+  cleanupAvailable: async () => (engine ? engine.cleanupAvailable() : false),
+  /** "Clean Up Unused Storage…", only after the user confirmed it; held under the sync lock like a pass. */
+  cleanUpUnusedStorage: async () => {
+    const e = engine;
+    if (!e) throw new Error('locked');
+    if (running) await running.catch(() => undefined);
+    const locks = (navigator as unknown as { locks?: LockManager }).locks;
+    const run = () => e.cleanUpUnusedStorage();
+    const report = await (locks ? (locks.request(`noteit-sync-${userId}`, run) as unknown as Promise<CleanupReport>) : run());
+    // The cleanup ran a full pass first.
+    await setStatus({ lastSync: Date.now() });
+    return report;
   },
   setDeviceName: async (name: string) => {
     deviceName = name.trim() || defaultDeviceName();

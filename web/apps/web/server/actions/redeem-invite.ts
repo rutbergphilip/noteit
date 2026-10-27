@@ -11,8 +11,10 @@ export default publicClient
     inviteInvalid: 'This invite is no longer valid.',
     usernameTaken: 'That username is taken.',
     rateLimited: 'Too many attempts. Try again in a minute.',
+    passwordLoginDisabled: 'Password sign-in is turned off on this server. Use the sign-in button instead.',
   })
   .action(async ({ parsedInput, ctx: { noteit }, event, fail }) => {
+    if (!noteit.cfg.passwordLogin) return fail('passwordLoginDisabled');
     if (noteit.setupLimiter.hit(`invite:${clientIp(event, noteit.cfg)}`)) return fail('rateLimited');
     const passwordHash = await hashPassword(parsedInput.password);
     const user = await noteit.accounts.mutate((f) => {

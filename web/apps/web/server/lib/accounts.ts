@@ -22,6 +22,8 @@ export interface User {
   role: 'admin' | 'user';
   status: 'active' | 'disabled' | 'deleting';
   passwordHash?: string;
+  /** The linked OpenID Connect identity (spec §7.2); accounts are found by it, never by email. */
+  oidc?: { issuer: string; sub: string };
   sessionEpoch: number;
   mustChangePassword: boolean;
   quotaBytes: number;

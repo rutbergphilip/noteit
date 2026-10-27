@@ -7,8 +7,9 @@ import { adminClient } from '../../utils/action-client';
 /** A new account with a one-time temporary password; the user must choose their own on first sign-in. */
 export default adminClient
   .schema(createUserInput)
-  .errors({ usernameTaken: 'That username is taken.' })
+  .errors({ usernameTaken: 'That username is taken.', passwordLoginDisabled: 'Password sign-in is turned off on this server. Create an invite link instead.' })
   .action(async ({ parsedInput, ctx: { noteit }, fail }) => {
+    if (!noteit.cfg.passwordLogin) return fail('passwordLoginDisabled');
     const temporaryPassword = randomBytes(12).toString('base64url');
     const passwordHash = await hashPassword(temporaryPassword);
     const user = await noteit.accounts.mutate((f) => {

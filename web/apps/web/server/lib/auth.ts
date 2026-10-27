@@ -32,7 +32,7 @@ export function sessionUser(event: H3Event, ctx: ServerContext): User | undefine
 }
 
 export function publicUser(u: User) {
-  return { id: u.id, username: u.username, displayName: u.displayName, role: u.role, mustChangePassword: u.mustChangePassword, oidcLinked: false };
+  return { id: u.id, username: u.username, displayName: u.displayName, role: u.role, mustChangePassword: u.mustChangePassword, oidcLinked: !!u.oidc, hasPassword: !!u.passwordHash };
 }
 
 export async function sessionView(ctx: ServerContext, user: User) {
@@ -43,14 +43,14 @@ export async function sessionView(ctx: ServerContext, user: User) {
   };
 }
 
-export function newUser(ctx: ServerContext, init: { username: string; displayName?: string | undefined; role: User['role']; passwordHash: string }, extra: Partial<User> = {}): User {
+export function newUser(ctx: ServerContext, init: { username: string; displayName?: string | undefined; role: User['role']; passwordHash: string | undefined }, extra: Partial<User> = {}): User {
   return {
     id: newUserId(),
     username: init.username,
     displayName: init.displayName || init.username,
     role: init.role,
     status: 'active',
-    passwordHash: init.passwordHash,
+    ...(init.passwordHash ? { passwordHash: init.passwordHash } : {}),
     sessionEpoch: 1,
     mustChangePassword: false,
     quotaBytes: ctx.cfg.defaultQuotaBytes,

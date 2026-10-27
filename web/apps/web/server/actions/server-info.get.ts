@@ -7,5 +7,5 @@ export default publicClient.action(({ ctx: { noteit } }) => ({
   sourceUrl: noteit.cfg.sourceUrl,
   needsSetup: noteit.accounts.isEmpty,
   storage: noteit.cfg.store,
-  auth: { password: noteit.cfg.passwordLogin, oidc: null },
+  auth: { password: noteit.cfg.passwordLogin, oidc: noteit.cfg.oidc ? { label: noteit.cfg.oidc.label } : null },
 }));
