@@ -194,7 +194,7 @@ const item = (active: boolean) => [
       />
       <UButton color="neutral" variant="outline" class="justify-start gap-2 rounded-[10px] p-2.5 text-left text-xs/snug font-normal text-muted ring-(--line)" @click="state.settings = true">
         <UIcon name="i-lucide-server" class="size-[15px] shrink-0" />
-        <span>This server · encrypted<br /><span class="opacity-80">Last sync {{ state.status.lastSync ? relativeTime(state.status.lastSync).toLowerCase() : 'pending' }}</span></span>
+        <span>This server · encrypted<br /><span class="text-dimmed">Last sync {{ state.status.lastSync ? relativeTime(state.status.lastSync).toLowerCase() : 'pending' }}</span></span>
       </UButton>
     </template>
   </UDashboardSidebar>

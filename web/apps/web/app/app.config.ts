@@ -7,6 +7,12 @@ export default defineAppConfig({
     },
     button: {
       slots: { base: 'font-semibold transition-colors duration-150' },
+      // Hover and press use the deeper accent (--acct) instead of fading the primary to 75%, which drops a white
+      // label (or violet link text) under 4.5:1.
+      compoundVariants: [
+        { color: 'primary', variant: 'solid', class: 'hover:bg-(--acct) active:bg-(--acct)' },
+        { color: 'primary', variant: 'link', class: 'hover:text-(--acct) active:text-(--acct)' },
+      ],
     },
     input: {
       slots: { root: 'w-full' },

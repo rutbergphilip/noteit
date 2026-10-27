@@ -5,15 +5,18 @@ import { useNoteit } from '~/composables/useNoteit';
 
 const { state, createNote, setQuery, lock, signOut, setTheme } = useNoteit();
 
-const initials = computed(() => {
-  const name = state.session?.user.displayName || state.session?.user.username || '?';
-  return name
+const userName = computed(() => state.session?.user.displayName || state.session?.user.username || '?');
+const initials = computed(() =>
+  userName.value
     .split(/\s+/)
     .map((p) => p[0])
     .join('')
     .slice(0, 2)
-    .toUpperCase();
-});
+    .toUpperCase(),
+);
+
+/** Names the user and keeps the initials the button shows, so speech input can say what it sees (WCAG 2.5.3). */
+const accountLabel = computed(() => `Account: ${userName.value}, ${initials.value}`);
 
 let searchTimer: ReturnType<typeof setTimeout> | undefined;
 const search = ref(state.query);
@@ -93,7 +96,7 @@ function home(): void {
           <UButton class="max-md:hidden" color="neutral" variant="ghost" size="lg" icon="i-lucide-sliders-horizontal" aria-label="Settings" @click="state.settings = true" />
         </UTooltip>
         <UDropdownMenu :items="accountItems" :content="{ align: 'end', sideOffset: 8 }" :ui="{ content: 'w-60' }">
-          <UButton color="neutral" variant="ghost" square class="rounded-full p-0.5" aria-label="Account">
+          <UButton color="neutral" variant="ghost" square class="rounded-full p-0.5" :aria-label="accountLabel">
             <UAvatar :text="initials" size="md" class="bg-(--avatar) text-xs font-bold text-white" :ui="{ fallback: 'text-white' }" />
           </UButton>
         </UDropdownMenu>

@@ -10,13 +10,14 @@
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
 
-  /* primary: the design's violet accent (500 = light --acc, 400 = dark --acc, 600 = --acct) */
+  /* primary: the design's violet accent (500 = light --acc, 400 = dark --acc, 600 = --acct); 500 is a shade deeper
+     than the design's #6e5bff so white labels and violet text on the sidebar grey reach 4.5:1 (WCAG AA) */
   --color-brand-50: #f3f1ff;
   --color-brand-100: #e9e5ff;
   --color-brand-200: #d5ceff;
   --color-brand-300: #b6aaff;
   --color-brand-400: #8f80ff;
-  --color-brand-500: #6e5bff;
+  --color-brand-500: #6450f2;
   --color-brand-600: #5443db;
   --color-brand-700: #4535b8;
   --color-brand-800: #392e94;
@@ -45,11 +46,11 @@
   --page: #f3f2f7;
   --ink: #1d1d22;
   --ink2: #62626e;
-  --ink3: #8c8c98;
+  --ink3: #6c6c78; /* design #8c8c98, darkened to 4.5:1 on --side */
   --line: rgba(20, 20, 40, 0.1);
   --line-strong: rgba(20, 20, 40, 0.14);
   --fill: rgba(20, 20, 40, 0.05);
-  --acc: #6e5bff;
+  --acc: #6450f2;
   --acct: #5443db;
   --onacc: #ffffff;
   --sel: rgba(110, 91, 255, 0.12);
@@ -104,7 +105,7 @@
   --page: #151518;
   --ink: #f1f1f4;
   --ink2: #a9a9b5;
-  --ink3: #7d7d89;
+  --ink3: #8e8e9a; /* design #7d7d89, lightened to 4.5:1 on --code */
   --line: rgba(255, 255, 255, 0.1);
   --line-strong: rgba(255, 255, 255, 0.16);
   --fill: rgba(255, 255, 255, 0.06);
@@ -149,7 +150,7 @@
 }
 /* Warnings read as the design's warm ink, not Tailwind's bright amber. */
 :root {
-  --ui-warning: #a15c00;
+  --ui-warning: #8a4f00;
 }
 .dark {
   --ui-warning: #f5c26b;
