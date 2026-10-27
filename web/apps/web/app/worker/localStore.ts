@@ -59,6 +59,11 @@ import {
   findMentions,
   linkMentions,
   rewriteLinkText,
+  plainLines,
+  searchHighlightRanges,
+  searchSnippet,
+  type Snippet,
+  type TextRange,
   mentionsAreSearched,
   noteLink,
   reminderId,
@@ -313,6 +318,30 @@ export class WebLocalStore implements SyncLocalStore {
     if (!q.hasTextTerms) return hits.map((d) => d.row.id);
     const docs = hits.map((d) => ({ foldedText: d.search, foldedTitle: searchFold(d.row.title), tags: d.row.tags, isPinned: d.row.isPinned, updatedAt: new Date(d.row.updatedAt) }));
     return rankSearch(docs, q, searchFold(query), now).map((i) => hits[i]!.row.id);
+  }
+
+  /**
+   * Title highlights and a body snippet for the first 150 hits (native NoteStore.search, decorated): the window of
+   * the text after the title with the most search words, 140 characters long.
+   */
+  searchDecorations(query: string, ids: Uuid[]): Record<Uuid, { title: TextRange[]; snippet?: Snippet }> {
+    const terms = parseQuery(query).highlightTerms;
+    const out: Record<Uuid, { title: TextRange[]; snippet?: Snippet }> = {};
+    if (!terms.length) return out;
+    ids.slice(0, 150).forEach((id) => {
+      const d = this.derived.get(id);
+      if (!d) return;
+      const entry: { title: TextRange[]; snippet?: Snippet } = { title: searchHighlightRanges(terms, d.row.title) };
+      const doc = d.row.kind === 'doc' ? this.getNote(id)?.container?.doc : undefined;
+      if (doc) {
+        const plain = plainLines(doc).join('\n').replace(/^\s+/, '');
+        const newline = plain.search(/[\n\r]/);
+        const snippet = newline < 0 ? undefined : searchSnippet(plain.slice(newline + 1), terms, 140);
+        if (snippet) entry.snippet = snippet;
+      }
+      out[id] = entry;
+    });
+    return out;
   }
 
   /** Notes that link here (with the line for context), and the notes this one links to. */

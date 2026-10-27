@@ -23,6 +23,7 @@ export * from './natural.js';
 export * from './reminders.js';
 export * from './mentions.js';
 export * from './rank.js';
+export * from './snippet.js';
 export * from './import-tags.js';
 export * from './md5.js';
 export * from './html-import.js';

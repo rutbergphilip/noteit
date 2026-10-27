@@ -6,6 +6,7 @@ import { WIKI_LINK_TRIGGER } from '../linking.js';
 import { dateTokenRewrite, localFirstWeekday } from '../natural.js';
 import { FindHighlight } from './find.js';
 import { CodeHighlight } from './highlight.js';
+import { SearchHighlight } from './searchHighlight.js';
 import { adjustFontSize, clearFormatting, setAlignment } from './format.js';
 import { codeLanguageId } from './languages.js';
 import { safeAlign, safeBlobUrl, safeColor, safeHref, safeInt, safeLanguage, safePositive } from './safe.js';
@@ -684,6 +685,7 @@ export function noteItExtensions(opts: { resolver?: AttachmentResolver; wikiLink
     MarkdownShortcuts.configure({ wikiLink: opts.wikiLink }),
     FindHighlight,
     CodeHighlight,
+    SearchHighlight,
   ];
 }
 
@@ -691,5 +693,6 @@ export { toEditorJSON, fromEditorJSON, prepareForEditor } from './convert.js';
 export * from './find.js';
 export * from './highlight.js';
 export * from './format.js';
+export * from './searchHighlight.js';
 export * from './languages.js';
 export * from './safe.js';

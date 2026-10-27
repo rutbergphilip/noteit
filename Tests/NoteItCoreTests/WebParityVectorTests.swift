@@ -2,7 +2,7 @@ import Foundation
 import XCTest
 @testable import NoteItCore
 
-/// The `statistics` and `evaluate` sections of Vectors/organise-vectors.json, which the web app's port
+/// The `snippets`, `statistics` and `evaluate` sections of Vectors/organise-vectors.json, which the web app's port
 /// (`web/packages/doc/test/organise.test.ts`) reads too, so Note Info and search filters agree on both.
 final class WebParityVectorTests: XCTestCase {
     private struct Doc: SearchDocument {
@@ -20,6 +20,24 @@ final class WebParityVectorTests: XCTestCase {
         var openDueDates: [LocalDateTime]
         var hasLiveReminder: Bool
         var hasAttachment: Bool
+    }
+
+    /// `snippets`: search highlights and note list snippets (SearchHighlighter), as [start, end) UTF-16 offsets.
+    func testSnippets() throws {
+        let pairs: ([NSRange]) -> [[Int]] = { $0.map { [$0.location, NSMaxRange($0)] } }
+        for vector in try OrganiseVectors.section("snippets") {
+            let text = try XCTUnwrap(vector["text"] as? String)
+            let terms = try XCTUnwrap(vector["terms"] as? [String])
+            let maxLength = try XCTUnwrap(vector["maxLength"] as? Int)
+            XCTAssertEqual(pairs(SearchHighlighter.ranges(of: terms, in: text)), vector["ranges"] as? [[Int]], text)
+            let snippet = SearchHighlighter.snippet(of: text, terms: terms, maxLength: maxLength)
+            if let expected = vector["snippet"] as? [String: Any] {
+                XCTAssertEqual(snippet?.text, expected["text"] as? String, text)
+                XCTAssertEqual(snippet.map { pairs($0.highlights) }, expected["highlights"] as? [[Int]], text)
+            } else {
+                XCTAssertNil(snippet, text)
+            }
+        }
     }
 
     func testStatistics() throws {

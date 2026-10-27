@@ -14,6 +14,8 @@ import {
   docToHtml,
   docToHtmlBody,
   docToMarkdown,
+  searchHighlightRanges,
+  searchSnippet,
   importMarkdown,
   expandTemplate,
   formatDatePattern,
@@ -90,6 +92,14 @@ describe('organise vectors (shared with Swift)', () => {
       if (v.text !== undefined) expect(q.hasTextTerms, v.input).toBe(v.text);
       if (v.issues !== undefined) expect(q.issues.length, v.input).toBe(v.issues);
       if (v.message) expect(q.issues[0]?.message).toBe(v.message);
+    }
+  });
+
+  it('search highlights and snippets', () => {
+    expect(vectors.snippets.length).toBeGreaterThan(5);
+    for (const v of vectors.snippets) {
+      expect(searchHighlightRanges(v.terms, v.text), v.text).toEqual(v.ranges);
+      expect(searchSnippet(v.text, v.terms, v.maxLength) ?? null, v.text).toEqual(v.snippet);
     }
   });
 

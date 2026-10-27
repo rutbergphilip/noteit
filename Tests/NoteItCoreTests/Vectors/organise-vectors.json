@@ -131,5 +131,17 @@
       { "query": "is:todo -tag:draft OR is:pinned", "doc": { "open": 1, "tags": ["draft"] }, "match": false },
       { "query": "is:maybe", "doc": { "text": "is:maybe" }, "match": true }
     ]
-  }
+  },
+  "snippets": [
+    { "text": "lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum lorem ipsum the invoice is late dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit dolor sit ", "terms": ["invoice"], "maxLength": 60, "ranges": [[364, 371]], "snippet": { "text": "…lorem ipsum the invoice is late dolor sit dolor sit dolor…", "highlights": [[17, 24]] } },
+    { "text": "the invoice\r\n\r\nanother invoice", "terms": ["invoice"], "maxLength": 60, "ranges": [[4, 11], [23, 30]], "snippet": { "text": "the invoice    another invoice", "highlights": [[4, 11], [23, 30]] } },
+    { "text": "nothing to see", "terms": ["invoice"], "maxLength": 60, "ranges": [], "snippet": null },
+    { "text": "👍🏽 plan 👨‍👩‍👧 Plan", "terms": ["plan"], "maxLength": 140, "ranges": [[5, 9], [19, 23]], "snippet": { "text": "👍🏽 plan 👨‍👩‍👧 Plan", "highlights": [[5, 9], [19, 23]] } },
+    { "text": "invoice", "terms": ["invoice", "voice"], "maxLength": 140, "ranges": [[0, 7]], "snippet": { "text": "invoice", "highlights": [[0, 7]] } },
+    { "text": "Café CAFÉ cafe ｃａｆｅ", "terms": ["cafe"], "maxLength": 140, "ranges": [[0, 4], [5, 9], [10, 14], [15, 19]], "snippet": { "text": "Café CAFÉ cafe ｃａｆｅ", "highlights": [[0, 4], [5, 9], [10, 14], [15, 19]] } },
+    { "text": "First line. Second has the budget. Then the plan and budget again, with more words after it to cut the window short here.", "terms": ["budget", "plan"], "maxLength": 50, "ranges": [[27, 33], [44, 48], [53, 59]], "snippet": { "text": "…Second has the budget. Then the plan and budget…", "highlights": [[16, 22], [33, 37], [42, 48]] } },
+    { "text": "A long intro without the words we want, going on and on and on.\nNew line: alpha beta gamma alpha", "terms": ["alpha", "gamma"], "maxLength": 40, "ranges": [[74, 79], [85, 90], [91, 96]], "snippet": { "text": "…New line: alpha beta gamma alpha", "highlights": [[11, 16], [22, 27], [28, 33]] } },
+    { "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx needle yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy", "terms": ["needle"], "maxLength": 30, "ranges": [[71, 77]], "snippet": { "text": "…needle…", "highlights": [[1, 7]] } },
+    { "text": "Ünïcödé words and Unicode again", "terms": ["unicode"], "maxLength": 140, "ranges": [[0, 7], [18, 25]], "snippet": { "text": "Ünïcödé words and Unicode again", "highlights": [[0, 7], [18, 25]] } }
+  ]
 }

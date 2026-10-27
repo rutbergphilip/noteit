@@ -338,3 +338,14 @@ describe('update links on rename', () => {
     expect((s.getNote(a)!.container!.doc.content[1] as { content: { text: string }[] }).content[0]!.text).toBe('Atlas');
   });
 });
+
+describe('search snippets', () => {
+  it('marks the title and gives a snippet of the text after it', async () => {
+    const { s } = await store();
+    const id = await s.createNote({ container: text('Invoice plan\nFirst line\nThe invoice is late') });
+    const d = s.searchDecorations('invoice', s.search('invoice'))[id]!;
+    expect(d.title).toEqual([[0, 7]]);
+    expect(d.snippet).toEqual({ text: '…The invoice is late', highlights: [[5, 12]] });
+    expect(s.searchDecorations('tag:x', [id])).toEqual({});
+  });
+});

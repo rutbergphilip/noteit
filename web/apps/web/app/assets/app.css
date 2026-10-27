@@ -362,6 +362,18 @@
   font-weight: 500;
 }
 
+/* The list search's words, in the note list and in the open note (native searchHighlight). */
+mark.search-hit {
+  color: inherit;
+  font-weight: 600;
+  background: var(--mark);
+  border-radius: 2px;
+}
+.ni-prose .ni-search-hit {
+  background: var(--mark);
+  border-radius: 2px;
+}
+
 /* Find in note: every match, and the current one stronger. */
 .ni-prose .ni-find {
   background: var(--mark);

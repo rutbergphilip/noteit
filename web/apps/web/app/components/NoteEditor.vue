@@ -3,9 +3,9 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
-import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS, isTagBoundary, tagQueryEnds, tagSuggestions, type TagSuggestion, deriveTitleAndPreview, searchFold, NOTE_LINK_MAX_TEXT } from '@noteit/doc';
+import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS, isTagBoundary, tagQueryEnds, tagSuggestions, type TagSuggestion, deriveTitleAndPreview, parseQuery, searchFold, NOTE_LINK_MAX_TEXT } from '@noteit/doc';
 import { useRenameTracker } from '~/composables/useRenameTracker';
-import { adjustFontSize, clearFormatting, currentAlignment, setAlignment, CODE_LANGUAGES, codeBlockGroups, codeLanguageId, effectiveCodeLanguage, fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
+import { searchHighlightKey, searchHighlightPositions, adjustFontSize, clearFormatting, currentAlignment, setAlignment, CODE_LANGUAGES, codeBlockGroups, codeLanguageId, effectiveCodeLanguage, fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
@@ -60,7 +60,10 @@ const editor = useEditor({
     handleKeyDown: (_view, e) => {
       // ⇧⌘V / ⌥⇧⌘V: Paste and Match Style, so the next paste stays plain text.
       if (e.code === 'KeyV' && e.shiftKey && (e.metaKey || e.ctrlKey)) plainPaste = true;
-      return linkListKey(e) || tagListKey(e);
+      if (linkListKey(e) || tagListKey(e)) return true;
+      // Esc clears the search's marks in the note (native SearchHighlightController).
+      if (e.key === 'Escape' && searchHighlightKey.getState(_view.state)?.find().length) return showSearchTerms([]), true;
+      return false;
     },
     // `#` at a tag boundary opens tag suggestions once it's in (native beginTagCompletionIfNeeded).
     handleTextInput: (_view, from, to, text) => {
@@ -474,6 +477,24 @@ watch(
   },
 );
 
+// MARK: the list search's words in the note (native SearchHighlightController)
+
+/** Marks `terms` in the note; with `scroll`, shows the first one after the title. */
+function showSearchTerms(terms: string[], scroll = false): void {
+  const ed = liveEditor();
+  if (!ed) return;
+  ed.view.dispatch(ed.state.tr.setMeta(searchHighlightKey, terms));
+  if (!scroll || !terms.length) return;
+  const titleEnd = ed.state.doc.firstChild?.nodeSize ?? 0;
+  const first = searchHighlightPositions(ed.state.doc, terms).find((r) => r.from >= titleEnd);
+  if (first) ed.view.domAtPos(first.from).node.parentElement?.scrollIntoView({ block: 'center' });
+}
+const searchTerms = () => (state.query.trim() ? parseQuery(state.query).highlightTerms : []);
+watch(
+  () => state.query,
+  () => showSearchTerms(searchTerms()),
+);
+
 async function load(): Promise<void> {
   const opened = await client().getNote(props.noteId);
   note.value = opened;
@@ -501,6 +522,7 @@ async function load(): Promise<void> {
   }
   ed.setEditable(editable.value && !row.value?.deletedAt);
   if (editable.value && !row.value?.title) ed.commands.focus('end');
+  showSearchTerms(searchTerms(), true);
 }
 
 const row = computed(() => state.notes.find((n) => n.id === props.noteId) ?? note.value?.row);
