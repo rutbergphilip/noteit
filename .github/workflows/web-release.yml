@@ -1,0 +1,323 @@
+name: Web release
+
+# The self-hosted web app's release artefacts, for the same vX.Y.Z tag as release.yml (docs/releasing.md):
+#   - ghcr.io/rutbergphilip/noteit-web:<version> for linux/amd64 and linux/arm64, plus :latest for full releases;
+#   - noteit-web-static-<version>.tar.gz, web-client-<version>.json and its minisign signature, attached to the
+#     GitHub Release that release.yml creates. This workflow never creates the release: it waits for it, so the
+#     two workflows can't race and the release's title, notes and "latest" flag stay release.yml's.
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build the bundle and both image architectures without pushing or attaching anything"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: ghcr.io/rutbergphilip/noteit-web
+
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    outputs:
+      publish: ${{ steps.meta.outputs.publish }}
+      version: ${{ steps.meta.outputs.version }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Release metadata
+        id: meta
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          if [[ "$EVENT" == "push" || "$DRY_RUN" == "false" ]]; then
+            if [[ "$REF_TYPE" != "tag" ]]; then
+              echo "::error::Real releases run from a vX.Y.Z tag. Push a tag, or run with dry_run=true."
+              exit 1
+            fi
+            if [[ ! "$REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Tag '$REF_NAME' doesn't match vMAJOR.MINOR.PATCH[-prerelease]."
+              exit 1
+            fi
+            publish=true
+            version="${REF_NAME#v}"
+          else
+            publish=false
+            # Rehearse with the newest released version, as release.yml does.
+            version="$(sed -nE 's/^## \[([0-9][^]]*)\].*/\1/p' CHANGELOG.md | head -n 1)"
+            version="${version:-0.0.0}"
+          fi
+          prerelease=false
+          [[ "$version" == *-* ]] && prerelease=true
+          {
+            echo "publish=$publish"
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+          echo "NoteIt web $version, publish=$publish, prerelease=$prerelease"
+
+      - name: Check signing key
+        id: key
+        env:
+          PUBLISH: ${{ steps.meta.outputs.publish }}
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+        run: |
+          if [[ -n "$MINISIGN_KEY" && -f scripts/noteit-release.pub ]]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$PUBLISH" == "true" ]]; then
+            echo "::error::A release needs the MINISIGN_KEY secret and scripts/noteit-release.pub (docs/releasing.md, \"Web app\"). Nothing was published."
+            exit 1
+          else
+            echo "::warning::No release signing key; the dry run signs with a throwaway key."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          package_json_file: web/package.json
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install
+        run: pnpm -C web install --frozen-lockfile
+
+      - name: Typecheck and test
+        run: |
+          pnpm -C web -r typecheck
+          pnpm -C web -r test
+
+      - name: Build
+        env:
+          # Must match the Dockerfile's NOTEIT_BUILD_ID, so the image serves byte-identical client files.
+          NOTEIT_BUILD_ID: noteit-${{ steps.meta.outputs.version }}
+        run: |
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)" pnpm -C web --filter @noteit/web build
+
+      - name: Static client and manifest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          node scripts/build-web-client-manifest.mjs --version "$VERSION" --commit "$COMMIT" --out dist/web
+          epoch="$(git log -1 --format=%ct)"
+          tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
+            -C dist/web -cf - "noteit-web-static-$VERSION" | gzip -9n > "dist/web/noteit-web-static-$VERSION.tar.gz"
+          rm -rf "dist/web/noteit-web-static-$VERSION"
+          sha256sum dist/web/*
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq minisign
+          minisign -v
+
+      - name: Sign the manifest
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          COMMIT: ${{ github.sha }}
+          RELEASE_KEY: ${{ steps.key.outputs.release }}
+          MINISIGN_KEY: ${{ secrets.MINISIGN_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          key="$RUNNER_TEMP/minisign.key"
+          manifest="dist/web/web-client-$VERSION.json"
+          if [[ "$RELEASE_KEY" == "true" ]]; then
+            (umask 077 && printf '%s\n' "$MINISIGN_KEY" > "$key")
+            cp scripts/noteit-release.pub dist/web/verify.pub
+          else
+            minisign -G -W -p dist/web/verify.pub -s "$key"
+          fi
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$key" -m "$manifest" \
+            -t "NoteIt web client $VERSION ($COMMIT)"
+          rm -f "$key"
+          # The signature must verify with the public key users will check it with.
+          mkdir -p "$RUNNER_TEMP/static"
+          tar -xzf "dist/web/noteit-web-static-$VERSION.tar.gz" -C "$RUNNER_TEMP/static"
+          node scripts/verify-web-client.mjs "$RUNNER_TEMP/static/noteit-web-static-$VERSION" --expect "$VERSION" \
+            --manifest "$manifest" --sig "$manifest.minisig" --pubkey dist/web/verify.pub
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: noteit-web-${{ steps.meta.outputs.version }}
+          path: dist/web/
+          if-no-files-found: error
+
+  image:
+    needs: bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.bundle.outputs.version }}
+      PUBLISH: ${{ needs.bundle.outputs.publish }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: noteit-web-${{ needs.bundle.outputs.version }}
+          path: dist/web
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        if: needs.bundle.outputs.publish == 'true'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: docker
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=${{ needs.bundle.outputs.version }}
+            type=raw,value=latest,enable=${{ needs.bundle.outputs.prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=NoteIt web
+            org.opencontainers.image.version=${{ needs.bundle.outputs.version }}
+            org.opencontainers.image.licenses=AGPL-3.0-only
+
+      - name: Build (linux/amd64, for the smoke test)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: web
+          platforms: linux/amd64
+          load: true
+          tags: noteit-web:smoke
+          build-args: |
+            NOTEIT_VERSION=${{ needs.bundle.outputs.version }}
+            NOTEIT_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=noteit-web
+          cache-to: type=gha,scope=noteit-web,mode=max
+
+      - name: Smoke test
+        run: |
+          docker run -d --name noteit -p 127.0.0.1:3000:3000 -e NOTEIT_PUBLIC_URL=http://127.0.0.1:3000 noteit-web:smoke
+          for _ in $(seq 1 60); do
+            [[ "$(docker inspect --format '{{.State.Health.Status}}' noteit)" == healthy ]] && break
+            sleep 2
+          done
+          docker inspect --format 'health={{.State.Health.Status}} user={{.Config.User}}' noteit
+          [[ "$(docker inspect --format '{{.State.Health.Status}}' noteit)" == healthy ]]
+          [[ "$(docker inspect --format '{{.Config.User}}' noteit)" == "1000:1000" ]]
+          curl -fsS http://127.0.0.1:3000/api/health | grep -q '"needsSetup":true'
+          docker logs noteit 2>&1 | grep -q "NoteIt setup token"
+          # The image serves exactly the client in the signed manifest.
+          manifest="dist/web/web-client-$VERSION.json"
+          node scripts/verify-web-client.mjs http://127.0.0.1:3000 --expect "$VERSION" \
+            --manifest "$manifest" --sig "$manifest.minisig" --pubkey dist/web/verify.pub
+          docker rm -f noteit
+
+      - name: Build and push (linux/amd64, linux/arm64)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: web
+          platforms: linux/amd64,linux/arm64
+          push: ${{ needs.bundle.outputs.publish == 'true' }}
+          tags: ${{ steps.docker.outputs.tags }}
+          labels: ${{ steps.docker.outputs.labels }}
+          annotations: ${{ steps.docker.outputs.annotations }}
+          build-args: |
+            NOTEIT_VERSION=${{ needs.bundle.outputs.version }}
+            NOTEIT_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=noteit-web
+          cache-to: type=gha,scope=noteit-web,mode=max
+
+      - name: Check anonymous pulls
+        if: needs.bundle.outputs.publish == 'true'
+        run: |
+          repo="${IMAGE#ghcr.io/}"
+          token="$(curl -fsS "https://ghcr.io/token?scope=repository:$repo:pull" | jq -r .token)"
+          status="$(curl -sS -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $token" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json' "https://ghcr.io/v2/$repo/manifests/$VERSION")"
+          if [[ "$status" == 200 ]]; then
+            echo "$IMAGE:$VERSION is publicly pullable."
+          else
+            echo "::warning::$IMAGE isn't public yet (HTTP $status). Make the package public once: docs/releasing.md, \"Web app\"."
+          fi
+
+  attach:
+    needs: [bundle, image]
+    if: needs.bundle.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 130
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.bundle.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+      REPOSITORY: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: noteit-web-${{ needs.bundle.outputs.version }}
+          path: dist/web
+
+      - name: Wait for the GitHub Release
+        run: |
+          # release.yml creates it after the notarized Mac build, which takes a while.
+          for _ in $(seq 1 240); do
+            if gh release view "v$VERSION" --repo "$REPOSITORY" > /dev/null 2>&1; then
+              echo "Release v$VERSION exists."
+              exit 0
+            fi
+            sleep 30
+          done
+          echo "::error::Release v$VERSION didn't appear within two hours. Check release.yml, then re-run this job."
+          exit 1
+
+      - name: Upload the static client and the signed manifest
+        run: |
+          gh release upload "v$VERSION" --repo "$REPOSITORY" --clobber \
+            "dist/web/noteit-web-static-$VERSION.tar.gz" \
+            "dist/web/web-client-$VERSION.json" \
+            "dist/web/web-client-$VERSION.json.minisig"
+
+      - name: Add the web app to the release notes
+        run: |
+          notes="$RUNNER_TEMP/notes.md"
+          gh release view "v$VERSION" --repo "$REPOSITORY" --json body --jq .body > "$notes"
+          if grep -qF '<!-- noteit-web -->' "$notes"; then
+            echo "The notes already have the web section."
+            exit 0
+          fi
+          pubkey="$(sed -n 2p scripts/noteit-release.pub)"
+          cat >> "$notes" <<EOF
+
+          <!-- noteit-web -->
+          ### Web app
+
+          - Docker image (linux/amd64, linux/arm64): \`docker pull $IMAGE:$VERSION\`. Setup: [self-hosting guide](https://github.com/$REPOSITORY/blob/v$VERSION/docs/self-hosting.md).
+          - Static client: \`noteit-web-static-$VERSION.tar.gz\`, described by \`web-client-$VERSION.json\` and its minisign signature.
+          - Check that a server runs this release's client: \`node scripts/verify-web-client.mjs https://notes.example.com --expect $VERSION\`.
+          - Release signing key (minisign; the maintainer holds the secret key): \`$pubkey\`
+          EOF
+          gh release edit "v$VERSION" --repo "$REPOSITORY" --notes-file "$notes"

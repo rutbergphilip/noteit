@@ -3,6 +3,7 @@ import { constants } from 'node:fs';
 import { lstat, mkdir, open, readdir, readFile, rename, rm, rmdir, stat, unlink } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { isCanonicalUuid, isListablePrefix, isValidKey } from '@noteit/core';
+import type { ObjectStore } from './store';
 
 export interface StoredObject {
   key: string;
@@ -17,7 +18,8 @@ export type DeleteResult = 'ok' | 'notFound' | 'preconditionFailed';
 export class InvalidKeyError extends Error {}
 
 /** Disk driver: one directory per user, ETag = hex MD5 of the bytes, conditionals atomic under a per-key mutex. */
-export class DiskStore {
+export class DiskStore implements ObjectStore {
+  readonly kind = 'disk';
   readonly usersRoot: string;
   private readonly tmpDir: string;
   private readonly locks = new Map<string, Promise<void>>();
@@ -27,6 +29,16 @@ export class DiskStore {
     this.usersRoot = resolve(dataDir, 'users');
     this.tmpDir = resolve(dataDir, 'tmp');
   }
+
+  started(): boolean {
+    return true;
+  }
+
+  ready(): boolean {
+    return true;
+  }
+
+  close(): void {}
 
   async init(): Promise<void> {
     await mkdir(this.usersRoot, { recursive: true, mode: 0o700 });

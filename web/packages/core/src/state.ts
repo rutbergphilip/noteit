@@ -12,6 +12,22 @@ export interface PendingBody {
   ifMatch?: string;
 }
 
+/** A body kept only because its tag is live (spec §3.4.9 "Stranded bodies"); when this device first saw it so. */
+export interface StrandedBody {
+  firstSeenPass: number;
+  /** ms since the epoch. */
+  firstSeenAt: number;
+}
+
+/**
+ * On a store without atomic conditional deletes, a meta and a tombstone left together: the tombstone's ETag and the
+ * meta ETag it names, so later passes resolve the pair without fetching the tombstone again (Swift TombstoneBinding).
+ */
+export interface TombstoneBinding {
+  tombstoneETag: string;
+  deletedMetaETag?: string;
+}
+
 /** Device-local sync state (never uploaded), the web's shape of Swift SyncState. */
 export interface SyncState {
   bases: Record<Uuid, Base>;
@@ -22,6 +38,11 @@ export interface SyncState {
   lastDeviceWrite?: number;
   lastDeviceAck?: string;
   passCount: number;
+  /** Listed body key → when it was first seen stranded. */
+  strandedBodies: Record<string, StrandedBody>;
+  /** Note → when this device first saw the version its base references missing (ms since the epoch). */
+  bodyMissingSince: Record<Uuid, number>;
+  tombstoneBindings: Record<Uuid, TombstoneBinding>;
 }
 
 export const emptySyncState = (): SyncState => ({
@@ -31,6 +52,9 @@ export const emptySyncState = (): SyncState => ({
   pendingBodyVersions: {},
   refusedRemotes: {},
   passCount: 0,
+  strandedBodies: {},
+  bodyMissingSince: {},
+  tombstoneBindings: {},
 });
 
 export interface SyncStateStore {

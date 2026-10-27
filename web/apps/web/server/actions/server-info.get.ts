@@ -6,6 +6,6 @@ export default publicClient.action(({ ctx: { noteit } }) => ({
   commit: noteit.cfg.commit,
   sourceUrl: noteit.cfg.sourceUrl,
   needsSetup: noteit.accounts.isEmpty,
-  storage: 'disk' as const,
+  storage: noteit.cfg.store,
   auth: { password: noteit.cfg.passwordLogin, oidc: null },
 }));

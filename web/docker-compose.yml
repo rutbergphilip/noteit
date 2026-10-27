@@ -1,20 +1,66 @@
-# NoteIt web for a homelab. Put it behind a TLS reverse proxy (see README.md) and set NOTEIT_PUBLIC_URL to
-# the address people use. The first-admin setup token is printed in the logs: `docker compose logs noteit`.
+# NoteIt web for a homelab. Full guide: docs/self-hosting.md.
+#
+#   docker compose up -d                 # pulls ghcr.io/rutbergphilip/noteit-web
+#   docker compose up -d --build         # or builds it from this directory instead
+#   docker compose logs noteit | grep "setup token"
+#
+# Put it behind a TLS reverse proxy and set NOTEIT_PUBLIC_URL to the address people use.
 services:
   noteit:
+    # Pin a release (NOTEIT_TAG=0.7.0 in .env, or edit this line) so upgrades happen when you choose.
+    image: ghcr.io/rutbergphilip/noteit-web:${NOTEIT_TAG:-latest}
+    # Used only by `docker compose build` / `up --build`, or when the image can't be pulled.
     build: .
-    image: noteit-web:local
     restart: unless-stopped
     ports:
+      # Loopback only: the reverse proxy on this host terminates TLS. Use "3000:3000" if it runs elsewhere.
       - "127.0.0.1:3000:3000"
     environment:
-      NOTEIT_PUBLIC_URL: "https://notes.example.lan"
-      # Behind a reverse proxy that sets X-Forwarded-For (one hop):
+      # Required in production: the URL people use. Writes must come from this origin.
+      NOTEIT_PUBLIC_URL: "https://notes.example.com"
+      # Behind a reverse proxy that sets X-Forwarded-For / X-Forwarded-Proto. Leave off without one.
       NOTEIT_TRUST_PROXY: "true"
+      # Proxies that append to X-Forwarded-For (Cloudflare → Caddy is 2).
       NOTEIT_TRUSTED_PROXY_HOPS: "1"
-      # Optional: NOTEIT_SETUP_TOKEN, NOTEIT_DEFAULT_QUOTA_MB, NOTEIT_MAX_OBJECT_MB, NOTEIT_SESSION_SECRET_FILE …
+
+      # First-admin token. Unset: generated, logged once and kept in /data/setup-token until used.
+      # NOTEIT_SETUP_TOKEN_FILE: /run/secrets/noteit_setup_token
+      # Session cookie key. Unset: generated into /data/session-secret. Changing it signs everyone out.
+      # NOTEIT_SESSION_SECRET_FILE: /run/secrets/noteit_session_secret
+
+      # Defaults for new accounts (admins can change each user's limits later).
+      # NOTEIT_DEFAULT_QUOTA_MB: "10240"
+      # NOTEIT_DEFAULT_MAX_OBJECTS: "100000"
+      # Largest single upload; match the reverse proxy's body size limit.
+      # NOTEIT_MAX_OBJECT_MB: "50"
+      # NOTEIT_INVITE_TTL_HOURS: "72"
+      # Password sign-in (on by default).
+      # NOTEIT_PASSWORD_LOGIN: "true"
+      # Keep the encrypted stores in an S3 bucket instead of /data (docs/self-hosting.md). The upstream must
+      # support conditional requests; the server checks at startup and refuses one that doesn't.
+      # NOTEIT_STORE: "s3"
+      # NOTEIT_S3_ENDPOINT: "https://s3.eu-north-1.amazonaws.com"
+      # NOTEIT_S3_REGION: "eu-north-1"
+      # NOTEIT_S3_BUCKET: "my-noteit"
+      # NOTEIT_S3_PREFIX: "noteit-server"
+      # NOTEIT_S3_PATH_STYLE: "true"
+      # NOTEIT_S3_ACCESS_KEY_ID: "…"
+      # NOTEIT_S3_SECRET_ACCESS_KEY_FILE: /run/secrets/noteit_s3_secret
+      # NOTEIT_STORE_TIMEOUT_S: "120"
+      # Shown in About as the AGPL source offer; point it at your fork if you change the code.
+      # NOTEIT_SOURCE_URL: "https://github.com/rutbergphilip/noteit"
+    # secrets:
+    #   - noteit_setup_token
+    #   - noteit_session_secret
     volumes:
+      # Accounts, the session key and every user's encrypted store. Back this up.
       - noteit-data:/data
+
+# secrets:
+#   noteit_setup_token:
+#     file: ./secrets/setup-token
+#   noteit_session_secret:
+#     file: ./secrets/session-secret
 
 volumes:
   noteit-data:

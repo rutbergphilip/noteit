@@ -113,9 +113,11 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 |---|---|---|---|
 | End-to-end encrypted sync, same store | iCloud, folder, S3, NoteIt Server | NoteIt Server (its own) | Parity |
 | Passphrase change, re-key, devices list | Yes | Yes | Parity |
-| Clean Up Unused Storage… | Yes | Server-side storage | Native-only by design |
+| Clean Up Unused Storage… | Yes | In the sync engine (`cleanUpUnusedStorage`, same rules and vectors as the Mac); no Settings button yet | Web gap |
+| Direct browser→S3 sync, without a server | Syncs straight to S3 | — (deferred: needs the connect wizard and the sealed key vault, plan Tasks 3.9, 4.8, 5.3) | Web gap |
 | Sync Now (`syncNow`), Lock (`lock`) | Automatic; no app lock | Commands | Web-only |
 | Server accounts, invites, access keys, users | — | Yes | Web-only |
+| Server keeps the stores in an S3 bucket (`NOTEIT_STORE=s3`) | — | Yes | Web-only |
 | Settings (`settings`) | ⌘, | ⌘, | Parity |
 | Menu shortcut editor | Settings › Shortcuts | Settings › Shortcuts: the same commands and conflict rules, kept per browser in localStorage (the Mac keeps its own locally) | Parity |
 | Light and dark appearance | System | System, light or dark | Parity |
@@ -128,4 +130,4 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 
 ## Summary
 
-As of this page's last change, by row: 60 parity, 0 web gaps, 1 planned (locked notes, on both apps), 13 native-only by design, 4 native-only (local data), 3 web-only. Smaller differences noted in Parity rows: choosing a notebook's default template, the caret at `{{cursor}}`, heading suggestions after `[[Title#`, the tag list drawn as a tree, Undo for a tag rename, and PDF, RTFD and plain text folder exports.
+As of this page's last change, by row: 60 parity, 2 web gaps (the Clean Up Unused Storage button and direct browser→S3 sync), 1 planned (locked notes, on both apps), 12 native-only by design, 4 native-only (local data), 4 web-only. Smaller differences noted in Parity rows: choosing a notebook's default template, the caret at `{{cursor}}`, heading suggestions after `[[Title#`, the tag list drawn as a tree, Undo for a tag rename, and PDF, RTFD and plain text folder exports.

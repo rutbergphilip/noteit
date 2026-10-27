@@ -18,6 +18,10 @@ export default defineNuxtConfig({
     classSuffix: '',
   },
   compatibilityDate: '2026-09-01',
+  // Reproducible client (signed release manifest, scripts/build-web-release.mjs): a fixed build id instead of a
+  // random one, and no app manifest (its builds/latest.json carries a build timestamp).
+  ...(process.env.NOTEIT_BUILD_ID ? { buildId: process.env.NOTEIT_BUILD_ID } : {}),
+  experimental: { appManifest: false },
   ssr: false,
   devtools: { enabled: false },
   telemetry: false,

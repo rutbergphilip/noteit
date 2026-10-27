@@ -328,6 +328,12 @@ jobs:
           PRERELEASE: ${{ needs.build.outputs.prerelease }}
           REPOSITORY: ${{ github.repository }}
         run: |
+          # This workflow owns the release; web-release.yml only waits for it and adds the web assets.
+          # On a re-run the release exists already, so replace the assets and keep its notes.
+          if gh release view "v$VERSION" --repo "$REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "v$VERSION" --repo "$REPOSITORY" --clobber "out/NoteIt-$VERSION.dmg" out/appcast.xml
+            exit 0
+          fi
           flags=()
           [[ "$PRERELEASE" == "true" ]] && flags+=(--prerelease)
           gh release create "v$VERSION" --repo "$REPOSITORY" --verify-tag \

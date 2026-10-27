@@ -14,6 +14,7 @@ import { sessionUser } from './auth';
 import { BodyTooLarge, readBodyLimited } from './body';
 import type { ServerContext } from './context';
 import { InvalidKeyError } from './diskStore';
+import { StoreUnavailable } from './store';
 import { checkCsrf, keyFromRawPath, normalizeIfMatch, parseIfNoneMatch, quoteETag } from './http';
 
 const PAGE = 1000;
@@ -40,7 +41,17 @@ export function createApiHandler(ctx: ServerContext) {
   };
 
   router.get('/health/live', defineEventHandler(() => ({ ok: true })));
-  router.get('/health', defineEventHandler(() => ({ ok: true, mode: 'server', needsSetup: accounts.isEmpty })));
+  // Readiness: 503 while the store (an upstream S3 bucket) can't be reached. Liveness above never depends on it.
+  router.get(
+    '/health',
+    defineEventHandler((event) => {
+      if (!store.ready()) {
+        setResponseStatus(event, 503);
+        return { ok: false, mode: 'server', reason: 'storeUnavailable' };
+      }
+      return { ok: true, mode: 'server', needsSetup: accounts.isEmpty };
+    }),
+  );
 
   // MARK: storage (zero-knowledge: bytes in, bytes out; the server never parses or decrypts them)
 
@@ -137,6 +148,7 @@ export function createApiHandler(ctx: ServerContext) {
     event.context.noteitRawUrl = event.node.req.url ?? '';
     try {
       const path = (event.path.split('?')[0] ?? '').replace(/^\/api/, '');
+      if (!store.started() && !SETUP_ALLOWED.has(path)) fail(503, 'storeUnavailable', 'The storage backend is not reachable yet.');
       if (accounts.isEmpty && !SETUP_ALLOWED.has(path)) fail(503, 'setupRequired', 'This server needs its first admin.');
       checkCsrf(event, cfg);
       const result = await inner(event);
@@ -152,6 +164,10 @@ export function createApiHandler(ctx: ServerContext) {
       if (e instanceof InvalidKeyError) {
         setResponseStatus(event, 400);
         return { error: 'invalidKey', message: 'Invalid key.' };
+      }
+      if (e instanceof StoreUnavailable) {
+        setResponseStatus(event, 502);
+        return { error: 'storeUnavailable', message: 'The storage backend is not reachable. Try again.' };
       }
       const status = (e as { statusCode?: number }).statusCode;
       if (status === 404 || status === 405) {
