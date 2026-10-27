@@ -62,6 +62,16 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test
 
 `DEVELOPER_DIR` points SwiftPM at Xcode's toolchain without changing `xcode-select`. The live S3 tests are skipped by default; the [README](../README.md#testing) and [CONTRIBUTING.md](../CONTRIBUTING.md#tests) explain how to run them against emulators or your own server.
 
+The web app's browser tests run against its production build on Chromium, Firefox and WebKit, each with its own server and an empty scratch data directory (ports 3711–3713, `E2E_PORT_BASE` moves them; `E2E_BROWSERS=webkit` picks browsers):
+
+```sh
+pnpm -C web --filter @noteit/web build
+pnpm -C web/apps/web exec playwright install chromium firefox webkit   # once
+pnpm -C web/apps/web e2e
+```
+
+`scripts/interop_tests.sh` checks that the Mac and the web app read each other's data: it starts the web server on a scratch data directory and has the Mac's sync engine (through the server's `/s3`) and the web app's sync code take turns creating, checking, editing and deleting notes, ending with a concurrent edit that must leave one conflict copy on both sides. Both halves skip themselves unless the script runs them.
+
 ## Debug launch arguments
 
 These only exist in debug builds (`#if DEBUG`). Release builds from `build_app.sh` ignore them.
