@@ -47,6 +47,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The web app shows the same note titles and previews as the Mac for notes with a table whose first row is bold or has a shaded cell, and it reads tags, due dates and reminders on the line after a code block as the Mac does.
 - The New Notebook and Edit Notebook sheet keeps its colours and icons inside its margins instead of running to the edges.
 - The sidebar's New Notebook button and sync status stay readable when notes and tags scroll underneath them.
 - Two tabs of the NoteIt web app editing the same note no longer lose an edit. Tabs see each other's saves straight away, and a save made from an older version keeps the other version as a conflict copy, as the Mac does when a note changes on two devices at once.

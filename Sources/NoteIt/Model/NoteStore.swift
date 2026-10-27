@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import CryptoKit
 import Foundation
+import NoteItDoc
 import NoteItMarkdown
 import NoteItSync
 
@@ -44,8 +45,8 @@ final class NoteStore: ObservableObject {
 
     /// Window during which notes count as "Recent".
     static let recentInterval: TimeInterval = LibraryQuery.recentInterval
-    nonisolated static let previewLength = 140
-    nonisolated static let titleLength = 120
+    nonisolated static let previewLength = DocDerivation.previewLength
+    nonisolated static let titleLength = DocDerivation.titleLength
     /// Max clean (non-dirty, non-selected) bodies kept in memory.
     static let bodyCacheLimit = 20
 
@@ -1511,31 +1512,12 @@ final class NoteStore: ObservableObject {
     }
 
     nonisolated private static func applyTitleAndPreview(to meta: inout NoteMeta, lines: [String]) {
-        var titleLineIndex: Int?
-        for (i, line) in lines.enumerated() where !clean(line).isEmpty {
-            titleLineIndex = i
-            break
-        }
-        if let titleLineIndex {
-            meta.title = String(clean(lines[titleLineIndex]).prefix(titleLength))
-            let rest = lines[(titleLineIndex + 1)...]
-                .map(clean)
-                .filter { !$0.isEmpty }
-                .joined(separator: " ")
-            meta.preview = String(rest.prefix(previewLength))
-        } else {
-            meta.title = ""
-            meta.preview = ""
-        }
+        (meta.title, meta.preview) = DocDerivation.titleAndPreview(lines: lines)
     }
 
     /// Trims whitespace and invisible characters (attachment glyphs, list markers' tabs, pasted control characters).
     nonisolated private static func clean(_ line: String) -> String {
-        let visible = line.replacingOccurrences(of: "\u{FFFC}", with: "")
-            .replacingOccurrences(of: "\t", with: " ")
-            .unicodeScalars.filter { $0.properties.generalCategory != .control }
-        return String(String.UnicodeScalarView(visible))
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        DocDerivation.clean(line)
     }
 
     nonisolated static func parseTags(_ string: String) -> [String] {

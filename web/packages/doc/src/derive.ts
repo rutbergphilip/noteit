@@ -29,6 +29,8 @@ interface Run {
   text: string;
   /** Masked for tag parsing: code and links. */
   masked: boolean;
+  /** In a code block, whose paragraph end native also sets in the code font. */
+  code?: boolean;
 }
 
 function inlineRuns(content: Inline[] | undefined, code: boolean): Run[] {
@@ -37,20 +39,23 @@ function inlineRuns(content: Inline[] | undefined, code: boolean): Run[] {
     switch (node.type) {
       case 'text': {
         const marks: Mark[] = node.marks ?? [];
-        runs.push({ text: node.text, masked: code || marks.some((m) => m.type === 'code' || m.type === 'link') });
+        runs.push({ text: node.text, masked: code || marks.some((m) => m.type === 'code' || m.type === 'link'), code });
         break;
       }
       case 'hardBreak':
-        runs.push({ text: ' ', masked: code });
+        runs.push({ text: ' ', masked: code, code });
         break;
       case 'image':
       case 'attachment':
-        runs.push({ text: '￼', masked: code });
+        runs.push({ text: '￼', masked: code, code });
         break;
     }
   }
   return runs;
 }
+
+/** A code block's runs end with an empty masked run, so even an empty one ends in code. */
+const codeRuns = (content: Inline[] | undefined): Run[] => [...inlineRuns(content, true), { text: '', masked: true, code: true }];
 
 const join = (runs: Run[]) => runs.map((r) => r.text).join('');
 const mask = (runs: Run[]) => runs.map((r) => (r.masked ? ' '.repeat(r.text.length) : r.text)).join('');
@@ -70,6 +75,25 @@ interface Paragraph {
   runs: Run[];
 }
 
+/**
+ * Native leaves a table's first row out of the preview when one of its cells is a header (shaded), or when one of
+ * its non-blank paragraphs starts in a bold font.
+ */
+function isHeaderRow(cells: { type: string; content?: ParagraphNode[] }[]): boolean {
+  return cells.some(
+    (c) =>
+      c.type === 'tableHeader' ||
+      (c.content ?? []).some((p) => {
+        const first = p.content?.[0];
+        return (
+          cleanLine(join(inlineRuns(p.content, false))).length > 0 &&
+          first?.type === 'text' &&
+          (first.marks ?? []).some((m) => m.type === 'bold')
+        );
+      }),
+  );
+}
+
 /** Every native paragraph of the document, in order, tables kept apart. */
 function paragraphs(doc: NoteItDoc): ({ kind: 'line'; p: Paragraph } | { kind: 'table'; rows: { header: boolean; cells: Paragraph[] }[] })[] {
   const out: ({ kind: 'line'; p: Paragraph } | { kind: 'table'; rows: { header: boolean; cells: Paragraph[] }[] })[] = [];
@@ -81,7 +105,7 @@ function paragraphs(doc: NoteItDoc): ({ kind: 'line'; p: Paragraph } | { kind: '
         out.push({ kind: 'line', p: { runs: inlineRuns(block.content, false) } });
         break;
       case 'codeBlock':
-        out.push({ kind: 'line', p: { runs: inlineRuns(block.content, true) } });
+        out.push({ kind: 'line', p: { runs: codeRuns(block.content) } });
         break;
       case 'blockquote':
         for (const p of block.content ?? []) out.push({ kind: 'line', p: para(p) });
@@ -95,8 +119,8 @@ function paragraphs(doc: NoteItDoc): ({ kind: 'line'; p: Paragraph } | { kind: '
       case 'table':
         out.push({
           kind: 'table',
-          rows: (block.content ?? []).map((row) => ({
-            header: row.content.length > 0 && row.content.every((c) => c.type === 'tableHeader'),
+          rows: (block.content ?? []).map((row, index) => ({
+            header: index === 0 && isHeaderRow(row.content),
             cells: row.content.flatMap((c) => (c.content ?? []).map(para)),
           })),
         });
@@ -148,14 +172,23 @@ export const derivePreview = (doc: NoteItDoc) => deriveTitleAndPreview(doc).prev
 const SEGMENT = String.raw`[\p{L}_][\p{L}\p{M}\p{N}_\-]*`;
 const TAG_RE = new RegExp(String.raw`(?<![^\s\p{Ps}\p{Pi},;"'])#(${SEGMENT}(?:\/${SEGMENT}){0,4})`, 'gu');
 
-/** The full native text with code and link ranges blanked, as `NoteStore.maskedForTokens`. */
-export function maskedText(doc: NoteItDoc): string {
-  const parts: string[] = [];
+/** Every paragraph's runs, table cells one each. */
+function flattened(doc: NoteItDoc): Run[][] {
+  const out: Run[][] = [];
   for (const item of paragraphs(doc)) {
-    if (item.kind === 'line') parts.push(mask(item.p.runs));
-    else for (const row of item.rows) for (const cell of row.cells) parts.push(mask(cell.runs));
+    if (item.kind === 'line') out.push(item.p.runs);
+    else for (const row of item.rows) for (const cell of row.cells) out.push(cell.runs);
   }
-  return parts.join('\n');
+  return out;
+}
+
+/**
+ * The full native text with code and link ranges blanked, as `NoteStore.maskedForTokens`. The newline after a code
+ * block is blanked too: native sets it in the code font.
+ */
+export function maskedText(doc: NoteItDoc): string {
+  const runs = flattened(doc);
+  return runs.map((r, i) => mask(r) + (i === runs.length - 1 ? '' : r[r.length - 1]?.code ? ' ' : '\n')).join('');
 }
 
 export function tagsIn(maskedNfc: string): string[] {
@@ -175,14 +208,12 @@ export function deriveTags(doc: NoteItDoc): string[] {
   return tagsIn(maskedText(doc));
 }
 
-/** The text search runs over: every line, tables included. */
+/**
+ * The note's whole text as native holds it (Swift `DocDerivation.plainText`): paragraphs and table cells joined by
+ * newlines, list markers, U+2028 line breaks and U+FFFC objects kept. Search reads this.
+ */
 export function searchableText(doc: NoteItDoc): string {
-  const parts: string[] = [];
-  for (const item of paragraphs(doc)) {
-    if (item.kind === 'line') parts.push(join(item.p.runs));
-    else for (const row of item.rows) for (const cell of row.cells) parts.push(join(cell.runs));
-  }
-  return parts.join('\n');
+  return flattened(doc).map(join).join('\n');
 }
 
 export function conflictTitleSuffix(deviceName: string, modifiedAt: Date, locale?: string): string {

@@ -1,0 +1,2373 @@
+{
+  "cases" : [
+    {
+      "doc" : {
+        "content" : [
+
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "",
+      "name" : "empty",
+      "plainText" : "",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : ""
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "   ",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "\t",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "\n   \n\t",
+      "name" : "blank-paragraphs",
+      "plainText" : "\n   \n\t",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : ""
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "Trip plan",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Trip plan",
+      "name" : "title-only",
+      "plainText" : "Trip plan",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "Trip plan"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "attrs" : {
+              "level" : 1
+            },
+            "content" : [
+              {
+                "text" : "Trip plan",
+                "type" : "text"
+              }
+            ],
+            "type" : "heading"
+          },
+          {
+            "content" : [
+              {
+                "text" : "Pack boots.",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "Book the hut.",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Trip plan\nPack boots.\n\nBook the hut.",
+      "name" : "title-and-preview",
+      "plainText" : "Trip plan\nPack boots.\n\nBook the hut.",
+      "preview" : "Pack boots. Book the hut.",
+      "tags" : [
+
+      ],
+      "title" : "Trip plan"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "  ",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "  First  ",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "second",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "\n  \n  First  \nsecond",
+      "name" : "leading-blank-lines",
+      "plainText" : "\n  \n  First  \nsecond",
+      "preview" : "second",
+      "tags" : [
+
+      ],
+      "title" : "First"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "a\tb\u0007c",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "\u001bd",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "a\tb\u0007c\n\u001bd",
+      "name" : "tabs-and-controls",
+      "plainText" : "a\tb\u0007c\n\u001bd",
+      "preview" : "d",
+      "tags" : [
+
+      ],
+      "title" : "a bc"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "name" : "title-120-ascii",
+      "plainText" : "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽",
+      "name" : "title-120-emoji-modifiers",
+      "plainText" : "👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽👍🏽"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx👨‍👩‍👧‍👦tail",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx👨‍👩‍👧‍👦tail",
+      "name" : "title-120-zwj-family",
+      "plainText" : "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx👨‍👩‍👧‍👦tail",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx👨‍👩‍👧‍👦"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "T",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy👩‍💻👩‍💻",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "T\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy👩‍💻👩‍💻",
+      "name" : "preview-140-zwj",
+      "plainText" : "T\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy👩‍💻👩‍💻",
+      "preview" : "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy👩‍💻",
+      "tags" : [
+
+      ],
+      "title" : "T"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "T",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "one",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "  two ",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "three",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "T\none\n  two \n\nthree",
+      "name" : "preview-joins-lines",
+      "plainText" : "T\none\n  two \n\nthree",
+      "preview" : "one two three",
+      "tags" : [
+
+      ],
+      "title" : "T"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "שלום עולם",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "مرحبا #سلام",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "שלום עולם\nمرحبا #سلام",
+      "name" : "rtl-text",
+      "plainText" : "שלום עולם\nمرحبا #سلام",
+      "preview" : "مرحبا #سلام",
+      "tags" : [
+        "سلام"
+      ],
+      "title" : "שלום עולם"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "Café #café",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Café #café",
+      "name" : "combining-accents",
+      "plainText" : "Café #café",
+      "preview" : "",
+      "tags" : [
+        "café"
+      ],
+      "title" : "Café #café"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "List",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "attrs" : {
+              "kind" : "bullet",
+              "level" : 0
+            },
+            "content" : [
+              {
+                "text" : "one",
+                "type" : "text"
+              }
+            ],
+            "type" : "listItem"
+          },
+          {
+            "attrs" : {
+              "kind" : "bullet",
+              "level" : 1
+            },
+            "content" : [
+              {
+                "text" : "two",
+                "type" : "text"
+              }
+            ],
+            "type" : "listItem"
+          },
+          {
+            "attrs" : {
+              "kind" : "bullet",
+              "level" : 2
+            },
+            "content" : [
+              {
+                "text" : "three",
+                "type" : "text"
+              }
+            ],
+            "type" : "listItem"
+          },
+          {
+            "attrs" : {
+              "kind" : "bullet",
+              "level" : 3
+            },
+            "content" : [
+              {
+                "text" : "four",
+                "type" : "text"
+              }
+            ],
+            "type" : "listItem"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "List\n•\tone\n◦\ttwo\n▪\tthree\n•\tfour",
+      "name" : "bullet-levels",
+      "plainText" : "List\n•\tone\n◦\ttwo\n▪\tthree\n•\tfour",
+      "preview" : "• one ◦ two ▪ three • four",
+      "tags" : [
+
+      ],
+      "title" : "List"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "attrs" : {
+              "kind" : "ordered",
+              "level" : 0,
+              "number" : 1
+            },
+            "content" : [
+              {
+                "text" : "first",
+                "type" : "text"
+              }
+            ],
+            "type" : "listItem"
+          },
+          {
+            "attrs" : {
+              "kind" : "ordered",
+              "level" : 0,
+              "number" : 2
+            },
+            "content" : [
+              {
+                "text" : "second",
+                "type" : "text"
+              }
+            ],
+            "type" : "listItem"
+          },
+          {
+            "attrs" : {
+              "kind" : "ordered",
+              "level" : 0,
+              "number" : 10
+            },
+            "content" : [
+              {
+                "text" : "tenth",
+                "type" : "text"
+              }
+            ],
+            "type" : "listItem"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "1.\tfirst\n2.\tsecond\n10.\ttenth",
+      "name" : "ordered-list",
+      "plainText" : "1.\tfirst\n2.\tsecond\n10.\ttenth",
+      "preview" : "2. second 10. tenth",
+      "tags" : [
+
+      ],
+      "title" : "1. first"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "attrs" : {
+              "checked" : false,
+              "kind" : "task",
+              "level" : 0
+            },
+            "content" : [
+              {
+                "text" : "buy milk",
+                "type" : "text"
+              }
+            ],
+            "type" : "listItem"
+          },
+          {
+            "attrs" : {
+              "checked" : true,
+              "kind" : "task",
+              "level" : 0
+            },
+            "content" : [
+              {
+                "text" : "call mom #home",
+                "type" : "text"
+              }
+            ],
+            "type" : "listItem"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "☐\tbuy milk\n☑\tcall mom #home",
+      "name" : "task-list",
+      "plainText" : "☐\tbuy milk\n☑\tcall mom #home",
+      "preview" : "☑ call mom #home",
+      "tags" : [
+        "home"
+      ],
+      "title" : "☐ buy milk"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "attrs" : {
+              "kind" : "bullet",
+              "level" : 0
+            },
+            "type" : "listItem"
+          },
+          {
+            "content" : [
+              {
+                "text" : "after",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "•\t\nafter",
+      "name" : "empty-list-item-title",
+      "plainText" : "•\t\nafter",
+      "preview" : "after",
+      "tags" : [
+
+      ],
+      "title" : "•"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "#gear and #gear/boots, #Café",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "#gear and #gear/boots, #Café",
+      "name" : "tags-basic",
+      "plainText" : "#gear and #gear/boots, #Café",
+      "preview" : "",
+      "tags" : [
+        "gear",
+        "gear/boots",
+        "café"
+      ],
+      "title" : "#gear and #gear/boots, #Café"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "(#paren) “#quote” ,#comma ;#semi \"#dq\" '#sq'",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "(#paren) “#quote” ,#comma ;#semi \"#dq\" '#sq'",
+      "name" : "tags-after-punctuation",
+      "plainText" : "(#paren) “#quote” ,#comma ;#semi \"#dq\" '#sq'",
+      "preview" : "",
+      "tags" : [
+        "paren",
+        "quote",
+        "comma",
+        "semi",
+        "dq",
+        "sq"
+      ],
+      "title" : "(#paren) “#quote” ,#comma ;#semi \"#dq\" '#sq'"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "a#b site.com/#x ?q=#y mail#tag",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "a#b site.com/#x ?q=#y mail#tag",
+      "name" : "tags-not-in-words",
+      "plainText" : "a#b site.com/#x ?q=#y mail#tag",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "a#b site.com/#x ?q=#y mail#tag"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "#Work #work #WORK #work/Plan",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "#Work #work #WORK #work/Plan",
+      "name" : "tags-dedup-case",
+      "plainText" : "#Work #work #WORK #work/Plan",
+      "preview" : "",
+      "tags" : [
+        "work",
+        "work/plan"
+      ],
+      "title" : "#Work #work #WORK #work/Plan"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "#a/b/c/d/e/f/g",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "#a/b/c/d/e/f/g",
+      "name" : "tags-nesting-limit",
+      "plainText" : "#a/b/c/d/e/f/g",
+      "preview" : "",
+      "tags" : [
+        "a/b/c/d/e"
+      ],
+      "title" : "#a/b/c/d/e/f/g"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "see ",
+                "type" : "text"
+              },
+              {
+                "marks" : [
+                  {
+                    "type" : "code"
+                  }
+                ],
+                "text" : "#notatag",
+                "type" : "text"
+              },
+              {
+                "text" : " and #real",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "see          and #real",
+      "name" : "tags-in-inline-code",
+      "plainText" : "see #notatag and #real",
+      "preview" : "",
+      "tags" : [
+        "real"
+      ],
+      "title" : "see #notatag and #real"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "marks" : [
+                  {
+                    "attrs" : {
+                      "href" : "https://example.com"
+                    },
+                    "type" : "link"
+                  }
+                ],
+                "text" : "#linked",
+                "type" : "text"
+              },
+              {
+                "text" : " #free",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "        #free",
+      "name" : "tags-in-link",
+      "plainText" : "#linked #free",
+      "preview" : "",
+      "tags" : [
+        "free"
+      ],
+      "title" : "#linked #free"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "Code",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "attrs" : {
+              "language" : "swift"
+            },
+            "content" : [
+              {
+                "text" : "let x = 1 // #nottag",
+                "type" : "text"
+              }
+            ],
+            "type" : "codeBlock"
+          },
+          {
+            "content" : [
+              {
+                "text" : "#after",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Code\n                     #after",
+      "name" : "tags-in-code-block",
+      "plainText" : "Code\nlet x = 1 // #nottag\n#after",
+      "preview" : "let x = 1 // #nottag #after",
+      "tags" : [
+        "after"
+      ],
+      "title" : "Code"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "attrs" : {
+              "language" : "python"
+            },
+            "content" : [
+              {
+                "text" : "print(\"hi\")",
+                "type" : "text"
+              }
+            ],
+            "type" : "codeBlock"
+          },
+          {
+            "content" : [
+              {
+                "text" : "second line",
+                "type" : "text"
+              }
+            ],
+            "type" : "codeBlock"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "                       ",
+      "name" : "code-block-language",
+      "plainText" : "print(\"hi\")\nsecond line",
+      "preview" : "second line",
+      "tags" : [
+
+      ],
+      "title" : "print(\"hi\")"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "  #!/bin/sh  ",
+                "type" : "text"
+              }
+            ],
+            "type" : "codeBlock"
+          },
+          {
+            "content" : [
+              {
+                "text" : "body",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "              body",
+      "name" : "code-block-title",
+      "plainText" : "  #!/bin/sh  \nbody",
+      "preview" : "body",
+      "tags" : [
+
+      ],
+      "title" : "#!/bin/sh"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "line one",
+                "type" : "text"
+              },
+              {
+                "type" : "hardBreak"
+              },
+              {
+                "text" : "line two",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "next",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "line one line two\nnext",
+      "name" : "hard-break",
+      "plainText" : "line one line two\nnext",
+      "preview" : "next",
+      "tags" : [
+
+      ],
+      "title" : "line one line two"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "a",
+                "type" : "text"
+              },
+              {
+                "attrs" : {
+                  "soft" : true
+                },
+                "type" : "hardBreak"
+              },
+              {
+                "text" : "b",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "a b",
+      "name" : "soft-break",
+      "plainText" : "a b",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "a b"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "type" : "hardBreak"
+              },
+              {
+                "text" : "middle",
+                "type" : "text"
+              },
+              {
+                "type" : "hardBreak"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : " middle ",
+      "name" : "break-at-edges",
+      "plainText" : " middle ",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "middle"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "attrs" : {
+                  "mime" : "image/png",
+                  "name" : "photo.png",
+                  "sha" : "2a6927613ddc903379f3e02145f22074ccf048c7753cfa1ed8ee26c746682997"
+                },
+                "type" : "image"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "Caption",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "￼\nCaption",
+      "name" : "image-only-title",
+      "plainText" : "￼\nCaption",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "Caption"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "Look ",
+                "type" : "text"
+              },
+              {
+                "attrs" : {
+                  "mime" : "image/png",
+                  "name" : "photo.png",
+                  "sha" : "2a6927613ddc903379f3e02145f22074ccf048c7753cfa1ed8ee26c746682997"
+                },
+                "type" : "image"
+              },
+              {
+                "text" : " here",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "attrs" : {
+                  "mime" : "application/pdf",
+                  "name" : "notes.pdf",
+                  "sha" : "d1cb546b102fab8362de413fdacc187b05be10df72b72db3b3e50b4953f6a555"
+                },
+                "type" : "attachment"
+              },
+              {
+                "text" : " attached",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Look ￼ here\n￼ attached",
+      "name" : "image-in-text",
+      "plainText" : "Look ￼ here\n￼ attached",
+      "preview" : "attached",
+      "tags" : [
+
+      ],
+      "title" : "Look  here"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "Above",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "type" : "horizontalRule"
+          },
+          {
+            "content" : [
+              {
+                "text" : "Below",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Above\n \nBelow",
+      "name" : "horizontal-rule",
+      "plainText" : "Above\n \nBelow",
+      "preview" : "Below",
+      "tags" : [
+
+      ],
+      "title" : "Above"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "text" : "Quoted #idea",
+                    "type" : "text"
+                  }
+                ],
+                "type" : "paragraph"
+              },
+              {
+                "content" : [
+                  {
+                    "text" : "more",
+                    "type" : "text"
+                  }
+                ],
+                "type" : "paragraph"
+              }
+            ],
+            "type" : "blockquote"
+          },
+          {
+            "content" : [
+              {
+                "text" : "after",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Quoted #idea\nmore\nafter",
+      "name" : "blockquote",
+      "plainText" : "Quoted #idea\nmore\nafter",
+      "preview" : "more after",
+      "tags" : [
+        "idea"
+      ],
+      "title" : "Quoted #idea"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "Prices",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "Item",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableHeader"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "Cost",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableHeader"
+                  }
+                ],
+                "type" : "tableRow"
+              },
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "Boots",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "120",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              },
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "Tent",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              }
+            ],
+            "type" : "table"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Prices\nItem\nCost\nBoots\n120\nTent\n",
+      "name" : "table-with-header",
+      "plainText" : "Prices\nItem\nCost\nBoots\n120\nTent\n",
+      "preview" : "Boots · 120  Tent",
+      "tags" : [
+
+      ],
+      "title" : "Prices"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "a",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "b",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              },
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              },
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "c",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "#tagged",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              }
+            ],
+            "type" : "table"
+          },
+          {
+            "content" : [
+              {
+                "text" : "after",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "a\nb\n\n\nc\n#tagged\nafter",
+      "name" : "table-without-header",
+      "plainText" : "a\nb\n\n\nc\n#tagged\nafter",
+      "preview" : "after",
+      "tags" : [
+        "tagged"
+      ],
+      "title" : "a · b  c · #tagged"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "T",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "H1",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableHeader"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "H2",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableHeader"
+                  }
+                ],
+                "type" : "tableRow"
+              }
+            ],
+            "type" : "table"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "T\nH1\nH2",
+      "name" : "table-only-header",
+      "plainText" : "T\nH1\nH2",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "T"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "attrs" : {
+              "columnWidths" : [
+                100,
+                200
+              ]
+            },
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "x",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "y",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              }
+            ],
+            "type" : "table"
+          },
+          {
+            "content" : [
+              {
+                "text" : "tail",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "x\ny\ntail",
+      "name" : "table-title",
+      "plainText" : "x\ny\ntail",
+      "preview" : "tail",
+      "tags" : [
+
+      ],
+      "title" : "x · y"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "attrs" : {
+              "level" : 1
+            },
+            "content" : [
+              {
+                "text" : "Title",
+                "type" : "text"
+              }
+            ],
+            "type" : "heading"
+          },
+          {
+            "attrs" : {
+              "level" : 2
+            },
+            "content" : [
+              {
+                "text" : "Heading",
+                "type" : "text"
+              }
+            ],
+            "type" : "heading"
+          },
+          {
+            "attrs" : {
+              "level" : 3
+            },
+            "content" : [
+              {
+                "text" : "Sub",
+                "type" : "text"
+              }
+            ],
+            "type" : "heading"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Title\nHeading\nSub",
+      "name" : "headings",
+      "plainText" : "Title\nHeading\nSub",
+      "preview" : "Heading Sub",
+      "tags" : [
+
+      ],
+      "title" : "Title"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "marks" : [
+                  {
+                    "type" : "bold"
+                  }
+                ],
+                "text" : "Bold",
+                "type" : "text"
+              },
+              {
+                "text" : " ",
+                "type" : "text"
+              },
+              {
+                "marks" : [
+                  {
+                    "type" : "italic"
+                  }
+                ],
+                "text" : "italic",
+                "type" : "text"
+              },
+              {
+                "text" : " ",
+                "type" : "text"
+              },
+              {
+                "marks" : [
+                  {
+                    "attrs" : {
+                      "color" : "yellow"
+                    },
+                    "type" : "highlight"
+                  }
+                ],
+                "text" : "#hl",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Bold italic #hl",
+      "name" : "mixed-marks",
+      "plainText" : "Bold italic #hl",
+      "preview" : "",
+      "tags" : [
+        "hl"
+      ],
+      "title" : "Bold italic #hl"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "T",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : " \t ",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : " ",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "T\n \t \n ",
+      "name" : "whitespace-only-preview",
+      "plainText" : "T\n \t \n ",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "T"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "#2024 #_under #a-b #é1",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "#2024 #_under #a-b #é1",
+      "name" : "numbers-tag",
+      "plainText" : "#2024 #_under #a-b #é1",
+      "preview" : "",
+      "tags" : [
+        "_under",
+        "a-b",
+        "é1"
+      ],
+      "title" : "#2024 #_under #a-b #é1"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "marks" : [
+                              {
+                                "type" : "bold"
+                              }
+                            ],
+                            "text" : "Name",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "plain",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              },
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "Ann",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "12",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              }
+            ],
+            "type" : "table"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Name\nplain\nAnn\n12",
+      "name" : "table-bold-first-row",
+      "plainText" : "Name\nplain\nAnn\n12",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "Ann · 12"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "Ann",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "12",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              },
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "marks" : [
+                              {
+                                "type" : "bold"
+                              }
+                            ],
+                            "text" : "Total",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "12",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              }
+            ],
+            "type" : "table"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "Ann\n12\nTotal\n12",
+      "name" : "table-bold-later-row",
+      "plainText" : "Ann\n12\nTotal\n12",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "Ann · 12  Total · 12"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "H",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableHeader"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "not",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              },
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "a",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "b",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              }
+            ],
+            "type" : "table"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "H\nnot\na\nb",
+      "name" : "table-one-header-cell",
+      "plainText" : "H\nnot\na\nb",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "a · b"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "a",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "b",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              },
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "H",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableHeader"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "c",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              }
+            ],
+            "type" : "table"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "a\nb\nH\nc",
+      "name" : "table-header-in-second-row",
+      "plainText" : "a\nb\nH\nc",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "a · b  H · c"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "marks" : [
+                              {
+                                "type" : "bold"
+                              }
+                            ],
+                            "text" : " ",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              },
+              {
+                "content" : [
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "a",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  },
+                  {
+                    "content" : [
+                      {
+                        "content" : [
+                          {
+                            "text" : "b",
+                            "type" : "text"
+                          }
+                        ],
+                        "type" : "paragraph"
+                      }
+                    ],
+                    "type" : "tableCell"
+                  }
+                ],
+                "type" : "tableRow"
+              }
+            ],
+            "type" : "table"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : " \n\na\nb",
+      "name" : "table-bold-blank-first-row",
+      "plainText" : " \n\na\nb",
+      "preview" : "",
+      "tags" : [
+
+      ],
+      "title" : "a · b"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "x = 1",
+                "type" : "text"
+              }
+            ],
+            "type" : "codeBlock"
+          },
+          {
+            "content" : [
+              {
+                "text" : "#after",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "text ",
+                "type" : "text"
+              },
+              {
+                "marks" : [
+                  {
+                    "type" : "code"
+                  }
+                ],
+                "text" : "code",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "#next",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "      #after\ntext     \n#next",
+      "name" : "code-block-then-tag",
+      "plainText" : "x = 1\n#after\ntext code\n#next",
+      "preview" : "#after text code #next",
+      "tags" : [
+        "after",
+        "next"
+      ],
+      "title" : "x = 1"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "T",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "type" : "codeBlock"
+          },
+          {
+            "content" : [
+              {
+                "text" : "#tail",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "T\n #tail",
+      "name" : "empty-code-block",
+      "plainText" : "T\n\n#tail",
+      "preview" : "#tail",
+      "tags" : [
+        "tail"
+      ],
+      "title" : "T"
+    },
+    {
+      "doc" : {
+        "content" : [
+          {
+            "content" : [
+              {
+                "text" : "see ",
+                "type" : "text"
+              },
+              {
+                "marks" : [
+                  {
+                    "attrs" : {
+                      "href" : "https://example.com"
+                    },
+                    "type" : "link"
+                  }
+                ],
+                "text" : "site",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          },
+          {
+            "content" : [
+              {
+                "text" : "#x",
+                "type" : "text"
+              }
+            ],
+            "type" : "paragraph"
+          }
+        ],
+        "type" : "doc"
+      },
+      "maskedText" : "see     \n#x",
+      "name" : "link-at-end",
+      "plainText" : "see site\n#x",
+      "preview" : "#x",
+      "tags" : [
+        "x"
+      ],
+      "title" : "see site"
+    }
+  ],
+  "generator" : "swift",
+  "version" : 1
+}
