@@ -14,6 +14,7 @@ import { notebookIcon, safeHex } from '~/utils/notebooks';
 import { commandKbds } from '~/utils/menuShortcuts';
 import type { OpenedNote } from '~/worker/types';
 import { useOpeningKey } from '~/utils/overlay';
+import { clearUnsaved, writeUnsaved } from '~/utils/unloadJournal';
 
 const props = defineProps<{ noteId: string }>();
 const { state, client, toast, refresh, openNote, createNote, trashNote, openDaily } = useNoteit();
@@ -569,6 +570,7 @@ async function saveNow(): Promise<void> {
   const json = JSON.stringify(doc);
   if (json === lastSaved) {
     saveState.value = 'saved';
+    if (!saveTimer) clearUnsaved(props.noteId);
     return;
   }
   saveState.value = 'saving';
@@ -579,6 +581,7 @@ async function saveNow(): Promise<void> {
     container.value = next;
     lastSaved = json;
     saveState.value = 'saved';
+    if (!saveTimer) clearUnsaved(props.noteId);
     if (saved.conflictCopy) toast('This note was changed somewhere else while you typed. That version is kept as a conflict copy.');
   } catch (e) {
     saveState.value = 'unsaved';
@@ -608,21 +611,45 @@ function flush(): void {
   void save();
 }
 
+/**
+ * Writes an edit not yet in the library to the unload journal, synchronously, so it survives the page going away
+ * before the save lands (Safari stops a page's IndexedDB work at unload). The next unlock saves it; a finished save
+ * clears it.
+ */
+function journalUnsaved(): void {
+  if (saveState.value === 'saved' && !saveTimer) return;
+  const ed = liveEditor();
+  const doc = ed ? fromEditorJSON(ed.getJSON()) : finalDoc;
+  if (!doc || !container.value || !editable.value || JSON.stringify(doc) === lastSaved) return;
+  writeUnsaved({ noteId: props.noteId, ...(baseRevision ? { baseRevision } : {}), container: { ...container.value, doc } });
+}
+
 // Leaving or hiding the page saves at once: the debounce would otherwise drop an edit typed just before a reload.
-// beforeunload also asks to stay while that save is still on its way to the library.
+// beforeunload also asks to stay while that save is still on its way to the library, and every way out journals it.
 function onBeforeUnload(e: BeforeUnloadEvent): void {
   flush();
   if (saveState.value === 'saved') return;
+  journalUnsaved();
   e.preventDefault();
   e.returnValue = '';
 }
-const onHidden = () => document.visibilityState === 'hidden' && flush();
+function onHidden(): void {
+  if (document.visibilityState !== 'hidden') return;
+  flush();
+  journalUnsaved();
+}
+function onPageHide(): void {
+  flush();
+  journalUnsaved();
+}
 window.addEventListener('beforeunload', onBeforeUnload);
+window.addEventListener('pagehide', onPageHide);
 window.addEventListener('noteit:flush', flush);
 document.addEventListener('visibilitychange', onHidden);
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', onBeforeUnload);
+  window.removeEventListener('pagehide', onPageHide);
   window.removeEventListener('noteit:flush', flush);
   document.removeEventListener('visibilitychange', onHidden);
   flush();

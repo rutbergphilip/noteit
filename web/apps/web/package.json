@@ -15,6 +15,7 @@
   "dependencies": {
     "@iconify-json/lucide": "1.2.142",
     "@internationalized/date": "3.12.4",
+    "@noble/ciphers": "2.4.0",
     "@node-rs/argon2": "2.2.1",
     "@noteit/core": "workspace:*",
     "@noteit/doc": "workspace:*",

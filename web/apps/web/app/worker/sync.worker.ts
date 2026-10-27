@@ -6,7 +6,10 @@ import {
   HttpProxyBackend,
   newUuid,
   openSession,
+  randomBytes,
+  sha256Hex,
   type StoreSession,
+  type SyncCipher,
   StorageError,
   storeExists,
   SyncEngine,
@@ -34,6 +37,8 @@ let deviceName = '';
 let backend: HttpProxyBackend | undefined;
 let local: WebLocalStore | undefined;
 let state: WebStateStore | undefined;
+/** The unlocked store's cipher, for the unload journal's key. */
+let cipher: SyncCipher | undefined;
 let engine: SyncEngine | undefined;
 let pendingPassphrase: string | undefined;
 let channel: BroadcastChannel | undefined;
@@ -145,6 +150,7 @@ async function unlock(args: { passphrase: string; create: boolean }): Promise<Un
   const exclusive = <T,>(fn: () => Promise<T>): Promise<T> => (locks ? (locks.request(`noteit-local-${userId}`, fn) as Promise<T>) : fn());
   local = new WebLocalStore(db, session.cipher, deviceID, () => new Date(), exclusive, deviceName);
   state = new WebStateStore(db, session.cipher);
+  cipher = session.cipher;
   await local.load();
   await local.purgeExpired();
   local.onChange = () => markDirty();
@@ -178,6 +184,7 @@ function lock(): void {
   engine = undefined;
   local = undefined;
   state = undefined;
+  cipher = undefined;
   pendingPassphrase = undefined;
   void setStatus({ phase: 'locked', recordErrors: [] });
 }
@@ -252,6 +259,52 @@ async function syncNow(): Promise<void> {
 
 // MARK: RPC
 
+const JOURNAL_KEY_CONTEXT = 'web-unload-journal-key';
+
+/**
+ * The key the page seals its unload journal with (utils/unloadJournal.ts). It is kept in IndexedDB sealed by the store
+ * key, so it can only be read while the library is unlocked; a new store or key makes a new one.
+ */
+async function journalKey(): Promise<Uint8Array> {
+  if (!db || !cipher) throw new Error('locked');
+  const sealed = await db.get<Uint8Array>('kv', 'journalKey');
+  if (sealed) {
+    try {
+      return await cipher.open(sealed, JOURNAL_KEY_CONTEXT);
+    } catch {
+      // Sealed by another store key: replaced below.
+    }
+  }
+  const raw = randomBytes(32);
+  await db.put('kv', 'journalKey', await cipher.seal(raw, JOURNAL_KEY_CONTEXT));
+  return raw;
+}
+
+/** Digests of the docs this browser saved lately, per note, so a replayed journal entry that did land is skipped. */
+const SAVED_DIGESTS = 20;
+const docDigest = async (container: BodyContainer) => (await sha256Hex(utf8(JSON.stringify(container.doc)))).slice(0, 32);
+
+async function saveNote(id: string, container: BodyContainer, baseRevision?: string): Promise<{ revision: string; conflictCopy?: string }> {
+  const digest = await docDigest(container);
+  const saved = await needLocal().saveNote(id, container, baseRevision);
+  if (db) {
+    const recent = (await db.get<string[]>('kv', `saved:${id}`)) ?? [];
+    await db.put('kv', `saved:${id}`, [digest, ...recent.filter((d) => d !== digest)].slice(0, SAVED_DIGESTS));
+  }
+  return saved;
+}
+
+/**
+ * Saves an edit from the unload journal through the normal save path, unless this browser already saved exactly that
+ * doc (the save landed before the page went away): replaying it then would turn later edits into a conflict copy.
+ */
+async function replayUnsaved(id: string, container: BodyContainer, baseRevision?: string): Promise<{ replayed: boolean; conflictCopy?: string }> {
+  const recent = (await db?.get<string[]>('kv', `saved:${id}`)) ?? [];
+  if (recent.includes(await docDigest(container))) return { replayed: false };
+  const saved = await saveNote(id, container, baseRevision);
+  return { replayed: true, ...(saved.conflictCopy ? { conflictCopy: saved.conflictCopy } : {}) };
+}
+
 function needLocal(): WebLocalStore {
   if (!local) throw new Error('locked');
   return local;
@@ -277,6 +330,7 @@ const api = {
   unlock,
   recheckLegacy,
   lock: async () => lock(),
+  journalKey,
   forgetDevice,
   syncNow,
   setVisible: async (v: boolean) => {
@@ -295,7 +349,8 @@ const api = {
   tasks: async (query = '') => needLocal().tasks(query),
   setTaskChecked: async (id: string, block: number, checked: boolean) => needLocal().setTaskChecked(id, block, checked),
   createNote: async (opts: { id?: string; notebookID?: string; container?: BodyContainer; createdAt?: string; updatedAt?: string; isPinned?: boolean }) => needLocal().createNote(opts),
-  saveNote: async (id: string, container: BodyContainer, baseRevision?: string) => needLocal().saveNote(id, container, baseRevision),
+  saveNote,
+  replayUnsaved,
   updateNoteMeta: async (id: string, change: { isPinned?: boolean; notebookID?: string | null; trashed?: boolean }) => needLocal().updateNoteMeta(id, change),
   deleteForever: async (id: string) => needLocal().deleteForever(id),
   createNotebook: async (opts: { name: string; colorHex: string; symbol: string; parent?: string }) => needLocal().createNotebook(opts),

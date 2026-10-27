@@ -3,7 +3,7 @@ import { editorOf, expect, expectSaved, newNote, noteRow, test, unlockLibrary } 
 // An edit typed just before the tab goes away is flushed at once instead of after the 600 ms debounce, and while
 // that save is on its way beforeunload asks to stay.
 
-test('closing the tab right after typing asks to stay, then keeps the edit when you leave', async ({ page, context, account, browserName }) => {
+test('closing the tab right after typing asks to stay, then keeps the edit when you leave', async ({ page, context, account }) => {
   void account;
   await newNote(page, 'Closing', 'first line');
   await page.keyboard.press('Enter');
@@ -15,21 +15,18 @@ test('closing the tab right after typing asks to stay, then keeps the edit when 
   await d.accept();
   await closed;
 
+  // WebKit stops the page's worker as soon as Leave is accepted, so the flushed save may never land; the edit waits
+  // in the unload journal, sealed, and is saved after the next unlock.
   const again = await context.newPage();
   await again.goto('/');
+  const journal = () => again.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('noteit-unsaved:')).map((k) => localStorage.getItem(k) ?? ''));
+  for (const entry of await journal()) expect(entry).not.toContain('typed right before closing');
   await unlockLibrary(again);
   await noteRow(again, 'Closing').click();
-  const kept = editorOf(again);
-  if (browserName !== 'webkit') {
-    await expect(kept).toContainText('typed right before closing', { timeout: 5_000 });
-    return;
-  }
-  // Known WebKit limitation (macOS WebKit 27 in Playwright): the page's worker runs nothing while the prompt is up
-  // and is stopped as soon as Leave is accepted, so the flushed save never lands (holding the prompt for 1.5 s
-  // doesn't help). The prompt itself is asserted above, and Stay (the next test) keeps the edit. Recorded, not failed.
-  await expect(kept).toContainText('first line');
-  const survived = (await kept.textContent())?.includes('typed right before closing');
-  test.info().annotations.push({ type: 'webkit-known-issue', description: `edit ${survived ? 'kept' : 'lost'} after accepting Leave` });
+  await expect(editorOf(again)).toContainText('typed right before closing', { timeout: 5_000 });
+  await expect.poll(journal).toEqual([]);
+  // The save landed or was replayed, never both: no conflict copy of our own edit.
+  await expect(noteRow(again, 'Closing')).toHaveCount(1);
 });
 
 test('staying on the beforeunload prompt lets the save finish', async ({ page, context, account }) => {

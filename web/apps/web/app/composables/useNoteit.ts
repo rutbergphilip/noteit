@@ -4,6 +4,7 @@ import { serverInfo, session as sessionAction, signOut as signOutAction } from '
 import { failureOf, type ServerInfo, type SessionInfo } from '~/utils/actions';
 import { templateTarget } from '~/utils/notebooks';
 import { createWorkerClient } from '~/utils/workerClient';
+import { clearJournalKey, clearUnsaved, hasJournalKey, readUnsaved, setJournalKey } from '~/utils/unloadJournal';
 import type { NoteRow, NotebookRow, SmartFolderRow, SyncStatus, UnlockResult } from '~/worker/types';
 
 export type Phase = 'loading' | 'setup' | 'signin' | 'changePassword' | 'unlock' | 'createStore' | 'legacy' | 'ready' | 'serverDown';
@@ -181,9 +182,49 @@ async function enter(session: SessionInfo | undefined): Promise<void> {
   state.phase = init.hasStore === false && !init.hasCache ? 'createStore' : 'unlock';
 }
 
+/**
+ * Takes the unload journal's key from the unlocked library and saves any edit a closed or reloaded tab left in the
+ * journal, through the normal save path: a note changed since keeps the other version as a conflict copy. An edit
+ * whose save did land before the page went away is skipped.
+ */
+async function restoreUnsaved(): Promise<void> {
+  const userId = state.session?.user.id;
+  if (!userId) return;
+  try {
+    setJournalKey(userId, await client().journalKey());
+  } catch {
+    return;
+  }
+  for (const edit of readUnsaved()) {
+    try {
+      const opened = await client().getNote(edit.noteId);
+      if (!opened?.container || opened.readOnly) {
+        clearUnsaved(edit.noteId);
+        continue;
+      }
+      // Attachments the journal had to leave out (storage quota) are still in the saved note.
+      const container = { ...edit.container, attachments: { ...opened.container.attachments, ...edit.container.attachments } };
+      const saved = await client().replayUnsaved(edit.noteId, container, edit.baseRevision);
+      clearUnsaved(edit.noteId);
+      if (saved.conflictCopy) toast('A note you were editing when the page closed was changed elsewhere since. That version is kept as a conflict copy.');
+    } catch {
+      // Kept for the next unlock.
+    }
+  }
+}
+
+// The legacy store screen moves on to the library by itself, without unlock().
+watch(
+  () => state.phase,
+  (phase) => {
+    if (phase === 'ready' && state.session && !hasJournalKey(state.session.user.id)) void restoreUnsaved().then(refresh);
+  },
+);
+
 async function unlock(passphrase: string, create = false, enter = true): Promise<UnlockResult> {
   const result = await client().unlock({ passphrase, create });
   if (result.status === 'ok') {
+    await restoreUnsaved();
     if (enter) {
       state.phase = 'ready';
       await refresh();
@@ -194,6 +235,7 @@ async function unlock(passphrase: string, create = false, enter = true): Promise
 }
 
 async function lock(): Promise<void> {
+  clearJournalKey();
   await client().lock();
   state.notes = [];
   state.notebooks = [];
@@ -202,6 +244,7 @@ async function lock(): Promise<void> {
 }
 
 async function signOut(forget = false): Promise<void> {
+  clearJournalKey();
   if (forget) await client().forgetDevice();
   else await client().lock();
   await useAction(signOutAction).executeAsync(undefined);
