@@ -110,9 +110,11 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 |---|---|---|---|
 | End-to-end encrypted sync, same store | iCloud, folder, S3, NoteIt Server | NoteIt Server (its own) | Parity |
 | Passphrase change, re-key, devices list | Yes | Yes | Parity |
-| Clean Up Unused Storage… | Yes | Server-side storage | Native-only by design |
+| Clean Up Unused Storage… | Yes | In the sync engine (`cleanUpUnusedStorage`, same rules and vectors as the Mac); no Settings button yet | Web gap |
+| Direct browser→S3 sync, without a server | Syncs straight to S3 | — (deferred: needs the connect wizard and the sealed key vault, plan Tasks 3.9, 4.8, 5.3) | Web gap |
 | Sync Now (`syncNow`), Lock (`lock`) | Automatic; app lock via locked notes | Commands | Web-only |
 | Server accounts, invites, access keys, users | — | Yes | Web-only |
+| Server keeps the stores in an S3 bucket (`NOTEIT_STORE=s3`) | — | Yes | Web-only |
 | Settings (`settings`) | ⌘, | ⌘, | Parity |
 | Menu shortcut editor | Settings › Shortcuts | Fixed shortcuts | Web gap |
 | Light and dark appearance | System | System, light or dark | Parity |
@@ -125,4 +127,4 @@ Shortcuts: the web uses native's shortcuts with ⌘ as Ctrl off a Mac and ⌃ as
 
 ## Summary
 
-As of this page's last change, by row: 49 parity, 10 web gaps, 13 native-only by design, 4 native-only (local data), 3 web-only. Highest-value web gaps, roughly in order: locked notes (notes password, wrapped key and locked bodies with shared vectors), Evernote/Notion import, tag suggestions after `#`, updating links on rename, exporting a notebook or everything, code block syntax colouring, Quick Capture's reminder offer.
+As of this page's last change, by row: 49 parity, 12 web gaps, 12 native-only by design, 4 native-only (local data), 4 web-only. Highest-value web gaps, roughly in order: locked notes (notes password, wrapped key and locked bodies with shared vectors), Evernote/Notion import, tag suggestions after `#`, updating links on rename, exporting a notebook or everything, code block syntax colouring, Quick Capture's reminder offer.
