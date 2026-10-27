@@ -68,6 +68,8 @@ jobs:
         run: pnpm -C web --filter @noteit/web build
 
       - name: Release scripts
+        # apt mirrors occasionally stall; fail fast instead of holding the job until its timeout.
+        timeout-minutes: 5
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq minisign
