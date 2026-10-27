@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref, watch, type VNode } from 'vue';
 import type { CommandPaletteGroup, CommandPaletteItem } from '@nuxt/ui';
 import { useNoteit } from '~/composables/useNoteit';
 import { webCommands } from '~/utils/commands';
@@ -105,6 +105,14 @@ const groups = computed<CommandPaletteGroup<CommandPaletteItem>[]>(() => {
   const label = mode === 'commands' ? 'Commands' : text ? undefined : 'Recent notes';
   return [{ id: 'results', ...(label ? { label } : {}), ignoreFilter: true, items: rows.map(item) }];
 });
+/**
+ * Names the results listbox for assistive tech. Nuxt UI's CommandPalette renders reka's ListboxContent without a
+ * name and passes no attributes to it (its `ui` slots take classes only), so the name is set on mount.
+ */
+function nameResults(vnode: VNode): void {
+  // The palette renders a fragment, so its vnode's element is an anchor inside the modal's content.
+  (vnode.el as Node | null)?.parentElement?.querySelector('[role="listbox"]')?.setAttribute('aria-label', 'Notes and commands');
+}
 // A fresh portal per opening, so it shows above the sidebar drawer (see useOpeningKey).
 const portalKey = useOpeningKey(() => state.palette);
 </script>
@@ -122,6 +130,7 @@ const portalKey = useOpeningKey(() => state.palette);
         class="max-h-[min(520px,70dvh)]"
         :ui="{ input: '[&>input]:text-[17px]', itemDescription: 'line-clamp-1', footer: 'p-0' }"
         @update:open="(v: boolean) => !v && close()"
+        @vue:mounted="nameResults"
       >
         <template #footer>
           <div class="flex flex-wrap items-center gap-4 border-t border-default px-4 py-2.5 text-xs text-muted">

@@ -88,6 +88,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - In the web app, closing Link to Note…'s list with Esc takes out the `[[` it typed, as on the Mac, and an editor closed while a note was still loading no longer throws an error.
 - ⌘Z in the web app's Tasks view undoes the last check or uncheck, and the ones before it, as on the Mac.
 - Web app exports: HTML and print put nested lists inside their parent item and show checklist items with a checkbox only, without a bullet; Markdown export writes an empty line as one blank line, so importing the file again no longer adds an empty paragraph.
+- In Safari, the web app no longer loses an edit typed just before you close the tab and choose Leave. Any edit still being saved as a tab closes or goes into the background is kept, encrypted, in the browser and saved the next time you unlock; if the note changed elsewhere meanwhile, the other version is kept as a conflict copy.
+- The web app's secondary text, links and accent buttons now meet WCAG AA contrast (4.5:1) in light and dark, including on hover. The account button is named after you, and the command palette's results list has a name for screen readers.
 
 ### Security
 
