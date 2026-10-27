@@ -118,16 +118,20 @@ export async function expectSaved(page: Page): Promise<void> {
   await expect(page.getByRole('toolbar', { name: 'Formatting' }).getByText('Saved', { exact: true })).toBeVisible();
 }
 
-/** A note row in the list by title. */
-export const noteRow = (page: Page, title: string | RegExp) => page.getByRole('listitem').filter({ hasText: title });
+/** A note row in the list by title (the row's text starts with it). */
+export const noteRow = (page: Page, title: string | RegExp) =>
+  page
+    .getByRole('region', { name: 'Notes' })
+    .getByRole('listitem')
+    .filter({ hasText: typeof title === 'string' ? new RegExp(`^${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) : title });
 
 /** Runs a command through the command palette (⌘K), by its title. */
 export async function runCommand(page: Page, title: string): Promise<void> {
   await page.keyboard.press('ControlOrMeta+k');
-  const dialog = page.getByRole('dialog');
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole('combobox').fill(title);
-  await dialog.getByRole('option', { name: title, exact: false }).first().click();
+  const input = page.getByRole('dialog').getByPlaceholder('Search notes and commands');
+  await expect(input).toBeVisible();
+  await input.fill(title);
+  await page.getByRole('dialog').getByRole('option', { name: title }).first().click();
 }
 
 /** A signed-in fresh account with an open, empty library: most specs start here. */
