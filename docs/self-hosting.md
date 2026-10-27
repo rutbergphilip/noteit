@@ -334,8 +334,13 @@ WantedBy=multi-user.target
 
 The browser runs whatever JavaScript the server sends, so a modified server could capture a passphrase. Each
 release's client files are listed with their SHA-256 in `web-client-X.Y.Z.json`, signed with the maintainer's
-minisign key (the public key is `scripts/noteit-release.pub` and is printed in every release's notes). From a
-checkout of this repository:
+minisign key. The public key is `scripts/noteit-release.pub`, and it is printed in every release's notes:
+
+```
+RWTAh3L8cqVIRvGo5uTFJSbKHU4tH6V1Qw25p7tsdzffKutLY4U5p6LQ
+```
+
+From a checkout of this repository:
 
 ```sh
 node scripts/verify-web-client.mjs https://notes.example.com --expect 0.7.0
