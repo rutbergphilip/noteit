@@ -31,6 +31,11 @@ let lastSaved = '';
 let baseRevision: string | undefined;
 /** The doc as typed, for the Links and Outline panel (word count updates as you type). */
 const liveDoc = shallowRef<NoteItDoc>();
+/**
+ * The doc as the editor was destroyed with an edit still pending. On unmount useEditor destroys the editor before
+ * this component's own onBeforeUnmount flushes, so the save reads this instead of the (gone) editor.
+ */
+let finalDoc: NoteItDoc | undefined;
 let liveTimer: ReturnType<typeof setTimeout> | undefined;
 
 function attachmentUrl(sha: string): string | undefined {
@@ -104,6 +109,9 @@ const editor = useEditor({
   onSelectionUpdate: () => {
     if (linkList.value) updateLinkList();
     if (tagList.value) updateTagList();
+  },
+  onDestroy: () => {
+    if (saveTimer && editor.value) finalDoc = fromEditorJSON(editor.value.getJSON());
   },
   onUpdate: () => {
     updateLinkList();
@@ -556,8 +564,8 @@ function save(): Promise<void> {
 async function saveNow(): Promise<void> {
   saveTimer = undefined;
   const ed = liveEditor();
-  if (!ed || !container.value || !editable.value) return;
-  const doc = fromEditorJSON(ed.getJSON());
+  const doc = ed ? fromEditorJSON(ed.getJSON()) : finalDoc;
+  if (!doc || !container.value || !editable.value) return;
   const json = JSON.stringify(doc);
   if (json === lastSaved) {
     saveState.value = 'saved';
