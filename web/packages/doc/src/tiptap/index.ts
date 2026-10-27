@@ -694,5 +694,6 @@ export * from './find.js';
 export * from './highlight.js';
 export * from './format.js';
 export * from './searchHighlight.js';
+export * from './tableRows.js';
 export * from './languages.js';
 export * from './safe.js';

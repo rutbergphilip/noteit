@@ -5,7 +5,7 @@ import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
 import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS, isTagBoundary, tagQueryEnds, tagSuggestions, type TagSuggestion, deriveTitleAndPreview, parseQuery, searchFold, NOTE_LINK_MAX_TEXT } from '@noteit/doc';
 import { useRenameTracker } from '~/composables/useRenameTracker';
-import { searchHighlightKey, searchHighlightPositions, adjustFontSize, clearFormatting, currentAlignment, setAlignment, CODE_LANGUAGES, codeBlockGroups, codeLanguageId, effectiveCodeLanguage, fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
+import { addTableRow, deleteTableRow, searchHighlightKey, searchHighlightPositions, adjustFontSize, clearFormatting, currentAlignment, setAlignment, CODE_LANGUAGES, codeBlockGroups, codeLanguageId, effectiveCodeLanguage, fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
@@ -752,6 +752,12 @@ function insertTable(): void {
   const ed = liveEditor();
   if (ed) insertTableAt(ed);
 }
+/** Format › Table's row commands while the caret is in a table (native addTableRow / deleteTableRow). */
+const tableItems = computed<DropdownMenuItem[]>(() => [
+  { label: 'Add Row Above', icon: 'i-lucide-between-horizontal-end', onSelect: () => formatWith((ed) => addTableRow(ed, false)) },
+  { label: 'Add Row Below', icon: 'i-lucide-between-horizontal-start', onSelect: () => formatWith((ed) => addTableRow(ed, true)) },
+  { label: 'Delete Row', icon: 'i-lucide-trash-2', color: 'error', onSelect: () => formatWith(deleteTableRow) },
+]);
 
 const linkOpen = ref(false);
 const linkHref = ref('');
@@ -994,6 +1000,9 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
       <UTooltip text="Table">
         <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-table" aria-label="Table" @click="insertTable" />
       </UTooltip>
+      <UDropdownMenu v-if="active('table')" :items="tableItems">
+        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-rows-3" aria-label="Table rows" />
+      </UDropdownMenu>
       <UPopover v-model:open="linkOpen">
         <UTooltip text="Link">
           <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-link" aria-label="Link" :aria-pressed="active('link')" :class="active('link') && 'bg-(--sel) text-(--acct)'" />
