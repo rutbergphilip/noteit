@@ -304,3 +304,28 @@ describe('unlinked mentions', () => {
     expect(s.links(target).backlinks.map((b) => b.id)).toEqual([mention]);
   });
 });
+
+describe('update links on rename', () => {
+  const linking = (title: string, href: string, shown: string): BodyContainer => ({
+    ...emptyContainer(),
+    doc: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: title }] }, { type: 'paragraph', content: [{ type: 'text', text: shown, marks: [{ type: 'link', attrs: { href } }] }] }] },
+  });
+
+  it('rewrites link text in other notes, skips the excluded one, and undoes unless edited since', async () => {
+    const { s } = await store();
+    const target = await s.createNote({ container: text('Atlas') });
+    const href = `noteit://note/${target.toUpperCase()}`;
+    const a = await s.createNote({ container: linking('A', href, 'Atlas') });
+    const b = await s.createNote({ container: linking('B', href, 'atlas') });
+    await s.createNote({ container: linking('Alias', href, 'Atlas map') });
+    expect(s.linkRenameCandidates(target, 'Atlas', b)).toEqual([a]);
+    const r = await s.rewriteLinkText(target, 'Atlas', 'Globe');
+    expect(r.updated).toBe(2);
+    expect(r.skipped).toBe(0);
+    expect(s.links(target).backlinks.length).toBe(3);
+    expect((s.getNote(a)!.container!.doc.content[1] as { content: { text: string }[] }).content[0]!.text).toBe('Globe');
+    await s.saveNote(b, linking('B edited', href, 'Globe'));
+    expect(await s.undoLinkRewrite(r.notes)).toBe(1);
+    expect((s.getNote(a)!.container!.doc.content[1] as { content: { text: string }[] }).content[0]!.text).toBe('Atlas');
+  });
+});

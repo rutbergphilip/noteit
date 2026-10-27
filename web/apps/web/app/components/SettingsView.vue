@@ -26,6 +26,7 @@ import { formatBytes, formatDateTime, relativeTime } from '~/utils/format';
 import { askNotificationPermission, notificationsSupported } from '~/utils/reminders';
 import type { DeviceView } from '~/worker/types';
 import { useOpeningKey } from '~/utils/overlay';
+import { linkRenameMode, setLinkRenameMode, type LinkRenameMode } from '~/composables/useRenameTracker';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
 const confirm = useConfirm();
@@ -124,6 +125,18 @@ const notifySub = computed(() =>
 async function allowNotifications(): Promise<void> {
   notifyState.value = await askNotificationPermission();
 }
+// When a note is renamed (native Settings › Editor › Links), kept in this browser.
+const renameMode = ref<LinkRenameMode>(linkRenameMode());
+const renameModes = [
+  { label: 'Ask', value: 'ask' },
+  { label: 'Always update links', value: 'always' },
+  { label: 'Never update links', value: 'never' },
+];
+function changeRenameMode(v: LinkRenameMode): void {
+  renameMode.value = v;
+  setLinkRenameMode(v);
+}
+
 const themes = [
   { label: 'System', value: 'system' },
   { label: 'Light', value: 'light' },
@@ -277,6 +290,9 @@ const portalKey = useOpeningKey(() => state.settings);
               </SettingsRow>
               <SettingsRow label="Reminder notifications" :sub="notifySub">
                 <UButton v-if="notifyState === 'default'" color="neutral" variant="outline" label="Allow" @click="allowNotifications" />
+              </SettingsRow>
+              <SettingsRow label="When a note is renamed" sub="Update the text of links to it that still show the old title.">
+                <USelect :model-value="renameMode" :items="renameModes" class="w-52" aria-label="When a note is renamed" @update:model-value="(v) => changeRenameMode(v as LinkRenameMode)" />
               </SettingsRow>
             </SettingsCard>
           </template>

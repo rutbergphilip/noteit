@@ -3,7 +3,8 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
-import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS, isTagBoundary, tagQueryEnds, tagSuggestions, type TagSuggestion } from '@noteit/doc';
+import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS, isTagBoundary, tagQueryEnds, tagSuggestions, type TagSuggestion, deriveTitleAndPreview, searchFold, NOTE_LINK_MAX_TEXT } from '@noteit/doc';
+import { useRenameTracker } from '~/composables/useRenameTracker';
 import { fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
@@ -106,7 +107,61 @@ const editor = useEditor({
     beginTagList();
     scheduleSave();
     if (liveTimer) clearTimeout(liveTimer);
-    liveTimer = setTimeout(() => editor.value && (liveDoc.value = fromEditorJSON(editor.value.getJSON())), 250);
+    liveTimer = setTimeout(() => {
+      if (!editor.value) return;
+      liveDoc.value = fromEditorJSON(editor.value.getJSON());
+      rename.changed(deriveTitleAndPreview(liveDoc.value).title);
+    }, 250);
+  },
+});
+
+// MARK: update links on rename (native RenameTracker): the open note's own links change in the editor, as one undo step.
+
+/** The ranges of links to this note (no heading) whose text reads `title`, with the first node's marks. */
+function ownLinkRanges(title: string): { from: number; to: number; marks: readonly import('@tiptap/pm/model').Mark[] }[] {
+  const ed = liveEditor();
+  const wanted = searchFold(title.trim());
+  if (!ed || !wanted) return [];
+  const out: { from: number; to: number; marks: readonly import('@tiptap/pm/model').Mark[] }[] = [];
+  const hrefOf = (n: import('@tiptap/pm/model').Node) => (n.isText ? (n.marks.find((m) => m.type.name === 'link')?.attrs.href as string | undefined) : undefined);
+  const mine = (href: string) => {
+    const l = parseNoteLink(href);
+    return !!l && 'id' in l && !l.heading && l.id.toUpperCase() === props.noteId.toUpperCase();
+  };
+  ed.state.doc.descendants((block, pos) => {
+    if (!block.isTextblock) return true;
+    let run: { from: number; to: number; href: string; text: string; marks: readonly import('@tiptap/pm/model').Mark[] } | undefined;
+    const flush = () => {
+      if (run && searchFold(run.text.trim()) === wanted) out.push({ from: run.from, to: run.to, marks: run.marks });
+      run = undefined;
+    };
+    block.forEach((child, offset) => {
+      const href = hrefOf(child);
+      const at = pos + 1 + offset;
+      if (href && run && run.href === href && run.to === at) {
+        run.to = at + child.nodeSize;
+        run.text += child.text ?? '';
+        return;
+      }
+      flush();
+      if (href && mine(href)) run = { from: at, to: at + child.nodeSize, href, text: child.text ?? '', marks: child.marks };
+    });
+    flush();
+    return false;
+  });
+  return out;
+}
+const rename = useRenameTracker(() => props.noteId, {
+  count: (old) => ownLinkRanges(old).length,
+  rewrite: (old, next) => {
+    const ed = liveEditor();
+    const ranges = ownLinkRanges(old);
+    const text = [...next.trim()].slice(0, NOTE_LINK_MAX_TEXT).join('');
+    if (!ed || !ranges.length || !text) return 0;
+    const tr = ed.state.tr;
+    for (const r of [...ranges].reverse()) tr.replaceWith(r.from, r.to, ed.schema.text(text, r.marks));
+    ed.view.dispatch(tr);
+    return ranges.length;
   },
 });
 
@@ -435,6 +490,7 @@ async function load(): Promise<void> {
     ed.commands.setContent(prepared.doc, { emitUpdate: false });
     lastSaved = JSON.stringify(opened.container.doc);
     liveDoc.value = opened.container.doc;
+    rename.observed(deriveTitleAndPreview(opened.container.doc).title);
   } else if (opened.container) {
     const prepared = prepareForEditor(opened.container);
     editable.value = false;
@@ -862,6 +918,29 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
     </div>
 
     <FindBar :editor="editor" :can-replace="editable && !row?.deletedAt" />
+
+    <div v-if="rename.prompt.value || rename.updating.value || rename.outcome.value" class="flex flex-wrap items-center gap-2 border-b border-default bg-(--side) px-6 py-1.5 text-xs max-md:px-3" role="status">
+      <template v-if="rename.prompt.value">
+        <UIcon name="i-lucide-link" class="size-3.5 text-muted" />
+        <span class="min-w-0 flex-1">{{
+          rename.prompt.value.noteCount === 1
+            ? `1 note links here as “${rename.prompt.value.oldTitle}”. Update the link to “${rename.prompt.value.newTitle}”?`
+            : `${rename.prompt.value.noteCount} notes link here as “${rename.prompt.value.oldTitle}”. Update the links to “${rename.prompt.value.newTitle}”?`
+        }}</span>
+        <UButton color="neutral" variant="soft" size="xs" label="Not Now" @click="rename.notNow()" />
+        <UButton size="xs" label="Update" @click="rename.update()" />
+      </template>
+      <template v-else-if="rename.updating.value">
+        <UIcon name="i-lucide-loader-circle" class="size-3.5 animate-spin text-muted" />
+        <span>Updating links…</span>
+      </template>
+      <template v-else-if="rename.outcome.value">
+        <UIcon name="i-lucide-circle-check" class="size-3.5 text-muted" />
+        <span class="min-w-0 flex-1">{{ rename.outcome.value.message }}</span>
+        <UButton v-if="rename.outcome.value.undo" color="neutral" variant="soft" size="xs" label="Undo" @click="rename.undo()" />
+        <UButton color="neutral" variant="ghost" size="xs" icon="i-lucide-x" aria-label="Dismiss" @click="rename.dismiss()" />
+      </template>
+    </div>
 
     <div v-if="readOnlyReason || row?.conflictSource" class="flex flex-col gap-2 px-6 pt-3">
       <UAlert

@@ -305,6 +305,9 @@ const api = {
   deleteSmartFolder: async (id: string) => needLocal().deleteSmartFolder(id),
   unlinkedMentions: async (id: string) => needLocal().unlinkedMentions(id),
   linkMentions: async (id: string, sources: string[]) => needLocal().linkMentions(id, sources),
+  linkRenameCandidates: async (id: string, oldTitle: string, exclude?: string) => needLocal().linkRenameCandidates(id, oldTitle, exclude),
+  rewriteLinkText: async (id: string, oldTitle: string, newTitle: string, exclude?: string) => needLocal().rewriteLinkText(id, oldTitle, newTitle, exclude),
+  undoLinkRewrite: async (notes: { id: string; revision: string; before: BodyContainer }[]) => needLocal().undoLinkRewrite(notes),
   liveReminders: async () => needLocal().liveReminders(),
   /** Without sync (no engine yet) the reminder is shown: a duplicate is better than a missed one. */
   claimReminder: async (id: string, at: number) => (engine ? engine.claimReminder(id, new Date(at)) : 'unavailable'),

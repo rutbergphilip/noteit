@@ -4,7 +4,8 @@
  */
 import { searchFold } from './search.js';
 import { parseDailyTitle } from './daily.js';
-import type { Inline, NoteItDoc } from './schema.js';
+import { NOTE_LINK_MAX_TEXT } from './linking.js';
+import { parseNoteLink, type Inline, type NoteItDoc } from './schema.js';
 
 export const MENTION_MIN_TITLE = 3;
 
@@ -53,7 +54,7 @@ export function mentionRanges(content: Inline[] | undefined, title: string): [nu
 }
 
 /** Every inline line of a doc in order, with a setter; the first line (the title) is index 0. */
-function lines(doc: NoteItDoc): { content: Inline[] | undefined; set: (c: Inline[]) => void }[] {
+function lines(doc: NoteItDoc, withCode = false): { content: Inline[] | undefined; set: (c: Inline[]) => void }[] {
   const out: { content: Inline[] | undefined; set: (c: Inline[]) => void }[] = [];
   const holder = (node: { content?: Inline[] }) => out.push({ content: node.content, set: (c) => (node.content = c) });
   for (const block of doc.content ?? []) {
@@ -62,6 +63,10 @@ function lines(doc: NoteItDoc): { content: Inline[] | undefined; set: (c: Inline
       case 'heading':
       case 'listItem':
         holder(block);
+        break;
+      case 'codeBlock':
+        if (withCode) holder(block);
+        else out.push({ content: undefined, set: () => undefined });
         break;
       case 'blockquote':
         for (const p of block.content ?? []) holder(p);
@@ -127,5 +132,53 @@ export function linkMentions(doc: NoteItDoc, title: string, href: string): NoteI
     changed = true;
   });
   return changed ? copy : undefined;
+}
+
+// MARK: Update links on rename (native NoteStore.linkTextRanges / rewriteLinkText)
+
+const linkHref = (n: Inline): string | undefined => (n.type === 'text' ? n.marks?.find((m) => m.type === 'link')?.attrs.href : undefined);
+
+/** Whether `href` is a link to the note `id` itself (no heading), as native's `.note(id:, heading: nil)`. */
+function linksToNote(href: string, id: string): boolean {
+  const parsed = parseNoteLink(href);
+  return !!parsed && 'id' in parsed && parsed.id.toUpperCase() === id.toUpperCase() && !parsed.heading;
+}
+
+/**
+ * The doc with the text of every link to note `id` that reads `oldTitle` (trimmed, case-, diacritic- and
+ * width-insensitive) replaced by `newTitle`, keeping the link's formatting; undefined when there's none.
+ */
+export function rewriteLinkText(doc: NoteItDoc, id: string, oldTitle: string, newTitle: string): { doc: NoteItDoc; count: number } | undefined {
+  const wanted = searchFold(oldTitle.trim());
+  const replacement = [...newTitle.trim()].slice(0, NOTE_LINK_MAX_TEXT).join('');
+  if (!wanted || !replacement) return undefined;
+  const copy = JSON.parse(JSON.stringify(doc)) as NoteItDoc;
+  let count = 0;
+  for (const line of lines(copy, true)) {
+    const content = line.content;
+    if (!content?.some((n) => linkHref(n))) continue;
+    const out: Inline[] = [];
+    let changed = false;
+    for (let i = 0; i < content.length; ) {
+      const href = linkHref(content[i]!);
+      if (!href || !linksToNote(href, id)) {
+        out.push(content[i]!);
+        i += 1;
+        continue;
+      }
+      // A link is the run of text nodes carrying the same href.
+      let j = i;
+      while (j < content.length && linkHref(content[j]!) === href) j += 1;
+      const run = content.slice(i, j) as Extract<Inline, { type: 'text' }>[];
+      if (searchFold(run.map((n) => n.text).join('').trim()) === wanted) {
+        out.push({ ...run[0]!, text: replacement });
+        count += 1;
+        changed = true;
+      } else out.push(...run);
+      i = j;
+    }
+    if (changed) line.set(out);
+  }
+  return count ? { doc: copy, count } : undefined;
 }
 

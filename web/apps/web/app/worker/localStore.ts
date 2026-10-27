@@ -57,6 +57,7 @@ import {
   rankSearch,
   findMentions,
   linkMentions,
+  rewriteLinkText,
   mentionsAreSearched,
   noteLink,
   reminderId,
@@ -370,6 +371,68 @@ export class WebLocalStore implements SyncLocalStore {
         changed += 1;
       }
       return changed;
+    });
+  }
+
+  /** Live, editable notes other than `exclude` with links to `id` that read `oldTitle` (native renameCandidates). */
+  linkRenameCandidates(id: Uuid, oldTitle: string, exclude?: Uuid): Uuid[] {
+    const wanted = searchFold(oldTitle.trim());
+    if (!wanted) return [];
+    const target = id.toUpperCase();
+    const out: Uuid[] = [];
+    for (const d of this.derived.values()) {
+      if (d.row.id === exclude || d.row.deletedAt || d.row.kind !== 'doc') continue;
+      if (d.links.some((l) => l.id === target && !l.heading && searchFold(l.text.trim()) === wanted)) out.push(d.row.id);
+    }
+    return out.sort();
+  }
+
+  /**
+   * Rewrites the text of those links to `newTitle` (native rewriteLinkText). Returns the links changed, the notes
+   * that couldn't be, and each changed note's previous body and new revision for Undo.
+   */
+  rewriteLinkText(id: Uuid, oldTitle: string, newTitle: string, exclude?: Uuid): Promise<{ updated: number; skipped: number; notes: { id: Uuid; revision: Uuid; before: BodyContainer }[] }> {
+    return this.exclusive(async () => {
+      await this.ensureFresh();
+      const result = { updated: 0, skipped: 0, notes: [] as { id: Uuid; revision: Uuid; before: BodyContainer }[] };
+      for (const source of this.linkRenameCandidates(id, oldTitle, exclude)) {
+        const opened = this.getNote(source);
+        if (!opened?.container || opened.readOnly) {
+          result.skipped += 1;
+          continue;
+        }
+        const rewritten = rewriteLinkText(opened.container.doc, id, oldTitle, newTitle);
+        if (!rewritten) continue;
+        try {
+          const saved = await this.saveNoteLocked(source, { ...opened.container, doc: rewritten.doc }, opened.row.revision);
+          result.updated += rewritten.count;
+          result.notes.push({ id: source, revision: saved.revision, before: opened.container });
+        } catch {
+          result.skipped += 1;
+        }
+      }
+      return result;
+    });
+  }
+
+  /** Puts back the bodies `rewriteLinkText` changed, for notes not edited since; returns how many were left alone. */
+  undoLinkRewrite(notes: { id: Uuid; revision: Uuid; before: BodyContainer }[]): Promise<number> {
+    return this.exclusive(async () => {
+      await this.ensureFresh();
+      let leftAlone = 0;
+      for (const n of notes) {
+        const row = this.derived.get(n.id)?.row;
+        if (!row || row.revision !== n.revision) {
+          leftAlone += 1;
+          continue;
+        }
+        try {
+          await this.saveNoteLocked(n.id, n.before, n.revision);
+        } catch {
+          leftAlone += 1;
+        }
+      }
+      return leftAlone;
     });
   }
 
