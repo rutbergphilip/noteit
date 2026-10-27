@@ -83,9 +83,46 @@ value, for Docker or Compose secrets (the file must be readable by uid 1000).
 | `NOTEIT_INVITE_TTL_HOURS` | `72` | How long invite links work. |
 | `NOTEIT_PASSWORD_LOGIN` | `true` | Password sign-in. |
 | `NOTEIT_SOURCE_URL` | this repository | The source link in About (the AGPL source offer). Point it at your fork if you change the code. |
+| `NOTEIT_STORE` | `disk` | Where the encrypted stores live: `disk` (the data volume) or `s3` (an upstream bucket, see [Store notes in an S3 bucket](#store-notes-in-an-s3-bucket)). |
+| `NOTEIT_S3_ENDPOINT`, `NOTEIT_S3_BUCKET` | — | The upstream S3 endpoint URL and bucket, with `NOTEIT_STORE=s3`. |
+| `NOTEIT_S3_ACCESS_KEY_ID`, `NOTEIT_S3_SECRET_ACCESS_KEY` (`_FILE`) | — | The upstream credentials. |
+| `NOTEIT_S3_REGION` | `us-east-1` | The upstream region. |
+| `NOTEIT_S3_PREFIX` | (bucket root) | Key prefix in the bucket; stores go under `<prefix>/users/<USER-ID>/`. |
+| `NOTEIT_S3_PATH_STYLE` | `true` | Path-style URLs; `false` for virtual-hosted buckets (`bucket.endpoint`). |
+| `NOTEIT_STORE_TIMEOUT_S` | `120` | Timeout of each upstream request. |
 | `NOTEIT_DATA_DIR` | `/data` | Where everything is stored. The image sets it; change it only when running without Docker. |
 | `PORT`, `HOST` | `3000`, `0.0.0.0` | Listen address. |
 | `NOTEIT_VERSION`, `NOTEIT_COMMIT` | set by the image | Shown in About and checked by the client verifier. Don't override them. |
+
+## Store notes in an S3 bucket
+
+By default each person's encrypted store is a directory in the data volume. With `NOTEIT_STORE=s3` the server
+keeps them in a bucket instead, under `<NOTEIT_S3_PREFIX>/users/<USER-ID>/`, and the volume only holds accounts and
+keys. The bytes are the same ciphertext either way.
+
+```sh
+-e NOTEIT_STORE=s3 \
+-e NOTEIT_S3_ENDPOINT=https://s3.eu-north-1.amazonaws.com -e NOTEIT_S3_REGION=eu-north-1 \
+-e NOTEIT_S3_BUCKET=my-noteit -e NOTEIT_S3_PREFIX=noteit-server \
+-e NOTEIT_S3_ACCESS_KEY_ID=… -e NOTEIT_S3_SECRET_ACCESS_KEY_FILE=/run/secrets/s3_secret
+```
+
+The upstream must support **conditional requests**: `If-None-Match: *` and `If-Match` on `PUT`, `If-Match` on
+`DELETE`, and a new ETag for every new content. Sync relies on them to never overwrite a newer note. At startup the
+server checks this on `<prefix>/server-canary/` and refuses to start if a check fails, naming it in the log (for
+example "it ignores If-Match on DELETE"). Amazon S3 supports all of them; check other providers before relying on
+them, or keep the default disk store.
+
+Other things to know:
+
+- The server must be the only writer to its prefix. Don't point the Mac app, rclone or another server at the
+  same prefix; the Mac syncs through the server's `/s3` endpoint instead.
+- If the upstream can't be reached at startup, the server keeps running and retries every 10 seconds. Until then
+  `/api/health` answers 503 and every other route except `/api/health/live` answers 503. After three failed
+  requests in a row later on, `/api/health` answers 503 until a probe succeeds; requests meanwhile fail with
+  `502 storeUnavailable`. The container is never restarted for this, since the health check is liveness only.
+- Give the key access to that bucket (and prefix) only. Backups of the volume no longer include the stores; back up
+  the bucket (versioning, replication or rclone) as well.
 
 ## Reverse proxy
 
@@ -291,7 +328,7 @@ WantedBy=multi-user.target
 | Endpoint | Answers |
 |---|---|
 | `GET /api/health/live` | `{"ok":true}` while the process serves requests. The image's Docker health check uses it. |
-| `GET /api/health` | `{"ok":true,"mode":"server","needsSetup":…}`; use it for readiness and uptime monitors. |
+| `GET /api/health` | `{"ok":true,"mode":"server","needsSetup":…}`, or 503 `{"ok":false,"reason":"storeUnavailable"}` while an upstream S3 store is unreachable. Use it for readiness and uptime monitors. |
 
 ## Verifying the client
 

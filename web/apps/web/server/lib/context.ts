@@ -3,6 +3,8 @@ import { join } from 'node:path';
 import { AccountStore, ApiFailure, type User } from './accounts';
 import { loadConfig, type ServerConfig } from './config';
 import { DiskStore } from './diskStore';
+import { S3Store } from './s3Store';
+import type { ObjectStore } from './store';
 import { Mutex } from './files';
 import { BootstrapToken, RateLimiter, SessionSigner } from './sessions';
 
@@ -10,7 +12,7 @@ import { BootstrapToken, RateLimiter, SessionSigner } from './sessions';
 export class Quotas {
   private readonly usage = new Map<string, Promise<{ bytes: number; objects: number }>>();
   private readonly locks = new Map<string, Mutex>();
-  constructor(private readonly store: DiskStore) {}
+  constructor(private readonly store: ObjectStore) {}
 
   /**
    * Every write of one user runs head → admit → put → applied inside this, so concurrent PUTs can't each admit
@@ -19,7 +21,15 @@ export class Quotas {
   exclusive<T>(userId: string, fn: () => Promise<T>): Promise<T> {
     let m = this.locks.get(userId);
     if (!m) this.locks.set(userId, (m = new Mutex()));
-    return m.run(fn);
+    return m.run(async () => {
+      try {
+        return await fn();
+      } catch (e) {
+        // A failed or timed-out store write may still have landed: recount from the store next time.
+        this.forget(userId);
+        throw e;
+      }
+    });
   }
 
   current(userId: string): Promise<{ bytes: number; objects: number }> {
@@ -53,7 +63,7 @@ export class Quotas {
 
 export interface ServerContext {
   cfg: ServerConfig;
-  store: DiskStore;
+  store: ObjectStore;
   accounts: AccountStore;
   sessions: SessionSigner;
   bootstrap: BootstrapToken;
@@ -64,15 +74,29 @@ export interface ServerContext {
   log: (msg: string) => void;
 }
 
-export async function createContext(cfg: ServerConfig = loadConfig(), log: (msg: string) => void = console.log): Promise<ServerContext> {
+export function createStore(cfg: ServerConfig, log: (msg: string) => void, fetchImpl?: typeof fetch): ObjectStore {
+  if (cfg.store === 's3' && cfg.s3) return new S3Store({ ...cfg.s3, timeoutMs: cfg.storeTimeoutMs }, log, fetchImpl);
+  return new DiskStore(cfg.dataDir);
+}
+
+export async function createContext(
+  cfg: ServerConfig = loadConfig(),
+  log: (msg: string) => void = console.log,
+  store: ObjectStore = createStore(cfg, log),
+): Promise<ServerContext> {
   await mkdir(cfg.dataDir, { recursive: true, mode: 0o700 });
-  const store = new DiskStore(cfg.dataDir);
   await store.init();
   const accounts = new AccountStore(cfg.dataDir);
   await accounts.load();
   // Finish deletions interrupted by a restart.
-  for (const user of accounts.users.filter((u) => u.status === 'deleting')) {
-    await store.deleteNamespace(user.id);
+  // Finish deletions interrupted by a restart (a later start retries if the upstream is unreachable now).
+  for (const user of store.started() ? accounts.users.filter((u) => u.status === 'deleting') : []) {
+    try {
+      await store.deleteNamespace(user.id);
+    } catch (e) {
+      log(`NoteIt: finishing the deletion of ${user.id} failed (${(e as Error).message}); it is retried on the next start`);
+      continue;
+    }
     await accounts.mutate((f) => {
       f.users = f.users.filter((u) => u.id !== user.id);
     });

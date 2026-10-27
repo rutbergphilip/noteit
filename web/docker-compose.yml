@@ -36,6 +36,17 @@ services:
       # NOTEIT_INVITE_TTL_HOURS: "72"
       # Password sign-in (on by default).
       # NOTEIT_PASSWORD_LOGIN: "true"
+      # Keep the encrypted stores in an S3 bucket instead of /data (docs/self-hosting.md). The upstream must
+      # support conditional requests; the server checks at startup and refuses one that doesn't.
+      # NOTEIT_STORE: "s3"
+      # NOTEIT_S3_ENDPOINT: "https://s3.eu-north-1.amazonaws.com"
+      # NOTEIT_S3_REGION: "eu-north-1"
+      # NOTEIT_S3_BUCKET: "my-noteit"
+      # NOTEIT_S3_PREFIX: "noteit-server"
+      # NOTEIT_S3_PATH_STYLE: "true"
+      # NOTEIT_S3_ACCESS_KEY_ID: "…"
+      # NOTEIT_S3_SECRET_ACCESS_KEY_FILE: /run/secrets/noteit_s3_secret
+      # NOTEIT_STORE_TIMEOUT_S: "120"
       # Shown in About as the AGPL source offer; point it at your fork if you change the code.
       # NOTEIT_SOURCE_URL: "https://github.com/rutbergphilip/noteit"
     # secrets:

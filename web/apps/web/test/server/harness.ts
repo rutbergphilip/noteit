@@ -7,6 +7,7 @@ import { createActionHandler, type SafeAction } from '#safe-action';
 import { createApiHandler } from '../../server/lib/api';
 import { loadConfig } from '../../server/lib/config';
 import { createContext, type ServerContext } from '../../server/lib/context';
+import type { ObjectStore } from '../../server/lib/store';
 import { securityHeaders } from '../../server/lib/http';
 import { createS3Handler } from '../../server/lib/s3';
 
@@ -33,10 +34,10 @@ export interface Harness {
 }
 
 /** The same handlers Nitro mounts, on a real HTTP listener. */
-export async function startServer(env: Record<string, string> = {}): Promise<Harness> {
+export async function startServer(env: Record<string, string> = {}, opts: { store?: ObjectStore; log?: (msg: string) => void } = {}): Promise<Harness> {
   const dataDir = await mkdtemp(join(tmpdir(), 'noteit-server-'));
   const cfg = loadConfig({ NOTEIT_DATA_DIR: dataDir, NOTEIT_SETUP_TOKEN: SETUP_TOKEN, ...env });
-  const ctx = await createContext(cfg, () => undefined);
+  const ctx = await createContext(cfg, opts.log ?? (() => undefined), opts.store);
   const api = createApiHandler(ctx);
   const s3 = createS3Handler(ctx);
   const app = createApp();
@@ -64,6 +65,7 @@ export async function startServer(env: Record<string, string> = {}): Promise<Har
     ctx,
     dataDir,
     close: async () => {
+      ctx.store.close();
       await new Promise<void>((r) => server.close(() => r()));
       await rm(dataDir, { recursive: true, force: true });
     },

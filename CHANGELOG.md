@@ -10,6 +10,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Added
 
 - The NoteIt web app ships as a Docker image for linux/amd64 and linux/arm64, `ghcr.io/rutbergphilip/noteit-web`, with a [self-hosting guide](docs/self-hosting.md) for Docker, Compose, reverse proxies (Caddy, nginx, Traefik), the first admin, connecting your Mac, backups, upgrades and running without Docker.
+- The web app's server can keep everyone's encrypted notes in an S3 bucket instead of its own disk (`NOTEIT_STORE=s3`). It checks at startup that the bucket supports the conditional requests sync relies on, and keeps running, reporting itself not ready, while the bucket can't be reached.
 - Each release signs a manifest of the web app's client files. `scripts/verify-web-client.mjs` checks that a server, or the static client attached to the release, serves exactly that client.
 - A portable note format for sync, so the upcoming NoteIt web app can open your notes. The first time this version syncs, it switches your storage over and converts your notes in the background; there's nothing to set up. If another Mac still runs an older NoteIt, it asks you first, because that Mac stops syncing until it's updated. Nothing on it is lost. Each of your devices downloads every note once while this happens.
 - A “NoteIt Server” choice when you set up sync, for syncing with your own NoteIt web app.

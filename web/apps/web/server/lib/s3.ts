@@ -6,6 +6,7 @@ import { ApiFailure, type User } from './accounts';
 import type { ServerContext } from './context';
 import type { StoredObject } from './diskStore';
 import { InvalidKeyError } from './diskStore';
+import { StoreUnavailable } from './store';
 import { normalizeIfMatch } from './http';
 
 export const BUCKET = 'noteit';
@@ -192,6 +193,7 @@ export function createS3Handler(ctx: ServerContext) {
     const url = event.node.req.url ?? '/';
     const method = event.method.toUpperCase();
     try {
+      if (!store.started()) throw new S3Failure(503, 'ServiceUnavailable', 'The storage backend is not reachable yet');
       if (ctx.accounts.isEmpty) throw new S3Failure(503, 'ServiceUnavailable', 'This server needs its first admin');
       // Signature first, from the headers alone: nothing is buffered for an unauthenticated client.
       const { user, payloadHash } = await authenticate(event, ctx);
@@ -304,6 +306,8 @@ export function createS3Handler(ctx: ServerContext) {
       if (!event.node.req.complete) setResponseHeader(event, 'Connection', 'close');
       if (e instanceof S3Failure) return method === 'HEAD' ? (setResponseStatus(event, e.status), '') : sendError(event, e, url.split('?')[0]!);
       if (e instanceof InvalidKeyError) return sendError(event, new S3Failure(400, 'InvalidArgument', 'Invalid key'), url.split('?')[0]!);
+      // S3 clients retry 503 with backoff.
+      if (e instanceof StoreUnavailable) return sendError(event, new S3Failure(503, 'ServiceUnavailable', 'The storage backend is not reachable'), url.split('?')[0]!);
       ctx.log(`s3 error: ${e instanceof Error ? (e.stack ?? e.message) : String(e)}`);
       return sendError(event, new S3Failure(500, 'InternalError', 'We encountered an internal error'), url.split('?')[0]!);
     }

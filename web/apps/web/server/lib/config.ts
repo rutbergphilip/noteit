@@ -1,7 +1,22 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
+export interface UpstreamS3Config {
+  endpoint: string;
+  region: string;
+  bucket: string;
+  prefix: string;
+  pathStyle: boolean;
+  accessKeyId: string;
+  secretAccessKey: string;
+}
+
 export interface ServerConfig {
+  /** Where user stores live: the data directory, or an upstream S3 bucket (spec §6.2). */
+  store: 'disk' | 's3';
+  s3: UpstreamS3Config | undefined;
+  /** Timeout of each upstream store request. */
+  storeTimeoutMs: number;
   dataDir: string;
   publicUrl: string | undefined;
   setupToken: string | undefined;
@@ -30,8 +45,33 @@ function secret(env: NodeJS.ProcessEnv, name: string): string | undefined {
 
 const int = (v: string | undefined, d: number) => (v && /^\d+$/.test(v) ? Number(v) : d);
 
-export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+function required(env: NodeJS.ProcessEnv, name: string): string {
+  const v = secret(env, name);
+  if (!v) throw new Error(`${name} is required when NOTEIT_STORE=s3`);
+  return v;
+}
+
+function upstreamS3(env: NodeJS.ProcessEnv): UpstreamS3Config {
+  const endpoint = required(env, 'NOTEIT_S3_ENDPOINT');
+  if (!/^https?:\/\//.test(endpoint)) throw new Error('NOTEIT_S3_ENDPOINT must be an http(s) URL');
   return {
+    endpoint,
+    region: env.NOTEIT_S3_REGION || 'us-east-1',
+    bucket: required(env, 'NOTEIT_S3_BUCKET'),
+    prefix: env.NOTEIT_S3_PREFIX ?? '',
+    pathStyle: env.NOTEIT_S3_PATH_STYLE !== 'false',
+    accessKeyId: required(env, 'NOTEIT_S3_ACCESS_KEY_ID'),
+    secretAccessKey: required(env, 'NOTEIT_S3_SECRET_ACCESS_KEY'),
+  };
+}
+
+export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const store = env.NOTEIT_STORE || 'disk';
+  if (store !== 'disk' && store !== 's3') throw new Error(`NOTEIT_STORE must be disk or s3, not ${JSON.stringify(store)}`);
+  return {
+    store,
+    s3: store === 's3' ? upstreamS3(env) : undefined,
+    storeTimeoutMs: Math.max(1, int(env.NOTEIT_STORE_TIMEOUT_S, 120)) * 1000,
     dataDir: resolve(env.NOTEIT_DATA_DIR || '/data'),
     publicUrl: env.NOTEIT_PUBLIC_URL?.replace(/\/$/, '') || undefined,
     setupToken: secret(env, 'NOTEIT_SETUP_TOKEN'),

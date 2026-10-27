@@ -65,7 +65,7 @@ the [self-hosting guide](../docs/self-hosting.md#verifying-the-client).
 
 ## Not in this version
 
-- Upstream S3 storage for the server (it stores on its own disk), direct browser→S3 mode, OIDC sign-in.
+- Direct browser→S3 mode and OIDC sign-in.
 - The multi-browser Playwright matrix and the native ⇄ web interop harness.
 - Orphan-body sweep and "Clean up unused storage": superseded note bodies are deleted right after each
   publish; leftovers from interrupted publishes stay until a later version sweeps them.
