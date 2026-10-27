@@ -13,13 +13,16 @@ import {
   keys,
   MemoryStateStore,
   openSession,
+  ROOT,
   type StoreSession,
   StorageError,
   SyncEngine,
+  SyncError,
   utf8,
   type SyncAction,
 } from '../src/index.js';
 import { FakeLocal } from './fake-local.js';
+import { HeldRequest, isTestCrash, ScriptedBackend } from './scripted-backend.js';
 import { golden } from './golden.js';
 
 interface PlannerCase {
@@ -53,7 +56,7 @@ describe('planner vectors', () => {
 });
 
 interface Step { device: string; op: string; args: Record<string, unknown> }
-interface Scenario { name: string; store?: 'v2'; steps: Step[]; expectRemoteKeys: string[]; expectLocal: Record<string, Record<string, unknown>[]> }
+interface Scenario { name: string; store?: 'v2'; backend?: { atomic?: boolean; atomicDelete?: boolean }; steps: Step[]; expectRemoteKeys: string[]; expectLocal: Record<string, Record<string, unknown>[]> }
 
 async function plainSession(backend: InMemoryBackend, now: Date): Promise<StoreSession> {
   const etag = await backend.put(keys.manifest, encodeJson({ createdAt: now.getTime() / 1000 - 978307200, formatVersion: 1 }), { ifNoneMatch: true });
@@ -136,29 +139,27 @@ describe('engine scenario vectors (v1 bodies)', () => {
 interface SnapshotCase { passphrase: string; objects: { key: string; etag: string; data: string }[]; expectRecords: Record<string, unknown>[] }
 
 /**
- * The v2 traces this engine can replay. The others need the orphan sweep (v2-lost-response leaves the superseded
- * version for it), stranded-body recovery, body repair,
- * cleanup or the native crash and hold hooks, which `@noteit/core` doesn't have yet (web-app plan Task 2.6).
+ * The v2 traces (Swift GoldenVectorTests.v2Scenarios), replayed the way Swift's runV2 does: every step advances the
+ * clock 60 s, a device whose name starts with "W" is wiped after its crash (never syncs again, not compared), and
+ * crashes, lost responses and held requests come from ScriptedBackend.
  */
-const V2_REPLAYED = new Set(['v2-publish']);
-
 describe('engine scenario vectors (v2, noteit-doc store)', () => {
   const v2 = golden<Scenario>('engine-scenarios.json').cases.filter((c) => c.store === 'v2');
   it('has the v2 traces', () => {
-    expect(v2.map((c) => c.name)).toEqual(expect.arrayContaining([...V2_REPLAYED, 'v2-lost-response', 'v2-orphan-sweep', 'v2-stranded', 'v2-repair']));
+    expect(v2.map((c) => c.name)).toEqual(
+      expect.arrayContaining(['v2-publish', 'v2-crash-before-commit', 'v2-lost-response', 'v2-orphan-sweep', 'v2-stranded', 'v2-held-create', 'v2-repair']),
+    );
   });
   for (const sc of v2) {
-    if (!V2_REPLAYED.has(sc.name)) {
-      it.todo(`${sc.name} (needs the sweep, recovery and fault hooks of Task 2.6)`);
-      continue;
-    }
     it(sc.name, async () => {
       let clock = new Date('2026-01-01T00:00:00.000Z');
-      const backend = new InMemoryBackend({ now: () => clock });
-      await connect(backend, { passphrase: 'scenario', createIfMissing: true, now: () => clock });
+      const memory = new InMemoryBackend({ now: () => clock, atomic: sc.backend?.atomic ?? true, atomicDelete: sc.backend?.atomicDelete ?? true });
+      const backend = new ScriptedBackend(memory);
+      await connect(memory, { passphrase: 'scenario', createIfMissing: true, now: () => clock });
       const devices = new Map<string, { local: FakeLocal; state: MemoryStateStore; engine: SyncEngine }>();
+      const held = new Map<string, HeldRequest>();
       const make = async (name: string, local: FakeLocal, state: MemoryStateStore) => {
-        const { session } = await connect(backend, { passphrase: 'scenario', createIfMissing: false });
+        const { session } = await connect(memory, { passphrase: 'scenario', createIfMissing: false });
         return new SyncEngine({ backend, session, local, state, deviceID: `device-${name}`, deviceName: name, now: () => clock });
       };
       const device = async (name: string) => {
@@ -171,8 +172,18 @@ describe('engine scenario vectors (v2, noteit-doc store)', () => {
         }
         return d;
       };
+      const sync = async (d: { engine: SyncEngine }) => {
+        try {
+          await d.engine.sync();
+        } catch (e) {
+          if (!isTestCrash(e)) throw e;
+        }
+      };
+      const pattern = (a: Record<string, unknown>) => (a.target === 'body' ? `bodies/${String(a.id)}` : keys.noteMeta(a.id as string));
+      const tick = () => (clock = new Date(clock.getTime() + 60_000));
       const known = new Set<string>();
       for (const step of sc.steps) {
+        tick();
         const d = await device(step.device);
         const a = step.args;
         if (typeof a.at === 'string') clock = new Date(a.at);
@@ -193,19 +204,47 @@ describe('engine scenario vectors (v2, noteit-doc store)', () => {
             });
             break;
           }
+          case 'delete':
+            d.local.remove(a.id as string, clock);
+            break;
           case 'sync':
-            await d.engine.sync().catch((e: unknown) => {
-              if (!(e instanceof StorageError)) throw e;
-            });
+            await sync(d);
+            break;
+          case 'syncRepeat':
+            for (let i = 0; i < (a.count as number); i++) {
+              tick();
+              await sync(d);
+            }
+            break;
+          case 'advanceClock':
+            clock = new Date(clock.getTime() + (a.seconds as number) * 1000);
+            break;
+          case 'crashDuring':
+            backend.on('put', pattern(a), { type: 'crashDuring' });
             break;
           case 'landThenFail':
-            backend.landThenFail('put', new RegExp(a.target === 'body' ? `bodies/${String(a.id)}` : `notes/${String(a.id)}\\.meta$`));
+            backend.on('put', pattern(a), { type: 'landThenFail' });
+            break;
+          case 'hold': {
+            const request = new HeldRequest();
+            held.set(step.device, request);
+            backend.on('put', pattern(a), { type: 'hold', held: request });
+            break;
+          }
+          case 'release':
+            await held.get(step.device)?.release();
             break;
           case 'restart':
             d.engine = await make(step.device, d.local, d.state);
             break;
-          case 'advanceClock':
-            clock = new Date(clock.getTime() + (a.seconds as number) * 1000);
+          case 'deleteBodies':
+            for (const o of await memory.list(`${ROOT}bodies/`)) if (o.key.includes(String(a.id))) await memory.delete(o.key);
+            break;
+          case 'cleanup':
+            // Refused on a store without atomic conditional writes (v2-cleanup-disabled).
+            await d.engine.cleanUpUnusedStorage().catch((e: unknown) => {
+              if (!(e instanceof SyncError && e.kind === 'cleanupUnavailable')) throw e;
+            });
             break;
           default:
             throw new Error(`unknown op ${step.op}`);
@@ -215,7 +254,7 @@ describe('engine scenario vectors (v2, noteit-doc store)', () => {
       const version = /\.[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\.([^.]+)\.body$/;
       const placeholder = (s: string) =>
         s.replace(version, (_, tag: string) => `.V.${tag === 'new' ? 'new' : 'TAG'}.body`).replace(uuidRe, (u) => (known.has(u) ? u : 'new'));
-      expect([...backend.objects.keys()].map(placeholder).sort()).toEqual([...sc.expectRemoteKeys].sort());
+      expect([...memory.objects.keys()].map(placeholder).sort()).toEqual([...sc.expectRemoteKeys].sort());
       for (const [name, expected] of Object.entries(sc.expectLocal)) {
         const got = [...(await device(name)).local.items.values()].map((r) => {
           const out: Record<string, unknown> = { id: placeholder(r.id), kind: r.kind, revision: placeholder(r.revision), title: r.meta.title };

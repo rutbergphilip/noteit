@@ -1588,6 +1588,482 @@
         }
       ],
       "store" : "v2"
+    },
+    {
+      "expectLocal" : {
+        "A" : [
+          {
+            "body" : "Body of Final",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "Final"
+          }
+        ],
+        "B" : [
+          {
+            "body" : "Body of Final",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "Final"
+          }
+        ]
+      },
+      "expectRemoteKeys" : [
+        "noteit/v1/bodies/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.V.TAG.body",
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
+      ],
+      "name" : "v2-crash-body",
+      "steps" : [
+        {
+          "args" : {
+            "at" : "2026-01-01T00:01:00.000Z",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "CC499D24-686A-47D4-B701-CC9F40A54C17",
+            "title" : "Draft"
+          },
+          "device" : "A",
+          "op" : "create"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+            "at" : "2026-01-01T00:04:00.000Z",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "Final"
+          },
+          "device" : "A",
+          "op" : "edit"
+        },
+        {
+          "args" : {
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "target" : "body"
+          },
+          "device" : "A",
+          "op" : "crashDuring"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "restart"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        }
+      ],
+      "store" : "v2"
+    },
+    {
+      "expectLocal" : {
+        "A" : [
+          {
+            "body" : "Body of From A",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "From A"
+          },
+          {
+            "body" : "Body of From B",
+            "conflictSource" : "B",
+            "id" : "new",
+            "kind" : "note",
+            "revision" : "new",
+            "title" : "From B (conflict — B)"
+          }
+        ],
+        "B" : [
+          {
+            "body" : "Body of From A",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "From A"
+          },
+          {
+            "body" : "Body of From B",
+            "conflictSource" : "B",
+            "id" : "new",
+            "kind" : "note",
+            "revision" : "new",
+            "title" : "From B (conflict — B)"
+          }
+        ]
+      },
+      "expectRemoteKeys" : [
+        "noteit/v1/bodies/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.V.TAG.body",
+        "noteit/v1/bodies/new.V.new.body",
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta",
+        "noteit/v1/notes/new.meta"
+      ],
+      "name" : "v2-late-commit",
+      "steps" : [
+        {
+          "args" : {
+            "at" : "2026-01-01T00:01:00.000Z",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "CC499D24-686A-47D4-B701-CC9F40A54C17",
+            "title" : "Shared"
+          },
+          "device" : "A",
+          "op" : "create"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+            "at" : "2026-01-01T00:04:00.000Z",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "From A"
+          },
+          "device" : "A",
+          "op" : "edit"
+        },
+        {
+          "args" : {
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "target" : "meta"
+          },
+          "device" : "A",
+          "op" : "hold"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+            "at" : "2026-01-01T00:07:00.000Z",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "revision" : "2F85744C-55B3-450F-96E3-964C28971075",
+            "title" : "From B"
+          },
+          "device" : "B",
+          "op" : "edit"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "release"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        }
+      ],
+      "store" : "v2"
+    },
+    {
+      "backend" : {
+        "atomic" : false
+      },
+      "expectLocal" : {
+        "A" : [
+          {
+            "body" : "Body of Second",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "Second"
+          }
+        ],
+        "B" : [
+          {
+            "body" : "Body of Second",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "Second"
+          }
+        ]
+      },
+      "expectRemoteKeys" : [
+        "noteit/v1/bodies/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.V.TAG.body",
+        "noteit/v1/bodies/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.V.new.body",
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.meta"
+      ],
+      "name" : "v2-cleanup-disabled",
+      "steps" : [
+        {
+          "args" : {
+            "at" : "2026-01-01T00:01:00.000Z",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "CC499D24-686A-47D4-B701-CC9F40A54C17",
+            "title" : "First"
+          },
+          "device" : "A",
+          "op" : "create"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+            "at" : "2026-01-01T00:04:00.000Z",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "Second"
+          },
+          "device" : "B",
+          "op" : "edit"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "cleanup"
+        }
+      ],
+      "store" : "v2"
+    },
+    {
+      "backend" : {
+        "atomicDelete" : false
+      },
+      "expectLocal" : {
+        "A" : [
+          {
+            "body" : "Body of Kept again",
+            "id" : "E610E818-ED4E-4FDD-8C93-409A6C554D03",
+            "kind" : "note",
+            "revision" : "2F85744C-55B3-450F-96E3-964C28971075",
+            "title" : "Kept again"
+          }
+        ],
+        "B" : [
+          {
+            "body" : "Body of Kept again",
+            "id" : "E610E818-ED4E-4FDD-8C93-409A6C554D03",
+            "kind" : "note",
+            "revision" : "2F85744C-55B3-450F-96E3-964C28971075",
+            "title" : "Kept again"
+          }
+        ]
+      },
+      "expectRemoteKeys" : [
+        "noteit/v1/bodies/E610E818-ED4E-4FDD-8C93-409A6C554D03.V.TAG.body",
+        "noteit/v1/devices/device-A.json",
+        "noteit/v1/devices/device-B.json",
+        "noteit/v1/manifest.json",
+        "noteit/v1/notes/E610E818-ED4E-4FDD-8C93-409A6C554D03.meta",
+        "noteit/v1/tombstones/21CFBD1D-66BF-4E04-816C-2BFA60C8F61A.json"
+      ],
+      "name" : "v2-no-atomic-delete",
+      "steps" : [
+        {
+          "args" : {
+            "at" : "2026-01-01T00:01:00.000Z",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A",
+            "kind" : "note",
+            "revision" : "CC499D24-686A-47D4-B701-CC9F40A54C17",
+            "title" : "Doomed"
+          },
+          "device" : "A",
+          "op" : "create"
+        },
+        {
+          "args" : {
+            "at" : "2026-01-01T00:02:00.000Z",
+            "id" : "E610E818-ED4E-4FDD-8C93-409A6C554D03",
+            "kind" : "note",
+            "revision" : "BFA4489A-87E1-4BAC-91BC-3109D06F5F84",
+            "title" : "Kept"
+          },
+          "device" : "A",
+          "op" : "create"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+            "at" : "2026-01-01T00:05:00.000Z",
+            "id" : "E610E818-ED4E-4FDD-8C93-409A6C554D03",
+            "revision" : "2F85744C-55B3-450F-96E3-964C28971075",
+            "title" : "Kept again"
+          },
+          "device" : "B",
+          "op" : "edit"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+            "at" : "2026-01-01T00:07:00.000Z",
+            "id" : "21CFBD1D-66BF-4E04-816C-2BFA60C8F61A"
+          },
+          "device" : "A",
+          "op" : "delete"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+            "seconds" : 2678400
+          },
+          "device" : "B",
+          "op" : "advanceClock"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "B",
+          "op" : "sync"
+        },
+        {
+          "args" : {
+
+          },
+          "device" : "A",
+          "op" : "sync"
+        }
+      ],
+      "store" : "v2"
     }
   ],
   "generator" : "swift",

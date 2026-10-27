@@ -53,6 +53,8 @@ export interface RemoteIndex {
   tombstones: Map<Uuid, RemoteObject>;
   devices: Map<string, RemoteObject>;
   sidecars: RemoteObject[];
+  /** Unparsable names under `bodies/` (Swift RemoteIndex.strayBodies); the orphan sweep removes them. */
+  strayBodies: RemoteObject[];
 }
 
 /** One listing of the root, indexed by record. Unknown prefixes and kinds are skipped, never errors. */
@@ -64,6 +66,7 @@ export function indexRemote(objects: RemoteObject[]): RemoteIndex {
     tombstones: new Map(),
     devices: new Map(),
     sidecars: [],
+    strayBodies: [],
   };
   for (const object of objects) {
     if (!object.key.startsWith(ROOT)) continue;
@@ -104,7 +107,10 @@ export function indexRemote(objects: RemoteObject[]): RemoteIndex {
         const m = DOC_BODY_RE.exec(name);
         const id = m && normalizeUuid(m[1]!);
         const version = m && normalizeUuid(m[2]!);
-        if (!m || !id || !version) break;
+        if (!m || !id || !version) {
+          index.strayBodies.push(object);
+          break;
+        }
         let versions = index.docBodies.get(id);
         if (!versions) index.docBodies.set(id, (versions = new Map()));
         versions.set(version, { ...object, tag: m[3]!, locked: m[4] === 'locked' });

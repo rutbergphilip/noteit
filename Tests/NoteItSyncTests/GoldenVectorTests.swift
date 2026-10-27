@@ -545,9 +545,16 @@ final class GoldenVectorTests: XCTestCase {
             var conflictSource: String?
         }
 
+        /// InMemoryBackend capabilities of a v2 trace; absent means both atomic.
+        struct Backend: Codable, Equatable {
+            var atomic: Bool?
+            var atomicDelete: Bool?
+        }
+
         var name: String
         /// "v2" for a trace on a noteit-doc store (web-app Task 0.4); absent for the v1 traces.
         var store: String?
+        var backend: Backend?
         var steps: [Step]
         /// For v2 traces, a versioned body key's version is "V" and a hashed tag "TAG".
         var expectRemoteKeys: [String]
@@ -562,6 +569,9 @@ final class GoldenVectorTests: XCTestCase {
         XCTAssertEqual(cases.count, 10)
         for (name, steps) in Self.v2Scenarios {
             cases.append(try await runV2(name, steps))
+        }
+        for (name, backend, steps) in Self.v2BackendScenarios {
+            cases.append(try await runV2(name, steps, backend: backend))
         }
         try VectorIO.check("engine-scenarios.json", cases)
     }
@@ -775,6 +785,54 @@ final class GoldenVectorTests: XCTestCase {
             step("B", "advanceClock", seconds: 2 * 86_400),
             sync("B"), sync("A"),
         ]),
+        // A crash while the new version's body is uploading: the restarted engine re-sends the same bytes to the same
+        // key and commits them.
+        ("v2-crash-body", [
+            step("A", "create", id: "n1", kind: "note", title: "Draft", revision: "1"),
+            sync("A"), sync("B"),
+            step("A", "edit", id: "n1", title: "Final", revision: "2"),
+            step("A", "crashDuring", id: "n1", target: "body"),
+            sync("A"),
+            step("A", "restart"),
+            sync("A"), sync("B"),
+        ]),
+        // A commit that times out and lands only after another device committed: it fails its precondition, and the
+        // edit comes back as a conflict copy.
+        ("v2-late-commit", [
+            step("A", "create", id: "n1", kind: "note", title: "Shared", revision: "1"),
+            sync("A"), sync("B"),
+            step("A", "edit", id: "n1", title: "From A", revision: "2"),
+            step("A", "hold", id: "n1", target: "meta"),
+            sync("A"),
+            step("B", "edit", id: "n1", title: "From B", revision: "3"),
+            sync("B"),
+            step("A", "release"),
+            sync("A"), sync("B"), sync("A"),
+        ]),
+    ]
+
+    /// v2 traces on a store without one of the atomic capabilities (spec §3.4.9).
+    private static let v2BackendScenarios: [(String, ScenarioCase.Backend, [ScriptStep])] = [
+        // No atomic conditional writes: every edit keeps the previous body, and cleanup is refused.
+        ("v2-cleanup-disabled", .init(atomic: false), [
+            step("A", "create", id: "n1", kind: "note", title: "First", revision: "1"),
+            sync("A"), sync("B"),
+            step("B", "edit", id: "n1", title: "Second", revision: "2"),
+            sync("B"), sync("A"),
+            step("B", "cleanup"),
+        ]),
+        // No atomic conditional deletes: versioned bodies go with plain deletes, a deletion leaves its tombstone.
+        ("v2-no-atomic-delete", .init(atomicDelete: false), [
+            step("A", "create", id: "n1", kind: "note", title: "Doomed", revision: "1"),
+            step("A", "create", id: "n2", kind: "note", title: "Kept", revision: "2"),
+            sync("A"), sync("B"),
+            step("B", "edit", id: "n2", title: "Kept again", revision: "3"),
+            sync("B"),
+            step("A", "delete", id: "n1"),
+            sync("A"), sync("B"),
+            step("B", "advanceClock", seconds: 31 * 86_400),
+            sync("B"), sync("A"),
+        ]),
     ]
 
     private final class V2Device {
@@ -792,9 +850,9 @@ final class GoldenVectorTests: XCTestCase {
     }
 
     /// Like `run`, on a noteit-doc store over an atomic `InMemoryBackend` wrapped in `ScriptedBackend` for the fault ops.
-    private func runV2(_ name: String, _ script: [ScriptStep]) async throws -> ScenarioCase {
+    private func runV2(_ name: String, _ script: [ScriptStep], backend options: ScenarioCase.Backend? = nil) async throws -> ScenarioCase {
         let clock = FixedClock(VectorIO.epoch)
-        let memory = InMemoryBackend(now: { clock.now() })
+        let memory = InMemoryBackend(atomic: options?.atomic ?? true, atomicDelete: options?.atomicDelete ?? true, now: { clock.now() })
         let backend = ScriptedBackend(memory)
         var devices: [String: V2Device] = [:]
         var held: [String: HeldRequest] = [:]
@@ -870,7 +928,11 @@ final class GoldenVectorTests: XCTestCase {
                     try await memory.delete(object.key, ifMatch: nil)
                 }
             case "cleanup":
-                _ = try await d.engine.cleanUpUnusedStorage()
+                do {
+                    _ = try await d.engine.cleanUpUnusedStorage()
+                } catch SyncError.cleanupUnavailable {
+                    // Refused on a store without atomic conditional writes (v2-cleanup-disabled).
+                }
             default:
                 XCTFail("Unknown op \(op)")
             }
@@ -900,6 +962,6 @@ final class GoldenVectorTests: XCTestCase {
             guard UUID(uuidString: id) != nil, !known.contains(id) else { return key }
             return key.replacingOccurrences(of: id, with: "new")
         }.sorted()
-        return ScenarioCase(name: name, store: "v2", steps: steps, expectRemoteKeys: keys, expectLocal: local)
+        return ScenarioCase(name: name, store: "v2", backend: options, steps: steps, expectRemoteKeys: keys, expectLocal: local)
     }
 }

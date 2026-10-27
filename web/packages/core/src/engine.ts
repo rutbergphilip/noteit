@@ -21,7 +21,7 @@ import { baseTag, context, indexRemote, keys, NEW_TAG, type RecordKind, type Rem
 import { type Base, decide, type LocalRecord } from './planner.js';
 import { manifestKeyID, type StoreSession } from './session.js';
 import { DEVICE_WRITE_INTERVAL_S, type PendingBody, type SyncState, type SyncStateStore, TOMBSTONE_RETENTION_DAYS } from './state.js';
-import type { StorageBackend } from './storage/backend.js';
+import type { RemoteObject, StorageBackend } from './storage/backend.js';
 import { newUuid, type Uuid } from './uuid.js';
 
 /** Body fields a meta-only write keeps exactly as they were (legacy RTFD and locked notes in a noteit-doc store). */
@@ -63,6 +63,22 @@ export interface SyncLocalStore {
   passDidFinish(): Promise<void>;
 }
 
+/** What "Clean up unused storage…" removed (spec §3.4.9; Swift CleanupReport). */
+export interface CleanupReport {
+  deletedObjects: number;
+  deletedBytes: number;
+}
+
+/** The meta this device holds references a missing version: other devices wait this long before republishing it. */
+export const BODY_REPAIR_GRACE_S = 86_400;
+/** A stranded body's meta is refreshed after it was stranded for this many passes and `STRANDED_AGE_S`. */
+export const STRANDED_PASSES = 20;
+export const STRANDED_AGE_S = 86_400;
+export const MAX_RECOVERY_WRITES_PER_PASS = 5;
+/** Only `cleanUpUnusedStorage()` reads it. */
+export const ORPHAN_BODY_GRACE_S = 30 * 86_400;
+export const MAX_ORPHAN_DELETES_PER_PASS = 200;
+
 export interface SyncReport {
   pushed: number;
   pulled: number;
@@ -80,6 +96,10 @@ interface Pass {
   seen: Set<Uuid>;
   importedCopies: boolean;
   touchedTombstones: Set<Uuid>;
+  /** Notes this pass wrote or resolved: the planner and the sweep leave them alone (Swift Pass.touched). */
+  touched: Set<Uuid>;
+  atomicWrites: boolean;
+  atomicDeletes: boolean;
 }
 
 interface FetchedRemote {
@@ -152,7 +172,6 @@ export class SyncEngine {
     if (!index.manifest) throw new SyncError('storeMissing', 'the store has no manifest');
     await this.refreshSession(index.manifest.etag);
     this.state = await this.stateStore.load();
-    this.state.passCount += 1;
     await this.handleForeignRekey();
 
     const records = await this.local.records();
@@ -164,7 +183,21 @@ export class SyncEngine {
       seen: new Set(),
       importedCopies: false,
       touchedTombstones: new Set(),
+      touched: new Set(),
+      atomicWrites: await this.backend.atomicConditionalWrites(),
+      atomicDeletes: await this.backend.atomicConditionalDelete(),
     };
+    const docSession = this.docMode;
+    if (docSession) {
+      this.state.passCount += 1;
+      await this.saveState();
+      // Each pass first settles this device's uncommitted or in-doubt versioned bodies (spec §3.4.9).
+      for (const id of Object.keys(this.state.pendingBodyVersions).sort()) {
+        await this.guardedRecord(id, pass, async () => {
+          if ((await this.resolvePending(id, pass)) === 'skip') pass.touched.add(id);
+        });
+      }
+    }
     const ids = new Set<Uuid>([
       ...pass.records.keys(),
       ...pass.deletions.keys(),
@@ -173,6 +206,7 @@ export class SyncEngine {
       ...Object.keys(this.state.bases),
       ...Object.keys(this.state.pendingBodyVersions),
     ]);
+    for (const id of pass.touched) ids.delete(id);
     for (const id of this.ordered(ids, pass)) await this.processSafely(id, pass);
 
     if (pass.importedCopies) {
@@ -182,6 +216,8 @@ export class SyncEngine {
     }
 
     await this.guarded(pass, () => this.sweepTombstones(pass));
+    // The web never converts legacy RTFD bodies (spec §3.4.8); the Mac's conversion sweep has no web counterpart.
+    if (docSession) await this.guarded(pass, () => this.sweepOrphanBodies(pass));
     await this.guarded(pass, () => this.writeDeviceRecordIfDue());
     await this.saveState();
     return pass.report;
@@ -231,8 +267,13 @@ export class SyncEngine {
 
   private async processSafely(id: Uuid, pass: Pass): Promise<void> {
     pass.seen.add(id);
+    await this.guardedRecord(id, pass, () => this.process(id, pass));
+  }
+
+  /** Runs one record's work with processSafely's error rules, without marking it seen. */
+  private async guardedRecord(id: Uuid, pass: Pass, work: () => Promise<void>): Promise<void> {
     try {
-      await this.process(id, pass);
+      await work();
     } catch (e) {
       if (e instanceof RecordDeferred) pass.report.skipped += 1;
       else if (e instanceof StorageError && isFatal(e)) throw e;
@@ -241,9 +282,6 @@ export class SyncEngine {
   }
 
   private async process(id: Uuid, pass: Pass): Promise<void> {
-    if (this.docMode && this.state.pendingBodyVersions[id]) {
-      if ((await this.resolvePending(id, pass)) === 'skip') return;
-    }
     const localRecord = pass.records.get(id);
     const deletion = pass.deletions.get(id);
     const remoteMeta = pass.index.metas.get(id);
@@ -251,30 +289,59 @@ export class SyncEngine {
     const kind: RecordKind = localRecord?.kind ?? deletion?.kind ?? remoteMeta?.kind ?? 'note';
 
     let tombstone: Tombstone | undefined;
-    if (pass.index.tombstones.has(id)) {
-      if (localRecord || remoteMeta) tombstone = await this.fetchTombstone(id);
-      else tombstone = { id, kind, deletedAt: -Infinity, deviceID: '' };
+    /** A leftover meta that lost to the tombstone but couldn't be deleted (no atomic conditional deletes). */
+    let leftoverMetaETag: string | undefined;
+    const listedTombstone = pass.index.tombstones.get(id);
+    if (listedTombstone) {
+      const binding = this.state.tombstoneBindings[id];
+      if (!localRecord && remoteMeta && binding && binding.tombstoneETag === listedTombstone.etag &&
+          binding.deletedMetaETag !== undefined && binding.deletedMetaETag === remoteMeta.etag) {
+        // A leftover pair resolved before: with no local record, the binding is all the rules below read.
+        tombstone = { id, kind, deletedAt: -Infinity, deviceID: '', deletedMetaETag: binding.deletedMetaETag };
+      } else if (localRecord || remoteMeta) {
+        tombstone = await this.fetchTombstone(id);
+        if (!pass.atomicDeletes && remoteMeta && tombstone) {
+          this.state.tombstoneBindings[id] = {
+            tombstoneETag: listedTombstone.etag,
+            ...(tombstone.deletedMetaETag !== undefined ? { deletedMetaETag: tombstone.deletedMetaETag } : {}),
+          };
+          await this.saveState();
+        }
+      } else {
+        // Rows 14/15 don't depend on the tombstone's contents, so skip the get.
+        tombstone = { id, kind, deletedAt: -Infinity, deviceID: '' };
+      }
     }
 
     if (remoteMeta && tombstone) {
+      // A meta and a tombstone together arise from an unfinished deletion or a race; the loser is removed, and
+      // where conditional deletes aren't atomic it stays and keeps losing (spec §3.4.9).
       let tombstoneWins: boolean;
       if (tombstone.deletedMetaETag !== undefined) tombstoneWins = tombstone.deletedMetaETag === remoteMeta.etag;
       else tombstoneWins = (await this.fetchEnvelope(id, remoteMeta.kind)).envelope.modifiedAt <= tombstone.deletedAt;
       if (tombstoneWins) {
-        try {
-          await this.backend.delete(keys.metaKey(id, remoteMeta.kind), { ifMatch: remoteMeta.etag });
-        } catch (e) {
-          if (e instanceof StorageError && e.kind === 'preconditionFailed') {
-            pass.report.skipped += 1;
-            return;
+        if (pass.atomicDeletes) {
+          try {
+            await this.backend.delete(keys.metaKey(id, remoteMeta.kind), { ifMatch: remoteMeta.etag });
+          } catch (e) {
+            if (e instanceof StorageError && e.kind === 'preconditionFailed') {
+              pass.report.skipped += 1;
+              return;
+            }
+            if (!(e instanceof StorageError && e.kind === 'notFound')) throw e;
           }
-          if (!(e instanceof StorageError && e.kind === 'notFound')) throw e;
+          // Versioned bodies of a note with a tombstone and no meta are the orphan sweep's.
+          const legacy = pass.index.bodies.get(id);
+          if (remoteMeta.kind === 'note' && pass.atomicWrites && legacy) await this.deleteIfUnchanged(legacy.key, legacy.etag);
+        } else {
+          leftoverMetaETag = remoteMeta.etag;
         }
-        if (remoteMeta.kind === 'note') await this.deleteBodies(id, pass);
         metaETag = undefined;
       } else {
-        await this.deleteIfPresent(keys.tombstone(id));
-        this.forgetTombstoneDate(id, pass);
+        if (pass.atomicDeletes && listedTombstone) {
+          await this.deleteIfUnchanged(keys.tombstone(id), listedTombstone.etag);
+          this.forgetTombstoneDate(id, pass);
+        }
         tombstone = undefined;
       }
     }
@@ -310,12 +377,18 @@ export class SyncEngine {
     }
 
     switch (action) {
-      case 'none':
-        if (!this.docMode && base && localRecord && kind === 'note' && base.bodyETag !== undefined &&
-          base.bodyETag !== pass.index.bodies.get(id)?.etag && base.revision === localRecord.revision && metaETag === base.remoteMetaETag) {
-          await this.repushBody(id, base, pass);
+      case 'none': {
+        if (!base || !localRecord || kind !== 'note' || base.revision !== localRecord.revision || metaETag !== base.remoteMetaETag) return;
+        const legacyMissing = base.bodyETag !== undefined && base.bodyETag !== pass.index.bodies.get(id)?.etag;
+        if (!this.docMode) {
+          if (legacyMissing) await this.repushBody(id, base, pass);
+        } else if (base.bodyVersion) {
+          await this.repairDocBodyIfMissing(id, base.bodyVersion, base, pass);
+        } else if (legacyMissing) {
+          await this.repairLegacyBody(id, base, pass);
         }
         return;
+      }
       case 'push':
         if (localRecord) await this.push(id, localRecord.kind, metaETag, pass);
         return;
@@ -345,9 +418,12 @@ export class SyncEngine {
         return;
       case 'resurrectPush':
         if (!localRecord) return;
-        await this.deleteIfPresent(keys.tombstone(id));
-        this.forgetTombstoneDate(id, pass);
-        await this.push(id, localRecord.kind, undefined, pass);
+        if (pass.atomicDeletes && listedTombstone) {
+          await this.deleteIfUnchanged(keys.tombstone(id), listedTombstone.etag);
+          this.forgetTombstoneDate(id, pass);
+        }
+        // A leftover meta (no atomic deletes) is overwritten with If-Match; the tombstone then loses to it.
+        await this.push(id, localRecord.kind, leftoverMetaETag, pass);
         return;
       case 'forgetBase':
         if (base || this.state.pendingPushes[id]) {
@@ -363,9 +439,11 @@ export class SyncEngine {
   // MARK: actions
 
   /** Conditional on `remoteETag` (absence when undefined). Returns false when another writer got there first. */
-  private async push(id: Uuid, kind: RecordKind, remoteETag: string | undefined, pass: Pass): Promise<boolean> {
+  private async push(id: Uuid, kind: RecordKind, remoteETag: string | undefined, pass: Pass, requireDoc = false): Promise<boolean> {
     const payload = await this.local.export(id, kind);
     if (this.docMode && kind === 'note' && !payload.carriedBody) return this.publishDocBody(id, payload, remoteETag, pass);
+    // Body repair republishes only a noteit-doc body; a legacy or locked note has none here to send.
+    if (requireDoc) return false;
 
     const envelope: RemoteEnvelope = {
       id,
@@ -411,6 +489,7 @@ export class SyncEngine {
     if (payload.carriedBody?.bodyVersion) nextBase.bodyVersion = payload.carriedBody.bodyVersion;
     this.state.bases[id] = nextBase;
     delete this.state.pendingPushes[id];
+    pass.touched.add(id);
     await this.saveState();
     pass.report.pushed += 1;
     return true;
@@ -502,8 +581,11 @@ export class SyncEngine {
     const previous = this.state.bases[id];
     const nextBase: Base = { revision: pending.envelope.revision, remoteMetaETag: newETag, bodyVersion: pending.version };
     if (pending.ifMatch !== undefined) nextBase.replacedMetaETag = pending.ifMatch;
-    if (bodyETag !== undefined) nextBase.docBodyETag = bodyETag;
+    // docBodyETag also marks the note as this device's publish, which body repair reads (Swift base.bodyETag).
+    nextBase.docBodyETag = bodyETag ?? pass.index.docBodies.get(id)?.get(pending.version)?.etag ?? pending.version;
     this.state.bases[id] = nextBase;
+    delete this.state.bodyMissingSince[id];
+    pass.touched.add(id);
     await this.clearPending(id, pending);
     pass.report.pushed += 1;
     await this.deletePreviousBody(id, previous, pending, pass);
@@ -723,31 +805,64 @@ export class SyncEngine {
     pass.report.pushed += 1;
   }
 
-  /** Tombstone first, then a conditional meta delete; a lost race withdraws the tombstone (row 9). */
+  /**
+   * Tombstone first, then a conditional meta delete; a lost race withdraws the tombstone and the next pass pulls the
+   * edit (row 9). The tombstone write is conditional on the listing (a late-landing one loses, spec §3.4 item 10).
+   * Without atomic conditional deletes the meta is deleted best effort (Swift deleteMetaBestEffort). Bodies go only
+   * once the meta is gone: conditionally where deletes are atomic, else plainly (versioned keys are immutable).
+   */
   private async pushDeletion(id: Uuid, deletion: LocalDeletion, metaETag: string | undefined, pass: Pass): Promise<void> {
     const tombstoneKey = keys.tombstone(id);
     const tombstone: Tombstone = { id, kind: deletion.kind, deletedAt: toDouble2001(deletion.deletedAt), deviceID: this.deviceID };
     if (metaETag !== undefined) tombstone.deletedMetaETag = metaETag;
-    const tombstoneETag = await this.backend.put(tombstoneKey, await this.seal(encodeJson(tombstone), tombstoneKey), {});
+    const listedTombstone = pass.index.tombstones.get(id)?.etag;
+    let tombstoneETag: string;
+    try {
+      tombstoneETag = await this.backend.put(
+        tombstoneKey,
+        await this.seal(encodeJson(tombstone), tombstoneKey),
+        listedTombstone !== undefined ? { ifMatch: listedTombstone } : { ifNoneMatch: true },
+      );
+    } catch (e) {
+      if (e instanceof StorageError && e.kind === 'preconditionFailed') {
+        pass.report.skipped += 1;
+        return;
+      }
+      throw e;
+    }
     pass.touchedTombstones.add(id);
-    if (metaETag !== undefined) {
+    let metaGone = metaETag === undefined;
+    if (metaETag !== undefined && pass.atomicDeletes) {
       try {
         await this.backend.delete(keys.metaKey(id, deletion.kind), { ifMatch: metaETag });
       } catch (e) {
         if (e instanceof StorageError && e.kind === 'preconditionFailed') {
-          try {
-            await this.backend.delete(tombstoneKey, { ifMatch: tombstoneETag });
-          } catch (err) {
-            if (!(err instanceof StorageError && (err.kind === 'notFound' || err.kind === 'preconditionFailed'))) throw err;
-          }
+          await this.deleteIfUnchanged(tombstoneKey, tombstoneETag);
           pass.report.skipped += 1;
           return;
         }
         if (!(e instanceof StorageError && e.kind === 'notFound')) throw e;
       }
+      metaGone = true;
+    } else if (metaETag !== undefined) {
+      metaGone = await this.deleteMetaBestEffort(keys.metaKey(id, deletion.kind), metaETag);
     }
-    if (deletion.kind === 'note' && (metaETag !== undefined || pass.index.bodies.has(id) || pass.index.docBodies.has(id))) {
-      await this.deleteBodies(id, pass);
+    // Deleted content doesn't stay in storage: once the meta is gone, so is every body of the note this pass listed.
+    // A version uploaded after the listing (a resurrection) isn't touched. If the meta moved on, nothing is deleted.
+    if (deletion.kind === 'note' && metaGone) {
+      const legacy = pass.index.bodies.get(id);
+      if (legacy) {
+        if (pass.atomicDeletes) await this.deleteIfUnchanged(legacy.key, legacy.etag);
+        else await this.deleteIfPresent(legacy.key);
+      }
+      const pending = this.state.pendingBodyVersions[id]?.version;
+      const versions = pass.index.docBodies.get(id);
+      for (const version of [...(versions?.keys() ?? [])].sort()) {
+        if (version === pending) continue;
+        const body = versions!.get(version)!;
+        if (pass.atomicDeletes) await this.deleteIfUnchanged(body.key, body.etag);
+        else await this.deleteIfPresent(body.key);
+      }
     }
     this.state.tombstoneDates[id] = tombstone.deletedAt;
     delete this.state.bases[id];
@@ -757,21 +872,50 @@ export class SyncEngine {
     pass.report.deleted += 1;
   }
 
-  private async deleteBodies(id: Uuid, pass: Pass): Promise<void> {
-    if (pass.index.bodies.has(id) || !this.docMode) await this.deleteIfPresent(keys.noteBody(id));
-    for (const version of pass.index.docBodies.get(id)?.values() ?? []) await this.deleteIfPresent(version.key);
+  /**
+   * A user delete's meta on a store without atomic conditional deletes: the backend's own check, or a re-read of
+   * the ETag, then a plain delete. A write landing in between is still protected: the tombstone names the meta it
+   * deleted, so the writer's next pass resurrects its edit. Whether the meta is gone.
+   */
+  private async deleteMetaBestEffort(key: string, listedETag: string): Promise<boolean> {
+    try {
+      await this.backend.delete(key, { ifMatch: listedETag });
+      return true;
+    } catch (e) {
+      if (!(e instanceof StorageError)) throw e;
+      if (e.kind === 'notFound') return true;
+      if (e.kind === 'preconditionFailed') return false;
+      if (e.kind !== 'conditionalDeleteUnsupported') throw e;
+    }
+    let current: string;
+    try {
+      current = (await this.backend.get(key)).etag;
+    } catch (e) {
+      if (e instanceof StorageError && e.kind === 'notFound') return true;
+      throw e;
+    }
+    if (current !== listedETag) return false;
+    await this.deleteIfPresent(key);
+    return true;
   }
 
   private async sweepTombstones(pass: Pass): Promise<void> {
     const cutoff = toDouble2001(this.now()) - TOMBSTONE_RETENTION_DAYS * 86400;
     let changed = false;
+    // Retention deletes need atomic conditional deletes: a plain delete could remove a tombstone written meanwhile.
     for (const id of [...pass.index.tombstones.keys()].sort()) {
-      if (pass.touchedTombstones.has(id)) continue;
+      if (!pass.atomicDeletes || pass.touchedTombstones.has(id)) continue;
       const deletedAt = this.state.tombstoneDates[id];
       if (deletedAt === undefined || deletedAt >= cutoff) continue;
-      await this.deleteIfPresent(keys.tombstone(id));
+      await this.deleteIfUnchanged(keys.tombstone(id), pass.index.tombstones.get(id)!.etag);
       delete this.state.tombstoneDates[id];
       changed = true;
+    }
+    for (const [id, binding] of Object.entries(this.state.tombstoneBindings)) {
+      if (pass.index.tombstones.get(id)?.etag !== binding.tombstoneETag) {
+        delete this.state.tombstoneBindings[id];
+        changed = true;
+      }
     }
     const live = new Set([...pass.index.tombstones.keys(), ...pass.touchedTombstones]);
     for (const id of Object.keys(this.state.tombstoneDates)) {
@@ -819,7 +963,249 @@ export class SyncEngine {
     return out.sort((a, b) => b.lastSync - a.lastSync);
   }
 
+  // MARK: body repair (Swift SyncEngine+DocBodies)
+
+  /**
+   * The meta this device holds references a version that is not listed. Its publisher republishes at once (new
+   * version, same revision); any other device waits `BODY_REPAIR_GRACE_S`, and racing repairers end with one winner.
+   */
+  private async repairDocBodyIfMissing(id: Uuid, version: Uuid, base: Base, pass: Pass): Promise<void> {
+    if (pass.index.docBodies.get(id)?.has(version)) {
+      if (this.state.bodyMissingSince[id] !== undefined) {
+        delete this.state.bodyMissingSince[id];
+        await this.saveState();
+      }
+      return;
+    }
+    if (this.state.pendingBodyVersions[id] || !this.docMode) return;
+    let since = this.state.bodyMissingSince[id];
+    if (since === undefined) {
+      since = this.now().getTime();
+      this.state.bodyMissingSince[id] = since;
+      await this.saveState();
+    }
+    if (base.docBodyETag === undefined && this.now().getTime() - since < BODY_REPAIR_GRACE_S * 1000) {
+      pass.report.skipped += 1;
+      return;
+    }
+    await this.push(id, 'note', base.remoteMetaETag, pass, true);
+  }
+
+  /**
+   * A legacy body this device published is missing or replaced (Swift repairLegacyBody): put it back with
+   * `If-None-Match: *`, or `If-Match` on the listed stale one, only where conditional writes are atomic.
+   */
+  private async repairLegacyBody(id: Uuid, base: Base, pass: Pass): Promise<void> {
+    if (!pass.atomicWrites) {
+      pass.report.skipped += 1;
+      return;
+    }
+    const payload = await this.local.export(id, 'note');
+    if (payload.revision !== base.revision || payload.bodyFormat !== undefined || !payload.body || payload.carriedBody) return;
+    const listed = pass.index.bodies.get(id);
+    let etag: string;
+    try {
+      etag = await this.backend.put(keys.noteBody(id), await this.seal(payload.body, keys.noteBody(id)), listed ? { ifMatch: listed.etag } : { ifNoneMatch: true });
+    } catch (e) {
+      if (e instanceof StorageError && e.kind === 'preconditionFailed') return;
+      throw e;
+    }
+    const current = this.state.bases[id];
+    if (current) current.bodyETag = etag;
+    await this.saveState();
+    pass.report.pushed += 1;
+  }
+
+  // MARK: orphan sweep and stranded bodies (spec §3.4.9; Swift SyncEngine+DocBodies)
+
+  /**
+   * Deletes bodies nothing can reference any more, at most `MAX_ORPHAN_DELETES_PER_PASS` per pass, each with
+   * `If-Match` on its listed ETag. Needs atomic conditional deletes at all; bodies (not just unparsable names) also
+   * need atomic conditional writes. Never touches this device's pending version, a note whose listed meta isn't the
+   * one this device knows, a body whose tag matches the listed meta, or a `new` body of a note without meta or
+   * tombstone.
+   */
+  private async sweepOrphanBodies(pass: Pass): Promise<void> {
+    if (!pass.atomicDeletes) return this.forgetStrandedBodies(new Set());
+    let budget = MAX_ORPHAN_DELETES_PER_PASS;
+    const remove = async (object: RemoteObject) => {
+      if (budget <= 0) return;
+      budget -= 1;
+      await this.deleteIfUnchanged(object.key, object.etag);
+    };
+    for (const object of pass.index.strayBodies) await remove(object);
+    if (!pass.atomicWrites) return this.forgetStrandedBodies(new Set());
+
+    const stranded = new Map<string, Uuid>();
+    for (const id of [...pass.index.docBodies.keys()].sort()) {
+      if (pass.touched.has(id)) continue;
+      const versions = pass.index.docBodies.get(id)!;
+      const listedMeta = pass.index.metas.get(id)?.etag;
+      const tombstoned = pass.index.tombstones.has(id);
+      const base = this.state.bases[id];
+      const liveTag = listedMeta !== undefined ? await baseTag(listedMeta) : undefined;
+      for (const version of [...versions.keys()].sort()) {
+        const body = versions.get(version)!;
+        if (this.state.pendingBodyVersions[id]?.version === version) continue;
+        let deletable: boolean;
+        if (listedMeta !== undefined) {
+          // Only a meta this device has read says which version it references.
+          if (!base || base.remoteMetaETag !== listedMeta) break;
+          const unreferenced = base.bodyVersion !== version;
+          const live = body.tag === liveTag;
+          deletable = unreferenced && !live;
+          // Kept only because its tag is live: its writer may still commit it, or was wiped.
+          if (unreferenced && live) stranded.set(body.key, id);
+        } else {
+          // Without a meta: a `new` body may belong to a create still in flight, unless a tombstone exists.
+          deletable = tombstoned || body.tag !== NEW_TAG;
+        }
+        if (deletable) await remove(body);
+      }
+    }
+    await this.recoverStrandedBodies(stranded, pass);
+    for (const id of [...pass.index.bodies.keys()].sort()) {
+      if (pass.touched.has(id)) continue;
+      const listedMeta = pass.index.metas.get(id)?.etag;
+      if (listedMeta !== undefined) {
+        const base = this.state.bases[id];
+        if (!base || base.remoteMetaETag !== listedMeta || base.bodyVersion === undefined) continue;
+      } else if (!pass.index.tombstones.has(id)) {
+        continue;
+      }
+      await remove(pass.index.bodies.get(id)!);
+    }
+  }
+
+  /**
+   * Keeps `strandedBodies` to the bodies stranded now; once a note's body has been stranded for `STRANDED_PASSES`
+   * passes and `STRANDED_AGE_S`, refreshes the note's meta so that its tag goes stale and the next sweep deletes it,
+   * at most `MAX_RECOVERY_WRITES_PER_PASS` notes per pass. The pass count and the clock decide only when to refresh,
+   * never whether a delete is safe.
+   */
+  private async recoverStrandedBodies(stranded: Map<string, Uuid>, pass: Pass): Promise<void> {
+    await this.forgetStrandedBodies(new Set(stranded.keys()));
+    if (stranded.size === 0) return;
+    const now = this.now().getTime();
+    for (const key of stranded.keys()) {
+      this.state.strandedBodies[key] ??= { firstSeenPass: this.state.passCount, firstSeenAt: now };
+    }
+    await this.saveState();
+    const due = new Set<Uuid>();
+    for (const [key, id] of stranded) {
+      const seen = this.state.strandedBodies[key];
+      if (!seen) continue;
+      if (this.state.passCount - seen.firstSeenPass >= STRANDED_PASSES && now - seen.firstSeenAt >= STRANDED_AGE_S * 1000) due.add(id);
+    }
+    let refreshes = 0;
+    for (const id of [...due].sort()) {
+      if (refreshes >= MAX_RECOVERY_WRITES_PER_PASS) break;
+      if (await this.refreshMeta(id, pass)) refreshes += 1;
+    }
+  }
+
+  /** Drops the entries of bodies no longer stranded or no longer listed. */
+  private async forgetStrandedBodies(keep: Set<string>): Promise<void> {
+    const entries = Object.entries(this.state.strandedBodies);
+    const kept = entries.filter(([key]) => keep.has(key));
+    if (kept.length === entries.length) return;
+    this.state.strandedBodies = Object.fromEntries(kept);
+    await this.saveState();
+  }
+
+  /**
+   * The recovery write: the same envelope plaintext sealed again (a fresh nonce, so a new ETag of the same size),
+   * `If-Match` the listed meta. Only for a noteit-doc meta this device knows, with no unpushed edit and no pending
+   * entry. A 412 or an in-doubt outcome leaves nothing to resolve. Whether a write was sent.
+   */
+  private async refreshMeta(id: Uuid, pass: Pass): Promise<boolean> {
+    const listed = pass.index.metas.get(id);
+    const base = this.state.bases[id];
+    if (!listed || listed.kind !== 'note' || !base || base.remoteMetaETag !== listed.etag || base.bodyVersion === undefined ||
+        pass.records.get(id)?.revision !== base.revision || this.state.pendingBodyVersions[id] || this.state.pendingPushes[id] ||
+        pass.touched.has(id)) {
+      return false;
+    }
+    const key = keys.noteMeta(id);
+    try {
+      const { data, etag } = await this.backend.get(key);
+      if (etag !== listed.etag) return false;
+      const plaintext = await this.open(data, key);
+      const envelope = decodeEnvelope(plaintext, this.session.features.has('locked-notes'));
+      if (envelope.id !== id || envelope.kind !== 'note' || envelope.bodyFormat === undefined ||
+          envelope.revision !== base.revision || envelope.bodyVersion !== base.bodyVersion) {
+        return false;
+      }
+      const newETag = await this.backend.put(key, await this.seal(plaintext, key), { ifMatch: listed.etag });
+      const current = this.state.bases[id];
+      if (current) current.remoteMetaETag = newETag;
+      pass.touched.add(id);
+      await this.saveState();
+      return true;
+    } catch (e) {
+      if (e instanceof StorageError && isFatal(e)) throw e;
+      // 412: the meta moved on. In doubt: the next pass lists whichever ETag is current. Either way, nothing to do.
+      return true;
+    }
+  }
+
+  // MARK: clean up unused storage
+
+  /**
+   * Only ever called from the confirmed Settings action. Runs a pass, then deletes every `new` body whose note has
+   * neither meta nor tombstone, that isn't this device's pending version, and whose listed `lastModified` is older
+   * than `ORPHAN_BODY_GRACE_S` (a body listed without one is kept). A creator still committing such a body after it
+   * was deleted loses the note's content: the confirmation warns about idle devices.
+   */
+  cleanUpUnusedStorage(): Promise<CleanupReport> {
+    const run = this.tail.then(async () => {
+      if (!(await this.backend.atomicConditionalWrites())) throw new SyncError('cleanupUnavailable');
+      const cutoff = this.now().getTime() - ORPHAN_BODY_GRACE_S * 1000;
+      try {
+        await this.runPass();
+      } finally {
+        await this.local.passDidFinish();
+      }
+      return this.deleteUnusedNewBodies(cutoff);
+    });
+    this.tail = run.catch(() => undefined);
+    return run;
+  }
+
+  private async deleteUnusedNewBodies(cutoff: number): Promise<CleanupReport> {
+    const index = indexRemote(await this.backend.list(ROOT));
+    const atomicDeletes = await this.backend.atomicConditionalDelete();
+    const report: CleanupReport = { deletedObjects: 0, deletedBytes: 0 };
+    for (const [id, versions] of index.docBodies) {
+      if (index.metas.has(id) || index.tombstones.has(id)) continue;
+      for (const [version, body] of versions) {
+        if (body.tag !== NEW_TAG || this.state.pendingBodyVersions[id]?.version === version) continue;
+        if (body.lastModified === undefined || body.lastModified >= cutoff) continue;
+        try {
+          // Without atomic deletes, a plain delete of an immutable key.
+          await this.backend.delete(body.key, atomicDeletes ? { ifMatch: body.etag } : {});
+        } catch (e) {
+          if (e instanceof StorageError && (e.kind === 'notFound' || e.kind === 'preconditionFailed')) continue;
+          throw e;
+        }
+        report.deletedObjects += 1;
+        report.deletedBytes += body.size;
+      }
+    }
+    return report;
+  }
+
   // MARK: remote helpers
+
+  /** A delete conditional on the listed ETag; gone or changed meanwhile is fine (Swift deleteIfUnchanged). */
+  private async deleteIfUnchanged(key: string, listedETag: string): Promise<void> {
+    try {
+      await this.backend.delete(key, { ifMatch: listedETag });
+    } catch (e) {
+      if (e instanceof StorageError && (e.kind === 'notFound' || e.kind === 'preconditionFailed')) return;
+      throw e;
+    }
+  }
 
   private async fetchEnvelope(id: Uuid, kind: RecordKind): Promise<{ envelope: RemoteEnvelope; etag: string }> {
     const key = keys.metaKey(id, kind);
