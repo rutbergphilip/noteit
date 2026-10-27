@@ -25,7 +25,7 @@
     "@tiptap/vue-3": "3.31.0",
     "fflate": "0.8.2",
     "h3": "1.15.11",
-    "nuxt": "4.6.0",
+    "nuxt": "4.6.2",
     "nuxt-safe-action": "0.7.0",
     "openid-client": "6.8.8",
     "tailwindcss": "4.3.3",
