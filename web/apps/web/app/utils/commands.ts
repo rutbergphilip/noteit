@@ -7,6 +7,7 @@
 import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
 import { pickImport } from '~/utils/importing';
+import { keysForWebCommand, paletteCombos } from '~/utils/menuShortcuts';
 
 export interface WebCommand {
   id: string;
@@ -92,8 +93,9 @@ export function webCommands(): WebCommand[] {
     { id: 'quickCapture', title: 'Open Quick Capture', icon: 'i-lucide-pen-line', keys: ['alt+mod+c'], available: always, run: () => (state.capture = true) },
     { id: 'syncNow', title: 'Sync Now', icon: 'i-lucide-refresh-cw', available: always, run: () => void n.client().syncNow() },
     { id: 'lock', title: 'Lock NoteIt', icon: 'i-lucide-lock', available: always, run: () => void n.lock() },
-  ].map((c) => ({ ...c, run: () => (close(), c.run()) })) as WebCommand[];
+    // Settings › Shortcuts can change native's menu shortcuts (utils/menuShortcuts.ts).
+  ].map((c) => ({ ...c, keys: keysForWebCommand(c.id, c.keys), run: () => (close(), c.run()) })) as WebCommand[];
 }
 
-/** Commands that open the palette itself (native ⌘O Open Quickly, ⇧⌘P Command Palette; ⌘K on the web too). */
-export const PALETTE_KEYS = ['mod+o', 'shift+mod+p', 'mod+k'];
+/** Combos that open the palette itself (native ⌘O Open Quickly, ⇧⌘P Command Palette, as set in Settings; ⌘K on the web too). */
+export const paletteKeys = (): string[] => paletteCombos();

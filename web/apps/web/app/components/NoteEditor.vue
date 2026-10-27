@@ -10,7 +10,7 @@ import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
 import { formatDateTime } from '~/utils/format';
 import { notebookIcon, safeHex } from '~/utils/notebooks';
-import { comboKbds } from '~/utils/shortcuts';
+import { commandKbds } from '~/utils/menuShortcuts';
 import type { OpenedNote } from '~/worker/types';
 import { useOpeningKey } from '~/utils/overlay';
 
@@ -598,14 +598,14 @@ async function deleteForever(): Promise<void> {
 }
 const shareItems = computed<DropdownMenuItem[][]>(() => [
   [
-    { label: 'Export as Markdown', icon: 'i-lucide-file-down', kbds: comboKbds('shift+mod+s'), onSelect: () => void exportNote(props.noteId, 'markdown') },
+    { label: 'Export as Markdown', icon: 'i-lucide-file-down', kbds: commandKbds('exportNote'), onSelect: () => void exportNote(props.noteId, 'markdown') },
     { label: 'Export as HTML', icon: 'i-lucide-file-code', onSelect: () => void exportNote(props.noteId, 'html') },
-    { label: 'Print or Save as PDF…', icon: 'i-lucide-printer', kbds: comboKbds('mod+p'), onSelect: () => void printNote(props.noteId) },
+    { label: 'Print or Save as PDF…', icon: 'i-lucide-printer', kbds: commandKbds('print'), onSelect: () => void printNote(props.noteId) },
     { label: 'Download NoteIt Document', icon: 'i-lucide-download', onSelect: () => void exportNote(props.noteId, 'noteitdoc') },
   ],
   [
-    { label: 'Copy as Markdown', icon: 'i-lucide-clipboard-copy', kbds: comboKbds('alt+shift+mod+c'), onSelect: () => void copyMarkdown(props.noteId) },
-    { label: 'Copy Note Link', icon: 'i-lucide-link', kbds: comboKbds('ctrl+mod+l'), onSelect: () => void copyNoteLink(props.noteId) },
+    { label: 'Copy as Markdown', icon: 'i-lucide-clipboard-copy', kbds: commandKbds('copyAsMarkdown'), onSelect: () => void copyMarkdown(props.noteId) },
+    { label: 'Copy Note Link', icon: 'i-lucide-link', kbds: commandKbds('copyNoteLink'), onSelect: () => void copyNoteLink(props.noteId) },
   ],
 ]);
 
@@ -662,7 +662,7 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
               @click="togglePin"
             />
           </UTooltip>
-          <UTooltip text="Links and Outline" :kbds="comboKbds('alt+mod+i')">
+          <UTooltip text="Links and Outline" :kbds="commandKbds('toggleInspector')">
             <UButton
               color="neutral"
               variant="ghost"

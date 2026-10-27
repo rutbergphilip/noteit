@@ -29,11 +29,12 @@ import { useOpeningKey } from '~/utils/overlay';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
 const confirm = useConfirm();
-type Section = 'general' | 'sync' | 'security' | 'account' | 'users' | 'about';
+type Section = 'general' | 'shortcuts' | 'sync' | 'security' | 'account' | 'users' | 'about';
 const section = ref<Section>('sync');
 const isAdmin = computed(() => state.session?.user.role === 'admin');
 const sections = computed(() => [
   { id: 'general' as const, label: 'General', icon: 'i-lucide-settings' },
+  { id: 'shortcuts' as const, label: 'Shortcuts', icon: 'i-lucide-keyboard' },
   { id: 'sync' as const, label: 'Sync & storage', icon: 'i-lucide-refresh-cw' },
   { id: 'security' as const, label: 'Security & devices', icon: 'i-lucide-shield' },
   { id: 'account' as const, label: 'Account', icon: 'i-lucide-user-round' },
@@ -278,6 +279,11 @@ const portalKey = useOpeningKey(() => state.settings);
                 <UButton v-if="notifyState === 'default'" color="neutral" variant="outline" label="Allow" @click="allowNotifications" />
               </SettingsRow>
             </SettingsCard>
+          </template>
+
+          <template v-else-if="section === 'shortcuts'">
+            <h2 class="text-xl font-bold">Shortcuts</h2>
+            <ShortcutsSettings />
           </template>
 
           <template v-else-if="section === 'sync'">
