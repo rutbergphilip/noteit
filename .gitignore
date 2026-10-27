@@ -16,3 +16,5 @@ web/apps/web/.output/
 web/apps/web/.data/
 web/**/test-results/
 .playwright-mcp/
+/dist/
+web/apps/web/dist
