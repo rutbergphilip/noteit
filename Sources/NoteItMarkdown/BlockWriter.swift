@@ -218,9 +218,11 @@ struct MarkdownWriter {
     private func assemble(_ units: [Unit], trailing: Int) -> (text: String, lines: Int) {
         var lines: [String] = []
         var levelBase = 0
+        var runs = ListRuns()
         for (index, unit) in units.enumerated() {
             let previousIsList = index > 0 && units[index - 1].isListItem
-            let separator = index == 0 ? (hasFrontMatter ? 1 : 0) : (previousIsList && unit.isListItem ? 0 : 1)
+            let newList = runs.startsNewList(unit.isListItem ? unit.nodes.first : nil)
+            let separator = index == 0 ? (hasFrontMatter ? 1 : 0) : (previousIsList && unit.isListItem && !newList ? 0 : 1)
             lines += Array(repeating: "", count: separator + unit.emptiesBefore)
             let runStart = unit.isListItem && !previousIsList
             if runStart { levelBase = unit.level }

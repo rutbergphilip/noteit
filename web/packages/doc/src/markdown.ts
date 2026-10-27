@@ -4,6 +4,7 @@
  * Swift codec's fixtures in `Tests/NoteItMarkdownTests/Fixtures` that carry no library-only syntax are this
  * writer's conformance tests.
  */
+import { listRuns } from './list-runs.js';
 import { type Block, type Inline, type Mark, type NoteItDoc, type ParagraphNode, parseNoteLink } from './schema.js';
 
 export interface MarkdownOptions {
@@ -165,7 +166,8 @@ export function docToMarkdown(doc: NoteItDoc, opts: MarkdownOptions = {}): strin
   const inline = new InlineWriter(opts, false);
   const cells = new InlineWriter(opts, true);
   // An empty paragraph is one more blank line before the next block, as the Swift codec writes it (and reads back).
-  const chunks: { text: string; list: boolean; emptiesBefore: number }[] = [];
+  const chunks: { text: string; list: boolean; newList?: boolean; emptiesBefore: number }[] = [];
+  const newList = listRuns();
   let empties = 0;
   const take = () => {
     const n = empties;
@@ -203,7 +205,7 @@ export function docToMarkdown(doc: NoteItDoc, opts: MarkdownOptions = {}): strin
         chunks.push({ text: '---', list: false, emptiesBefore: take() });
         break;
       case 'listItem':
-        chunks.push({ text: `${listPrefix(b.attrs)}${inline.write(b.content)}`, list: true, emptiesBefore: take() });
+        chunks.push({ text: `${listPrefix(b.attrs)}${inline.write(b.content)}`, list: true, newList: newList(b), emptiesBefore: take() });
         break;
       case 'table': {
         const rows = b.content ?? [];
@@ -223,7 +225,7 @@ export function docToMarkdown(doc: NoteItDoc, opts: MarkdownOptions = {}): strin
   }
   let md = '';
   chunks.forEach((c, k) => {
-    if (k > 0) md += c.list && chunks[k - 1]!.list ? '\n' : '\n\n';
+    if (k > 0) md += c.list && chunks[k - 1]!.list && !c.newList ? '\n' : '\n\n';
     md += '\n'.repeat(c.emptiesBefore) + c.text;
   });
   return md ? `${md.replace(/\n+$/, '')}\n` : '';

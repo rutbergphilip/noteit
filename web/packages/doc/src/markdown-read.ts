@@ -8,6 +8,7 @@
  * Also the paste heuristic of `Sources/NoteIt/Editor/MarkdownPaste.swift` (`looksLikeMarkdown`), and
  * `markdownForPaste`, which turns pasted Markdown source into blocks the way native paste does.
  */
+import { listRuns } from './list-runs.js';
 import { addAttachment } from './container.js';
 import { HIGHLIGHT_YELLOW } from './markdown.js';
 import { sha256HexSync } from './sha256.js';
@@ -1829,9 +1830,11 @@ class BlockParser {
     if (empty) add({ nodes: [empty], isListItem: false });
 
     const result: Node[] = [];
+    const newList = listRuns();
     units.forEach((unit, index) => {
       const gap = blanks[index]!;
-      const separator = index === 0 ? 0 : units[index - 1]!.isListItem && unit.isListItem ? 0 : 1;
+      const breaks = newList(unit.isListItem ? (unit.nodes[0] as never) : undefined);
+      const separator = index === 0 ? 0 : units[index - 1]!.isListItem && unit.isListItem && !breaks ? 0 : 1;
       for (let k = Math.min(separator, gap); k < gap; k++) result.push(EMPTY_PARAGRAPH());
       result.push(...unit.nodes);
     });

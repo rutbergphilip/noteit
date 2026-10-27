@@ -174,6 +174,12 @@ describe('Markdown export round trip and HTML lists', () => {
     expect(docToMarkdown(doc)).toBe('\nOne\n\n\nTwo\n\n\n- a\n\n- b\n');
   });
 
+  it('starts a new list of another kind after a blank line, which reads back as no empty paragraph (lists.md)', () => {
+    const doc = { type: 'doc' as const, content: [heading, li('bullet', 0, 'a'), li('ordered', 0, 'one', { number: 1 }), p(), li('task', 0, 't', { checked: false }), li('bullet', 0, 'b')] };
+    expect(docToMarkdown(doc)).toBe('# Note\n\n- a\n\n1. one\n\n\n- [ ] t\n\n- b\n');
+    expect(importMarkdown(docToMarkdown(doc), { fallbackTitle: 'x' }).body.doc).toEqual(doc);
+  });
+
   it('re-imports an export without extra empty paragraphs', () => {
     const doc = { type: 'doc' as const, content: [heading, p(), p('x'), p(), p('y'), li('bullet', 0, 'a'), li('bullet', 1, 'a1'), li('ordered', 0, 'one', { number: 1 }), li('task', 0, 'done', { checked: true }), p('End')] };
     expect(importMarkdown(docToMarkdown(doc), { fallbackTitle: 'x' }).body.doc).toEqual(doc);
