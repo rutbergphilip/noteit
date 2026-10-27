@@ -272,7 +272,7 @@ describe('reminder claims (Swift SyncEngine+Claims)', () => {
     const { FakeLocal } = await import('./fake-local.js');
     const backend = new InMemoryBackend();
     const a = await connect(backend, { passphrase: 'claims claims', createIfMissing: true });
-    const mk = (id: string, now: () => Date) => new SyncEngine({ backend, session: a.session, local: new FakeLocal(), state: new MemoryStateStore(), deviceID: id, deviceName: id, now });
+    const mk = (id: string, now: () => Date) => new SyncEngine({ backend, session: a.session, local: new FakeLocal(id), state: new MemoryStateStore(), deviceID: id, deviceName: id, now });
     const t = new Date('2026-10-24T09:00:00Z');
     const ea = mk('A', () => t);
     const eb = mk('B', () => t);
