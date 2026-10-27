@@ -18,6 +18,9 @@ export interface S3Config {
 
 class ConditionalNotSupported extends Error {}
 
+/** Canaries older than this are a crashed client's (spec §6.4). */
+export const STALE_CANARY_MS = 10 * 60_000;
+
 /**
  * Port of the native S3Backend's request shapes (path-style URLs, SigV4 headers, quoted If-Match, If-None-Match: *).
  * Conditional requests are sent once; unconditional ones retry network errors after 0.5 s and 1.5 s.
@@ -189,14 +192,35 @@ export class S3Backend implements StorageBackend {
     parseListV2(await (await this.send('GET', undefined, { query: [['list-type', '2'], ['max-keys', '1'], ['prefix', this.keyPrefix]] })).text());
   }
 
-  async atomicConditionalWrites(): Promise<boolean> {
-    await this.verifyConditionals();
-    return this.conditionalWritesSupported;
+  /**
+   * For the direct-mode connect wizard's CORS check (spec §6.4): a PUT with `If-None-Match: *`, returning the ETag
+   * header exactly as the browser exposes it ('' when CORS hides it), with no HEAD fallback.
+   */
+  async putExposingETag(key: string, data: Uint8Array): Promise<string> {
+    const res = await this.send('PUT', key, { body: data, headers: { 'If-None-Match': '*' }, conditional: true });
+    return unquoteETag(res.headers.get('ETag') ?? '');
   }
 
+  /** Whether this session's canary finished (false after a network or credential failure, until it runs again). */
+  get conditionalsChecked(): boolean {
+    return this.checked;
+  }
+
+  /** What this session's canary found; both false until it ran (call `verifyConditionals()` first). */
+  get capabilities(): { writes: boolean; deletes: boolean } {
+    return { writes: this.writePassed && this.conditionalWritesSupported, deletes: this.deletePassed && this.conditionalDeletesSupported };
+  }
+
+  /** True once this session's canary passed its write steps (S3Backend.swift writePassed). */
+  async atomicConditionalWrites(): Promise<boolean> {
+    await this.verifyConditionals();
+    return this.writePassed && this.conditionalWritesSupported;
+  }
+
+  /** True once this session's canary passed its delete steps. */
   async atomicConditionalDelete(): Promise<boolean> {
     await this.verifyConditionals();
-    return this.conditionalDeletesSupported;
+    return this.deletePassed && this.conditionalDeletesSupported;
   }
 
   private async headETag(key: string): Promise<string | undefined> {
@@ -214,42 +238,103 @@ export class S3Backend implements StorageBackend {
     if (opts.ifMatch !== undefined && current !== opts.ifMatch) throw new StorageError('preconditionFailed', key);
   }
 
-  /** The canary (S3Backend.swift runConditionalCanary): checks If-None-Match, a bogus If-Match, and conditional deletes. */
+  /**
+   * The canary (S3Backend.swift runConditionalCanary, spec §6.4), once per session. Write steps: create with
+   * If-None-Match, then it and a bogus If-Match must get 412; an If-Match overwrite with the first ETag must succeed
+   * with a different ETag, after which that ETag must get 412. Delete steps: a bogus If-Match DELETE must get 412 and
+   * leave the object; a DELETE with the current ETag must remove it. A canary that can't finish (network,
+   * credentials) marks nothing and runs again next time. Never throws.
+   */
   verifyConditionals(): Promise<void> {
-    this.canary ??= this.runCanary().catch((e) => {
-      this.canary = undefined;
-      throw e;
-    });
+    this.canary ??= this.runCanary();
     return this.canary;
+  }
+
+  private writePassed = false;
+  private deletePassed = false;
+  private checked = false;
+
+  private async accepts(f: () => Promise<unknown>): Promise<boolean> {
+    try {
+      await f();
+      return true;
+    } catch (e) {
+      if (e instanceof StorageError && e.kind === 'preconditionFailed') return false;
+      if (e instanceof ConditionalNotSupported) return true;
+      throw e;
+    }
   }
 
   private async runCanary(): Promise<void> {
     const key = CANARY_PREFIX + newUuid();
     const bogus = { 'If-Match': `"${CANARY_MISMATCH_ETAG}"` };
-    const accepts = async (f: () => Promise<unknown>): Promise<boolean> => {
-      try {
-        await f();
-        return true;
-      } catch (e) {
-        if (e instanceof StorageError && e.kind === 'preconditionFailed') return false;
-        if (e instanceof ConditionalNotSupported) return true;
-        throw e;
-      }
-    };
     try {
+      let writesHold = true;
       try {
-        await this.upload(key, utf8('canary'), { 'If-None-Match': '*' });
-        const a = await accepts(() => this.upload(key, utf8('again'), { 'If-None-Match': '*' }));
-        const b = await accepts(() => this.upload(key, utf8('again'), bogus));
-        if (a || b) this.conditionalWritesSupported = false;
+        const first = await this.upload(key, utf8('canary'), { 'If-None-Match': '*' });
+        const ignoresNoneMatch = await this.accepts(() => this.upload(key, utf8('again'), { 'If-None-Match': '*' }));
+        const ignoresMatch = await this.accepts(() => this.upload(key, utf8('again'), bogus));
+        writesHold = !ignoresNoneMatch && !ignoresMatch && (await this.overwriteRetiresETag(key, first));
       } catch (e) {
         if (!(e instanceof ConditionalNotSupported)) throw e;
-        this.conditionalWritesSupported = false;
+        writesHold = false;
         await this.upload(key, utf8('canary'), {});
       }
-      if (await accepts(() => this.send('DELETE', key, { headers: bogus, conditional: true }))) this.conditionalDeletesSupported = false;
-    } finally {
+      const deletesHold = await this.conditionalDeleteHolds(key, bogus);
+      if (!writesHold) this.conditionalWritesSupported = false;
+      if (!deletesHold) this.conditionalDeletesSupported = false;
+      this.writePassed = writesHold;
+      this.deletePassed = deletesHold;
+      this.checked = true;
+      // Passing delete steps removed the canary already.
+      if (!deletesHold) await this.send('DELETE', key).catch(() => undefined);
+      await this.sweepStaleCanaries();
+    } catch {
+      // Unreachable or unauthorized: real requests surface the error; check again next time.
       await this.send('DELETE', key).catch(() => undefined);
+      this.canary = undefined;
+    }
+  }
+
+  /** An If-Match overwrite with `first` succeeds with a new ETag, and `first` stops matching afterwards. */
+  private async overwriteRetiresETag(key: string, first: string): Promise<boolean> {
+    let second: string;
+    try {
+      second = await this.upload(key, utf8('canary-2'), { 'If-Match': `"${first}"` });
+    } catch (e) {
+      if ((e instanceof StorageError && e.kind === 'preconditionFailed') || e instanceof ConditionalNotSupported) return false;
+      throw e;
+    }
+    if (second === first) return false;
+    return !(await this.accepts(() => this.upload(key, utf8('canary-3'), { 'If-Match': `"${first}"` })));
+  }
+
+  /** The canary's delete steps; on success the canary is gone. */
+  private async conditionalDeleteHolds(key: string, bogus: Record<string, string>): Promise<boolean> {
+    if (await this.accepts(() => this.send('DELETE', key, { headers: bogus, conditional: true }))) return false;
+    const current = await this.headETag(key);
+    if (current === undefined) return false;
+    try {
+      await this.send('DELETE', key, { headers: { 'If-Match': `"${current}"` }, conditional: true });
+    } catch (e) {
+      if ((e instanceof StorageError && e.kind === 'preconditionFailed') || e instanceof ConditionalNotSupported) return false;
+      throw e;
+    }
+    return (await this.headETag(key)) === undefined;
+  }
+
+  /**
+   * Canaries left by a client that crashed mid-check: without a server nobody else removes them (spec §6.4). Only
+   * ones older than 10 minutes, so another client's running check is left alone. Best effort.
+   */
+  private async sweepStaleCanaries(): Promise<void> {
+    try {
+      const cutoff = this.now().getTime() - STALE_CANARY_MS;
+      for (const o of await this.list(CANARY_PREFIX)) {
+        if (o.lastModified !== undefined && o.lastModified < cutoff) await this.send('DELETE', o.key).catch(() => undefined);
+      }
+    } catch {
+      // Listing failed: try again on the next session's canary.
     }
   }
 }

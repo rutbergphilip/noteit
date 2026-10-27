@@ -81,9 +81,28 @@ export function checkActionCsrf(event: H3Event, cfg: ServerConfig): void {
   if (getHeader(event, 'origin') !== expectedOrigin(event, cfg)) throw new ApiFailure(403, 'forbidden', 'Cross-origin request refused');
 }
 
-/** The CSP; the SPA page adds sha256 hashes of its own inline scripts (Nuxt's config and importmap). */
-export function contentSecurityPolicy(scriptHashes: string[] = []): string {
-  return CSP.replace("script-src 'self'", ["script-src 'self'", ...scriptHashes.map((h) => `'sha256-${h}'`)].join(' '));
+/**
+ * The CSP; the SPA page adds sha256 hashes of its own inline scripts (Nuxt's config and importmap). In direct mode
+ * (spec §11.2) the browser talks to a bucket the user chooses, so `connect-src` allows any https origin and local
+ * development endpoints.
+ */
+export function contentSecurityPolicy(scriptHashes: string[] = [], direct = false): string {
+  let policy = CSP.replace("script-src 'self'", ["script-src 'self'", ...scriptHashes.map((h) => `'sha256-${h}'`)].join(' '));
+  if (direct) policy = policy.replace("connect-src 'self'", DIRECT_CONNECT_SRC);
+  return policy;
+}
+
+export const DIRECT_CONNECT_SRC = "connect-src 'self' https: http://localhost:* http://127.0.0.1:*";
+
+/**
+ * The page's own `<meta>` CSP, for static hosts that send no header: the direct-mode policy without the directives a
+ * `<meta>` policy can't carry (`frame-ancestors`). Under the server's header, both apply and `connect-src` stays 'self'.
+ */
+export function metaContentSecurityPolicy(scriptHashes: string[]): string {
+  return contentSecurityPolicy(scriptHashes, true)
+    .split('; ')
+    .filter((d) => !d.startsWith('frame-ancestors'))
+    .join('; ');
 }
 
 const CSP = [
@@ -101,7 +120,7 @@ const CSP = [
 ].join('; ');
 
 export function securityHeaders(event: H3Event, cfg: ServerConfig): void {
-  setResponseHeader(event, 'Content-Security-Policy', CSP);
+  setResponseHeader(event, 'Content-Security-Policy', contentSecurityPolicy([], cfg.mode === 'static'));
   setResponseHeader(event, 'X-Content-Type-Options', 'nosniff');
   setResponseHeader(event, 'Referrer-Policy', 'no-referrer');
   setResponseHeader(event, 'X-Frame-Options', 'DENY');

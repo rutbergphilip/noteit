@@ -1,4 +1,5 @@
 import { defineNitroPlugin } from 'nitropack/runtime';
+import { loadConfig } from '../lib/config';
 import { serverContext } from '../lib/context';
 
 /**
@@ -7,6 +8,10 @@ import { serverContext } from '../lib/context';
  * process with the reason instead of failing every request.
  */
 export default defineNitroPlugin(async () => {
+  if (loadConfig().mode === 'static') {
+    console.log('NoteIt static client (NOTEIT_MODE=static): direct mode, no accounts and no /api; nothing is stored here');
+    return;
+  }
   try {
     const ctx = await serverContext();
     const where = ctx.cfg.store === 's3' && ctx.cfg.s3 ? `stores in s3://${ctx.cfg.s3.bucket}/${ctx.cfg.s3.prefix}` : `data in ${ctx.cfg.dataDir}`;

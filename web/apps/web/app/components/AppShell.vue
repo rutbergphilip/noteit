@@ -23,7 +23,9 @@ function onSearch(): void {
 }
 
 const accountItems = computed<DropdownMenuItem[][]>(() => [
-  [{ type: 'label', label: state.session?.user.displayName, description: `@${state.session?.user.username}`, avatar: { text: initials.value, class: 'bg-(--avatar) text-white' } }],
+  state.mode === 'direct'
+    ? [{ type: 'label', label: 'This browser', description: 'Syncs straight to your bucket', avatar: { icon: 'i-lucide-database', class: 'bg-(--avatar) text-white' } }]
+    : [{ type: 'label', label: state.session?.user.displayName, description: `@${state.session?.user.username}`, avatar: { text: initials.value, class: 'bg-(--avatar) text-white' } }],
   [
     {
       label: 'Appearance',
@@ -43,7 +45,7 @@ const accountItems = computed<DropdownMenuItem[][]>(() => [
   ],
   [
     { label: 'Lock', icon: 'i-lucide-lock', onSelect: () => void lock() },
-    { label: 'Sign Out', icon: 'i-lucide-log-out', onSelect: () => void signOut() },
+    ...(state.mode === 'direct' ? [] : [{ label: 'Sign Out', icon: 'i-lucide-log-out', onSelect: () => void signOut() }]),
   ],
 ]);
 
@@ -94,7 +96,7 @@ function home(): void {
         </UTooltip>
         <UDropdownMenu :items="accountItems" :content="{ align: 'end', sideOffset: 8 }" :ui="{ content: 'w-60' }">
           <UButton color="neutral" variant="ghost" square class="rounded-full p-0.5" aria-label="Account">
-            <UAvatar :text="initials" size="md" class="bg-(--avatar) text-xs font-bold text-white" :ui="{ fallback: 'text-white' }" />
+            <UAvatar :text="state.mode === 'direct' ? undefined : initials" :icon="state.mode === 'direct' ? 'i-lucide-database' : undefined" size="md" class="bg-(--avatar) text-xs font-bold text-white" :ui="{ fallback: 'text-white' }" />
           </UButton>
         </UDropdownMenu>
       </div>

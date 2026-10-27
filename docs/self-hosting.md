@@ -29,7 +29,8 @@ Every release tag `vX.Y.Z` publishes:
 
 The image runs as uid 1000, keeps everything in the `/data` volume, and has a health check on
 `/api/health/live`. The static tarball is the exact client the image serves (see
-[Verifying the client](#verifying-the-client)); the web app still needs the server for sign-in and sync.
+[Verifying the client](#verifying-the-client)). Served on its own it runs in
+[direct mode](#direct-mode-no-server), syncing straight to your own S3 bucket.
 
 ## Run it with Docker
 
@@ -91,6 +92,7 @@ value, for Docker or Compose secrets (the file must be readable by uid 1000).
 | `NOTEIT_S3_PREFIX` | (bucket root) | Key prefix in the bucket; stores go under `<prefix>/users/<USER-ID>/`. |
 | `NOTEIT_S3_PATH_STYLE` | `true` | Path-style URLs; `false` for virtual-hosted buckets (`bucket.endpoint`). |
 | `NOTEIT_STORE_TIMEOUT_S` | `120` | Timeout of each upstream request. |
+| `NOTEIT_MODE` | `server` | `static` serves only the client, in [direct mode](#direct-mode-no-server): no accounts, no `/api` except the health checks, no `/s3`, nothing written to `/data`. |
 | `NOTEIT_DATA_DIR` | `/data` | Where everything is stored. The image sets it; change it only when running without Docker. |
 | `PORT`, `HOST` | `3000`, `0.0.0.0` | Listen address. |
 | `NOTEIT_VERSION`, `NOTEIT_COMMIT` | set by the image | Shown in About and checked by the client verifier. Don't override them. |
@@ -124,6 +126,127 @@ Other things to know:
   `502 storeUnavailable`. The container is never restarted for this, since the health check is liveness only.
 - Give the key access to that bucket (and prefix) only. Backups of the volume no longer include the stores; back up
   the bucket (versioning, replication or rclone) as well.
+
+## Direct mode (no server)
+
+The web app can also run without a NoteIt server: the browser syncs straight to an S3-compatible bucket you own,
+the same store the Mac's S3 sync uses. A Mac and a browser can share one bucket (and key prefix). There are no
+accounts: it's one person's client for one bucket or prefix. Families use one bucket or prefix per person, each
+with its own key.
+
+### Serve the static client
+
+Any static host works. Unpack `noteit-web-static-X.Y.Z.tar.gz` from the release; it holds
+`noteit-client.json` = `{"mode": "direct"}`, which makes it start in direct mode. You may add
+`"sourceUrl": "https://…"` (the source link in About, for a fork); nothing else is allowed, and the client refuses to
+start with anything else in it. That file isn't in the signed hashes, so `scripts/verify-web-client.mjs` checks it
+against its schema instead.
+
+The page carries its own `<meta>` Content-Security-Policy, which lets it reach any `https:` bucket (and
+`http://localhost` for testing). Add the headers a `<meta>` policy can't set, and serve `200.html` for unknown
+paths:
+
+```caddyfile
+notes.example.com {
+	root * /srv/noteit-web-static-0.7.0
+	try_files {path} /200.html
+	header {
+		Content-Security-Policy "frame-ancestors 'none'; object-src 'none'; base-uri 'none'"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Cross-Origin-Opener-Policy same-origin
+	}
+	file_server
+}
+```
+
+```nginx
+server {
+    server_name notes.example.com;
+    root /srv/noteit-web-static-0.7.0;
+    location / { try_files $uri /200.html; }
+    add_header Content-Security-Policy "frame-ancestors 'none'; object-src 'none'; base-uri 'none'" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header Referrer-Policy no-referrer always;
+    add_header Cross-Origin-Opener-Policy same-origin always;
+}
+```
+
+A bucket website (S3, R2, B2) works too: upload the files, set `index.html` as the index and `200.html` as the error
+document. Or run the Docker image with `NOTEIT_MODE=static`, which serves the same files with the full policy as a
+header and nothing else.
+
+Serve it over HTTPS: browsers only give Web Crypto to secure origins (`http://localhost` aside).
+
+### Connect a bucket
+
+Open the site and fill in the endpoint, region, bucket, path-style (on for MinIO, Garage and most self-hosted
+servers), an optional key prefix (the same as on your Mac, if you set one there), and an access key. NoteIt checks
+the bucket before saving anything:
+
+1. it lists the prefix, which shows the bucket allows this site and the key works;
+2. it uploads a small check object with `If-None-Match: *` and reads its `ETag`, then deletes it;
+3. it runs the same conditional request check the Mac runs, and shows "Conditional Writes: Not Supported" or
+   "Conditional Deletes: Not Supported" when the provider doesn't honour them (sync still works, more slowly and
+   keeping earlier copies of notes).
+
+A failed step names what's missing, such as "origin not allowed", "PUT or If-None-Match not allowed" or "ETag not
+exposed", and shows the CORS rules below. Then enter your sync passphrase (or choose one for an empty bucket).
+
+The access key is stored only in this browser's IndexedDB, encrypted with your sync passphrase (AES-256-GCM, key from
+PBKDF2-SHA256 with 210,000 iterations and a salt made on the device); it never goes into cookies, `localStorage` or
+a URL, and requests carry only SigV4 signatures. Unlocking opens it with the passphrase, then your notes. If you
+changed the passphrase on another device, unlocking asks for the current one (or the previous and the current one,
+under "Passphrase changed on another device?") and re-encrypts the key with it; "Set up again" starts over and
+replaces the saved key only once the new setup works. Settings › Security › Forget this browser deletes the key and
+the offline copy.
+
+Give the browser a **bucket-scoped key** that can only read, write, delete and list that one bucket: an AWS IAM
+policy on `arn:aws:s3:::my-notes` and `arn:aws:s3:::my-notes/*`, an R2 API token with Object Read & Write for one
+bucket, a B2 application key restricted to the bucket, or a MinIO user with a bucket policy. Script running on the
+site, or whoever controls the static host, could use the key to delete or roll back objects (never to read notes
+without the passphrase), so use a host you run or trust.
+
+### Bucket CORS rules
+
+The bucket must allow the site's origin (exactly, not `*`), the methods `GET`, `PUT`, `HEAD` and `DELETE`, the request
+headers `authorization`, `content-type`, `if-match`, `if-none-match`, `x-amz-content-sha256` and `x-amz-date`, and
+**expose `ETag`**. Error responses must carry the CORS headers too (all the providers below do).
+
+- **AWS S3**: `aws s3api put-bucket-cors --bucket my-notes --cors-configuration file://cors.json` with
+
+  ```json
+  {"CORSRules": [{
+    "AllowedOrigins": ["https://notes.example.com"],
+    "AllowedMethods": ["GET", "PUT", "HEAD", "DELETE"],
+    "AllowedHeaders": ["authorization", "content-type", "if-match", "if-none-match",
+                       "x-amz-content-sha256", "x-amz-date"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }]}
+  ```
+- **Cloudflare R2**: bucket › Settings › CORS Policy in the dashboard, which takes the rules without the wrapper (or
+  the AWS command with `--endpoint-url https://<account-id>.r2.cloudflarestorage.com`):
+
+  ```json
+  [{"AllowedOrigins": ["https://notes.example.com"], "AllowedMethods": ["GET", "PUT", "HEAD", "DELETE"],
+    "AllowedHeaders": ["authorization", "content-type", "if-match", "if-none-match",
+                       "x-amz-content-sha256", "x-amz-date"],
+    "ExposeHeaders": ["ETag"], "MaxAgeSeconds": 3600}]
+  ```
+- **MinIO**: CORS is server-wide (per-bucket `PutBucketCors` isn't implemented in the community edition). Set
+  `MINIO_API_CORS_ALLOW_ORIGIN=https://notes.example.com` (the default is `*`) and restart; MinIO already allows the
+  methods and exposes `ETag`.
+- **Backblaze B2**, with the `b2` CLI (v4):
+
+  ```sh
+  b2 bucket update --cors-rules '[{"corsRuleName": "noteit",
+    "allowedOrigins": ["https://notes.example.com"],
+    "allowedOperations": ["s3_get", "s3_head", "s3_put", "s3_delete"],
+    "allowedHeaders": ["authorization", "content-type", "if-match", "if-none-match",
+                       "x-amz-content-sha256", "x-amz-date"],
+    "exposeHeaders": ["ETag"], "maxAgeSeconds": 3600}]' my-notes allPrivate
+  ```
 
 ## Reverse proxy
 

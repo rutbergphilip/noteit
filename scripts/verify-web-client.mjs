@@ -13,7 +13,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { compareVersions, hashTree, parseManifest, sha256, verifyMinisign } from './lib/web-client.mjs';
+import { checkClientConfig, compareVersions, hashTree, parseManifest, sha256, verifyMinisign } from './lib/web-client.mjs';
 
 const REPO = 'rutbergphilip/noteit';
 const GITHUB_API = process.env.NOTEIT_GITHUB_API ?? 'https://api.github.com';
@@ -165,6 +165,10 @@ async function compareDir(dir, manifest) {
     else if (actual[path] !== hash) problems.push(`mismatched ${path}`);
   }
   for (const path of Object.keys(actual)) if (!(path in manifest.files)) problems.push(`extra ${path}`);
+  // Not hashed (operators edit it), but it must still be a valid configuration.
+  const config = await readFile(join(dir, 'noteit-client.json'), 'utf8').catch(() => undefined);
+  if (config === undefined) problems.push('missing /noteit-client.json');
+  else problems.push(...checkClientConfig(config));
   return problems;
 }
 

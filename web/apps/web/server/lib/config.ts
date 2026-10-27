@@ -27,6 +27,11 @@ export interface OidcConfig {
 }
 
 export interface ServerConfig {
+  /**
+   * `server` (default) or `static` (NOTEIT_MODE=static, spec §6.4): only the client's files, noteit-client.json
+   * saying `direct` and the health routes; no accounts, no /api, no /s3, nothing written to the data directory.
+   */
+  mode: 'server' | 'static';
   /** Where user stores live: the data directory, or an upstream S3 bucket (spec §6.2). */
   store: 'disk' | 's3';
   s3: UpstreamS3Config | undefined;
@@ -121,6 +126,8 @@ function oidcConfig(env: NodeJS.ProcessEnv, publicUrl: string | undefined): Oidc
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const mode = env.NOTEIT_MODE || 'server';
+  if (mode !== 'server' && mode !== 'static') throw new Error(`NOTEIT_MODE must be server or static, not ${JSON.stringify(mode)}`);
   const store = env.NOTEIT_STORE || 'disk';
   const publicUrl = env.NOTEIT_PUBLIC_URL?.replace(/\/$/, '') || undefined;
   const oidc = oidcConfig(env, publicUrl);
@@ -128,6 +135,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   if (!passwordLogin && !oidc) throw new Error('NOTEIT_PASSWORD_LOGIN=false needs OIDC sign-in (NOTEIT_OIDC_ISSUER)');
   if (store !== 'disk' && store !== 's3') throw new Error(`NOTEIT_STORE must be disk or s3, not ${JSON.stringify(store)}`);
   return {
+    mode,
     store,
     s3: store === 's3' ? upstreamS3(env) : undefined,
     storeTimeoutMs: Math.max(1, int(env.NOTEIT_STORE_TIMEOUT_S, 120)) * 1000,

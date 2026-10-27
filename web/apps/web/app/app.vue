@@ -99,6 +99,9 @@ onBeforeUnmount(() => {
         <SetupWizard v-else-if="state.phase === 'setup'" key="setup" />
         <SignIn v-else-if="state.phase === 'signin'" key="signin" />
         <ChangePassword v-else-if="state.phase === 'changePassword'" key="password" />
+        <DirectUnlock v-else-if="state.phase === 'unlock' && state.mode === 'direct'" key="direct-unlock" />
+        <ConnectDirect v-else-if="state.phase === 'connectDirect'" key="connect" />
+        <ConfigError v-else-if="state.phase === 'configError'" key="config" />
         <UnlockScreen v-else-if="state.phase === 'unlock' || state.phase === 'createStore'" key="unlock" />
         <LegacyStore v-else-if="state.phase === 'legacy'" key="legacy" />
         <AppShell v-else-if="state.phase === 'ready'" key="ready" />

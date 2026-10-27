@@ -41,6 +41,7 @@ async function bundle(version) {
   await writeFile(join(dir, '200.html'), page);
   await writeFile(join(dir, `_nuxt/entry-${version}.js`), `console.log(${JSON.stringify(version)})`);
   await writeFile(join(dir, '_nuxt/worker.js'), 'self.onmessage = () => {}');
+  await writeFile(join(dir, 'noteit-client.json'), '{"mode": "direct"}\n');
   return dir;
 }
 
@@ -217,6 +218,18 @@ describe('verify-web-client', () => {
     const r = await run([dir, '--expect', '1.1.0']);
     assert.equal(r.code, 1, r.out);
     assert.match(r.out, /extra \/_nuxt\/extra\.js/);
+  });
+
+  it("doesn't hash noteit-client.json, but checks it against its schema", async () => {
+    const dir = join(root, 'configured');
+    await cp(join(root, 'static-1.1.0'), dir, { recursive: true });
+    await writeFile(join(dir, 'noteit-client.json'), '{"mode": "direct", "sourceUrl": "https://git.example.com/noteit"}');
+    const ok = await run([dir, '--expect', '1.1.0']);
+    assert.equal(ok.code, 0, ok.out);
+    await writeFile(join(dir, 'noteit-client.json'), '{"mode": "direct", "endpoint": "https://evil.example"}');
+    const r = await run([dir, '--expect', '1.1.0']);
+    assert.equal(r.code, 1, r.out);
+    assert.match(r.out, /unknown key endpoint/);
   });
 });
 

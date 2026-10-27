@@ -7,14 +7,36 @@ import { join, relative, sep } from 'node:path';
 
 export const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
-/** Every file under `dir`, keyed by its URL path ("/_nuxt/x.js"), with its SHA-256. */
+/** Operators edit it (spec §6.4), so it isn't hashed; `checkClientConfig` checks it against its schema instead. */
+export const CLIENT_CONFIG = '/noteit-client.json';
+
+/** Problems with a `noteit-client.json`: `{"mode": "server" | "direct", "sourceUrl"?: "https://…"}` (direct only). */
+export function checkClientConfig(text) {
+  let c;
+  try {
+    c = JSON.parse(text);
+  } catch {
+    return ['noteit-client.json is not JSON'];
+  }
+  if (!c || typeof c !== 'object' || Array.isArray(c)) return ['noteit-client.json is not an object'];
+  const problems = [];
+  for (const k of Object.keys(c)) if (k !== 'mode' && k !== 'sourceUrl') problems.push(`noteit-client.json has an unknown key ${k}`);
+  if (c.mode !== 'server' && c.mode !== 'direct') problems.push('noteit-client.json mode must be "server" or "direct"');
+  if ('sourceUrl' in c && (c.mode !== 'direct' || typeof c.sourceUrl !== 'string' || !/^https:\/\/\S+$/.test(c.sourceUrl))) problems.push('noteit-client.json sourceUrl must be an https:// URL, in direct mode');
+  return problems;
+}
+
+/** Every file under `dir` except noteit-client.json, keyed by its URL path ("/_nuxt/x.js"), with its SHA-256. */
 export async function hashTree(dir) {
   const files = {};
   async function walk(d) {
     for (const entry of await readdir(d, { withFileTypes: true })) {
       const path = join(d, entry.name);
       if (entry.isDirectory()) await walk(path);
-      else if (entry.isFile()) files['/' + relative(dir, path).split(sep).join('/')] = sha256(await readFile(path));
+      else if (entry.isFile()) {
+        const key = '/' + relative(dir, path).split(sep).join('/');
+        if (key !== CLIENT_CONFIG) files[key] = sha256(await readFile(path));
+      }
       else throw new Error(`unexpected entry in the client bundle: ${path}`);
     }
   }

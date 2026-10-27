@@ -7,6 +7,7 @@ final class LiveS3EmulatorTests: XCTestCase {
     private var config: S3Config!
     private var credentials: S3Credentials!
     private var dir: URL!
+    private var interopPrefix: String?
 
     override func setUp() async throws {
         guard let endpoint = AppEnvironment.value("LIVE_S3_ENDPOINT").flatMap(URL.init(string:)) else {
@@ -17,7 +18,9 @@ final class LiveS3EmulatorTests: XCTestCase {
         credentials = S3Credentials(accessKeyID: AppEnvironment.value("LIVE_S3_ACCESS_KEY") ?? "test",
                                     secretAccessKey: AppEnvironment.value("LIVE_S3_SECRET") ?? "test")
         // A NoteIt server only accepts keys in the store layout, so it runs without a per-run prefix.
-        let prefix = AppEnvironment.value("LIVE_S3_NO_PREFIX") == nil ? "run-\(UUID().uuidString.prefix(8))" : ""
+        // The web interop step works in the prefix the web app's test wrote (scripts/direct_s3_interop.sh).
+        interopPrefix = AppEnvironment.value("LIVE_S3_INTEROP_PREFIX")
+        let prefix = interopPrefix ?? (AppEnvironment.value("LIVE_S3_NO_PREFIX") == nil ? "run-\(UUID().uuidString.prefix(8))" : "")
         config = S3Config(endpoint: endpoint, region: region, bucket: bucket,
                           pathStyle: AppEnvironment.value("LIVE_S3_VIRTUAL_HOST") == nil, prefix: prefix)
         if AppEnvironment.value("LIVE_S3_CREATE_BUCKET") != nil { try await createBucketIfNeeded() }
@@ -27,7 +30,8 @@ final class LiveS3EmulatorTests: XCTestCase {
 
     override func tearDown() async throws {
         if let dir { try? FileManager.default.removeItem(at: dir) }
-        guard config != nil else { return }
+        // The web app reads what the interop step wrote; its script deletes the prefix afterwards.
+        guard config != nil, interopPrefix == nil else { return }
         let backend = makeBackend()
         for object in (try? await backend.list(prefix: "")) ?? [] { try? await backend.delete(object.key) }
     }
@@ -152,5 +156,27 @@ final class LiveS3EmulatorTests: XCTestCase {
             let data = try await backend.get(object.key).data
             XCTAssertNil(data.range(of: Data("Ghostty".utf8)), "plaintext leaked in \(object.key)")
         }
+    }
+
+    /// Direct mode (web-app Task 5.3): the Mac opens the store the web app's `S3Backend` created in a shared bucket,
+    /// reads the web's note and writes one back for the web to read. Run by `scripts/direct_s3_interop.sh`.
+    func testSharesABucketWithTheWebApp() async throws {
+        guard interopPrefix != nil else { throw XCTSkip("NOTEIT_LIVE_S3_INTEROP_PREFIX not set") }
+        let backend = makeBackend()
+        let (session, created) = try await SyncEngine.connectSession(
+            backend: backend, kind: .library, credential: .passphrase(AppEnvironment.value("LIVE_S3_INTEROP_PASSPHRASE") ?? "interop passphrase"),
+            deviceName: "Mac", createIfMissing: false, encrypted: true)
+        XCTAssertFalse(created)
+        XCTAssertEqual(session.bodyEncoding, .noteItDocV1, "the web creates v2 stores with noteit-doc")
+        let ref = StoreSessionRef(session)
+        let store = FakeLocalStore(session: ref)
+        let engine = SyncEngine(backend: backend, session: ref, local: store, stateURL: dir.appendingPathComponent("mac.json"),
+                                deviceID: "interop-mac", deviceName: "Mac")
+        _ = try await engine.sync()
+        let titles = await store.titles()
+        XCTAssertTrue(titles.contains("From the web"), "\(titles)")
+        await store.create(title: "From the Mac")
+        let report = try await engine.sync()
+        XCTAssertEqual(report.pushed, 1)
     }
 }

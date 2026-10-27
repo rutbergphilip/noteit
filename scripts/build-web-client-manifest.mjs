@@ -5,7 +5,8 @@
 //
 // It starts the built server once (temporary data directory, loopback), takes the page it serves at `/` and its
 // Content-Security-Policy, and writes
-//   <out>/noteit-web-static-<version>/   .output/public plus that page as index.html and 200.html
+//   <out>/noteit-web-static-<version>/   .output/public plus that page as index.html and 200.html, and
+//                                        noteit-client.json {"mode": "direct"} (not hashed)
 //   <out>/web-client-<version>.json      {version, commit, csp, files: {"/path": sha256}}
 // The release workflow packs the directory into noteit-web-static-<version>.tar.gz, signs the manifest with
 // minisign, and checks the image's copy of the client against it. verify-web-client.mjs checks a running server
@@ -77,6 +78,9 @@ await cp(join(output, 'public'), staticDir, { recursive: true });
 // The SPA page: index.html for `/`, 200.html as the fallback for client routes on static hosts.
 await writeFile(join(staticDir, 'index.html'), page);
 await writeFile(join(staticDir, '200.html'), page);
+// The static client runs in direct mode (spec §6.4): it syncs straight to the user's bucket. Operators may add
+// a sourceUrl; the file isn't in the signed hashes.
+await writeFile(join(staticDir, 'noteit-client.json'), '{"mode": "direct"}\n');
 
 const manifest = { version: args.version, commit: args.commit, csp, files: await hashTree(staticDir) };
 const manifestPath = join(out, `web-client-${args.version}.json`);
