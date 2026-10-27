@@ -52,7 +52,7 @@ const named = (m: RegExpExecArray, g: number): Clock | undefined => (m[g] === un
 const isMidnight = (m: RegExpExecArray, g: number) => m[g]?.toLowerCase() === 'midnight';
 
 /** Wall-clock parts of `d` in `timeZone`. */
-function partsIn(d: Date, timeZone?: string): LocalDateTime & { second: number } {
+export function partsIn(d: Date, timeZone?: string): LocalDateTime & { second: number } {
   const f = new Intl.DateTimeFormat('en-US', { timeZone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' });
   const p = Object.fromEntries(f.formatToParts(d).map((x) => [x.type, x.value]));
   return { year: Number(p.year), month: Number(p.month), day: Number(p.day), hour: Number(p.hour) % 24, minute: Number(p.minute), second: Number(p.second) };
