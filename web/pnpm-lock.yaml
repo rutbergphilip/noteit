@@ -110,6 +110,9 @@ importers:
       fflate:
         specifier: 0.8.2
         version: 0.8.2
+      highlight.js:
+        specifier: 11.11.2
+        version: 11.11.2
       lowlight:
         specifier: 3.3.0
         version: 3.3.0

@@ -27,6 +27,7 @@ import { askNotificationPermission, notificationsSupported } from '~/utils/remin
 import type { DeviceView } from '~/worker/types';
 import { useOpeningKey } from '~/utils/overlay';
 import { linkRenameMode, setLinkRenameMode, type LinkRenameMode } from '~/composables/useRenameTracker';
+import { CODE_THEMES, codeStyle, setCodeStyle, type CodeThemeId } from '~/utils/codeStyle';
 
 const { state, client, setTheme, lock, signOut, toast, boot } = useNoteit();
 const confirm = useConfirm();
@@ -132,6 +133,12 @@ const renameModes = [
   { label: 'Always update links', value: 'always' },
   { label: 'Never update links', value: 'never' },
 ];
+// Code blocks (native Settings › Editor › Code), kept in this browser.
+const code = ref(codeStyle());
+function changeCode(change: { theme?: CodeThemeId; highlighting?: boolean }): void {
+  setCodeStyle(change);
+  code.value = codeStyle();
+}
 function changeRenameMode(v: LinkRenameMode): void {
   renameMode.value = v;
   setLinkRenameMode(v);
@@ -279,6 +286,14 @@ const portalKey = useOpeningKey(() => state.settings);
             <SettingsCard title="Appearance">
               <SettingsRow label="Theme" sub="Follows your system unless you pick one.">
                 <USelect :model-value="state.theme" :items="themes" class="w-36" aria-label="Theme" @update:model-value="(t) => setTheme(t as 'system' | 'light' | 'dark')" />
+              </SettingsRow>
+            </SettingsCard>
+            <SettingsCard title="Code blocks">
+              <SettingsRow label="Syntax highlighting" sub="Colours code by language, set from the code block or guessed.">
+                <USwitch :model-value="code.highlighting" aria-label="Syntax highlighting" @update:model-value="(v) => changeCode({ highlighting: !!v })" />
+              </SettingsRow>
+              <SettingsRow label="Theme">
+                <USelect :model-value="code.theme" :items="[...CODE_THEMES]" class="w-36" aria-label="Code block theme" :disabled="!code.highlighting" @update:model-value="(v) => changeCode({ theme: v as CodeThemeId })" />
               </SettingsRow>
             </SettingsCard>
             <SettingsCard title="This browser">

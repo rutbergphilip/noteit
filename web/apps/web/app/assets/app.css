@@ -371,3 +371,110 @@
   background: rgba(255, 159, 10, 0.75);
   box-shadow: 0 0 0 1px rgba(255, 159, 10, 0.9);
 }
+
+/* Code block colours (native CodeTheme: Xcode, GitHub, Solarized, Nord; Settings › General picks one). */
+:root {
+  --tk-plain: #1F1F24;
+  --tk-keyword: #9B2393;
+  --tk-string: #C41A16;
+  --tk-comment: #5D6C79;
+  --tk-number: #1C00CF;
+  --tk-type: #0B4F79;
+  --tk-property: #326D74;
+  --tk-punctuation: #4A4A52;
+}
+.dark {
+  --tk-plain: #DFDFE0;
+  --tk-keyword: #FC5FA3;
+  --tk-string: #FC6A5D;
+  --tk-comment: #7F8C98;
+  --tk-number: #D0BF69;
+  --tk-type: #5DD8FF;
+  --tk-property: #67B7A4;
+  --tk-punctuation: #B4B4B9;
+}
+:root[data-code-theme="github"] {
+  --tk-plain: #1F2328;
+  --tk-keyword: #CF222E;
+  --tk-string: #0A3069;
+  --tk-comment: #6E7781;
+  --tk-number: #0550AE;
+  --tk-type: #953800;
+  --tk-property: #8250DF;
+  --tk-punctuation: #57606A;
+  --tk-bg: #F6F8FA;
+}
+.dark[data-code-theme="github"] {
+  --tk-plain: #E6EDF3;
+  --tk-keyword: #FF7B72;
+  --tk-string: #A5D6FF;
+  --tk-comment: #8B949E;
+  --tk-number: #79C0FF;
+  --tk-type: #FFA657;
+  --tk-property: #D2A8FF;
+  --tk-punctuation: #ADBAC7;
+  --tk-bg: #161B22;
+}
+:root[data-code-theme="solarized"] {
+  --tk-plain: #586E75;
+  --tk-keyword: #859900;
+  --tk-string: #2AA198;
+  --tk-comment: #93A1A1;
+  --tk-number: #D33682;
+  --tk-type: #B58900;
+  --tk-property: #268BD2;
+  --tk-punctuation: #657B83;
+  --tk-bg: #FDF6E3;
+}
+.dark[data-code-theme="solarized"] {
+  --tk-plain: #93A1A1;
+  --tk-keyword: #859900;
+  --tk-string: #2AA198;
+  --tk-comment: #657B83;
+  --tk-number: #D33682;
+  --tk-type: #B58900;
+  --tk-property: #268BD2;
+  --tk-punctuation: #839496;
+  --tk-bg: #002B36;
+}
+:root[data-code-theme="nord"] {
+  --tk-plain: #2E3440;
+  --tk-keyword: #5E81AC;
+  --tk-string: #4F7D3A;
+  --tk-comment: #7B88A1;
+  --tk-number: #9A6A94;
+  --tk-type: #3B8A8C;
+  --tk-property: #4C7BA6;
+  --tk-punctuation: #4C566A;
+  --tk-bg: #ECEFF4;
+}
+.dark[data-code-theme="nord"] {
+  --tk-plain: #D8DEE9;
+  --tk-keyword: #81A1C1;
+  --tk-string: #A3BE8C;
+  --tk-comment: #7B88A1;
+  --tk-number: #B48EAD;
+  --tk-type: #8FBCBB;
+  --tk-property: #88C0D0;
+  --tk-punctuation: #A7B1C2;
+  --tk-bg: #2E3440;
+}
+.ni-prose pre.ni-code {
+  color: var(--tk-plain);
+  background: var(--tk-bg, var(--code));
+}
+.ni-prose .tk-keyword { color: var(--tk-keyword); }
+.ni-prose .tk-string { color: var(--tk-string); }
+.ni-prose .tk-comment { color: var(--tk-comment); }
+.ni-prose .tk-number { color: var(--tk-number); }
+.ni-prose .tk-type { color: var(--tk-type); }
+.ni-prose .tk-property { color: var(--tk-property); }
+.ni-prose .tk-punctuation { color: var(--tk-punctuation); }
+:root[data-code-highlight="off"] .ni-prose pre.ni-code,
+:root[data-code-highlight="off"] .ni-prose pre.ni-code [class^="tk-"] {
+  color: inherit;
+  background-color: var(--code);
+}
+:root[data-code-highlight="off"] .ni-prose pre.ni-code [class^="tk-"] {
+  background-color: transparent;
+}

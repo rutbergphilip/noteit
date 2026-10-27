@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, watch } from 'vue';
 import { setNotifier, type Theme, useNoteit } from '~/composables/useNoteit';
 import { paletteKeys, webCommands } from '~/utils/commands';
 import { loadMenuShortcuts } from '~/utils/menuShortcuts';
+import { applyCodeStyle } from '~/utils/codeStyle';
 import { matchesCombo } from '~/utils/shortcuts';
 import { startReminders, stopReminders } from '~/utils/reminders';
 
@@ -70,6 +71,7 @@ const onPageHide = (e: PageTransitionEvent) => {
 
 onMounted(() => {
   loadMenuShortcuts();
+  applyCodeStyle();
   window.addEventListener('pagehide', onPageHide);
   window.addEventListener('keydown', onKey);
   document.addEventListener('visibilitychange', onVisibility);

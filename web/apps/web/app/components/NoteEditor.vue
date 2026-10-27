@@ -5,7 +5,7 @@ import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
 import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS, isTagBoundary, tagQueryEnds, tagSuggestions, type TagSuggestion, deriveTitleAndPreview, searchFold, NOTE_LINK_MAX_TEXT } from '@noteit/doc';
 import { useRenameTracker } from '~/composables/useRenameTracker';
-import { fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
+import { CODE_LANGUAGES, codeBlockGroups, codeLanguageId, effectiveCodeLanguage, fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
 import { copyMarkdown, copyNoteLink, exportNote, printNote } from '~/utils/exporting';
@@ -661,6 +661,38 @@ function setBlock(v: Block): void {
   else chain.setNode('heading', { level: Number(v.slice(1)) }).run();
 }
 
+// MARK: code block language (native CodeStyler's corner menu): Automatic (the guess) or one of native's languages.
+
+const AUTOMATIC = 'auto';
+/** The code block under the caret: the run of code lines it belongs to, with what it's set to and what it shows as. */
+const codeGroup = computed(() => {
+  const ed = liveEditor();
+  void state.selectedId;
+  if (!ed || !ed.isActive('codeBlock')) return undefined;
+  const pos = ed.state.selection.$from.before(1);
+  const group = codeBlockGroups(ed.state.doc).find((g) => g.lines.some((l) => l.pos === pos));
+  if (!group) return undefined;
+  const text = group.lines.map((l) => l.node.textContent).join('\n');
+  const known = group.language ? codeLanguageId(group.language) : undefined;
+  const shown = effectiveCodeLanguage(group.language, text);
+  return { group, value: known ?? AUTOMATIC, guess: shown.guessed ? shown.id : undefined };
+});
+const languageItems = computed(() => {
+  const guess = CODE_LANGUAGES.find((l) => l.id === codeGroup.value?.guess)?.name;
+  return [{ label: guess ? `Automatic (${guess})` : 'Automatic', value: AUTOMATIC }, ...CODE_LANGUAGES.map((l) => ({ label: l.name, value: l.id }))];
+});
+/** Sets every line of the block to the canonical id native writes, or removes it for Automatic. */
+function setCodeLanguage(value: string): void {
+  const ed = liveEditor();
+  const g = codeGroup.value;
+  if (!ed || !g) return;
+  const language = value === AUTOMATIC ? null : value;
+  const tr = ed.state.tr;
+  for (const line of g.group.lines) tr.setNodeAttribute(line.pos, 'language', language);
+  ed.view.dispatch(tr);
+  ed.commands.focus();
+}
+
 const mark = (name: string) => editor.value?.chain().focus().toggleMark(name).run();
 const active = (name: string, attrs?: Record<string, unknown>) => !!editor.value?.isActive(name, attrs);
 
@@ -848,6 +880,17 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
       aria-label="Formatting"
     >
       <USelect :model-value="blockType" :items="BLOCKS" size="sm" variant="soft" aria-label="Text style" class="w-32 flex-none bg-(--fill)" @update:model-value="(v) => setBlock(v as Block)" />
+      <USelect
+        v-if="codeGroup"
+        :model-value="codeGroup.value"
+        :items="languageItems"
+        size="sm"
+        variant="soft"
+        aria-label="Code language"
+        class="ms-1 w-44 flex-none bg-(--fill)"
+        :ui="{ content: 'max-h-80' }"
+        @update:model-value="(v) => setCodeLanguage(String(v))"
+      />
       <USeparator orientation="vertical" class="mx-1.5 h-[18px]" />
       <UTooltip v-for="m in MARKS" :key="m.mark" :text="m.label" :kbds="[...m.kbds]">
         <UButton color="neutral" variant="ghost" size="sm" square class="size-[30px] justify-center" :icon="m.icon" :aria-label="m.label" :aria-pressed="active(m.mark)" :class="active(m.mark) && 'bg-(--sel) text-(--acct)'" @click="mark(m.mark)" />
