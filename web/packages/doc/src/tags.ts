@@ -2,6 +2,7 @@
  * Rename, merge and delete tags everywhere (native TagRewriter + QueryRewriter.renamingTag): `#tag` tokens and the
  * tags nested in them are rewritten in note text outside code and links; renaming onto a tag in use merges them.
  */
+import { fuzzyMatch, fuzzyQuery } from './fuzzy.js';
 import { lexQuery } from './query.js';
 import type { Block, Inline, NoteItDoc } from './schema.js';
 import { isValidTagName, MAX_TAG_DEPTH, normalizedTag, tagMatches } from './tokens.js';
@@ -154,4 +155,42 @@ export function renameTagInQuery(from: string, to: string, query: string): strin
     result = result.slice(0, valueStart) + (needsQuotes ? `"${next}"` : next) + result.slice(valueEnd);
   }
   return result;
+}
+
+// MARK: `#` suggestions (native TagCompletionSource)
+
+/** Characters a `#` may follow and still start a tag (native `TagCompletionSource.isBoundary`); undefined is the line start. */
+export function isTagBoundary(ch: string | undefined): boolean {
+  if (ch === undefined) return true;
+  return /^[\s,;"'\p{Ps}\p{Pi}]$/u.test(ch);
+}
+
+/** Whether the text typed after `#` can no longer be a tag, which closes the suggestions. */
+export function tagQueryEnds(query: string): boolean {
+  if (!query) return false;
+  return !isValidTagName(query.endsWith('/') ? query.slice(0, -1) : query);
+}
+
+export interface TagSuggestion {
+  tag: string;
+  count: number;
+  /** Matched character offsets in `tag`. */
+  matched: number[];
+}
+
+/** Up to eight tags: best fuzzy match first, then most used, then by name (native `TagCompletionSource.rank`). */
+export function tagSuggestions(notes: readonly { tags: readonly string[]; deletedAt?: unknown }[], query: string, limit = 8): TagSuggestion[] {
+  const counts = new Map<string, number>();
+  for (const n of notes) if (!n.deletedAt) for (const t of n.tags) counts.set(t, (counts.get(t) ?? 0) + 1);
+  const fuzzy = fuzzyQuery(query);
+  const scored: (TagSuggestion & { score: number })[] = [];
+  for (const [tag, count] of counts) {
+    if (!fuzzy.terms.length) scored.push({ tag, count, score: 0, matched: [] });
+    else {
+      const m = fuzzyMatch(fuzzy, tag);
+      if (m) scored.push({ tag, count, score: m.score, matched: m.matchedIndices });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score || b.count - a.count || (a.tag < b.tag ? -1 : a.tag > b.tag ? 1 : 0));
+  return scored.slice(0, limit).map(({ tag, count, matched }) => ({ tag, count, matched }));
 }

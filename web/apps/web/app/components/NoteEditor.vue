@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
 import { EditorContent, useEditor } from '@tiptap/vue-3';
 import type { Editor } from '@tiptap/core';
 import type { DropdownMenuItem } from '@nuxt/ui';
-import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS } from '@noteit/doc';
+import { dailyNotebook, parseDailyTitle, localDateTimeToken, localFirstWeekday, localFromDate, parseNaturalDate, addAttachment, attachmentTooLargeMessage, markdownForPaste, noteIDForTitle, linkSuggestions, noteLinkURL, WIKI_LINK_OPEN, wikiLink, type LinkTarget, type BodyContainer, HIGHLIGHT_COLORS, isAllowedLink, MAX_ATTACHMENT_BYTES, type NoteItDoc, parseNoteLink, sanitizePastedHtml, TEXT_COLORS, isTagBoundary, tagQueryEnds, tagSuggestions, type TagSuggestion } from '@noteit/doc';
 import { fromEditorJSON, insertTable as insertTableAt, noteItExtensions, prepareForEditor } from '@noteit/doc/tiptap';
 import { useConfirm } from '~/lib/confirm';
 import { useNoteit } from '~/composables/useNoteit';
@@ -59,7 +59,12 @@ const editor = useEditor({
     handleKeyDown: (_view, e) => {
       // ⇧⌘V / ⌥⇧⌘V: Paste and Match Style, so the next paste stays plain text.
       if (e.code === 'KeyV' && e.shiftKey && (e.metaKey || e.ctrlKey)) plainPaste = true;
-      return linkListKey(e);
+      return linkListKey(e) || tagListKey(e);
+    },
+    // `#` at a tag boundary opens tag suggestions once it's in (native beginTagCompletionIfNeeded).
+    handleTextInput: (_view, from, to, text) => {
+      if (text === '#' && from === to) tagListPending = from + 1;
+      return false;
     },
     attributes: { class: 'ni-prose', 'aria-label': 'Note' },
     transformPastedHTML: (html) => sanitizePastedHtml(html),
@@ -92,9 +97,13 @@ const editor = useEditor({
   },
   // Typing opens the `[[` list; moving the caret only updates or closes an open one, so a body loaded or restored
   // with `[[` at its end doesn't pop it up (native opens completions on typing).
-  onSelectionUpdate: () => linkList.value && updateLinkList(),
+  onSelectionUpdate: () => {
+    if (linkList.value) updateLinkList();
+    if (tagList.value) updateTagList();
+  },
   onUpdate: () => {
     updateLinkList();
+    beginTagList();
     scheduleSave();
     if (liveTimer) clearTimeout(liveTimer);
     liveTimer = setTimeout(() => editor.value && (liveDoc.value = fromEditorJSON(editor.value.getJSON())), 250);
@@ -198,6 +207,99 @@ watch(
     linkToNote();
   },
 );
+
+// MARK: `#` tag suggestions (native TagCompletionSource / InlineCompletionController)
+
+/** `start` is just after the `#`; the query is the text from there to the caret. The list hides while nothing matches. */
+const tagList = ref<{ start: number; items: TagSuggestion[]; index: number; x: number; y: number; above: boolean }>();
+let tagListPending: number | undefined;
+function beginTagList(): void {
+  const start = tagListPending;
+  tagListPending = undefined;
+  const ed = liveEditor();
+  if (start === undefined || !ed || !editable.value || linkList.value) {
+    if (tagList.value) updateTagList();
+    return;
+  }
+  const { $from, empty } = ed.state.selection;
+  if (!empty || $from.pos !== start || $from.parent.type.name === 'codeBlock' || !$from.parent.isTextblock) return;
+  // Not in code or a link, and only where a tag can start: the line start, a space or opening punctuation.
+  if ($from.marks().some((m) => m.type.name === 'code' || m.type.name === 'link')) return;
+  const before = $from.parentOffset >= 2 ? $from.parent.textBetween($from.parentOffset - 2, $from.parentOffset - 1, undefined, '\ufffc') : undefined;
+  if (!isTagBoundary(before)) return;
+  tagList.value = { start, items: [], index: 0, x: 0, y: 0, above: false };
+  updateTagList();
+}
+function updateTagList(): void {
+  const ed = liveEditor();
+  const list = tagList.value;
+  if (!ed || !list || !editable.value) return void (tagList.value = undefined);
+  const { $from, empty } = ed.state.selection;
+  if (!empty || $from.pos < list.start || list.start < $from.start() || list.start > $from.end()) return void (tagList.value = undefined);
+  const query = ed.state.doc.textBetween(list.start, $from.pos, '\n', '\ufffc');
+  if (query.includes('\n') || tagQueryEnds(query)) return void (tagList.value = undefined);
+  const items = tagSuggestions(state.notes, query);
+  const previous = list.items[list.index]?.tag;
+  const at = ed.view.coordsAtPos(list.start - 1);
+  const x = Math.max(8, Math.min(at.left, window.innerWidth - LINK_LIST_WIDTH - 8));
+  const above = at.bottom + 4 + LINK_LIST_MAX_HEIGHT > window.innerHeight - 8 && at.top - 4 - LINK_LIST_MAX_HEIGHT >= 8;
+  const kept = previous ? items.findIndex((t) => t.tag === previous) : -1;
+  tagList.value = { start: list.start, items, index: Math.max(0, kept), x, y: above ? at.top - 4 : at.bottom + 4, above };
+}
+/** Replaces the typed query with the tag (the `#` stays), and a space unless one follows (native accept). */
+function chooseTag(t: TagSuggestion): void {
+  const ed = liveEditor();
+  const list = tagList.value;
+  tagList.value = undefined;
+  if (!ed || !list) return;
+  const to = ed.state.selection.from;
+  const next = ed.state.doc.textBetween(to, Math.min(to + 1, ed.state.selection.$from.end()), undefined, '\ufffc');
+  const text = t.tag + (next && /\s/.test(next) ? '' : ' ');
+  const link = ed.schema.marks.link;
+  const tr = ed.state.tr.insertText(text, list.start, to);
+  if (link) tr.removeMark(list.start, list.start + text.length, link).removeStoredMark(link);
+  ed.view.dispatch(tr);
+  ed.commands.focus();
+}
+function tagListKey(e: KeyboardEvent): boolean {
+  const list = tagList.value;
+  if (!list) return false;
+  const rows = list.items.length;
+  if (e.key === 'ArrowDown' || (e.ctrlKey && e.key === 'n')) {
+    if (rows) list.index = (list.index + 1) % rows;
+    return rows > 0;
+  }
+  if (e.key === 'ArrowUp' || (e.ctrlKey && e.key === 'p')) {
+    if (rows) list.index = (list.index - 1 + rows) % rows;
+    return rows > 0;
+  }
+  if (e.key === 'Enter' || e.key === 'Tab') {
+    const row = list.items[list.index];
+    if (!row) {
+      tagList.value = undefined;
+      return false;
+    }
+    chooseTag(row);
+    return true;
+  }
+  if (e.key === 'Escape') {
+    tagList.value = undefined;
+    return true;
+  }
+  return false;
+}
+/** The tag split into matched and unmatched runs, for bolding what was typed. */
+function tagRuns(t: TagSuggestion): { text: string; hit: boolean }[] {
+  const hits = new Set(t.matched);
+  const runs: { text: string; hit: boolean }[] = [];
+  [...t.tag].forEach((c, i) => {
+    const hit = hits.has(i);
+    const last = runs[runs.length - 1];
+    if (last && last.hit === hit) last.text += c;
+    else runs.push({ text: c, hit });
+  });
+  return runs;
+}
 
 // MARK: pasting Markdown (native MarkdownPaste): clearly-Markdown plain text comes in formatted; HTML from a web page
 // keeps its own formatting, and code blocks and Paste and Match Style take the text as it is.
@@ -812,6 +914,29 @@ const inspectorPortalKey = useOpeningKey(() => state.inspector.open && narrow.va
           >
             <UIcon name="i-lucide-file-text" class="size-4 shrink-0 text-muted" />
             <span class="truncate">{{ n.title }}</span>
+          </button>
+        </div>
+        <div
+          v-if="tagList && tagList.items.length"
+          class="fixed z-50 max-h-64 w-72 max-w-[calc(100vw-16px)] overflow-y-auto rounded-lg bg-default py-1 text-sm shadow-lg ring ring-default"
+          :class="tagList.above && '-translate-y-full'"
+          :style="{ left: `${tagList.x}px`, top: `${tagList.y}px` }"
+          role="listbox"
+          aria-label="Tag"
+        >
+          <button
+            v-for="(t, i) in tagList.items"
+            :key="t.tag"
+            type="button"
+            role="option"
+            :aria-selected="i === tagList.index"
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+            :class="i === tagList.index ? 'bg-(--sel)' : 'hover:bg-(--fill)'"
+            @mousedown.prevent="chooseTag(t)"
+          >
+            <UIcon name="i-lucide-hash" class="size-4 shrink-0 text-muted" />
+            <span class="truncate"><span v-for="(r, k) in tagRuns(t)" :key="k" :class="r.hit && 'font-semibold'">{{ r.text }}</span></span>
+            <span class="ms-auto shrink-0 text-xs text-muted">{{ t.count === 1 ? '1 note' : `${t.count} notes` }}</span>
           </button>
         </div>
       </article>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveTags, renameTagInQuery, rewriteTags, tagRenameProblem, type NoteItDoc } from '../src/index.js';
+import { deriveTags, isTagBoundary, renameTagInQuery, rewriteTags, tagQueryEnds, tagRenameProblem, tagSuggestions, type NoteItDoc } from '../src/index.js';
 
 const p = (...content: unknown[]) => ({ type: 'paragraph', content }) as never;
 const t = (text: string, marks?: unknown[]) => (marks ? { type: 'text', text, marks } : { type: 'text', text });
@@ -35,5 +35,25 @@ describe('tag rename, merge and delete (native TagRewriter)', () => {
   it('renames tag: filters in smart folder searches', () => {
     expect(renameTagInQuery('work', 'job', 'tag:work -tag:#work/acme tag:workshop "tag:work"')).toBe('tag:job -tag:#job/acme tag:workshop "tag:work"');
     expect(renameTagInQuery('work', 'my job', 'tag:work')).toBe('tag:"my job"');
+  });
+});
+
+describe('`#` suggestions (native TagCompletionSource, TokenStylerTests)', () => {
+  const notes = (counts: Record<string, number>) => Object.entries(counts).flatMap(([tag, n]) => Array.from({ length: n }, () => ({ tags: [tag] })));
+
+  it('ranks by match, then by how many notes use the tag', () => {
+    const ranked = tagSuggestions(notes({ work: 2, 'work/acme': 5, home: 9, wobble: 1 }), 'wo').map((s) => s.tag);
+    expect(new Set(ranked)).toEqual(new Set(['work', 'work/acme', 'wobble']));
+    expect(tagSuggestions(notes({ a: 1, b: 3 }), '').map((s) => s.tag)).toEqual(['b', 'a']);
+    expect(tagSuggestions([{ tags: ['gone'], deletedAt: '2026-01-01' }], '')).toEqual([]);
+  });
+
+  it('ends on characters a tag cannot hold, and starts only at a boundary', () => {
+    expect(tagQueryEnds('')).toBe(false);
+    expect(tagQueryEnds('work/')).toBe(false);
+    expect(tagQueryEnds('work acme')).toBe(true);
+    expect(tagQueryEnds('a/b/c/d/e/f')).toBe(true);
+    expect([undefined, ' ', '(', '“', ','].every(isTagBoundary)).toBe(true);
+    expect(['a', '1', '#', '/'].some(isTagBoundary)).toBe(false);
   });
 });
