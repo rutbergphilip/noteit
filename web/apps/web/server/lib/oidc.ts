@@ -175,6 +175,9 @@ export class OidcProvider {
     switch (flow.intent) {
       case 'login': {
         const user = await ctx.accounts.mutate((f) => {
+          // Before first-admin setup only the setup intent (with the token) creates an account, even from a flow
+          // cookie minted earlier.
+          if (f.users.length === 0) throw new OidcOutcome('setupRequired');
           let u = linked(f);
           if (!u) {
             if (!this.cfg.autoProvision || !inGroups(this.cfg.allowedGroups)) throw new OidcOutcome('notLinked');
@@ -204,6 +207,7 @@ export class OidcProvider {
       }
       case 'invite': {
         const user = await ctx.accounts.mutate((f) => {
+          if (f.users.length === 0) throw new OidcOutcome('setupRequired');
           const invite = f.invites.find((i) => i.tokenSha256 === flow.inviteSha);
           if (!invite || invite.usedAt || invite.revokedAt || Date.parse(invite.expiresAt) < Date.now()) throw new OidcOutcome('inviteInvalid');
           if (linked(f)) throw new OidcOutcome('alreadyLinked');

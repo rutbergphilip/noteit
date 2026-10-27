@@ -13,6 +13,7 @@ export const OIDC_ERRORS = {
   inviteInvalid: 'This invite is no longer valid.',
   usernameTaken: 'That username is taken. Choose another one and try again.',
   setupDone: 'This server already has an admin.',
+  setupRequired: 'This server needs its first admin. Set it up with the setup token first.',
 } as const;
 
 export type OidcErrorCode = keyof typeof OIDC_ERRORS;

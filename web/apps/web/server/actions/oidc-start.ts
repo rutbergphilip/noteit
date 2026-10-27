@@ -13,6 +13,7 @@ export default publicClient
   .schema(oidcStartInput)
   .errors({
     oidcDisabled: 'Single sign-on is not set up on this server.',
+    setupRequired: 'This server needs its first admin.',
     alreadySetUp: 'This server already has an admin.',
     invalidSetupToken: 'That setup token is not right.',
     inviteInvalid: 'This invite is no longer valid.',
@@ -29,6 +30,8 @@ export default publicClient
       if (wait) setResponseHeader(event, 'Retry-After', wait);
       return wait > 0;
     };
+    // Until the first admin exists, only setup (which checks the setup token) may start a flow.
+    if (noteit.accounts.isEmpty && intent !== 'setup') return fail('setupRequired');
     switch (intent) {
       case 'login':
         return { url: await provider.start(event, noteit, { intent }) };

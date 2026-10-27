@@ -98,6 +98,42 @@ describe('OIDC sign-in', () => {
     expect(suggestUsername({}, () => false)).toBe('user');
   });
 
+  it('lets nobody in through OIDC before first-admin setup except with the setup token', async () => {
+    expect(h.ctx.accounts.isEmpty).toBe(true);
+    const b = jarBrowser(h.url);
+    // Even a member of the auto-provisioning group can't start a login or invite flow.
+    claims = { sub: 'early-sub', preferred_username: 'early', groups: ['noteit', 'noteit-admins'] };
+    expect((await b.action('oidc-start', { intent: 'login' })).businessError?.code).toBe('setupRequired');
+    expect((await b.action('oidc-start', { intent: 'invite', token: 'anything' })).businessError?.code).toBe('setupRequired');
+    expect((await b.action('oidc-start', { intent: 'link' })).businessError?.code).toBe('setupRequired');
+    // Setup still needs the token, exactly like password setup.
+    expect((await b.action('oidc-start', { intent: 'setup' })).businessError?.code).toBe('invalidSetupToken');
+    expect((await b.action('oidc-start', { intent: 'setup', token: 'wrong' })).businessError?.code).toBe('invalidSetupToken');
+    expect((await b.action('setup', { token: 'wrong', username: 'x1', password: 'a long password' })).businessError?.code).toBe('invalidSetupToken');
+
+    // A login or invite flow cookie minted before setup (sealed with the server's key) can't be replayed either.
+    for (const intent of ['login', 'invite'] as const) {
+      const forged = jarBrowser(h.url);
+      const config = await h.ctx.oidc!.discover();
+      const { randomState, randomNonce, randomPKCECodeVerifier, calculatePKCECodeChallenge, buildAuthorizationUrl } = await import('openid-client');
+      const flow = { state: randomState(), nonce: randomNonce(), verifier: randomPKCECodeVerifier(), intent, inviteSha: 'x' };
+      forged.jar.set('noteit_oidc', h.ctx.sessions.seal('oidc-flow', flow, 600));
+      const url = buildAuthorizationUrl(config, {
+        redirect_uri: h.ctx.cfg.oidc!.redirectUrl,
+        scope: 'openid',
+        code_challenge: await calculatePKCECodeChallenge(flow.verifier),
+        code_challenge_method: 'S256',
+        state: flow.state,
+        nonce: flow.nonce,
+      });
+      const callback = new URL((await fetch(url, { redirect: 'manual' })).headers.get('location')!);
+      const page = await (await forged.fetch(callback.pathname + callback.search)).text();
+      expect(page).toContain('/#oidc-error=setupRequired');
+      expect((await forged.action('session', undefined, 'GET')).data).toBeNull();
+    }
+    expect(h.ctx.accounts.isEmpty).toBe(true);
+  });
+
   it('sets up the first admin through OIDC with the setup token, then signs in by (iss, sub)', async () => {
     const info = await jarBrowser(h.url).action('server-info', undefined, 'GET');
     expect(info.data.auth).toEqual({ password: true, oidc: { label: 'Authentik' } });
