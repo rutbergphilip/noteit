@@ -574,7 +574,18 @@ export class SyncEngine {
 
   /** Returns false (skipped) when the remote is mid-upload or the local record changed during the pass. */
   private async pull(id: Uuid, kind: RecordKind, expectedLocalRevision: Uuid | undefined, pass: Pass): Promise<boolean> {
-    const remote = await this.fetchRemote(id, kind, pass);
+    const fetched = await this.fetchEnvelope(id, kind);
+    // Another device's meta refresh (spec §3.4.9): the base's revision and body version under a new ETag. Only the
+    // ETag moves; nothing is downloaded (Swift `adoptRefreshedMeta`).
+    const base = this.state.bases[id];
+    const { envelope } = fetched;
+    if (kind === 'note' && base?.bodyVersion && envelope.bodyFormat !== undefined && envelope.revision === base.revision &&
+        envelope.bodyVersion === base.bodyVersion && fetched.etag !== base.remoteMetaETag) {
+      base.remoteMetaETag = fetched.etag;
+      await this.saveState();
+      return false;
+    }
+    const remote = await this.fetchRemote(id, kind, pass, fetched);
     if (!remote.payload || (await this.currentRevision(id)) !== expectedLocalRevision) {
       pass.report.skipped += 1;
       return false;
@@ -818,8 +829,13 @@ export class SyncEngine {
     return { envelope, etag };
   }
 
-  private async fetchRemote(id: Uuid, kind: RecordKind, pass: Pass): Promise<FetchedRemote> {
-    const { envelope, etag } = await this.fetchEnvelope(id, kind);
+  private async fetchRemote(
+    id: Uuid,
+    kind: RecordKind,
+    pass: Pass,
+    fetched?: { envelope: RemoteEnvelope; etag: string },
+  ): Promise<FetchedRemote> {
+    const { envelope, etag } = fetched ?? (await this.fetchEnvelope(id, kind));
     const payload: RecordPayload = {
       id,
       kind,

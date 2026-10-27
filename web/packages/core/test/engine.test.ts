@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   b64decode,
+  BODY_FORMAT_DOC_V1,
+  connect,
   b64encode,
   decide,
   decodeManifest,
@@ -51,7 +53,7 @@ describe('planner vectors', () => {
 });
 
 interface Step { device: string; op: string; args: Record<string, unknown> }
-interface Scenario { name: string; steps: Step[]; expectRemoteKeys: string[]; expectLocal: Record<string, Record<string, unknown>[]> }
+interface Scenario { name: string; store?: 'v2'; steps: Step[]; expectRemoteKeys: string[]; expectLocal: Record<string, Record<string, unknown>[]> }
 
 async function plainSession(backend: InMemoryBackend, now: Date): Promise<StoreSession> {
   const etag = await backend.put(keys.manifest, encodeJson({ createdAt: now.getTime() / 1000 - 978307200, formatVersion: 1 }), { ifNoneMatch: true });
@@ -59,7 +61,7 @@ async function plainSession(backend: InMemoryBackend, now: Date): Promise<StoreS
 }
 
 describe('engine scenario vectors (v1 bodies)', () => {
-  for (const sc of golden<Scenario>('engine-scenarios.json').cases) {
+  for (const sc of golden<Scenario>('engine-scenarios.json').cases.filter((c) => c.store === undefined)) {
     it(sc.name, async () => {
       let clock = new Date('2026-01-01T00:00:00.000Z');
       const backend = new InMemoryBackend({ now: () => clock });
@@ -132,6 +134,101 @@ describe('engine scenario vectors (v1 bodies)', () => {
 });
 
 interface SnapshotCase { passphrase: string; objects: { key: string; etag: string; data: string }[]; expectRecords: Record<string, unknown>[] }
+
+/**
+ * The v2 traces this engine can replay. The others need the orphan sweep (v2-lost-response leaves the superseded
+ * version for it), stranded-body recovery, body repair,
+ * cleanup or the native crash and hold hooks, which `@noteit/core` doesn't have yet (web-app plan Task 2.6).
+ */
+const V2_REPLAYED = new Set(['v2-publish']);
+
+describe('engine scenario vectors (v2, noteit-doc store)', () => {
+  const v2 = golden<Scenario>('engine-scenarios.json').cases.filter((c) => c.store === 'v2');
+  it('has the v2 traces', () => {
+    expect(v2.map((c) => c.name)).toEqual(expect.arrayContaining([...V2_REPLAYED, 'v2-lost-response', 'v2-orphan-sweep', 'v2-stranded', 'v2-repair']));
+  });
+  for (const sc of v2) {
+    if (!V2_REPLAYED.has(sc.name)) {
+      it.todo(`${sc.name} (needs the sweep, recovery and fault hooks of Task 2.6)`);
+      continue;
+    }
+    it(sc.name, async () => {
+      let clock = new Date('2026-01-01T00:00:00.000Z');
+      const backend = new InMemoryBackend({ now: () => clock });
+      await connect(backend, { passphrase: 'scenario', createIfMissing: true, now: () => clock });
+      const devices = new Map<string, { local: FakeLocal; state: MemoryStateStore; engine: SyncEngine }>();
+      const make = async (name: string, local: FakeLocal, state: MemoryStateStore) => {
+        const { session } = await connect(backend, { passphrase: 'scenario', createIfMissing: false });
+        return new SyncEngine({ backend, session, local, state, deviceID: `device-${name}`, deviceName: name, now: () => clock });
+      };
+      const device = async (name: string) => {
+        let d = devices.get(name);
+        if (!d) {
+          const local = new FakeLocal(`device-${name}`, BODY_FORMAT_DOC_V1);
+          const state = new MemoryStateStore();
+          d = { local, state, engine: await make(name, local, state) };
+          devices.set(name, d);
+        }
+        return d;
+      };
+      const known = new Set<string>();
+      for (const step of sc.steps) {
+        const d = await device(step.device);
+        const a = step.args;
+        if (typeof a.at === 'string') clock = new Date(a.at);
+        if (typeof a.id === 'string') known.add(a.id);
+        if (typeof a.revision === 'string') known.add(a.revision);
+        switch (step.op) {
+          case 'create':
+          case 'edit': {
+            const existing = d.local.items.get(a.id as string);
+            const kind = (a.kind as 'note' | 'notebook' | undefined) ?? existing?.kind ?? 'note';
+            d.local.upsert({
+              id: a.id as string,
+              kind,
+              revision: a.revision as string,
+              modifiedAt: clock,
+              meta: { title: a.title },
+              ...(kind === 'note' ? { body: utf8(`Body of ${String(a.title)}`) } : {}),
+            });
+            break;
+          }
+          case 'sync':
+            await d.engine.sync().catch((e: unknown) => {
+              if (!(e instanceof StorageError)) throw e;
+            });
+            break;
+          case 'landThenFail':
+            backend.landThenFail('put', new RegExp(a.target === 'body' ? `bodies/${String(a.id)}` : `notes/${String(a.id)}\\.meta$`));
+            break;
+          case 'restart':
+            d.engine = await make(step.device, d.local, d.state);
+            break;
+          case 'advanceClock':
+            clock = new Date(clock.getTime() + (a.seconds as number) * 1000);
+            break;
+          default:
+            throw new Error(`unknown op ${step.op}`);
+        }
+      }
+      const uuidRe = /[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}/g;
+      const version = /\.[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}\.([^.]+)\.body$/;
+      const placeholder = (s: string) =>
+        s.replace(version, (_, tag: string) => `.V.${tag === 'new' ? 'new' : 'TAG'}.body`).replace(uuidRe, (u) => (known.has(u) ? u : 'new'));
+      expect([...backend.objects.keys()].map(placeholder).sort()).toEqual([...sc.expectRemoteKeys].sort());
+      for (const [name, expected] of Object.entries(sc.expectLocal)) {
+        const got = [...(await device(name)).local.items.values()].map((r) => {
+          const out: Record<string, unknown> = { id: placeholder(r.id), kind: r.kind, revision: placeholder(r.revision), title: r.meta.title };
+          if (r.body) out.body = fromUtf8(r.body);
+          if (r.meta.conflictSource) out.conflictSource = r.meta.conflictSource;
+          return out;
+        });
+        const sort = (xs: Record<string, unknown>[]) => [...xs].sort((x, y) => String(x.id).localeCompare(String(y.id)));
+        expect(sort(got)).toEqual(sort(expected));
+      }
+    });
+  }
+});
 
 describe('store-snapshot vector', () => {
   for (const c of golden<SnapshotCase>('store-snapshot.json').cases) {

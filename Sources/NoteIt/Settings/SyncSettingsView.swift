@@ -146,6 +146,7 @@ private struct SyncSetupView: View {
                 Image(systemName: "lock.fill").foregroundStyle(.green)
             }
             SecureField("Passphrase", text: $passphrase, prompt: Text("Enter the passphrase used on your other Mac"))
+            SettingsFootnote(text: PassphraseHint.text)
         } else {
             Toggle(isOn: $encrypt) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -158,6 +159,7 @@ private struct SyncSetupView: View {
             if encrypt {
                 SecureField("Passphrase", text: $passphrase, prompt: Text("At least 8 characters"))
                 SecureField("Confirm passphrase", text: $confirmation)
+                SettingsFootnote(text: PassphraseHint.text)
                 if !passphrase.isEmpty {
                     PassphraseMeter(passphrase: passphrase, confirmation: confirmation)
                 }
@@ -705,6 +707,7 @@ private struct SyncConnectedView: View {
                 Button("Unlock") { Task { await unlock() } }
                     .disabled(unlockPassphrase.isEmpty || unlocking)
             }
+            SettingsFootnote(text: PassphraseHint.text)
             if let unlockError {
                 SettingsFootnote(text: unlockError, symbol: "xmark.octagon.fill", color: .red)
             }

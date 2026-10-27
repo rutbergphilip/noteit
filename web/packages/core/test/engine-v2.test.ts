@@ -113,6 +113,42 @@ describe('engine in a noteit-doc store', () => {
     expect(env.bodySHA256).toBe(await sha256Hex(docBody('Two')));
   });
 
+  it('takes another device’s meta refresh without downloading the body or making a conflict copy', async () => {
+    const { backend, device, now, tick } = await setup();
+    const a = await device('A');
+    const b = await device('B');
+    const id = newUuid();
+    a.local.upsert({ id, kind: 'note', revision: newUuid(), modifiedAt: now(), meta: { title: 'Kept' }, body: docBody('Kept') });
+    await a.engine.sync();
+    await b.engine.sync();
+
+    // A Mac's stranded-body recovery: the same envelope plaintext sealed again, If-Match the listed ETag.
+    const key = `notes/${id}.meta`;
+    const { data, etag } = await backend.get(keys.noteMeta(id));
+    const plain = await a.engine.session.cipher.open(data, key);
+    const refreshed = await backend.put(keys.noteMeta(id), await a.engine.session.cipher.seal(plain, key), { ifMatch: etag });
+    expect(refreshed).not.toBe(etag);
+
+    const gets: string[] = [];
+    const get = backend.get.bind(backend);
+    backend.get = async (k: string) => {
+      gets.push(k);
+      return get(k);
+    };
+    const report = await b.engine.sync();
+    expect(report.pulled).toBe(0);
+    expect(gets.filter((k) => k.includes('/bodies/'))).toEqual([]);
+    expect((await b.state.load()).bases[id]?.remoteMetaETag).toBe(refreshed);
+
+    // An edit made before the refresh was seen is pushed against the new ETag, with no conflict copy.
+    tick(10);
+    a.local.upsert({ ...a.local.items.get(id)!, revision: newUuid(), meta: { title: 'Edited' }, body: docBody('Edited') });
+    const pushed = await a.engine.sync();
+    expect(pushed.conflicts).toBe(0);
+    await b.engine.sync();
+    expect([...b.local.items.values()].map((r) => r.meta.title)).toEqual(['Edited']);
+  });
+
   it('makes a conflict copy when two devices edit the same note', async () => {
     const { device, now, tick } = await setup();
     const a = await device('A');

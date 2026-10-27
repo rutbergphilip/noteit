@@ -835,9 +835,11 @@ final class ExternalChangeTests: XCTestCase {
         try edit("Kept.md", "first", "edited outside")
         try put("New.md", "# New\n\nadded\n")
         try put("Folder/Inside.md", "# Inside\n\nin a folder\n")
-        store.markdownFolderNeedsScan()
-        try await waitUntil({ store.note(with: kept)?.preview.contains("edited outside") == true },
-                            "the edit is applied as the scan read it")
+        // The files really are spoiled once the scan has read them, so a later scan (the one the reload of Kept
+        // asks for when it finds its file changed) rightly reads "Spoiled": the state is checked as this scan left it.
+        let applied = await store.rescanMarkdownFolder()
+        XCTAssertTrue(applied)
+        XCTAssertTrue(store.note(with: kept)?.preview.contains("edited outside") == true, "the edit is applied as the scan read it")
         XCTAssertNotNil(store.notes.first { $0.title == "New" })
         let folder = try XCTUnwrap(store.notebooks.first { $0.name == "Folder" })
         XCTAssertEqual(store.notes.first { $0.title == "Inside" }?.notebookID, folder.id)

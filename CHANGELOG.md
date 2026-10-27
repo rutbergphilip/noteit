@@ -36,6 +36,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- Every passphrase field in Settings › Sync now says to type the passphrase exactly as on your other devices, because letters with accents can differ between keyboards.
+- Insert Image with several files over the 25 MB attachment limit names all of them in one alert, and still adds the others.
+- A copy of a note that a Mac uploaded but never finished saving, because it was erased or stopped syncing for good, is now removed by your other devices after a day and 20 syncs, even when your storage is full. They do it with a small rewrite of the note's sync record that changes nothing in the note, and it never touches a note you have unsynced edits to.
 - Saving a note to sync is now crash-safe: a note's new text is uploaded completely before other devices are pointed at it, so they never see half a save.
 - On S3 storage, a request that could change data is never sent twice automatically. A dropped connection is sorted out on the next sync instead.
 - On storage that can't delete conditionally (sync folders and some S3 providers), NoteIt checks that a note is unchanged right before deleting it, and leaves anything another device changed meanwhile.
@@ -45,6 +48,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- The web app shows the same note titles and previews as the Mac for notes with a table whose first row is bold or has a shaded cell, and it reads tags, due dates and reminders on the line after a code block as the Mac does.
 - The New Notebook and Edit Notebook sheet keeps its colours and icons inside its margins instead of running to the edges.
 - The sidebar's New Notebook button and sync status stay readable when notes and tags scroll underneath them.
 - Two tabs of the NoteIt web app editing the same note no longer lose an edit. Tabs see each other's saves straight away, and a save made from an older version keeps the other version as a conflict copy, as the Mac does when a note changes on two devices at once.

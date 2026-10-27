@@ -325,7 +325,7 @@ extension SyncEngine {
     /// conditional writes. Never touches this device's pending version, a note whose listed meta isn't the one this
     /// device knows, a body whose tag matches the listed meta, or a `new` body of a note without meta or tombstone.
     func sweepOrphanBodies(_ pass: Pass) async throws {
-        guard pass.atomicDeletes else { return }
+        guard pass.atomicDeletes else { return try forgetStrandedBodies(except: []) }
         var budget = Self.maxOrphanDeletesPerPass
         func remove(_ object: RemoteObject) async throws {
             guard budget > 0 else { return }
@@ -333,8 +333,12 @@ extension SyncEngine {
             try await deleteIfUnchanged(object.key, listedETag: object.etag)
         }
         for object in pass.index.strayBodies { try await remove(object) }
-        guard pass.atomicWrites else { return }
+        guard pass.atomicWrites else {
+            try forgetStrandedBodies(except: [])
+            return
+        }
 
+        var stranded: [String: UUID] = [:]
         for (id, versions) in pass.index.docBodies.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where !pass.touched.contains(id) {
             let listedMeta = pass.index.metas[id]?.etag
             let tombstoned = pass.index.tombstones[id] != nil
@@ -345,7 +349,11 @@ extension SyncEngine {
                 if let listedMeta {
                     // Only a meta this device has read says which version it references.
                     guard let base, base.remoteMetaETag == listedMeta else { break }
-                    deletable = base.bodyVersion != version && body.tag != RemoteLayout.baseTag(listedMeta)
+                    let unreferenced = base.bodyVersion != version
+                    let liveTag = body.tag == RemoteLayout.baseTag(listedMeta)
+                    deletable = unreferenced && !liveTag
+                    // Kept only because its tag is live: its writer may still commit it, or was wiped.
+                    if unreferenced, liveTag { stranded[body.object.key] = id }
                 } else {
                     // Without a meta: a `new` body may belong to a create still in flight, unless a tombstone exists.
                     deletable = tombstoned || body.tag != RemoteLayout.newTag
@@ -353,6 +361,7 @@ extension SyncEngine {
                 if deletable { try await remove(body.object) }
             }
         }
+        try await recoverStrandedBodies(stranded, pass)
         for (id, etag) in pass.index.bodies.sorted(by: { $0.key.uuidString < $1.key.uuidString }) where !pass.touched.contains(id) {
             if let listedMeta = pass.index.metas[id]?.etag {
                 guard let base = state.bases[id], base.remoteMetaETag == listedMeta, base.bodyVersion != nil else { continue }
@@ -360,6 +369,73 @@ extension SyncEngine {
                 continue
             }
             try await remove(RemoteObject(key: RemoteLayout.body(id), etag: etag, size: 0))
+        }
+    }
+
+    // MARK: - Stranded bodies
+
+    /// Keeps `strandedBodies` to the bodies stranded now (spec §3.4.9 "Stranded bodies: meta refresh"); once a note's
+    /// body has been stranded for `strandedPasses` passes and `strandedAge`, refreshes the note's meta so that its tag
+    /// goes stale and the next sweep deletes it, at most `maxRecoveryWritesPerPass` notes per pass. The pass count and
+    /// the clock decide only when to refresh, never whether a delete is safe. Only on atomic stores (the caller's).
+    private func recoverStrandedBodies(_ stranded: [String: UUID], _ pass: Pass) async throws {
+        try forgetStrandedBodies(except: Set(stranded.keys))
+        guard !stranded.isEmpty else { return }
+        let now = now()
+        for key in stranded.keys where state.strandedBodies[key] == nil {
+            state.strandedBodies[key] = .init(firstSeenPass: state.passCount, firstSeenAt: now)
+        }
+        try saveState()
+
+        var due: Set<UUID> = []
+        for (key, id) in stranded {
+            guard let seen = state.strandedBodies[key] else { continue }
+            if state.passCount - seen.firstSeenPass >= Self.strandedPasses, now.timeIntervalSince(seen.firstSeenAt) >= Self.strandedAge {
+                due.insert(id)
+            }
+        }
+        var refreshes = 0
+        for id in due.sorted(by: { $0.uuidString < $1.uuidString }) where refreshes < Self.maxRecoveryWritesPerPass {
+            if try await refreshMeta(id, pass) { refreshes += 1 }
+        }
+    }
+
+    /// Drops the entries of bodies no longer stranded or no longer listed.
+    private func forgetStrandedBodies(except keys: Set<String>) throws {
+        let kept = state.strandedBodies.filter { keys.contains($0.key) }
+        guard kept.count != state.strandedBodies.count else { return }
+        state.strandedBodies = kept
+        try saveState()
+    }
+
+    /// The recovery write: the same envelope plaintext sealed again (a fresh nonce, so a new ETag of the same size),
+    /// `If-Match` the listed meta. Only for a noteit-doc meta this device knows, with no unpushed edit and no pending
+    /// entry. A 412 or an in-doubt outcome leaves nothing to resolve. Whether a write was sent.
+    private func refreshMeta(_ id: UUID, _ pass: Pass) async throws -> Bool {
+        guard let listed = pass.index.metas[id], listed.kind == .note, let base = state.bases[id],
+              base.remoteMetaETag == listed.etag, base.bodyVersion != nil,
+              pass.records[id]?.revision == base.revision,
+              state.pendingBodyVersions[id] == nil, state.pendingPushes[id] == nil,
+              !pass.touched.contains(id) else { return false }
+        let key = RemoteLayout.meta(.note, id)
+        do {
+            let (data, etag) = try await backend.get(key)
+            guard etag == listed.etag else { return false }
+            let plaintext = try open(data, key: key)
+            let envelope = try Self.decode(RemoteEnvelope.self, from: plaintext)
+            guard envelope.id == id, envelope.kind == .note, envelope.bodyFormat != nil,
+                  envelope.revision == base.revision, envelope.bodyVersion == base.bodyVersion else { return false }
+            try BodyFormat.validateEnvelope(envelope, features: session.current.features)
+            let newETag = try await backend.put(key, data: try seal(plaintext, key: key), ifMatch: listed.etag, ifNoneMatch: false)
+            state.bases[id]?.remoteMetaETag = newETag
+            pass.touched.insert(id)
+            try saveState()
+            return true
+        } catch let error as StorageError where Self.isFatal(error) {
+            throw error
+        } catch {
+            // 412: the meta moved on. In doubt: the next pass lists whichever ETag is current. Either way, nothing to do.
+            return true
         }
     }
 
