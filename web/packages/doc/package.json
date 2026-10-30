@@ -14,14 +14,14 @@
   "dependencies": {
     "@tiptap/core": "3.31.0",
     "@tiptap/pm": "3.31.0",
-    "fflate": "0.8.2",
+    "fflate": "0.8.3",
     "highlight.js": "11.11.2",
     "lowlight": "3.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "happy-dom": "15.11.7",
+    "happy-dom": "21.0.4",
     "typescript": "~5.9.3",
-    "vitest": "3.2.4"
+    "vitest": "4.1.12"
   }
 }

@@ -7,6 +7,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Security
+
+- The web app's server is updated to Nuxt 4.6.2, Zod 4.6.6 and fflate 0.8.3, which fix route rules being skipped for paths in a different case, unsanitised head tags in server islands, memory exhaustion when checking very large form input, and an endless loop on malformed zip files during import.
+
 ## [0.7.0] - 2026-10-27
 
 ### Added
